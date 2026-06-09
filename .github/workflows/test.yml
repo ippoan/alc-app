@@ -13,6 +13,8 @@ permissions:
   contents: write
   packages: read
   pull-requests: write
+  id-token: write   # frontend-ci.yml 内蔵の secret-verify job が要求 (未宣言だと
+                    # gcp_secret_verify_* を渡さない caller でも startup_failure)
 
 jobs:
   ci:
