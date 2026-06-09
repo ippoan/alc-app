@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['web/**', '.github/workflows/test.yml']
+    paths: ['web/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml']
   pull_request:
     branches: [main]
-    paths: ['web/**', '.github/workflows/test.yml']
+    paths: ['web/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml']
 
 permissions:
   contents: write

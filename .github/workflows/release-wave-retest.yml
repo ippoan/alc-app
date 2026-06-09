@@ -1,0 +1,52 @@
+name: Release Wave Retest
+
+# ci-dashboard の Compatibility グラフの retest ボタンから飛んでくる
+# repository_dispatch (event: release-wave-retest) を受け、payload の
+# backend_image (= ghcr.io/ippoan/rust-alc-api:) を相手に integration
+# test を回し直して compat report を送り直す経路 (Refs ippoan/ci-dashboard#157)。
+#
+# frontend-ci.yml はこの retest 経路を想定済み:
+#   - report-compatibility job は github.event_name で gate されず、
+#     compat_backend_image (= dispatch payload の image) を優先採用する。
+#   - deploy / auto-merge / pr-limit / publish は github.event_name が
+#     pull_request / push の時だけ走るので repository_dispatch では skip。
+# has_deploy: false で deploy/publish 系もダブルで止める。
+
+on:
+  repository_dispatch:
+    types:
+      - release-wave-retest
+
+permissions:
+  contents: write
+  packages: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  retest:
+    uses: ippoan/ci-workflows/.github/workflows/frontend-ci.yml@main
+    with:
+      has_integration: true
+      has_deploy: false
+      # dispatch payload の backend image を test 相手に明示指定する。
+      # frontend-ci の report-compatibility がこの image をそのまま記録する。
+      compat_backend_repo: ippoan/rust-alc-api
+      compat_backend_image: ${{ github.event.client_payload.backend_image }}
+      compat_backend_image_env: API_IMAGE
+      # 以下は test.yml の ci job の with をそのまま流用 (同一 integration 構成)。
+      working_directory: web
+      gcp_secret_verify_wrangler_path: 'web/wrangler.jsonc'
+      install_command: 'npm install'
+      use_auth_client_dev: true
+      pre_install_script: |
+        mkdir -p ../fc1200-wasm/pkg
+        echo '{"name":"fc1200-wasm","version":"0.0.0","main":"index.js","types":"index.d.ts"}' > ../fc1200-wasm/pkg/package.json
+        echo 'module.exports = {}' > ../fc1200-wasm/pkg/index.js
+        if [ -f app/types/fc1200-wasm.d.ts ]; then
+          cp app/types/fc1200-wasm.d.ts ../fc1200-wasm/pkg/index.d.ts
+        fi
+      integration_test_command: 'npx vitest run tests/utils/api.test.ts'
+      integration_env: 'TEST_LIVE=1 API_BASE_URL=http://localhost:18080'
+      cache_dependency_path: web/package-lock.json
+    secrets: inherit
