@@ -21,6 +21,11 @@ jobs:
     uses: ippoan/ci-workflows/.github/workflows/frontend-ci.yml@main
     with:
       working_directory: web
+      # 内蔵 secret-verify job は wrangler 設定を repo root で autodetect する
+      # (working_directory を見ない)。本 repo の wrangler.jsonc は web/ 配下
+      # なので明示 path を渡さないと "wrangler config not found" で落ちる。
+      # secrets.required は [] なので verify は 0 件で trivial pass。
+      gcp_secret_verify_wrangler_path: 'web/wrangler.jsonc'
       install_command: 'npm install'
       has_integration: true
       # integration test は rust-alc-api コンテナ (docker-compose.test.yml の
