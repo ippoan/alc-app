@@ -47,4 +47,17 @@ jobs:
       integration_test_command: 'npx vitest run tests/utils/api.test.ts'
       integration_env: 'TEST_LIVE=1 API_BASE_URL=http://localhost:18080'
       cache_dependency_path: web/package-lock.json
+      # Release Wave の deploy 面に乗せる。frontend-ci の deploy-staging (PR) /
+      # deploy-release (v* tag) が wrangler deploy 後に version 配分を
+      # ci-dashboard /webhooks/release-wave/traffic-report へ報告し、
+      # /release-wave の「Traffic (version split)」表に alc-app 行が出る。
+      # 手動 `cd web && npm run deploy` (= nuxt build && wrangler deploy) を
+      # そのまま CI 化したもの。NUXT_PUBLIC_* は wrangler.jsonc の vars
+      # (prod = top-level / staging = env.staging.vars) で runtime 注入され、
+      # nitro preset も nuxt.config で cloudflare_module 固定なので build 時の
+      # env 注入は不要。release_no_traffic=true (default) により release の
+      # `wrangler deploy` は `wrangler versions upload` (no-traffic) に置換され、
+      # flip は Release Wave / wrangler versions deploy で明示的に 100% へ。
+      deploy_staging_script: 'npm run build && npx wrangler deploy --env staging'
+      deploy_release_script: 'npm run build && npx wrangler deploy'
     secrets: inherit
