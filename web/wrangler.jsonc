@@ -11,6 +11,12 @@
 		"enabled": true,
 		"head_sampling_rate": 1
 	},
+	// frontend-ci.yml の secret-verify job が secret backup の auditability の
+	// ため明示宣言を要求する。他 CF worker repo (nuxt-notify / nuxt-trouble) に
+	// 揃えて空配列を宣言する。
+	"secrets": {
+		"required": []
+	},
 	"env": {
 		"staging": {
 			"name": "alc-app-staging",

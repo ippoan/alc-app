@@ -13,14 +13,29 @@ permissions:
   contents: write
   packages: read
   pull-requests: write
+  id-token: write   # frontend-ci.yml 内蔵の secret-verify job が要求 (未宣言だと
+                    # gcp_secret_verify_* を渡さない caller でも startup_failure)
 
 jobs:
   ci:
     uses: ippoan/ci-workflows/.github/workflows/frontend-ci.yml@main
     with:
       working_directory: web
+      # 内蔵 secret-verify job は wrangler 設定を repo root で autodetect する
+      # (working_directory を見ない)。本 repo の wrangler.jsonc は web/ 配下
+      # なので明示 path を渡さないと "wrangler config not found" で落ちる。
+      # secrets.required は [] なので verify は 0 件で trivial pass。
+      gcp_secret_verify_wrangler_path: 'web/wrangler.jsonc'
       install_command: 'npm install'
       has_integration: true
+      # integration test は rust-alc-api コンテナ (docker-compose.test.yml の
+      # api サービス) を相手に走る。Release Wave の frontend↔backend
+      # compatibility edge を記録するため backend repo と image env を配線する。
+      # compat machinery が test 前に backend SHA を解決し
+      # API_IMAGE=ghcr.io/ippoan/rust-alc-api:<sha> を export して、その image で
+      # integration を回す (truthful 突合)。docker-compose は ${API_IMAGE} を読む。
+      compat_backend_repo: 'ippoan/rust-alc-api'
+      compat_backend_image_env: 'API_IMAGE'
       use_auth_client_dev: true
       pre_install_script: |
         mkdir -p ../fc1200-wasm/pkg
