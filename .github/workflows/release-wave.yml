@@ -1,0 +1,29 @@
+name: Release Wave
+
+# Release Wave 機構の caller (薄い ~10 行 wrapper)。
+# ci-dashboard から repository_dispatch で flip / rollback event を
+# 受けて、ci-workflows の release-wave-handler.yml reusable に処理を委譲する。
+#
+# 親 issue: ippoan/ci-dashboard#137 / #237
+# Reusable: ippoan/ci-workflows/.github/workflows/release-wave-handler.yml
+# Repo config: ippoan/ci-workflows/config/release-wave-targets.yaml の
+#              `ippoan/alc-app` entry (platform=cloudflare-workers)
+
+on:
+  repository_dispatch:
+    types:
+      - release-wave-flip
+      - release-wave-rollback
+      - release-wave-traffic-rollback   # frontend 単独 rollback (cloudflare-workers)
+      - release-wave-backend-rollback    # backend 単独 rollback (cloudrun)
+
+permissions:
+  contents: write     # tag push (stage 時)
+  id-token: write     # WIF (cloudrun path 用、本 repo は CF だが reusable
+                      # parse 時 caller permissions check が要る)
+  packages: read      # @ippoan/* GitHub Packages dep install (npm_scope=@ippoan)
+
+jobs:
+  handler:
+    uses: ippoan/ci-workflows/.github/workflows/release-wave-handler.yml@main
+    secrets: inherit
