@@ -23,6 +23,14 @@ jobs:
       working_directory: web
       install_command: 'npm install'
       has_integration: true
+      # integration test は rust-alc-api コンテナ (docker-compose.test.yml の
+      # api サービス) を相手に走る。Release Wave の frontend↔backend
+      # compatibility edge を記録するため backend repo と image env を配線する。
+      # compat machinery が test 前に backend SHA を解決し
+      # API_IMAGE=ghcr.io/ippoan/rust-alc-api:<sha> を export して、その image で
+      # integration を回す (truthful 突合)。docker-compose は ${API_IMAGE} を読む。
+      compat_backend_repo: 'ippoan/rust-alc-api'
+      compat_backend_image_env: 'API_IMAGE'
       use_auth_client_dev: true
       pre_install_script: |
         mkdir -p ../fc1200-wasm/pkg
