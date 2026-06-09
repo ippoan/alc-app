@@ -28,8 +28,12 @@
 
 ## デプロイ
 
-- **web (Cloudflare Workers)**: `cd web && npm run deploy` — `nuxt build && wrangler deploy`
-  - URL: https://alc-app.m-tama-ramu.workers.dev
+- **web (Cloudflare Workers)**: 通常運用は **CI 経由** (auth-worker / ippoan 標準と統一、#33)。
+  - PR → main: `test.yml` (frontend-ci.yml) の `deploy-staging` が staging に自動 deploy
+    - URL: https://alc-staging.ippoan.org (custom domain) / alc-app-staging.m-tama-ramu.workers.dev
+  - `v*` tag push: `deploy-release` が **no-traffic upload** (`wrangler versions upload`) → Release Wave / `wrangler versions deploy <id>@100%` で明示 flip
+    - URL: https://alc.ippoan.org (custom domain) / alc-app.m-tama-ramu.workers.dev
+  - 緊急時 fallback (手動): `cd web && npm run deploy` (= `nuxt build && wrangler deploy`)
 - **cf-alc-signaling (Cloudflare Workers)**: `cd cf-alc-signaling && wrangler deploy`
   - URL: https://alc-signaling.m-tama-ramu.workers.dev
   - シークレット不要 (現在 STUN P2P のみ。TURN は後日対応予定)
