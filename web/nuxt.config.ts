@@ -13,6 +13,7 @@ export default defineNuxtConfig({
       googleClientId: process.env.NUXT_PUBLIC_GOOGLE_CLIENT_ID || '',
       authWorkerUrl: process.env.NUXT_PUBLIC_AUTH_WORKER_URL || 'https://auth.ippoan.org',
       stagingTenantId: process.env.NUXT_PUBLIC_STAGING_TENANT_ID || '',
+      appVersion: process.env.NUXT_PUBLIC_APP_VERSION || 'dev',
     },
   },
 

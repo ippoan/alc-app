@@ -2,10 +2,13 @@ name: CI
 
 on:
   push:
+    # paths フィルタは付けない (auth-worker と同形)。GitHub Actions は tag push
+    # でも paths を評価するため、web/ を変更しない `v*` tag リリースで
+    # deploy-release / no-traffic upload / traffic-report が発火しなくなるのを防ぐ。
     branches: [main]
     tags: ['v*']
-    paths: ['web/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml']
   pull_request:
+    # PR 側は無駄打ちを抑えるため paths を残す (push/tag は常に発火させる)。
     branches: [main]
     paths: ['web/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml']
 
@@ -58,6 +61,10 @@ jobs:
       # env 注入は不要。release_no_traffic=true (default) により release の
       # `wrangler deploy` は `wrangler versions upload` (no-traffic) に置換され、
       # flip は Release Wave / wrangler versions deploy で明示的に 100% へ。
-      deploy_staging_script: 'npm run build && npx wrangler deploy --env staging'
-      deploy_release_script: 'npm run build && npx wrangler deploy'
+      # VersionBadge (@ippoan/auth-client) 用に稼働版数を注入 (auth-worker / ippoan
+      # 統一)。staging は commit SHA、release は tag (ref_name)。NUXT_PUBLIC_APP_VERSION
+      # は build 時に runtimeConfig.public.appVersion へ焼き込み、runtime も wrangler
+      # --var で上書きする (二重指定で確実に反映)。
+      deploy_staging_script: 'NUXT_PUBLIC_APP_VERSION=${{ github.sha }} npm run build && npx wrangler deploy --env staging --var NUXT_PUBLIC_APP_VERSION:${{ github.sha }}'
+      deploy_release_script: 'NUXT_PUBLIC_APP_VERSION=${{ github.ref_name }} npm run build && npx wrangler deploy --var NUXT_PUBLIC_APP_VERSION:${{ github.ref_name }}'
     secrets: inherit

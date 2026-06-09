@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { StagingFooter } from '@ippoan/auth-client'
+import { StagingFooter, VersionBadge } from '@ippoan/auth-client'
 
 const { init, isLoading } = useAuth()
 const { isAndroidApp } = useFingerprint()
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase as string
 const stagingTenantId = config.public.stagingTenantId as string
+const appVersion = config.public.appVersion as string
 
 onMounted(async () => {
   // --- リロード検知ログ ---
@@ -43,6 +44,7 @@ useHead({
     </div>
     <NuxtPage v-else />
     <StagingFooter :api-base="apiBase" :tenant-id="stagingTenantId" />
+    <VersionBadge :api-base="apiBase" :frontend-version="appVersion" />
   </div>
 </template>
 
