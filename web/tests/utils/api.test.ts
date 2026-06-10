@@ -609,6 +609,25 @@ describe('api', () => {
         })
       },
     )
+
+    // live は SEED device に settings_token が未発行のため token 付き呼び出しが 401 になる
+    it.skipIf(isLive)('getDeviceSettings sends X-Device-Token when provided (Refs rust-alc-api#388)', async () => {
+      stubOk({ call_enabled: true, status: 'active', always_on: false })
+      await callApi(() => getDeviceSettings(SEED_DEVICE_ID, 'tok-123'))
+      assertMock(() => {
+        const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>
+        expect(headers['X-Device-Token']).toBe('tok-123')
+      })
+    })
+
+    it.skipIf(isLive)('getDeviceSettings omits X-Device-Token when not provided', async () => {
+      stubOk({ call_enabled: true, status: 'active', always_on: false })
+      await callApi(() => getDeviceSettings(SEED_DEVICE_ID))
+      assertMock(() => {
+        const headers = mockFetch.mock.calls[0][1].headers as Record<string, string>
+        expect(headers['X-Device-Token']).toBeUndefined()
+      })
+    })
   })
 
   // ============================================================

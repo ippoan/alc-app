@@ -12,6 +12,7 @@ function decodeJwtPayload(base64url: string): any {
 const REFRESH_TOKEN_KEY = 'alc_refresh_token'
 const DEVICE_TENANT_KEY = 'alc_device_tenant_id'
 const DEVICE_ID_KEY = 'alc_device_id'
+const DEVICE_SETTINGS_TOKEN_KEY = 'alc_device_settings_token'
 
 // シングルトン state (composable の外で定義して複数コンポーネント間で共有)
 const user = ref<AuthUser | null>(null)
@@ -23,6 +24,10 @@ const deviceTenantId = ref<string | null>(
 )
 const deviceId = ref<string | null>(
   isClient ? localStorage.getItem(DEVICE_ID_KEY) : null,
+)
+// settings 取得用の device 保有 token (Refs rust-alc-api#388)。承認時に backend が発行
+const deviceSettingsToken = ref<string | null>(
+  isClient ? localStorage.getItem(DEVICE_SETTINGS_TOKEN_KEY) : null,
 )
 
 let initialized = false
@@ -307,9 +312,10 @@ export function useAuth() {
   }
 
   /** 端末をテナントにアクティベート */
-  function activateDevice(tenantId: string, devId?: string) {
+  function activateDevice(tenantId: string, devId?: string, settingsToken?: string) {
     deviceTenantId.value = tenantId
     if (devId) deviceId.value = devId
+    if (settingsToken) deviceSettingsToken.value = settingsToken
     if (isClient) {
       localStorage.setItem(DEVICE_TENANT_KEY, tenantId)
       if (devId) {
@@ -320,6 +326,9 @@ export function useAuth() {
           android.setDeviceId(devId)
         }
       }
+      if (settingsToken) {
+        localStorage.setItem(DEVICE_SETTINGS_TOKEN_KEY, settingsToken)
+      }
     }
   }
 
@@ -327,9 +336,11 @@ export function useAuth() {
   function deactivateDevice() {
     deviceTenantId.value = null
     deviceId.value = null
+    deviceSettingsToken.value = null
     if (isClient) {
       localStorage.removeItem(DEVICE_TENANT_KEY)
       localStorage.removeItem(DEVICE_ID_KEY)
+      localStorage.removeItem(DEVICE_SETTINGS_TOKEN_KEY)
       const android = (window as any).Android
       if (android?.setDeviceId) {
         android.setDeviceId('')
@@ -390,6 +401,7 @@ export function useAuth() {
     isLoading: readonly(isLoading),
     deviceTenantId: readonly(deviceTenantId),
     deviceId: readonly(deviceId),
+    deviceSettingsToken: readonly(deviceSettingsToken),
     isDeviceActivated,
     init,
     loginWithGoogleRedirect,

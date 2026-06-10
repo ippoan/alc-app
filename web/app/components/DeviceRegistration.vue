@@ -38,7 +38,7 @@ function startPolling() {
       const res = await checkDeviceRegistrationStatus(registrationCode.value)
       if (res.status === 'approved' && res.tenant_id && res.device_id) {
         stopPolling()
-        activateDevice(res.tenant_id, res.device_id)
+        activateDevice(res.tenant_id, res.device_id, res.settings_token)
         status.value = 'approved'
       } else if (res.status === 'expired') {
         stopPolling()

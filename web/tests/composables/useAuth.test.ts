@@ -124,6 +124,21 @@ describe('useAuth', () => {
       expect(localStorage.getItem('alc_device_id')).toBeNull()
     })
 
+    it('should store settings_token on activate and clear on deactivate (Refs rust-alc-api#388)', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateDevice, deactivateDevice, deviceSettingsToken } = useAuth()
+
+      activateDevice('tenant-123', 'dev-456', 'token-abc')
+
+      expect(deviceSettingsToken.value).toBe('token-abc')
+      expect(localStorage.getItem('alc_device_settings_token')).toBe('token-abc')
+
+      deactivateDevice()
+
+      expect(deviceSettingsToken.value).toBeNull()
+      expect(localStorage.getItem('alc_device_settings_token')).toBeNull()
+    })
+
     it('should call Android.setDeviceId("") on deactivate', async () => {
       const mockSetDeviceId = vi.fn()
       ;(window as any).Android = { setDeviceId: mockSetDeviceId }
