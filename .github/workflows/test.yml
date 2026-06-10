@@ -29,6 +29,11 @@ jobs:
       # なので明示 path を渡さないと "wrangler config not found" で落ちる。
       # secrets.required は [] なので verify は 0 件で trivial pass。
       gcp_secret_verify_wrangler_path: 'web/wrangler.jsonc'
+      # staging build に export/import 用 key を焼く (rust-alc-api#391 opt-in 認証)。
+      # org secret ALC_STAGING_API_KEY → NUXT_PUBLIC_STAGING_API_KEY。client bundle に
+      # 入る公開値モデル (staging ページ閲覧者 = key を知る人) は issue #391 前提のとおり
+      staging_build_secret_name: 'ALC_STAGING_API_KEY'
+      staging_build_env_name: 'NUXT_PUBLIC_STAGING_API_KEY'
       install_command: 'npm install'
       has_integration: true
       # integration test は rust-alc-api コンテナ (docker-compose.test.yml の
