@@ -6,6 +6,7 @@ const { isAndroidApp } = useFingerprint()
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase as string
 const stagingTenantId = config.public.stagingTenantId as string
+const stagingApiKey = config.public.stagingApiKey as string
 const appVersion = config.public.appVersion as string
 
 onMounted(async () => {
@@ -43,7 +44,7 @@ useHead({
       <div class="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
     <NuxtPage v-else />
-    <StagingFooter :api-base="apiBase" :tenant-id="stagingTenantId" />
+    <StagingFooter :api-base="apiBase" :tenant-id="stagingTenantId" :staging-api-key="stagingApiKey" />
     <VersionBadge :api-base="apiBase" :frontend-version="appVersion" />
   </div>
 </template>
