@@ -9,8 +9,11 @@ on:
     tags: ['v*']
   pull_request:
     # PR 側は無駄打ちを抑えるため paths を残す (push/tag は常に発火させる)。
+    # .claude/** も含める: required check (Vitest+Coverage) が paths 不一致だと
+    # 永遠に来ず PR が "2 expected checks" で blocked になり管理者バイパス必須に
+    # なるため、skill / CLAUDE.md など .claude 配下の変更でも CI を発火させる。
     branches: [main]
-    paths: ['web/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml']
+    paths: ['web/**', '.claude/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml']
 
 permissions:
   contents: write
