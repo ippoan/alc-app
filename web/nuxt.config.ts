@@ -13,6 +13,8 @@ export default defineNuxtConfig({
       googleClientId: process.env.NUXT_PUBLIC_GOOGLE_CLIENT_ID || '',
       authWorkerUrl: process.env.NUXT_PUBLIC_AUTH_WORKER_URL || 'https://auth.ippoan.org',
       stagingTenantId: process.env.NUXT_PUBLIC_STAGING_TENANT_ID || '',
+      // staging export/import の X-Staging-Key (rust-alc-api#391 opt-in 認証)。空なら送らない
+      stagingApiKey: process.env.NUXT_PUBLIC_STAGING_API_KEY || '',
       appVersion: process.env.NUXT_PUBLIC_APP_VERSION || 'dev',
     },
   },
