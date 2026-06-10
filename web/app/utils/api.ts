@@ -708,8 +708,16 @@ export async function deleteDevice(id: string): Promise<void> {
   return request<void>(`/api/devices/${id}`, { method: 'DELETE' })
 }
 
-export async function getDeviceSettings(deviceId: string): Promise<DeviceSettingsResponse> {
-  return request<DeviceSettingsResponse>(`/api/devices/settings/${deviceId}`)
+export async function getDeviceSettings(
+  deviceId: string,
+  settingsToken?: string | null,
+): Promise<DeviceSettingsResponse> {
+  // 承認時に発行された device 保有 token を X-Device-Token で送る (Refs rust-alc-api#388)。
+  // 未発行の旧端末は従来どおりヘッダ無しで呼べる (backend 側が移行期互換)
+  const options: RequestInit = settingsToken
+    ? { headers: { 'X-Device-Token': settingsToken } }
+    : {}
+  return request<DeviceSettingsResponse>(`/api/devices/settings/${deviceId}`, options)
 }
 
 export async function updateDeviceCallSettings(

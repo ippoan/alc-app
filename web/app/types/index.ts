@@ -838,6 +838,8 @@ export interface RegistrationStatusResponse {
   device_id?: string
   tenant_id?: string
   device_name?: string
+  /** 承認時に発行される device 保有 token (approved 時のみ、Refs rust-alc-api#388) */
+  settings_token?: string
 }
 
 export interface ClaimRegistrationRequest {
@@ -852,6 +854,8 @@ export interface ClaimRegistrationResponse {
   device_id?: string
   tenant_id?: string
   message?: string
+  /** 即時登録フローで発行される device 保有 token (Refs rust-alc-api#388) */
+  settings_token?: string
 }
 
 export interface CreateTokenResponse {

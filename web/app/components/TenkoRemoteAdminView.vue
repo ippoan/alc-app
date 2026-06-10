@@ -291,13 +291,13 @@ function connectWatchSocket() {
   }
 }
 
-const { deviceId } = useAuth()
+const { deviceId, deviceSettingsToken } = useAuth()
 
 onMounted(async () => {
   // 着信通知モード: ルーム読み込みより先に管理者IDを復元 (requestCall で id_input スキップするため)
   if (props.initialRoomId && !authenticatedManagerId.value && deviceId.value) {
     try {
-      const settings = await getDeviceSettings(deviceId.value)
+      const settings = await getDeviceSettings(deviceId.value, deviceSettingsToken.value)
       if (settings.last_login_employee_id) {
         setManagerId(settings.last_login_employee_id)
       }

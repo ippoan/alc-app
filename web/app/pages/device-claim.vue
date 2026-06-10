@@ -43,7 +43,7 @@ async function submit() {
 
     if (res.flow_type === 'url' && res.device_id && res.tenant_id) {
       // URLフロー: 即アクティベート
-      activateDevice(res.tenant_id, res.device_id)
+      activateDevice(res.tenant_id, res.device_id, res.settings_token)
       status.value = 'activated'
     } else if (res.flow_type === 'qr_permanent') {
       // QR永久: 承認待ち
@@ -66,7 +66,7 @@ function startPolling() {
       const res = await checkDeviceRegistrationStatus(token.value)
       if (res.status === 'approved' && res.tenant_id && res.device_id) {
         stopPolling()
-        activateDevice(res.tenant_id, res.device_id)
+        activateDevice(res.tenant_id, res.device_id, res.settings_token)
         status.value = 'activated'
       } else if (res.status === 'rejected') {
         stopPolling()
