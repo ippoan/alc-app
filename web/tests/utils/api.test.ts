@@ -253,7 +253,10 @@ describe('api', () => {
       expect(result).toEqual({ id: '1' })
     })
 
-    it('should fall through to original 401 error when retry also fails', async () => {
+    it('should surface the retry error when retry fails with a non-401', async () => {
+      // createAuthFetch (v0.2.57) 移行で意味論を更新: retry の実エラー (403/500) を
+      // 伝播する。旧実装は元の 401 にフォールスルーしていたが、実ステータスを
+      // 隠すため lib 側の挙動を正とした
       if (isLive) {
         // live: 無効 JWT + refresher が直さない → retry も 401 → エラー
         const refresher = vi.fn(async () => {}) // token 差し替えなし
@@ -269,7 +272,7 @@ describe('api', () => {
         .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('unauthorized') })
         .mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden', text: () => Promise.resolve('denied') })
 
-      await expect(getEmployees()).rejects.toThrow('API エラー (401)')
+      await expect(getEmployees()).rejects.toThrow('API エラー (403): denied')
       expect(refresher).toHaveBeenCalledTimes(1)
       expectMock(mockFetch).toHaveBeenCalledTimes(2)
     })
@@ -378,8 +381,8 @@ describe('api', () => {
       expect(refresher).toHaveBeenCalledTimes(1)
     })
 
-    it('should handle retry text() error and fall through to original 401', async () => {
-      // 無効 JWT + refresher が JWT 直さない → retry も 401 → 元のエラー
+    it('should handle retry text() error and surface the retry status', async () => {
+      // retry の text() が落ちても statusText fallback で retry の実ステータスを伝播する
       const refresher = vi.fn(async () => {})
       initApi(isLive ? API_BASE : 'https://api.example.com', () => 'invalid-token', undefined, refresher)
 
@@ -387,7 +390,7 @@ describe('api', () => {
         .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('original') })
         .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Error', text: () => Promise.reject(new Error('fail')) })
 
-      await expect(getEmployees()).rejects.toThrow('API エラー (401)')
+      await expect(getEmployees()).rejects.toThrow(isLive ? 'API エラー (401)' : 'API エラー (500)')
     })
   })
 
