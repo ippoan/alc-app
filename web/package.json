@@ -29,6 +29,7 @@
     "wrangler": "^4.71.0"
   },
   "devDependencies": {
+    "@ippoan/test-utils": "^0.2.57",
     "@nuxt/test-utils": "^4.0.0",
     "@playwright/test": "^1.59.1",
     "@types/w3c-web-serial": "^1.0.8",
