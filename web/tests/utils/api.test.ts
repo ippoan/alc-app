@@ -1023,6 +1023,24 @@ describe('api', () => {
       const blob = new Blob(['photo'])
       await expect(uploadFacePhoto(blob)).rejects.toThrow('API 未初期化')
     })
+
+    it('should send Authorization header when JWT is available (no X-Tenant-ID)', async () => {
+      // buildAuthHeaders の JWT 優先分岐 (raw fetch 経路) のカバレッジ。
+      // request() は createAuthFetch 委譲になったため、upload 系で直接踏む
+      if (isLive) return
+      initApi('https://api.example.com', () => 'jwt-token', () => 'tenant-1')
+      stubResponse({
+        ok: true,
+        json: () => Promise.resolve({ url: 'https://r2.example.com/face.jpg' }),
+      })
+      const blob = new Blob(['photo'], { type: 'image/jpeg' })
+      await uploadFacePhoto(blob)
+      assertMock(() => {
+        const [, fetchOpts] = mockFetch.mock.calls[0]
+        expect(fetchOpts.headers['Authorization']).toBe('Bearer jwt-token')
+        expect(fetchOpts.headers['X-Tenant-ID']).toBeUndefined()
+      })
+    })
   })
 
   describe('uploadReportAudio', () => {
