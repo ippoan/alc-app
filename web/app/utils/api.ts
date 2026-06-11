@@ -20,14 +20,17 @@ import type {
   GuidanceRecord, CreateGuidanceRecord, GuidanceRecordsResponse, GuidanceRecordAttachment,
   CommunicationItem, CreateCommunicationItem, CommunicationItemsResponse,
 } from '~/types'
+import { createAuthFetch } from '@ippoan/auth-client'
 
 let apiBase = ''
 let getAccessToken: (() => string | null) | null = null
 let getDeviceTenantId: (() => string | null) | null = null
 let tokenRefresher: (() => Promise<void>) | null = null
 
-// 同時リフレッシュ防止用
-let refreshPromise: Promise<void> | null = null
+// JSON 経路の transport (ヘッダー付与 + 401→refresh→retry single-flight) は
+// @ippoan/auth-client の createAuthFetch に集約 (Refs ippoan/auth-worker#257)。
+// blob / FormData 系の raw fetch (uploadFacePhoto 等) は buildAuthHeaders を継続使用
+let authFetch: (<T>(path: string, init?: RequestInit) => Promise<T>) | null = null
 
 export function initApi(
   baseUrl: string,
@@ -39,6 +42,16 @@ export function initApi(
   getAccessToken = tokenGetter || null
   getDeviceTenantId = tenantGetter || null
   tokenRefresher = refresher || null
+  authFetch = apiBase
+    ? createAuthFetch({
+        baseUrl: apiBase,
+        tokenGetter: () => getAccessToken?.() ?? null,
+        // JWT 優先: token がある間は X-Tenant-ID を付けない (キオスクは fallback)
+        tenantIdGetter: () => (getAccessToken?.() ? null : getDeviceTenantId?.() ?? null),
+        tokenRefresher: refresher,
+        errorLabel: 'API エラー',
+      })
+    : null
 }
 
 /** 認証ヘッダーを構築 */
@@ -62,47 +75,8 @@ function buildAuthHeaders(): Record<string, string> {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (!apiBase) throw new Error('API 未初期化: initApi() を呼んでください')
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...buildAuthHeaders(),
-    ...(options.headers as Record<string, string> || {}),
-  }
-
-  const res = await fetch(`${apiBase}${path}`, { ...options, headers })
-
-  // 401 → トークンリフレッシュ → リトライ (1回のみ)
-  if (res.status === 401 && tokenRefresher && getAccessToken?.()) {
-    try {
-      if (!refreshPromise) {
-        refreshPromise = tokenRefresher().finally(() => { refreshPromise = null })
-      }
-      await refreshPromise
-
-      const retryHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...buildAuthHeaders(),
-        ...(options.headers as Record<string, string> || {}),
-      }
-      const retryRes = await fetch(`${apiBase}${path}`, { ...options, headers: retryHeaders })
-      if (!retryRes.ok) {
-        const body = await retryRes.text().catch(() => '')
-        throw new Error(`API エラー (${retryRes.status}): ${body || retryRes.statusText}`)
-      }
-      if (retryRes.status === 204) return undefined as T
-      return retryRes.json()
-    } catch {
-      // リフレッシュ失敗 → 元のエラーを投げる
-    }
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`API エラー (${res.status}): ${body || res.statusText}`)
-  }
-  if (res.status === 204) return undefined as T
-  return res.json()
+  if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
+  return authFetch<T>(path, options)
 }
 
 /** 測定結果を保存 */
