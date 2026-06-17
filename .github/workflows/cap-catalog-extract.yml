@@ -1,0 +1,20 @@
+name: cap-catalog extract
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  extract:
+    uses: ippoan/ci-workflows/.github/workflows/catalog-extract.yml@main
+    with:
+      language: ts
+      working_directory: web
+  auto-merge:
+    needs: [extract]
+    if: github.event_name == 'pull_request'
+    uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
+    secrets: inherit
