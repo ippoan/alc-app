@@ -37,7 +37,8 @@ export function cfEnv(event: H3Event): Record<string, unknown> {
 export function bearerToken(authHeader: string | undefined): string {
   if (!authHeader) return ''
   const m = /^Bearer\s+(.+)$/i.exec(authHeader)
-  return m ? m[1] : ''
+  // noUncheckedIndexedAccess 下では m[1] は string | undefined なので ?? で string に固定。
+  return m?.[1] ?? ''
 }
 
 /**
