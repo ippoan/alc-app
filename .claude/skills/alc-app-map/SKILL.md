@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:3dae2860f983b29cdd6622cbf6056f0e7d8ec739
+generated-from: alc-app:79f580782bd5116fd68b780471a1cf25abc636a5
 paths: [web/, cf-alc-signaling/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「alc.ippoan.org」等。
 ---
@@ -39,7 +39,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | **components** | `Tenko*.vue` (多数: Kiosk/VideoCall/RemoteAdminView/ScheduleManager 等) `*Dashboard.vue` `FaceAuth.vue` `AlcMeasurement.vue` `Device*.vue` | 点呼 UI / ダッシュボード / 測定 / デバイス管理 |
 | **utils** | `web/app/utils/{api,env,face-approval,face-db,fc1200,human-config,license,offline-queue,video-store}.ts` | API client / 顔 DB (IndexedDB) / FC-1200 / human 設定 / オフラインキュー |
 | **worker** | `web/app/workers/face-detect.worker.ts` | 顔検出 Web Worker (@vladmandic/human) |
-| **server route** | `web/server/api/{tenko-call/*,devices/*,github-checksum.get}.ts` | 点呼コール (drivers/numbers/register) / デバイス (FCM token / version / watchdog / claim) / NFC bridge checksum |
+| **server route** | `web/server/api/{proxy/[...path],tenko-call/*,devices/*,github-checksum.get}.ts` | **proxy/** = identity proxy (`createIdentityProxyHandler`、#434 step 2): cookie/Bearer JWT を AUTH_WORKER service binding で introspect → X-Tenant-ID + X-User-ID/Email/Role を注入して rust-alc-api へ転送。点呼コール / デバイス (FCM token / version / watchdog / claim) / NFC bridge checksum |
 | **型 (生成)** | `web/app/types/generated/*` (91 file) + `web/app/types/index.ts` | rust-alc-api models.rs から **ts-rs 自動生成** (`Backend` namespace)。手動編集禁止。フロント固有型は index.ts に手動定義 |
 | **middleware** | `web/app/middleware/auth.global.ts` | 全ルート認証ガード |
 
