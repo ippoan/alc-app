@@ -189,4 +189,30 @@ describe('useDeviceToken (#434 step 3c)', () => {
       expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k')).toBeNull()
     })
   })
+
+  describe('setupAsKiosk (self-pair)', () => {
+    it('成功すると credential を発行・保存して true', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ device_id: 'd1', device_secret: 's1' }),
+      }))
+      const useDeviceToken = await load()
+      const { setupAsKiosk, hasKioskCredential } = useDeviceToken()
+
+      expect(await setupAsKiosk('admin-jwt', 'kiosk-1')).toBe(true)
+      expect(hasKioskCredential.value).toBe(true)
+      expect(localStorage.getItem('alc_kiosk_device_id')).toBe('d1')
+      expect(localStorage.getItem('alc_kiosk_device_secret')).toBe('s1')
+    })
+
+    it('pairing 失敗時は false で credential を保存しない', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}) }))
+      const useDeviceToken = await load()
+      const { setupAsKiosk, hasKioskCredential } = useDeviceToken()
+
+      expect(await setupAsKiosk('admin-jwt', 'kiosk-1')).toBe(false)
+      expect(hasKioskCredential.value).toBe(false)
+      expect(localStorage.getItem('alc_kiosk_device_id')).toBeNull()
+    })
+  })
 })
