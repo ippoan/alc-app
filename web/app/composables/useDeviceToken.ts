@@ -130,6 +130,21 @@ export function useDeviceToken() {
     }
   }
 
+  /**
+   * この端末をキオスク化する (P1 / 方式1)。管理者がログイン済みの端末で 1 度だけ実行する。
+   * 現在の access token で `/device/pair` を叩いて device-kiosk credential を発行し、
+   * そのまま端末に保存する (self-pair)。以降この端末は (管理者ログアウト後) device JWT
+   * 経由で通信する。通常の管理者セッションは self-pair しないので分離は保たれる。
+   *
+   * @returns 成功時 true (credential 発行・保存済み)、失敗時 false
+   */
+  async function setupAsKiosk(adminToken: string, label: string): Promise<boolean> {
+    const cred = await pairKioskDevice(adminToken, label)
+    if (!cred) return false
+    storeKioskCredential(cred.device_id, cred.device_secret)
+    return true
+  }
+
   return {
     hasKioskCredential,
     kioskDeviceId: readonly(kioskDeviceId),
@@ -137,5 +152,6 @@ export function useDeviceToken() {
     clearKioskCredential,
     getDeviceJwt,
     pairKioskDevice,
+    setupAsKiosk,
   }
 }
