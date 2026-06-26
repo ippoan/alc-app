@@ -1,25 +1,21 @@
 /**
- * REST API proxy: `/api/proxy/<path>` → rust-alc-api `/api/<path>`
+ * REST API proxy: `/api/proxy/<path>` → auth-worker `/alc-proxy/*` → rust-alc-api `/api/<path>`
  *
- * #434 step 2 consumer 横展開 (carins #38 / nuxt_dtako_logs と同型)。
- * introspect 検証 → X-Tenant-ID + X-User-ID/Email/Role 注入を
- * @ippoan/auth-client/server の createIdentityProxyHandler に集約する。
+ * #434 step 3 (方式 B): introspect / ACL / OIDC mint / identity 注入を
+ * auth-worker `/alc-proxy/*` に集約し、consumer は createAuthWorkerProxyHandler で
+ * service binding (AUTH_WORKER) に thin-forward するだけ。旧 createIdentityProxyHandler
+ * (方式 A) を置換。consumer は X-Alc-Proxy-Secret (=INTERNAL_SHARED_SECRET、consumer
+ * proof) + X-Alc-Proxy-Origin + browser JWT のみ。auth-worker (#308) が
+ * X-Alc-Proxy-Secret を constant-time 検証してから JWT 検証 + ACL + OIDC mint +
+ * X-Tenant-ID/X-User-* 注入を行う。
  *
- * 旧版 (kiosk-proxy 手組み + introspectToken 直叩き、device-kiosk role のみ許可) を
- * 置換する。rust-alc-api は #441 で JWT 検証を撤去し注入 identity を信頼する dumb
- * backend になったため、X-Tenant-ID だけでなく X-User-ID/Email/Role も載せないと
- * AuthUser 必須 handler が 500 になる。createIdentityProxyHandler は introspect
- * 結果から X-User-* も載せてこれを解消する。
- *
- * - browser JWT は cookie (`logi_auth_token`) / Bearer のどちらでも受ける。
- *   キオスク端末は device JWT を Bearer で送る (= 段階移行で従来 caller を壊さない)。
- * - introspect は AUTH_WORKER service binding (worker-to-worker, in-process) で
- *   叩くので外部 req を増やさない。
- * - INTERNAL_SHARED_SECRET は Secrets Store binding (.get()) のため route 側で
- *   resolve してから渡す。
+ * - browser JWT は cookie (logi_auth_token) / Bearer のどちらでも受ける。キオスク端末は
+ *   device JWT を Bearer で送る (方式 B でも Authorization は素通しされ維持される)。
+ * - AUTH_WORKER service binding は方式 B では必須 (未設定は 503)。
+ * - INTERNAL_SHARED_SECRET は Secrets Store binding (.get()) のため route 側で resolve。
  */
 import type { H3Event } from 'h3'
-import { createIdentityProxyHandler } from '@ippoan/auth-client/server'
+import { createAuthWorkerProxyHandler } from '@ippoan/auth-client/server'
 
 function cfEnv(event: H3Event): Record<string, unknown> {
   return (event.context.cloudflare as { env?: Record<string, unknown> } | undefined)?.env ?? {}
@@ -36,8 +32,6 @@ async function resolveSecret(binding: unknown): Promise<string | null> {
 
 export default defineEventHandler(async (event) => {
   const env = cfEnv(event)
-  const config = useRuntimeConfig(event)
-
   const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET)
   if (!sharedSecret) {
     throw createError({
@@ -45,23 +39,17 @@ export default defineEventHandler(async (event) => {
       statusMessage: 'INTERNAL_SHARED_SECRET binding が未設定です',
     })
   }
-
-  const authWorkerUrl =
-    (config.public.authWorkerUrl as string) ||
-    (typeof env.NUXT_PUBLIC_AUTH_WORKER_URL === 'string' && env.NUXT_PUBLIC_AUTH_WORKER_URL
-      ? env.NUXT_PUBLIC_AUTH_WORKER_URL
-      : 'https://auth.ippoan.org')
   const authWorker = env.AUTH_WORKER as { fetch: typeof fetch } | undefined
+  if (!authWorker) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: 'AUTH_WORKER service binding が未設定です',
+    })
+  }
 
-  const proxy = createIdentityProxyHandler({
-    backendUrl: (e) =>
-      (useRuntimeConfig(e).alcApiUrl as string) ||
-      (useRuntimeConfig(e).public.apiBase as string) ||
-      'https://alc-api.ippoan.org',
-    authWorkerUrl,
+  const proxy = createAuthWorkerProxyHandler({
     sharedSecret,
-    // AUTH_WORKER service binding 経由で introspect (worker-to-worker, in-process)。
-    introspectFetch: authWorker ? () => authWorker.fetch.bind(authWorker) : undefined,
+    authWorkerFetch: () => authWorker.fetch.bind(authWorker),
   })
   return proxy(event)
 })
