@@ -13,7 +13,11 @@ on:
     # 永遠に来ず PR が "2 expected checks" で blocked になり管理者バイパス必須に
     # なるため、skill / CLAUDE.md など .claude 配下の変更でも CI を発火させる。
     branches: [main]
-    paths: ['web/**', '.claude/**', '.github/workflows/test.yml', '.github/workflows/release-wave-retest.yml', '.github/workflows/cap-catalog-extract.yml']
+    # workflow ファイル単独の変更でも必ず CI を発火させるため `.github/workflows/**`
+    # を catch-all で含める。個別 file 列挙だと新規 workflow を追加する PR
+    # (例: ci-shape-report.yml) で required check が来ず "2 expected checks" の
+    # デッドロックになる (上記コメント参照)。
+    paths: ['web/**', '.claude/**', '.github/workflows/**']
 
 permissions:
   contents: write
