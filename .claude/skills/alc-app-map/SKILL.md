@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:3dae2860f983b29cdd6622cbf6056f0e7d8ec739
+generated-from: alc-app:79f580782bd5116fd68b780471a1cf25abc636a5
 paths: [web/, cf-alc-signaling/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「alc.ippoan.org」等。
 ---
