@@ -9,9 +9,31 @@ import {
 } from '~/utils/api'
 import type { TestFcmAllResult } from '~/utils/api'
 
-const { user } = useAuth()
+const { user, accessToken } = useAuth()
 const isDeveloper = computed(() => user.value?.email === 'm.tama.ramu@gmail.com')
 const registrationMode = ref<'dev' | 'owner'>('dev')
+
+// この端末をキオスクにする (#434 P1 / 方式1): ログイン中の access token で
+// device-kiosk credential を self-pair し端末に保存する。ログアウト後この端末は
+// device 認証 (/api/proxy) で動作し、通常の管理者セッションとは分離される。
+const { hasKioskCredential, setupAsKiosk } = useDeviceToken()
+const kioskName = ref('')
+const kioskSetupBusy = ref(false)
+const kioskSetupMsg = ref('')
+async function setupThisAsKiosk() {
+  const token = accessToken.value
+  if (!token) {
+    kioskSetupMsg.value = 'ログインが必要です'
+    return
+  }
+  kioskSetupBusy.value = true
+  kioskSetupMsg.value = ''
+  const ok = await setupAsKiosk(token, kioskName.value.trim() || 'kiosk')
+  kioskSetupBusy.value = false
+  kioskSetupMsg.value = ok
+    ? 'この端末をキオスクに設定しました。ログアウトすると device 認証で動作します。'
+    : 'キオスク設定に失敗しました'
+}
 
 const devices = ref<Device[]>([])
 const pending = ref<DeviceRegistrationRequest[]>([])
@@ -579,6 +601,34 @@ onMounted(() => refresh())
 <template>
   <div class="space-y-6">
     <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+
+    <!-- この端末をキオスクにする (#434 P1 / 方式1) -->
+    <div class="bg-white rounded-xl shadow-sm p-4">
+      <h3 class="text-sm font-medium text-gray-800 mb-2">この端末をキオスクにする</h3>
+      <p class="text-xs text-gray-500 mb-3">
+        ログイン中の管理者権限でこの端末に device 認証 (device-kiosk) を発行します。
+        設定後ログアウトすると、この端末は X-Tenant-ID ではなく device 認証で API にアクセスします。
+      </p>
+      <p v-if="hasKioskCredential" class="text-xs text-green-600 mb-2">
+        ✓ この端末はキオスク設定済みです (再設定で credential を更新)
+      </p>
+      <div class="flex gap-2 items-center">
+        <input
+          v-model="kioskName"
+          type="text"
+          placeholder="端末名 (任意)"
+          class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
+        >
+        <button
+          class="px-3 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white disabled:opacity-50"
+          :disabled="kioskSetupBusy || !accessToken"
+          @click="setupThisAsKiosk"
+        >
+          {{ kioskSetupBusy ? '設定中…' : 'キオスクにする' }}
+        </button>
+      </div>
+      <p v-if="kioskSetupMsg" class="text-xs mt-2 text-gray-700">{{ kioskSetupMsg }}</p>
+    </div>
 
     <!-- 登録モード選択 (開発者のみ) -->
     <div v-if="isDeveloper" class="rounded-xl shadow-sm p-3" :class="registrationMode === 'dev' ? 'bg-indigo-50' : 'bg-amber-50'">

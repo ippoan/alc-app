@@ -26,6 +26,9 @@ let apiBase = ''
 let getAccessToken: (() => string | null) | null = null
 let getDeviceTenantId: (() => string | null) | null = null
 let tokenRefresher: (() => Promise<void>) | null = null
+// キオスク device JWT getter (#434 3b)。設定されていて admin JWT が無い時、
+// JSON リクエストを same-origin proxy (/api/proxy) 経由に切替える。
+let getKioskDeviceJwt: (() => Promise<string | null>) | null = null
 
 // JSON 経路の transport (ヘッダー付与 + 401→refresh→retry single-flight) は
 // @ippoan/auth-client の createAuthFetch に集約 (Refs ippoan/auth-worker#257)。
@@ -37,11 +40,13 @@ export function initApi(
   tokenGetter?: () => string | null,
   tenantGetter?: () => string | null,
   refresher?: () => Promise<void>,
+  deviceJwtGetter?: () => Promise<string | null>,
 ) {
   apiBase = baseUrl.replace(/\/$/, '')
   getAccessToken = tokenGetter || null
   getDeviceTenantId = tenantGetter || null
   tokenRefresher = refresher || null
+  getKioskDeviceJwt = deviceJwtGetter || null
   authFetch = apiBase
     ? createAuthFetch({
         baseUrl: apiBase,
@@ -76,7 +81,28 @@ function buildAuthHeaders(): Record<string, string> {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
+  // キオスク: admin JWT が無く device JWT があれば same-origin proxy (/api/proxy, #434)
+  // 経由にする。proxy が device JWT を introspect 検証して X-Tenant-ID に変換する。
+  // device JWT が無ければ従来の X-Tenant-ID 直 fetch に fallback (段階移行で非破壊)。
+  if (!getAccessToken?.() && getKioskDeviceJwt) {
+    const jwt = await getKioskDeviceJwt()
+    if (jwt) return proxyRequest<T>(path, jwt, options)
+  }
   return authFetch<T>(path, options)
+}
+
+/** device JWT を Bearer に載せて same-origin proxy (/api/proxy) に転送する。 */
+async function proxyRequest<T>(path: string, jwt: string, options: RequestInit): Promise<T> {
+  const proxyPath = path.replace(/^\/api\//, '/api/proxy/')
+  const headers = new Headers(options.headers)
+  headers.set('Authorization', `Bearer ${jwt}`)
+  const res = await fetch(proxyPath, { ...options, headers })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`API エラー (${res.status}): ${body || res.statusText}`)
+  }
+  if (res.status === 204) return undefined as T
+  return (await res.json()) as T
 }
 
 /** 測定結果を保存 */

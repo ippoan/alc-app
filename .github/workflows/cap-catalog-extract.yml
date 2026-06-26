@@ -1,0 +1,26 @@
+name: cap-catalog extract
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Per-job permission パターン (Refs ippoan/cap-catalog#29 retroactive 改善):
+# top-level は read のみ。auto-merge job 側で write を明示 elevate する。
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    uses: ippoan/ci-workflows/.github/workflows/catalog-extract.yml@main
+    with:
+      language: ts
+      working_directory: web
+  auto-merge:
+    needs: [extract]
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
+    secrets: inherit

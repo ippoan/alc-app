@@ -17,6 +17,26 @@
 	"secrets": {
 		"required": []
 	},
+	// キオスク proxy (server/api/proxy/[...path].ts, #434 Option ① / B案) 用。
+	// leg A: auth-worker /auth/introspect を service binding (worker-to-worker) で
+	// 叩いて device JWT を検証する。INTERNAL_SHARED_SECRET は introspect の認証用
+	// (carins / ref-files / cc-relay と同じ CF Secrets Store entry を物理共有)。
+	// leg B (rust-alc-api への X-Tenant-ID 転送) には proxy 真正性 secret を載せない。
+	// bare X-Tenant-ID 直叩きは Cloud Run の網層ロックダウンで塞ぐ方針なので
+	// TENANT_PROXY_SECRET binding は持たない (#434 B案)。
+	"services": [
+		{
+			"binding": "AUTH_WORKER",
+			"service": "auth-worker"
+		}
+	],
+	"secrets_store_secrets": [
+		{
+			"binding": "INTERNAL_SHARED_SECRET",
+			"store_id": "bd7bc91a3e5f4111add4acf6cb4b8733",
+			"secret_name": "INTERNAL_SHARED_SECRET"
+		}
+	],
 	"env": {
 		"staging": {
 			"name": "alc-app-staging",
@@ -28,14 +48,33 @@
 			],
 			"vars": {
 				"NUXT_PUBLIC_API_BASE": "https://rust-alc-api-staging-566bls5vfq-an.a.run.app",
+				// /api/proxy が叩く rust-alc-api backend (server-only, #434 step 2)。
+				"NUXT_ALC_API_URL": "https://rust-alc-api-staging-566bls5vfq-an.a.run.app",
 				"NUXT_PUBLIC_STAGING_TENANT_ID": "11111111-1111-1111-1111-111111111111",
 				"NUXT_PUBLIC_GOOGLE_CLIENT_ID": "747065218280-ugkrbgaoik32f5mmi94sso4b0026j3cp.apps.googleusercontent.com",
 				"NUXT_PUBLIC_AUTH_WORKER_URL": "https://auth-staging.ippoan.org"
-			}
+			},
+			// named env は top-level binding を継承しないので再宣言する。
+			// staging は auth-worker-staging を叩く。
+			"services": [
+				{
+					"binding": "AUTH_WORKER",
+					"service": "auth-worker-staging"
+				}
+			],
+			"secrets_store_secrets": [
+				{
+					"binding": "INTERNAL_SHARED_SECRET",
+					"store_id": "bd7bc91a3e5f4111add4acf6cb4b8733",
+					"secret_name": "INTERNAL_SHARED_SECRET"
+				}
+			]
 		}
 	},
 	"vars": {
 		"NUXT_PUBLIC_API_BASE": "https://alc-api.ippoan.org",
+		// /api/proxy が叩く rust-alc-api backend (server-only, #434 step 2)。
+		"NUXT_ALC_API_URL": "https://alc-api.ippoan.org",
 		"NUXT_PUBLIC_GOOGLE_CLIENT_ID": "747065218280-ugkrbgaoik32f5mmi94sso4b0026j3cp.apps.googleusercontent.com",
 		"NUXT_PUBLIC_AUTH_WORKER_URL": "https://auth.ippoan.org"
 	},

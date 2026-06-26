@@ -158,6 +158,49 @@ export const jwtToken = isLive ? makeJwt() : null
 let liveReady = false
 
 /**
+ * live 時: rust-alc-api は #441 で dumb backend 化し、`require_tenant_header` が
+ * `X-Tenant-ID` + `X-User-ID/Email/Role` を要求する (本番は server proxy =
+ * `createIdentityProxyHandler` が introspect 検証して注入する)。integration テストは
+ * proxy を介さず backend を直叩きするため、ここで proxy の代わりに検証済み相当の
+ * identity ヘッダをテスト用 claim (= makeJwt と同値、seed.sql の admin) から注入する
+ * (Refs rust-alc-api#434)。`createAuthFetch` は JWT がある時 `Bearer` のみ送り
+ * X-Tenant-ID を付けない設計なので、これが無いと全 authed endpoint が 401 になる。
+ *
+ * globalThis.fetch を冪等にラップする (二重ラップは Symbol guard で防ぐ)。
+ */
+const LIVE_IDENTITY_FETCH = Symbol.for('alc-app:live-identity-fetch')
+function installLiveIdentityFetch() {
+  if (!isLive) return
+  const current = globalThis.fetch as typeof fetch & { [LIVE_IDENTITY_FETCH]?: true }
+  if (current[LIVE_IDENTITY_FETCH]) return
+  const base = current
+  // proxy (createIdentityProxyHandler) を忠実に模倣する: introspect 成功相当 =
+  // **有効な Bearer (= テスト JWT) を持つリクエストにだけ** identity を注入する。
+  // 無効/不在 Bearer は注入せず backend に 401 させる → 無認証/無効トークンで
+  // 401 を期待する negative テスト (reject 系 / 401 token refresh 群) の意図を保つ。
+  // refresh テストも「無効 Bearer → 401 → refresher が有効 JWT に差替 → retry で
+  // 有効 Bearer → 注入 → 200」と正しく成立する。
+  const validBearer = `Bearer ${jwtToken}`
+  const wrapped = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const headers = new Headers(
+      init.headers ?? (input instanceof Request ? input.headers : undefined),
+    )
+    if (headers.get('Authorization') === validBearer) {
+      headers.set('X-Tenant-ID', TEST_TENANT_ID)
+      headers.set('X-User-ID', TEST_USER_ID)
+      headers.set('X-User-Email', 'test@example.com')
+      headers.set('X-User-Role', 'admin')
+    }
+    if (input instanceof Request) {
+      return base(new Request(input, { headers }))
+    }
+    return base(input, { ...init, headers })
+  }) as typeof fetch & { [LIVE_IDENTITY_FETCH]?: true }
+  wrapped[LIVE_IDENTITY_FETCH] = true
+  globalThis.fetch = wrapped
+}
+
+/**
  * live 時: happy-dom の FormData/Blob を Node.js native に戻す。
  * happy-dom は setupFiles より先に環境を適用するため、save-native では間に合わない。
  * undici + node:buffer から直接取得する。
@@ -174,6 +217,9 @@ export function restoreNativeApis() {
   const undici = require('undici')
   globalThis.FormData = undici.FormData
   globalThis.fetch = undici.fetch
+  // undici fetch に差し替えた後も identity 注入ラッパーを被せ直す
+  // (FormData テストは setupApi より先に restoreNativeApis だけ呼ぶため必須)。
+  installLiveIdentityFetch()
 }
 
 export async function setupApi() {
@@ -183,6 +229,7 @@ export async function setupApi() {
       liveReady = true
     }
     initApi(API_BASE, () => jwtToken!)
+    installLiveIdentityFetch()
   } else {
     vi.stubGlobal('fetch', mockFetch)
     initApi(API_BASE, undefined, () => 'test-tenant')

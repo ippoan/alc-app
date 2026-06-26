@@ -1850,3 +1850,67 @@ restoreNativeApis()
     })
   })
 })
+
+// #434 step 3b: キオスク device JWT があれば same-origin proxy (/api/proxy) 経由。
+// mock 専用 (live では proxy route は別 worker なので skip)。
+describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('admin JWT があれば proxy を使わず直 fetch する', async () => {
+    initApi(API_BASE, () => 'admin-jwt', undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await getEmployees()
+    const url = mockFetch.mock.calls[0][0] as string
+    expect(url).toBe(`${API_BASE}/api/employees`)
+    expect(url).not.toContain('/api/proxy/')
+  })
+
+  it('admin 無 + device JWT 有 → /api/proxy 経由 + Authorization Bearer', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson([{ id: 'e1' }]))
+    const result = await getEmployees()
+    expect(result).toEqual([{ id: 'e1' }])
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/employees')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer dev-jwt')
+  })
+
+  it('admin 無 + device JWT null → 従来の直 fetch に fallback', async () => {
+    initApi(API_BASE, undefined, () => 'tid', undefined, () => Promise.resolve(null))
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await getEmployees()
+    const url = mockFetch.mock.calls[0][0] as string
+    expect(url).toBe(`${API_BASE}/api/employees`)
+    expect(url).not.toContain('/api/proxy/')
+  })
+
+  it('proxy 経由 204 は undefined を返す', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(ok204())
+    expect(await deleteEmployee(UUID1)).toBeUndefined()
+    expect(mockFetch.mock.calls[0][0]).toBe(`/api/proxy/employees/${UUID1}`)
+  })
+
+  it('proxy 非 2xx は API エラー (body) を throw', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(errResponse(403, 'forbidden'))
+    await expect(getEmployees()).rejects.toThrow('API エラー (403): forbidden')
+  })
+
+  it('proxy 非 2xx で body 空なら statusText を使う', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Server Error',
+      text: () => Promise.resolve(''),
+    })
+    await expect(getEmployees()).rejects.toThrow('API エラー (500): Server Error')
+  })
+})

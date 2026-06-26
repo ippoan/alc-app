@@ -6,6 +6,9 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
 
   runtimeConfig: {
+    // server-only: /api/proxy が rust-alc-api を叩く backend URL (#434 step 2)。
+    // 未設定なら public.apiBase に fallback する (proxy handler 側で実装)。
+    alcApiUrl: process.env.NUXT_ALC_API_URL || '',
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:3001',
       signalingUrl: process.env.NUXT_PUBLIC_SIGNALING_URL || 'http://localhost:8787',
