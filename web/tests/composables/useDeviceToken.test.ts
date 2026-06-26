@@ -145,4 +145,48 @@ describe('useDeviceToken (#434 step 3c)', () => {
     expect(localStorage.getItem('alc_kiosk_device_id')).toBeNull()
     expect(await getDeviceJwt()).toBeNull()
   })
+
+  describe('pairKioskDevice (管理者側 /device/pair)', () => {
+    it('adminToken 空は fetch せず null', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('', 'kiosk-1')).toBeNull()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('role=device-kiosk で発行し credential を返す', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ device_id: 'd1', device_secret: 's1' }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const useDeviceToken = await load()
+      const cred = await useDeviceToken().pairKioskDevice('admin-jwt', 'kiosk-1')
+
+      expect(cred).toEqual({ device_id: 'd1', device_secret: 's1' })
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe('https://auth.ippoan.org/device/pair')
+      expect(init.headers.Authorization).toBe('Bearer admin-jwt')
+      expect(JSON.parse(init.body)).toEqual({ label: 'kiosk-1', role: 'device-kiosk' })
+    })
+
+    it('non-2xx は null', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}) }))
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k')).toBeNull()
+    })
+
+    it('device_id / device_secret 欠落は null', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ device_id: 'd1' }) }))
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k')).toBeNull()
+    })
+
+    it('fetch throw は null', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('net')))
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k')).toBeNull()
+    })
+  })
 })

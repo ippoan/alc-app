@@ -100,11 +100,42 @@ export function useDeviceToken() {
     }
   }
 
+  /**
+   * 管理者 (operator session) が auth-worker `/device/pair` で device-kiosk
+   * credential を発行する (P1 pairing の管理者側)。返り値の credential を QR 等で
+   * kiosk に渡し、kiosk 側で `storeKioskCredential` する想定。device_secret は
+   * 1 回限り (auth-worker は hash のみ保持) なので呼び出し側で即配布する。
+   *
+   * @param adminToken 管理者の access token (rust-alc-api / auth-worker 共有 JWT_SECRET)
+   * @param label      運用識別ラベル (端末名等)
+   * @returns 失敗時は null
+   */
+  async function pairKioskDevice(
+    adminToken: string,
+    label: string,
+  ): Promise<{ device_id: string; device_secret: string } | null> {
+    if (!adminToken) return null
+    try {
+      const res = await fetch(`${authWorkerUrl}/device/pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ label, role: 'device-kiosk' }),
+      })
+      if (!res.ok) return null
+      const data = (await res.json()) as { device_id?: string; device_secret?: string }
+      if (!data.device_id || !data.device_secret) return null
+      return { device_id: data.device_id, device_secret: data.device_secret }
+    } catch {
+      return null
+    }
+  }
+
   return {
     hasKioskCredential,
     kioskDeviceId: readonly(kioskDeviceId),
     storeKioskCredential,
     clearKioskCredential,
     getDeviceJwt,
+    pairKioskDevice,
   }
 }
