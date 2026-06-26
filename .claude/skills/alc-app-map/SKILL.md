@@ -39,7 +39,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | **components** | `Tenko*.vue` (多数: Kiosk/VideoCall/RemoteAdminView/ScheduleManager 等) `*Dashboard.vue` `FaceAuth.vue` `AlcMeasurement.vue` `Device*.vue` | 点呼 UI / ダッシュボード / 測定 / デバイス管理 |
 | **utils** | `web/app/utils/{api,env,face-approval,face-db,fc1200,human-config,license,offline-queue,video-store}.ts` | API client / 顔 DB (IndexedDB) / FC-1200 / human 設定 / オフラインキュー |
 | **worker** | `web/app/workers/face-detect.worker.ts` | 顔検出 Web Worker (@vladmandic/human) |
-| **server route** | `web/server/api/{tenko-call/*,devices/*,github-checksum.get}.ts` | 点呼コール (drivers/numbers/register) / デバイス (FCM token / version / watchdog / claim) / NFC bridge checksum |
+| **server route** | `web/server/api/{proxy/[...path],tenko-call/*,devices/*,github-checksum.get}.ts` | **proxy/** = identity proxy (`createIdentityProxyHandler`、#434 step 2): cookie/Bearer JWT を AUTH_WORKER service binding で introspect → X-Tenant-ID + X-User-ID/Email/Role を注入して rust-alc-api へ転送。点呼コール / デバイス (FCM token / version / watchdog / claim) / NFC bridge checksum |
 | **型 (生成)** | `web/app/types/generated/*` (91 file) + `web/app/types/index.ts` | rust-alc-api models.rs から **ts-rs 自動生成** (`Backend` namespace)。手動編集禁止。フロント固有型は index.ts に手動定義 |
 | **middleware** | `web/app/middleware/auth.global.ts` | 全ルート認証ガード |
 

@@ -48,6 +48,8 @@
 			],
 			"vars": {
 				"NUXT_PUBLIC_API_BASE": "https://rust-alc-api-staging-566bls5vfq-an.a.run.app",
+				// /api/proxy が叩く rust-alc-api backend (server-only, #434 step 2)。
+				"NUXT_ALC_API_URL": "https://rust-alc-api-staging-566bls5vfq-an.a.run.app",
 				"NUXT_PUBLIC_STAGING_TENANT_ID": "11111111-1111-1111-1111-111111111111",
 				"NUXT_PUBLIC_GOOGLE_CLIENT_ID": "747065218280-ugkrbgaoik32f5mmi94sso4b0026j3cp.apps.googleusercontent.com",
 				"NUXT_PUBLIC_AUTH_WORKER_URL": "https://auth-staging.ippoan.org"
@@ -71,6 +73,8 @@
 	},
 	"vars": {
 		"NUXT_PUBLIC_API_BASE": "https://alc-api.ippoan.org",
+		// /api/proxy が叩く rust-alc-api backend (server-only, #434 step 2)。
+		"NUXT_ALC_API_URL": "https://alc-api.ippoan.org",
 		"NUXT_PUBLIC_GOOGLE_CLIENT_ID": "747065218280-ugkrbgaoik32f5mmi94sso4b0026j3cp.apps.googleusercontent.com",
 		"NUXT_PUBLIC_AUTH_WORKER_URL": "https://auth.ippoan.org"
 	},
