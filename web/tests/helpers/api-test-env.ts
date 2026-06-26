@@ -174,14 +174,23 @@ function installLiveIdentityFetch() {
   const current = globalThis.fetch as typeof fetch & { [LIVE_IDENTITY_FETCH]?: true }
   if (current[LIVE_IDENTITY_FETCH]) return
   const base = current
+  // proxy (createIdentityProxyHandler) を忠実に模倣する: introspect 成功相当 =
+  // **有効な Bearer (= テスト JWT) を持つリクエストにだけ** identity を注入する。
+  // 無効/不在 Bearer は注入せず backend に 401 させる → 無認証/無効トークンで
+  // 401 を期待する negative テスト (reject 系 / 401 token refresh 群) の意図を保つ。
+  // refresh テストも「無効 Bearer → 401 → refresher が有効 JWT に差替 → retry で
+  // 有効 Bearer → 注入 → 200」と正しく成立する。
+  const validBearer = `Bearer ${jwtToken}`
   const wrapped = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = new Headers(
       init.headers ?? (input instanceof Request ? input.headers : undefined),
     )
-    headers.set('X-Tenant-ID', TEST_TENANT_ID)
-    headers.set('X-User-ID', TEST_USER_ID)
-    headers.set('X-User-Email', 'test@example.com')
-    headers.set('X-User-Role', 'admin')
+    if (headers.get('Authorization') === validBearer) {
+      headers.set('X-Tenant-ID', TEST_TENANT_ID)
+      headers.set('X-User-ID', TEST_USER_ID)
+      headers.set('X-User-Email', 'test@example.com')
+      headers.set('X-User-Role', 'admin')
+    }
     if (input instanceof Request) {
       return base(new Request(input, { headers }))
     }
