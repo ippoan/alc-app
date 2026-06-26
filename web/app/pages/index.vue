@@ -25,6 +25,9 @@ initApi(
   () => accessToken.value,
   () => deviceTenantId.value,
   () => refreshAccessToken(),
+  // キオスク: device credential があれば device JWT を mint して proxy 経由に切替 (#434 3b)。
+  // 無ければ null → 従来の X-Tenant-ID 直 fetch に fallback (非破壊)。
+  () => useDeviceToken().getDeviceJwt(),
 )
 
 // 顔データ同期 (singleton)
