@@ -32,8 +32,17 @@ let getKioskDeviceJwt: (() => Promise<string | null>) | null = null
 
 // JSON 経路の transport (ヘッダー付与 + 401→refresh→retry single-flight) は
 // @ippoan/auth-client の createAuthFetch に集約 (Refs ippoan/auth-worker#257)。
-// blob / FormData 系の raw fetch (uploadFacePhoto 等) は buildAuthHeaders を継続使用
+// blob / FormData 系の raw fetch (uploadFacePhoto 等) は proxyRawFetch を使用
 let authFetch: (<T>(path: string, init?: RequestInit) => Promise<T>) | null = null
+// admin browser JWT を same-origin proxy (/api/proxy) 経由で送るための 2 つ目のインスタンス
+// (#434 step 3d caller #3)。baseUrl='' で same-origin、X-Tenant-ID は付けない (proxy が注入)。
+// authFetch と同じ 401→refresh→retry を再利用するため createAuthFetch をもう 1 個作る。
+let proxyAuthFetch: (<T>(path: string, init?: RequestInit) => Promise<T>) | null = null
+
+/** `/api/...` を same-origin proxy path `/api/proxy/...` に書き換える (proxyRequest と同規約)。 */
+function toProxyPath(path: string): string {
+  return path.replace(/^\/api\//, '/api/proxy/')
+}
 
 export function initApi(
   baseUrl: string,
@@ -47,53 +56,63 @@ export function initApi(
   getDeviceTenantId = tenantGetter || null
   tokenRefresher = refresher || null
   getKioskDeviceJwt = deviceJwtGetter || null
+  // authFetch は **admin JWT が無い fallback 経路専用** (admin は proxyAuthFetch へ行く)。
+  // よって token は常に付けず、X-Tenant-ID kiosk fallback だけ載せる。
   authFetch = apiBase
     ? createAuthFetch({
         baseUrl: apiBase,
-        tokenGetter: () => getAccessToken?.() ?? null,
-        // JWT 優先: token がある間は X-Tenant-ID を付けない (キオスクは fallback)
-        tenantIdGetter: () => (getAccessToken?.() ? null : getDeviceTenantId?.() ?? null),
+        tokenGetter: () => null,
+        tenantIdGetter: () => getDeviceTenantId?.() ?? null,
         tokenRefresher: refresher,
         errorLabel: 'API エラー',
       })
     : null
+  // proxy 経路は same-origin (/api/proxy) なので apiBase 非依存。admin JWT があるときだけ
+  // 呼ばれる (request() の guard 後) ので getAccessToken は non-null。X-Tenant-ID は
+  // proxy (auth-worker /alc-proxy) が検証済み JWT から注入するため consumer は送らない。
+  proxyAuthFetch = createAuthFetch({
+    baseUrl: '',
+    tokenGetter: () => getAccessToken!(),
+    tenantIdGetter: () => null,
+    tokenRefresher: refresher,
+    errorLabel: 'API エラー',
+  })
 }
 
 /** 認証ヘッダーを構築 */
+// proxyRawFetch の fallback (= admin/device JWT が無い経路) でだけ使う。JWT がある場合は
+// proxyRawFetch が proxy 経由にするためここには来ない。残るは X-Tenant-ID kiosk fallback のみ。
 function buildAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
-
-  // JWT 優先
-  const token = getAccessToken?.()
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-    return headers
-  }
-
-  // フォールバック: キオスクモード (X-Tenant-ID)
   const tenantId = getDeviceTenantId?.()
-  if (tenantId) {
-    headers['X-Tenant-ID'] = tenantId
-  }
-
+  if (tenantId) headers['X-Tenant-ID'] = tenantId
   return headers
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
-  // キオスク: admin JWT が無く device JWT があれば same-origin proxy (/api/proxy, #434)
-  // 経由にする。proxy が device JWT を introspect 検証して X-Tenant-ID に変換する。
-  // device JWT が無ければ従来の X-Tenant-ID 直 fetch に fallback (段階移行で非破壊)。
-  if (!getAccessToken?.() && getKioskDeviceJwt) {
+  // admin browser JWT があれば same-origin proxy (/api/proxy, #434 step 3d) 経由にする。
+  // proxy (auth-worker /alc-proxy) が JWT を検証して X-Tenant-ID + X-User-* を注入し
+  // OIDC mint する (Cloud Run IAM lockdown 後も到達可)。401→refresh→retry を効かせるため
+  // proxyAuthFetch (createAuthFetch インスタンス) を使う。
+  if (getAccessToken?.()) {
+    // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
+    // 通過 = initApi 済み) ので non-null。
+    return proxyAuthFetch!<T>(toProxyPath(path), options)
+  }
+  // キオスク: admin JWT が無く device JWT があれば same-origin proxy 経由。
+  // proxy が device JWT を検証して X-Tenant-ID に変換する。
+  if (getKioskDeviceJwt) {
     const jwt = await getKioskDeviceJwt()
     if (jwt) return proxyRequest<T>(path, jwt, options)
   }
+  // 認証情報なし: 従来の X-Tenant-ID 直 fetch に fallback (段階移行で非破壊)。
   return authFetch<T>(path, options)
 }
 
 /** device JWT を Bearer に載せて same-origin proxy (/api/proxy) に転送する。 */
 async function proxyRequest<T>(path: string, jwt: string, options: RequestInit): Promise<T> {
-  const proxyPath = path.replace(/^\/api\//, '/api/proxy/')
+  const proxyPath = toProxyPath(path)
   const headers = new Headers(options.headers)
   headers.set('Authorization', `Bearer ${jwt}`)
   const res = await fetch(proxyPath, { ...options, headers })
@@ -103,6 +122,27 @@ async function proxyRequest<T>(path: string, jwt: string, options: RequestInit):
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
+}
+
+/**
+ * blob / FormData 系の raw fetch を認証付きで投げ Response をそのまま返す (#434 step 3d)。
+ * admin browser JWT or device JWT があれば same-origin proxy (/api/proxy) 経由
+ * (proxy が X-Tenant-ID 注入 + OIDC mint)。どちらも無ければ従来の `${apiBase}` 直叩き
+ * (X-Tenant-ID fallback) に倒す (lockdown 前の非破壊)。
+ */
+async function proxyRawFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  let jwt = getAccessToken?.() ?? null
+  if (!jwt && getKioskDeviceJwt) jwt = await getKioskDeviceJwt()
+  if (jwt) {
+    const headers = new Headers(init.headers)
+    headers.set('Authorization', `Bearer ${jwt}`)
+    return fetch(toProxyPath(path), { ...init, headers })
+  }
+  // 認証情報なし: 直叩き fallback
+  if (!apiBase) throw new Error('API 未初期化')
+  const headers = new Headers(init.headers)
+  for (const [k, v] of Object.entries(buildAuthHeaders())) headers.set(k, v)
+  return fetch(`${apiBase}${path}`, { ...init, headers })
 }
 
 /** 測定結果を保存 */
@@ -269,10 +309,8 @@ export async function updateEmployeeLicense(
 export async function fetchFacePhoto(measurementId: string): Promise<string | null> {
   if (!apiBase) return null
 
-  const authHeaders = buildAuthHeaders()
   try {
-    const res = await fetch(`${apiBase}/api/measurements/${measurementId}/face-photo`, {
-      headers: authHeaders,
+    const res = await proxyRawFetch(`/api/measurements/${measurementId}/face-photo`, {
       cache: 'no-store',
     })
     if (!res.ok) return null
@@ -288,12 +326,8 @@ export async function uploadFacePhoto(blob: Blob): Promise<string> {
   const formData = new FormData()
   formData.append('file', blob, 'face.jpg')
 
-  if (!apiBase) throw new Error('API 未初期化')
-
-  const authHeaders = buildAuthHeaders()
-  const res = await fetch(`${apiBase}/api/upload/face-photo`, {
+  const res = await proxyRawFetch(`/api/upload/face-photo`, {
     method: 'POST',
-    headers: authHeaders,
     body: formData,
   })
 
@@ -307,12 +341,8 @@ export async function uploadReportAudio(blob: Blob): Promise<string> {
   const formData = new FormData()
   formData.append('file', blob, 'report.webm')
 
-  if (!apiBase) throw new Error('API 未初期化')
-
-  const authHeaders = buildAuthHeaders()
-  const res = await fetch(`${apiBase}/api/upload/report-audio`, {
+  const res = await proxyRawFetch(`/api/upload/report-audio`, {
     method: 'POST',
-    headers: authHeaders,
     body: formData,
   })
 
@@ -325,12 +355,8 @@ export async function uploadBlowVideo(blob: Blob): Promise<string> {
   const formData = new FormData()
   formData.append('file', blob, 'blow.webm')
 
-  if (!apiBase) throw new Error('API 未初期化')
-
-  const authHeaders = buildAuthHeaders()
-  const res = await fetch(`${apiBase}/api/upload/blow-video`, {
+  const res = await proxyRawFetch(`/api/upload/blow-video`, {
     method: 'POST',
-    headers: authHeaders,
     body: formData,
   })
 
@@ -355,9 +381,7 @@ function toParams(filter: object): string {
 
 /** CSV ダウンロード (blob → ブラウザ保存) */
 async function downloadCsv(path: string, filename: string): Promise<void> {
-  if (!apiBase) throw new Error('API 未初期化')
-  const headers = buildAuthHeaders()
-  const res = await fetch(`${apiBase}${path}`, { headers })
+  const res = await proxyRawFetch(path, {})
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`CSV ダウンロード失敗 (${res.status}): ${body || res.statusText}`)
@@ -628,6 +652,53 @@ export async function downloadTimePunchesCsv(filter: TimePunchFilter = {}): Prom
   await downloadCsv(`/api/timecard/punches/csv${toParams(filter)}`, 'time-punches.csv')
 }
 
+// ============================================================
+// 中間点呼 (TenkoCall) 管理 API (admin)
+// ============================================================
+// 管理画面 (TenkoCallManager / EmployeeList) の admin 操作。request() 経由で
+// same-origin proxy (/api/proxy → auth-worker /alc-proxy) に通す (#434 step 3d)。
+// public な register / tenko (キオスク端末側) はここには含めない。
+
+export interface TenkoCallNumber {
+  id: number
+  call_number: string
+  tenant_id: string
+  label: string | null
+  created_at: string
+}
+
+export interface TenkoCallDriver {
+  id: number
+  phone_number: string
+  driver_name: string
+  call_number: string | null
+  employee_code: string | null
+  tenant_id: string
+  created_at: string
+}
+
+export async function getTenkoCallNumbers(): Promise<TenkoCallNumber[]> {
+  return request<TenkoCallNumber[]>('/api/tenko-call/numbers')
+}
+
+export async function addTenkoCallNumber(body: {
+  call_number: string
+  label: string | null
+}): Promise<unknown> {
+  return request<unknown>('/api/tenko-call/numbers', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteTenkoCallNumber(id: number): Promise<void> {
+  await request<void>(`/api/tenko-call/numbers/${id}`, { method: 'DELETE' })
+}
+
+export async function getTenkoCallDrivers(): Promise<TenkoCallDriver[]> {
+  return request<TenkoCallDriver[]>('/api/tenko-call/drivers')
+}
+
 // ============ Device Registration ============
 
 // 公開API (認証不要)
@@ -864,13 +935,10 @@ export async function deleteGuidanceRecord(id: string): Promise<void> {
 }
 
 export async function uploadGuidanceAttachment(recordId: string, file: File): Promise<GuidanceRecordAttachment> {
-  if (!apiBase) throw new Error('API 未初期化')
   const formData = new FormData()
   formData.append('file', file, file.name)
-  const headers = buildAuthHeaders()
-  const res = await fetch(`${apiBase}/api/guidance-records/${recordId}/attachments`, {
+  const res = await proxyRawFetch(`/api/guidance-records/${recordId}/attachments`, {
     method: 'POST',
-    headers,
     body: formData,
   })
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`)

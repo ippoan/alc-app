@@ -51,6 +51,8 @@ import {
   listGuidanceRecords, createGuidanceRecord, deleteGuidanceRecord, uploadGuidanceAttachment, deleteGuidanceAttachment,
   // Communication items
   listCommunicationItems, getActiveCommunicationItems, createCommunicationItem, updateCommunicationItem, deleteCommunicationItem,
+  // TenkoCall admin (#434 step 3d)
+  getTenkoCallNumbers, addTenkoCallNumber, deleteTenkoCallNumber, getTenkoCallDrivers,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -1024,9 +1026,8 @@ describe('api', () => {
       await expect(uploadFacePhoto(blob)).rejects.toThrow('API 未初期化')
     })
 
-    it('should send Authorization header when JWT is available (no X-Tenant-ID)', async () => {
-      // buildAuthHeaders の JWT 優先分岐 (raw fetch 経路) のカバレッジ。
-      // request() は createAuthFetch 委譲になったため、upload 系で直接踏む
+    it('admin JWT があれば upload も /api/proxy 経由 (Authorization Bearer, X-Tenant-ID なし)', async () => {
+      // #434 step 3d: admin JWT あり → proxyRawFetch が same-origin proxy 経由にする。
       if (isLive) return
       initApi('https://api.example.com', () => 'jwt-token', () => 'tenant-1')
       stubResponse({
@@ -1036,9 +1037,11 @@ describe('api', () => {
       const blob = new Blob(['photo'], { type: 'image/jpeg' })
       await uploadFacePhoto(blob)
       assertMock(() => {
-        const [, fetchOpts] = mockFetch.mock.calls[0]
-        expect(fetchOpts.headers['Authorization']).toBe('Bearer jwt-token')
-        expect(fetchOpts.headers['X-Tenant-ID']).toBeUndefined()
+        const [url, fetchOpts] = mockFetch.mock.calls[0]
+        expect(url).toBe('/api/proxy/upload/face-photo')
+        const h = new Headers(fetchOpts.headers)
+        expect(h.get('Authorization')).toBe('Bearer jwt-token')
+        expect(h.get('X-Tenant-ID')).toBeNull()
       })
     })
   })
@@ -1838,6 +1841,41 @@ restoreNativeApis()
     })
   })
 
+  describe('TenkoCall admin (#434 step 3d)', () => {
+    it('getTenkoCallNumbers returns list', async () => {
+      const r = await verifyApi(
+        () => getTenkoCallNumbers(),
+        [{ id: 1, call_number: '0120', tenant_id: 't', label: null, created_at: '2026-01-01' }],
+      )
+      expect(Array.isArray(r)).toBe(true)
+    })
+
+    it('getTenkoCallDrivers returns list', async () => {
+      const r = await verifyApi(() => getTenkoCallDrivers(), [])
+      expect(Array.isArray(r)).toBe(true)
+    })
+
+    it('addTenkoCallNumber posts to /api/tenko-call/numbers', async () => {
+      stubOk({ id: 2 })
+      await callApi(() => addTenkoCallNumber({ call_number: '0120', label: null }))
+      assertMock(() => {
+        const [url, init] = mockFetch.mock.calls[0]
+        expect(String(url)).toContain('/api/tenko-call/numbers')
+        expect(init.method).toBe('POST')
+      })
+    })
+
+    it('deleteTenkoCallNumber deletes /api/tenko-call/numbers/{id}', async () => {
+      stub204()
+      await callApi(() => deleteTenkoCallNumber(1))
+      assertMock(() => {
+        const [url, init] = mockFetch.mock.calls[0]
+        expect(String(url)).toContain('/api/tenko-call/numbers/1')
+        expect(init.method).toBe('DELETE')
+      })
+    })
+  })
+
   describe.skipIf(!isLive)('Auth (live only)', () => {
     it('should reject request without auth', async () => {
       initApi(API_BASE)
@@ -1862,13 +1900,17 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('admin JWT があれば proxy を使わず直 fetch する', async () => {
-    initApi(API_BASE, () => 'admin-jwt', undefined, undefined, () => Promise.resolve('dev-jwt'))
-    mockFetch.mockResolvedValueOnce(okJson([]))
-    await getEmployees()
-    const url = mockFetch.mock.calls[0][0] as string
-    expect(url).toBe(`${API_BASE}/api/employees`)
-    expect(url).not.toContain('/api/proxy/')
+  it('admin JWT があれば /api/proxy 経由 + Authorization Bearer (X-Tenant-ID なし)', async () => {
+    // #434 step 3d: admin browser JWT も proxy 経由にする (auth-worker が X-Tenant-ID 注入)。
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson([{ id: 'e1' }]))
+    const result = await getEmployees()
+    expect(result).toEqual([{ id: 'e1' }])
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/employees')
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer admin-jwt')
+    expect(h.get('X-Tenant-ID')).toBeNull()
   })
 
   it('admin 無 + device JWT 有 → /api/proxy 経由 + Authorization Bearer', async () => {
@@ -1888,6 +1930,17 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     const url = mockFetch.mock.calls[0][0] as string
     expect(url).toBe(`${API_BASE}/api/employees`)
     expect(url).not.toContain('/api/proxy/')
+  })
+
+  it('admin/device/tenant すべて無 → 直 fetch + auth ヘッダー無 (authFetch fallback)', async () => {
+    initApi(API_BASE)
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await getEmployees()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe(`${API_BASE}/api/employees`)
+    const h = new Headers(init.headers)
+    expect(h.get('X-Tenant-ID')).toBeNull()
+    expect(h.get('Authorization')).toBeNull()
   })
 
   it('proxy 経由 204 は undefined を返す', async () => {
@@ -1912,5 +1965,44 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
       text: () => Promise.resolve(''),
     })
     await expect(getEmployees()).rejects.toThrow('API エラー (500): Server Error')
+  })
+
+  // --- proxyRawFetch (blob/FormData raw 経路) の分岐カバレッジ ---
+
+  it('device JWT → upload も /api/proxy 経由 (proxyRawFetch device 分岐)', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ url: 'https://r2/x.jpg' }))
+    const url = await uploadFacePhoto(new Blob(['x']))
+    expect(url).toBe('https://r2/x.jpg')
+    const [u, init] = mockFetch.mock.calls[0]
+    expect(u).toBe('/api/proxy/upload/face-photo')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer dev-jwt')
+  })
+
+  it('admin/device JWT 無 + tenant 有 → upload 直 fetch + X-Tenant-ID (proxyRawFetch fallback)', async () => {
+    initApi(API_BASE, undefined, () => 'tid-1')
+    mockFetch.mockResolvedValueOnce(okJson({ url: 'https://r2/x.jpg' }))
+    await uploadFacePhoto(new Blob(['x']))
+    const [u, init] = mockFetch.mock.calls[0]
+    expect(u).toBe(`${API_BASE}/api/upload/face-photo`)
+    const h = new Headers(init.headers)
+    expect(h.get('X-Tenant-ID')).toBe('tid-1')
+    expect(h.get('Authorization')).toBeNull()
+  })
+
+  it('admin/device JWT 無 + tenant 無 → upload 直 fetch + 空 auth ヘッダー (buildAuthHeaders 空分岐)', async () => {
+    initApi(API_BASE)
+    mockFetch.mockResolvedValueOnce(okJson({ url: 'https://r2/x.jpg' }))
+    await uploadFacePhoto(new Blob(['x']))
+    const [u, init] = mockFetch.mock.calls[0]
+    expect(u).toBe(`${API_BASE}/api/upload/face-photo`)
+    const h = new Headers(init.headers)
+    expect(h.get('X-Tenant-ID')).toBeNull()
+    expect(h.get('Authorization')).toBeNull()
+  })
+
+  it('apiBase 未設定 + 認証無 → proxyRawFetch が API 未初期化 を throw', async () => {
+    initApi('')
+    await expect(uploadFacePhoto(new Blob(['x']))).rejects.toThrow('API 未初期化')
   })
 })

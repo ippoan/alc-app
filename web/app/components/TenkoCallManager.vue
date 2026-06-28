@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import QRCode from 'qrcode'
-
-interface TenkoCallNumber {
-  id: number
-  call_number: string
-  tenant_id: string
-  label: string | null
-  created_at: string
-}
+import {
+  getTenkoCallNumbers,
+  addTenkoCallNumber,
+  deleteTenkoCallNumber,
+  type TenkoCallNumber,
+} from '~/utils/api'
 
 const numbers = ref<TenkoCallNumber[]>([])
 const loading = ref(false)
@@ -21,15 +19,6 @@ const adding = ref(false)
 // QRコード画像キャッシュ
 const qrImages = ref<Record<string, string>>({})
 
-const { accessToken, deviceTenantId } = useAuth()
-
-function authHeaders() {
-  const h: Record<string, string> = {}
-  if (accessToken.value) h['Authorization'] = `Bearer ${accessToken.value}`
-  if (deviceTenantId.value) h['X-Tenant-ID'] = deviceTenantId.value
-  return h
-}
-
 async function generateQr(callNumber: string): Promise<string> {
   if (qrImages.value[callNumber]) return qrImages.value[callNumber]
   const url = await QRCode.toDataURL(callNumber, { width: 200, margin: 2 })
@@ -41,7 +30,7 @@ async function fetchData() {
   loading.value = true
   error.value = ''
   try {
-    const nums = await $fetch<TenkoCallNumber[]>('/api/tenko-call/numbers', { headers: authHeaders() })
+    const nums = await getTenkoCallNumbers()
     numbers.value = nums
     // QRコード生成
     for (const num of nums) {
@@ -59,13 +48,9 @@ async function addNumber() {
   adding.value = true
   error.value = ''
   try {
-    await $fetch('/api/tenko-call/numbers', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: {
-        call_number: newCallNumber.value.trim(),
-        label: newLabel.value.trim() || null,
-      },
+    await addTenkoCallNumber({
+      call_number: newCallNumber.value.trim(),
+      label: newLabel.value.trim() || null,
     })
     newCallNumber.value = ''
     newLabel.value = ''
@@ -80,10 +65,7 @@ async function addNumber() {
 async function removeNumber(id: number) {
   if (!confirm('この点呼用番号を削除しますか？')) return
   try {
-    await $fetch(`/api/tenko-call/numbers/${id}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    })
+    await deleteTenkoCallNumber(id)
     await fetchData()
   } catch (e: any) {
     error.value = e.message || '削除に失敗しました'
