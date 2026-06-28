@@ -181,6 +181,15 @@ function installLiveIdentityFetch() {
   // refresh テストも「無効 Bearer → 401 → refresher が有効 JWT に差替 → retry で
   // 有効 Bearer → 注入 → 200」と正しく成立する。
   const validBearer = `Bearer ${jwtToken}`
+  // admin/device JWT 経路は same-origin `/api/proxy/<rest>` に出る (#434 step 3d)。
+  // live は Nuxt server proxy が無いため、ここで proxy + auth-worker /alc-proxy を模倣:
+  // path を `${API_BASE}/api/<rest>` に書き換え、有効 Bearer なら identity を注入する。
+  const rewriteProxyUrl = (url: string): string => {
+    const marker = '/api/proxy/'
+    const i = url.indexOf(marker)
+    if (i === -1) return url
+    return `${API_BASE}/api/${url.slice(i + marker.length)}`
+  }
   const wrapped = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = new Headers(
       init.headers ?? (input instanceof Request ? input.headers : undefined),
@@ -192,9 +201,12 @@ function installLiveIdentityFetch() {
       headers.set('X-User-Role', 'admin')
     }
     if (input instanceof Request) {
+      // 本 codebase の fetch は全て string URL なので Request 経路は実質通らない。
+      // 念のため header 注入のみ行い URL 書換はしない (proxy path は string で来る)。
       return base(new Request(input, { headers }))
     }
-    return base(input, { ...init, headers })
+    const rewritten = rewriteProxyUrl(String(input))
+    return base(rewritten, { ...init, headers })
   }) as typeof fetch & { [LIVE_IDENTITY_FETCH]?: true }
   wrapped[LIVE_IDENTITY_FETCH] = true
   globalThis.fetch = wrapped

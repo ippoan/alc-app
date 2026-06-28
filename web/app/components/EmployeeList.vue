@@ -1,18 +1,8 @@
 <script setup lang="ts">
 import type { ApiEmployee } from '~/types'
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, uploadFacePhoto, updateEmployeeFace, approveFace, rejectFace } from '~/utils/api'
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, uploadFacePhoto, updateEmployeeFace, approveFace, rejectFace, getTenkoCallDrivers, type TenkoCallDriver } from '~/utils/api'
 import { getRawFaceDescriptor, getAllDescriptorsWithTimestamp } from '~/utils/face-db'
 import { FACE_MODEL_VERSION } from '~/composables/useFaceDetection'
-
-interface TenkoCallDriver {
-  id: number
-  phone_number: string
-  driver_name: string
-  call_number: string | null
-  employee_code: string | null
-  tenant_id: string
-  created_at: string
-}
 
 const employees = ref<ApiEmployee[]>([])
 const tenkoDrivers = ref<TenkoCallDriver[]>([])
@@ -216,15 +206,6 @@ async function handleReject(id: string) {
   }
 }
 
-const { accessToken, deviceTenantId } = useAuth()
-
-function authHeaders() {
-  const h: Record<string, string> = {}
-  if (accessToken.value) h['Authorization'] = `Bearer ${accessToken.value}`
-  if (deviceTenantId.value) h['X-Tenant-ID'] = deviceTenantId.value
-  return h
-}
-
 // employee_code でマッチ
 const tenkoDriverMap = computed(() => {
   const map = new Map<string, TenkoCallDriver>()
@@ -245,7 +226,7 @@ async function fetchData() {
   try {
     const [emps, drivers] = await Promise.all([
       getEmployees(),
-      $fetch<TenkoCallDriver[]>('/api/tenko-call/drivers', { headers: authHeaders() }).catch(() => [] as TenkoCallDriver[]),
+      getTenkoCallDrivers().catch(() => [] as TenkoCallDriver[]),
     ])
     employees.value = emps
     tenkoDrivers.value = drivers
