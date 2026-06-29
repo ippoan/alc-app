@@ -45,9 +45,12 @@ export function buildInternalProxyForward(input: {
   search?: string
   contentType?: string | null
   body?: BodyInit | null
+  /** 追加で載せるヘッダー (例: dev OTA の X-Internal-Secret pass-through)。 */
+  extraHeaders?: Record<string, string>
 }): InternalProxyForward {
   const headers: Record<string, string> = {
     'X-Alc-Proxy-Secret': input.sharedSecret,
+    ...(input.extraHeaders ?? {}),
   }
   if (input.contentType) headers['Content-Type'] = input.contentType
   const url = `${INTERNAL_PROXY_BASE}${INTERNAL_PROXY_PREFIX}${input.rustPath}${input.search ?? ''}`
@@ -73,8 +76,15 @@ async function resolveSecret(binding: unknown): Promise<string | null> {
 /**
  * 固定 rustPath の public ingest 経路を `/alc-internal-proxy` 経由で forward する
  * Nitro server route handler を生成する。
+ *
+ * `forwardInternalSecret: true` の時は incoming request の `X-Internal-Secret` を
+ * pass-through する (dev OTA = trigger-update-dev 用。auth-worker 側 internal-secret クラスが
+ * これを rust に中継し、rust が FCM_INTERNAL_SECRET で検証する)。
  */
-export function createInternalIngestHandler(rustPath: string) {
+export function createInternalIngestHandler(
+  rustPath: string,
+  opts: { forwardInternalSecret?: boolean } = {},
+) {
   return defineEventHandler(async (event) => {
     const env = cfEnv(event)
     const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET)
@@ -103,12 +113,19 @@ export function createInternalIngestHandler(rustPath: string) {
       }
     }
 
+    let extraHeaders: Record<string, string> | undefined
+    if (opts.forwardInternalSecret) {
+      const internalSecret = getHeader(event, 'x-internal-secret')
+      if (internalSecret) extraHeaders = { 'X-Internal-Secret': internalSecret }
+    }
+
     const { url, init } = buildInternalProxyForward({
       sharedSecret,
       rustPath,
       method,
       contentType,
       body,
+      extraHeaders,
     })
 
     const res = await authWorker.fetch(url, init)
