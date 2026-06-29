@@ -43,6 +43,18 @@ describe('buildInternalProxyForward (rust-alc-api#434 caller #5, public-ingest f
     expect(init.body).toBeUndefined()
   })
 
+  it('extraHeaders を載せる (X-Internal-Secret pass-through、dev OTA 用)', () => {
+    const { init } = buildInternalProxyForward({
+      sharedSecret: SECRET,
+      rustPath: '/api/devices/trigger-update-dev',
+      method: 'POST',
+      extraHeaders: { 'X-Internal-Secret': 'fcm-secret-xyz' },
+    })
+    const h = init.headers as Record<string, string>
+    expect(h['X-Alc-Proxy-Secret']).toBe(SECRET)
+    expect(h['X-Internal-Secret']).toBe('fcm-secret-xyz')
+  })
+
   it('search query を維持する', () => {
     const { url } = buildInternalProxyForward({
       sharedSecret: SECRET,
