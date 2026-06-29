@@ -49,15 +49,21 @@ describe('useAuth', () => {
     localStorage.clear()
     sessionStorage.clear()
     mockFetch.mockReset()
-    // Reset singleton state: re-import fresh module
-    // We need to reset the `initialized` flag and singleton refs.
-    // Since useAuth uses module-level state, we reset via logout + deactivate
+    // Reset singleton state: re-import fresh module.
+    // useAuth uses module-level state; we clean up the previous instance's window
+    // listeners via logout(), then reset the module cache so refs are fresh.
     const { useAuth } = await import('~/composables/useAuth')
     const auth = useAuth()
-    // Force clear state without fetch (accessToken may be null)
     if (auth.accessToken.value) {
-      mockFetch.mockResolvedValueOnce({ ok: true })
-      await auth.logout()
+      // logout() redirects via window.location; mock it so cleanup doesn't navigate.
+      const origLocation = window.location
+      Object.defineProperty(window, 'location', {
+        value: { ...origLocation, origin: 'https://example.com', href: '', set href(_v: string) {} },
+        writable: true,
+        configurable: true,
+      })
+      auth.logout()
+      Object.defineProperty(window, 'location', { value: origLocation, writable: true, configurable: true })
     }
     auth.deactivateDevice()
     mockFetch.mockReset()
@@ -155,135 +161,54 @@ describe('useAuth', () => {
     })
   })
 
-  describe('token refresh', () => {
-    it('should call /api/auth/refresh and update access token', async () => {
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+  describe('session refresh (cookie)', () => {
+    function setDocCookie(value: string) {
+      Object.defineProperty(document, 'cookie', { value, writable: true, configurable: true })
+    }
+    afterEach(() => setDocCookie(''))
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          access_token: fakeJwt,
-          expires_in: 3600,
-        }),
-      })
+    // #434: cookie session モデルでは rust の /api/auth/refresh は叩かず、auth-worker が
+    // 配布した logi_auth_token cookie を読み直して session を再確立する。
+    it('re-establishes session from logi_auth_token cookie', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
 
       const { useAuth } = await import('~/composables/useAuth')
       const { refreshAccessToken, accessToken, user } = useAuth()
-      await refreshAccessToken('rt_test-refresh-token')
+      await refreshAccessToken()
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/auth/refresh'),
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({ refresh_token: 'rt_test-refresh-token' }),
-        }),
-      )
       expect(accessToken.value).toBe(fakeJwt)
       expect(user.value?.email).toBe('test@example.com')
     })
 
-    it('should throw when refresh fails', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-      })
-
+    it('rejects when no session cookie is present', async () => {
+      setDocCookie('other=1')
       const { useAuth } = await import('~/composables/useAuth')
       const { refreshAccessToken } = useAuth()
-      await expect(refreshAccessToken('rt_expired')).rejects.toThrow()
+      await expect(refreshAccessToken()).rejects.toThrow('セッションがありません')
     })
 
-    it('should throw when no refresh token available', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const { refreshAccessToken } = useAuth()
-      await expect(refreshAccessToken()).rejects.toThrow('Refresh token がありません')
-    })
-
-    it('should use localStorage refresh token when no argument given', async () => {
-      localStorage.setItem('alc_refresh_token', 'rt_from_storage')
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const { refreshAccessToken } = useAuth()
-      await refreshAccessToken()
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          body: JSON.stringify({ refresh_token: 'rt_from_storage' }),
-        }),
-      )
-    })
-
-    it('should handle JWT decode failure gracefully (user stays logged in)', async () => {
-      // JWT with invalid payload (not base64)
-      const badJwt = 'header.!!!invalid!!!.sig'
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: badJwt, expires_in: 3600 }),
-      })
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const { refreshAccessToken, accessToken, user } = useAuth()
-      await refreshAccessToken('rt_test')
-
-      // accessToken is set even though decode fails
-      expect(accessToken.value).toBe(badJwt)
-      // user remains null since decode failed
-      expect(user.value).toBeNull()
-    })
-
-    it('should handle JWT with missing parts[1] gracefully', async () => {
-      const noPayloadJwt = 'headeronly'
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: noPayloadJwt, expires_in: 3600 }),
-      })
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const { refreshAccessToken, accessToken } = useAuth()
-      await refreshAccessToken('rt_test')
-
-      expect(accessToken.value).toBe(noPayloadJwt)
-    })
-  })
-
-  describe('decodeJwtPayload (multibyte)', () => {
-    it('should correctly decode JWT with multibyte characters', async () => {
-      const fakeJwt = createFakeJwtMultibyte({
-        ...defaultPayload,
-        name: '田中太郎',
-      })
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
+    it('decodes multibyte claims from the cookie JWT', async () => {
+      const fakeJwt = createFakeJwtMultibyte({ ...defaultPayload, name: '田中太郎' })
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
 
       const { useAuth } = await import('~/composables/useAuth')
       const { refreshAccessToken, user } = useAuth()
-      await refreshAccessToken('rt_test')
+      await refreshAccessToken()
 
       expect(user.value?.name).toBe('田中太郎')
     })
   })
 
   describe('init', () => {
-    it('should restore from refresh token in localStorage', async () => {
-      localStorage.setItem('alc_refresh_token', 'rt_stored')
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+    function setDocCookie(value: string) {
+      Object.defineProperty(document, 'cookie', { value, writable: true, configurable: true })
+    }
+    afterEach(() => setDocCookie(''))
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
+    it('should restore session from logi_auth_token cookie', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
 
       const { useAuth } = await import('~/composables/useAuth')
       const { init, isAuthenticated, isLoading } = useAuth()
@@ -294,11 +219,8 @@ describe('useAuth', () => {
       expect(isLoading.value).toBe(false)
     })
 
-    it('should clear refresh token when refresh fails', async () => {
-      localStorage.setItem('alc_refresh_token', 'rt_expired')
-
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 })
-
+    it('stays unauthenticated when no cookie is present', async () => {
+      setDocCookie('')
       const { useAuth } = await import('~/composables/useAuth')
       const { init, isAuthenticated, isLoading } = useAuth()
 
@@ -306,7 +228,6 @@ describe('useAuth', () => {
 
       expect(isAuthenticated.value).toBe(false)
       expect(isLoading.value).toBe(false)
-      expect(localStorage.getItem('alc_refresh_token')).toBeNull()
     })
 
     it('should not run twice (idempotent)', async () => {
@@ -453,195 +374,109 @@ describe('useAuth', () => {
   })
 
   describe('logout', () => {
-    it('should clear access token but keep device tenant', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const { activateDevice, logout, accessToken, deviceTenantId, isAuthenticated } = useAuth()
-
-      // Activate device
-      activateDevice('tenant-abc')
-
-      // Login first
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
+    let restoreLocation: (() => void) | null = null
+    let hrefSetter = vi.fn()
+    function setDocCookie(value: string) {
+      Object.defineProperty(document, 'cookie', { value, writable: true, configurable: true })
+    }
+    function mockLocation() {
+      hrefSetter = vi.fn()
+      const originalLocation = window.location
+      Object.defineProperty(window, 'location', {
+        value: {
+          ...originalLocation,
+          origin: 'https://example.com',
+          href: '',
+          set href(val: string) { hrefSetter(val) },
+        },
+        writable: true,
+        configurable: true,
       })
-      await useAuth().refreshAccessToken('rt_test')
+      restoreLocation = () => Object.defineProperty(window, 'location', {
+        value: originalLocation, writable: true, configurable: true,
+      })
+    }
+    afterEach(() => {
+      setDocCookie('')
+      restoreLocation?.()
+      restoreLocation = null
+    })
 
-      // Logout
-      mockFetch.mockResolvedValueOnce({ ok: true })
-      await logout()
+    it('clears token, keeps device tenant, and redirects to auth-worker /logout', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateDevice, logout, consumeAuthCookie, accessToken, deviceTenantId, isAuthenticated } = useAuth()
+
+      activateDevice('tenant-abc')
+      localStorage.setItem('alc_refresh_token', 'rt_x')
+      // cookie の tenant は空 = consumeAuthCookie が activateDevice しない (端末 tenant 保持の検証)
+      const fakeJwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: '' }, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
+      consumeAuthCookie()
+
+      mockLocation()
+      logout()
 
       expect(accessToken.value).toBeNull()
       expect(isAuthenticated.value).toBe(false)
+      // 端末の tenant は保持 (キオスク継続)
       expect(deviceTenantId.value).toBe('tenant-abc')
       expect(localStorage.getItem('alc_device_tenant_id')).toBe('tenant-abc')
+      // refresh token は除去
       expect(localStorage.getItem('alc_refresh_token')).toBeNull()
+      // auth-worker /logout?redirect_uri=.../login へ遷移 (cookie クリアを委譲)
+      const url = hrefSetter.mock.calls[0]?.[0] as string
+      expect(url).toContain('/logout')
+      expect(url).toContain(`redirect_uri=${encodeURIComponent('https://example.com/login')}`)
     })
 
-    it('should handle logout API failure gracefully', async () => {
+    it('redirects even when not authenticated (no inactivity timer to clear)', async () => {
       const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
+      const { logout, accessToken } = useAuth()
 
-      // Login first
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
-      await auth.refreshAccessToken('rt_test')
+      // 未ログイン = inactivityTimerId 未設定。stopInactivityWatch の clear 分岐 (false) を通る
+      mockLocation()
+      logout()
 
-      // Logout API fails
-      mockFetch.mockRejectedValueOnce(new Error('network error'))
-      await auth.logout()
-
-      // Should still clear local state
-      expect(auth.accessToken.value).toBeNull()
-    })
-
-    it('should skip logout API call when not authenticated', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const { logout } = useAuth()
-
-      await logout()
-
-      // fetch should not be called (no accessToken)
-      expect(mockFetch).not.toHaveBeenCalled()
-    })
-
-    it('should create and remove Google logout iframe', async () => {
-      const appendSpy = vi.spyOn(document.body, 'appendChild')
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      // Login
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
-      await auth.refreshAccessToken('rt_test')
-
-      mockFetch.mockResolvedValueOnce({ ok: true })
-      await auth.logout()
-
-      // iframe should be appended
-      expect(appendSpy).toHaveBeenCalledWith(expect.any(HTMLIFrameElement))
-      const iframe = appendSpy.mock.calls[0]![0] as HTMLIFrameElement
-      expect(iframe.src).toContain('accounts.google.com/Logout')
-
-      // Advance timer to trigger iframe removal
-      vi.advanceTimersByTime(3000)
-
-      appendSpy.mockRestore()
-    })
-  })
-
-  describe('scheduleAutoRefresh', () => {
-    it('should schedule refresh before token expires', async () => {
-      // Token expires in 120 seconds
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 120)
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 120 }),
-      })
-
-      // Store refresh token so the scheduled callback can find it
-      localStorage.setItem('alc_refresh_token', 'rt_test')
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-      await auth.refreshAccessToken('rt_test')
-
-      // Should schedule refresh at ~60 seconds (120 - 60 = 60 seconds before expiry)
-      // Prepare mock for the auto-refresh call
-      const refreshJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: refreshJwt, expires_in: 3600 }),
-      })
-
-      // Advance timer to trigger the scheduled refresh (async to flush promise chain)
-      await vi.advanceTimersByTimeAsync(60_000)
-
-      // Wait for the async refresh
-      await vi.waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledTimes(2)
-      })
-    })
-
-    it('should immediately refresh if token is already expired', async () => {
-      // Token already expired (exp in the past)
-      const expiredJwt = createFakeJwtWithExp(defaultPayload, -10)
-
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ access_token: expiredJwt, expires_in: 0 }),
-        })
-        // The immediate refresh call
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            access_token: createFakeJwtWithExp(defaultPayload, 3600),
-            expires_in: 3600,
-          }),
-        })
-
-      // Store refresh token so the immediate re-refresh can find it
-      localStorage.setItem('alc_refresh_token', 'rt_test')
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-      await auth.refreshAccessToken('rt_test')
-
-      // Let the fire-and-forget refreshAccessToken() resolve
-      await vi.advanceTimersByTimeAsync(0)
-
-      // The immediate refresh should have been triggered
-      await vi.waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledTimes(2)
-      })
-    })
-
-    it('should handle token with no exp claim', async () => {
-      const noExpJwt = createFakeJwt({ sub: 'user-1', email: 'a@b.com', name: 'A', tenant_id: 't', role: 'admin' })
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: noExpJwt, expires_in: 3600 }),
-      })
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-      await auth.refreshAccessToken('rt_test')
-
-      // No scheduled refresh (no exp in token)
-      expect(mockFetch).toHaveBeenCalledTimes(1)
+      expect(accessToken.value).toBeNull()
+      const url = hrefSetter.mock.calls[0]?.[0] as string
+      expect(url).toContain('/logout')
     })
   })
 
   describe('inactivity auto-logout', () => {
+    let restoreLocation: (() => void) | null = null
+    function setDocCookie(value: string) {
+      Object.defineProperty(document, 'cookie', { value, writable: true, configurable: true })
+    }
+    function mockLocation() {
+      const originalLocation = window.location
+      Object.defineProperty(window, 'location', {
+        value: { ...originalLocation, origin: 'https://example.com', href: '', set href(_v: string) {} },
+        writable: true,
+        configurable: true,
+      })
+      restoreLocation = () => Object.defineProperty(window, 'location', {
+        value: originalLocation, writable: true, configurable: true,
+      })
+    }
+    afterEach(() => {
+      setDocCookie('')
+      restoreLocation?.()
+      restoreLocation = null
+    })
+
     it('should auto-logout after 5 minutes of inactivity', async () => {
       const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
 
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-      await auth.refreshAccessToken('rt_test')
+      auth.consumeAuthCookie()
 
       expect(auth.isAuthenticated.value).toBe(true)
 
-      // Logout API call
-      mockFetch.mockResolvedValueOnce({ ok: true })
-
-      // Advance timer by 5 minutes
+      mockLocation()
+      // Advance timer by 5 minutes → inactivity logout fires
       vi.advanceTimersByTime(5 * 60 * 1000)
 
       await vi.waitFor(() => {
@@ -651,15 +486,11 @@ describe('useAuth', () => {
 
     it('should reset inactivity timer on user activity', async () => {
       const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
-      })
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
 
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-      await auth.refreshAccessToken('rt_test')
+      auth.consumeAuthCookie()
 
       // After 4 minutes, simulate user activity
       vi.advanceTimersByTime(4 * 60 * 1000)
@@ -670,7 +501,7 @@ describe('useAuth', () => {
       expect(auth.isAuthenticated.value).toBe(true)
 
       // But 5 min after last activity, should be logged out
-      mockFetch.mockResolvedValueOnce({ ok: true })
+      mockLocation()
       vi.advanceTimersByTime(1 * 60 * 1000)
 
       await vi.waitFor(() => {
@@ -1124,18 +955,18 @@ describe('useAuth', () => {
       expect(isAuthenticated.value).toBe(false)
     })
 
-    it('should be true after token refresh', async () => {
+    it('should be true after session refresh from cookie', async () => {
       const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: fakeJwt, expires_in: 3600 }),
+      Object.defineProperty(document, 'cookie', {
+        value: `logi_auth_token=${fakeJwt}`, writable: true, configurable: true,
       })
 
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-      await auth.refreshAccessToken('rt_test')
+      await auth.refreshAccessToken()
 
       expect(auth.isAuthenticated.value).toBe(true)
+      Object.defineProperty(document, 'cookie', { value: '', writable: true, configurable: true })
     })
   })
 
@@ -1192,23 +1023,20 @@ describe('useAuth', () => {
       expect(localStorage.getItem('alc_device_id')).toBe('pre-existing')
     })
 
-    it('logout does not create iframe or remove localStorage when isClient=false', async () => {
-      const appendSpy = vi.spyOn(document.body, 'appendChild')
-
+    it('logout does not remove localStorage or redirect when isClient=false', async () => {
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
 
       // Set up a refresh token in localStorage (simulating pre-existing state)
       localStorage.setItem('alc_refresh_token', 'rt-ssr-test')
 
-      await auth.logout()
+      // No window.location navigation on the server (isClient guard skips the block).
+      auth.logout()
 
-      // No iframe should be created
-      expect(appendSpy).not.toHaveBeenCalled()
-      // localStorage should not be touched
+      // accessToken は guard 外で常にクリアされる
+      expect(auth.accessToken.value).toBeNull()
+      // localStorage は触られない (isClient guard で skip)
       expect(localStorage.getItem('alc_refresh_token')).toBe('rt-ssr-test')
-
-      appendSpy.mockRestore()
     })
 
     it('handleLineworksHash returns false when isClient=false', async () => {
@@ -1218,7 +1046,7 @@ describe('useAuth', () => {
       expect(auth.handleLineworksHash()).toBe(false)
     })
 
-    it('init() skips localStorage and Android bridge when isClient=false', async () => {
+    it('init() skips cookie/localStorage and Android bridge when isClient=false', async () => {
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
 
@@ -1226,89 +1054,17 @@ describe('useAuth', () => {
 
       // isLoading is set to false
       expect(auth.isLoading.value).toBe(false)
-      // No refresh attempted (no localStorage access)
+      // consumeAuthCookie returns false on the server → not authenticated
       expect(auth.isAuthenticated.value).toBe(false)
     })
 
-    it('init() skips localStorage.removeItem on refresh failure when isClient=false', async () => {
-      // Even with a refresh token somehow available, isClient=false skips localStorage access
+    it('refreshAccessToken() rejects on the server (no cookie access)', async () => {
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
 
-      // init() with isClient=false: refreshToken will be null (skips localStorage.getItem)
-      // So no refresh attempt is made
-      await auth.init()
-      expect(auth.isAuthenticated.value).toBe(false)
+      // consumeAuthCookie returns false (isClient=false) → reject
+      await expect(auth.refreshAccessToken()).rejects.toThrow('セッションがありません')
     })
-
-    it('setTokens skips localStorage when isClient=false (via refreshAccessToken)', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      // Simulate a successful refresh
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          access_token: createFakeJwt(defaultPayload),
-        }),
-      })
-
-      await auth.refreshAccessToken('rt-test-token')
-
-      // Token is set in memory
-      expect(auth.accessToken.value).toBeTruthy()
-      // But localStorage is not touched
-      expect(localStorage.getItem('alc_refresh_token')).toBeNull()
-    })
-
-    it('startInactivityWatch is no-op when isClient=false', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      const addSpy = vi.spyOn(window, 'addEventListener')
-
-      // refreshAccessToken calls startInactivityWatch internally
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          access_token: createFakeJwt(defaultPayload),
-        }),
-      })
-      await auth.refreshAccessToken('rt-test')
-
-      // No event listeners should be added (startInactivityWatch returns early)
-      const inactivityEvents = addSpy.mock.calls.filter(
-        ([name]) => ['mousedown', 'keydown', 'touchstart', 'scroll'].includes(name as string),
-      )
-      expect(inactivityEvents).toHaveLength(0)
-      addSpy.mockRestore()
-    })
-
-    it('refreshAccessToken() without arg: ternary evaluates isClient=false → null → throws', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      // No refreshToken arg → falls through || to (isClient ? ... : null) → null
-      await expect(auth.refreshAccessToken()).rejects.toThrow('Refresh token がありません')
-    })
-
-    it('init() catch block skips localStorage.removeItem when isClient=false', async () => {
-      // Simulate a stored refresh token that will fail
-      localStorage.setItem('alc_refresh_token', 'invalid-rt')
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      // In SSR, refreshToken is null (isClient=false skips localStorage.getItem)
-      // so no refresh is attempted and the catch block is not reached.
-      // However to cover line 57 (catch + isClient check), we need a DIFFERENT test.
-      // Actually: when isClient=false, the refreshToken is null, so the `if (refreshToken)`
-      // at line 52 is false, and the catch block is never entered.
-      // Line 57's false branch means: isClient is false IN the catch block.
-      // This requires isClient=true + refresh failure. Let me check...
-      await auth.init()
-      expect(auth.isAuthenticated.value).toBe(false)
-    })
-
   })
 
   describe('staging auth bypass', () => {
@@ -1332,12 +1088,10 @@ describe('useAuth', () => {
     })
 
     it('should not auto-activate when already authenticated', async () => {
-      const jwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ access_token: jwt }),
+      const jwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: '' }, 3600)
+      Object.defineProperty(document, 'cookie', {
+        value: `logi_auth_token=${jwt}`, writable: true, configurable: true,
       })
-      localStorage.setItem('alc_refresh_token', 'valid-refresh')
 
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
@@ -1346,6 +1100,7 @@ describe('useAuth', () => {
       expect(auth.isAuthenticated.value).toBe(true)
       auth.applyStagingBypass('staging-tenant-123')
       expect(auth.isDeviceActivated.value).toBe(false)
+      Object.defineProperty(document, 'cookie', { value: '', writable: true, configurable: true })
     })
 
     it('should not auto-activate when already device-activated', async () => {
