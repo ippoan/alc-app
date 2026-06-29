@@ -1,32 +1,26 @@
 <script setup lang="ts">
-const { handleGoogleCallback, isAuthenticated } = useAuth()
+const { consumeAuthCookie, isAuthenticated } = useAuth()
 const route = useRoute()
 const error = ref<string | null>(null)
 
-onMounted(async () => {
-  const code = route.query.code as string
-  const state = route.query.state as string
+// #434: Google OAuth は auth-worker が orchestrate し、logi_auth_token cookie で
+// ログインを配布する。callback では cookie を消費するだけ (code 交換は auth-worker)。
+onMounted(() => {
   const queryError = route.query.error as string
-
   if (queryError) {
     error.value = `Google 認証エラー: ${queryError}`
     return
   }
 
-  if (!code || !state) {
-    error.value = '不正なコールバックです'
+  if (!consumeAuthCookie()) {
+    error.value = 'ログインに失敗しました (認証情報が見つかりません)'
     return
   }
 
-  try {
-    await handleGoogleCallback(code, state)
-    // ログイン成功 → リダイレクト先へ
-    const redirect = sessionStorage.getItem('oauth_redirect') || '/?role=admin'
-    sessionStorage.removeItem('oauth_redirect')
-    navigateTo(redirect)
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'ログインに失敗しました'
-  }
+  // ログイン成功 → リダイレクト先へ
+  const redirect = sessionStorage.getItem('oauth_redirect') || '/?role=admin'
+  sessionStorage.removeItem('oauth_redirect')
+  navigateTo(redirect)
 })
 </script>
 

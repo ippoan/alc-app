@@ -1,4 +1,4 @@
-import type { AuthUser, AuthResponse, RefreshResponse } from '~/types'
+import type { AuthUser, RefreshResponse } from '~/types'
 import { isClient } from '~/utils/env'
 
 /** Base64url → UTF-8 JSON デコード (マルチバイト文字対応) */
@@ -49,6 +49,11 @@ export function useAuth() {
 
     // deviceTenantId はモジュールスコープで既に復元済み
 
+    // #434: auth-worker が logi_auth_token cookie でログインを保持するので、まず cookie を
+    // 消費してログイン状態を復元する (Google login 後の再訪・別タブ等)。cookie 無し /
+    // SSR では no-op。
+    consumeAuthCookie()
+
     // Refresh token があれば自動ログイン試行
     const refreshToken = isClient
       ? localStorage.getItem(REFRESH_TOKEN_KEY)
@@ -98,52 +103,46 @@ export function useAuth() {
 
   /** Google OAuth ログイン (Authorization Code Flow + prompt=login) */
   function loginWithGoogleRedirect(redirectAfterLogin?: string): void {
-    const clientId = config.public.googleClientId as string
+    if (!isClient) return
     const callbackUrl = `${window.location.origin}/auth/callback`
-
-    // CSRF 対策: state をランダム生成して sessionStorage に保存
-    const state = crypto.randomUUID()
-    sessionStorage.setItem('oauth_state', state)
     if (redirectAfterLogin) {
       sessionStorage.setItem('oauth_redirect', redirectAfterLogin)
     }
-
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: callbackUrl,
-      response_type: 'code',
-      scope: 'openid email profile',
-      prompt: 'login',
-      max_age: '0',
-      state,
-    })
-
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`
+    // #434: Google OAuth は auth-worker が orchestrate する (rust は dumb backend)。
+    // auth-worker が Google と code 交換 → JWT 発行 → logi_auth_token cookie
+    // (Domain=.ippoan.org) で配布し callbackUrl へ戻す。client_id / CSRF state / code
+    // 交換は auth-worker が担う (HMAC state)。alc-app は戻ってきた cookie を読むだけ。
+    const authWorker = (config.public.authWorkerUrl as string).replace(/\/$/, '')
+    const params = new URLSearchParams({ redirect_uri: callbackUrl })
+    window.location.href = `${authWorker}/oauth/google/redirect?${params.toString()}`
   }
 
-  /** Google OAuth コールバック: authorization code をバックエンドと交換 */
-  async function handleGoogleCallback(code: string, state: string): Promise<void> {
-    // CSRF state 検証
-    const savedState = sessionStorage.getItem('oauth_state')
-    sessionStorage.removeItem('oauth_state')
-    if (!savedState || savedState !== state) {
-      throw new Error('不正なリクエスト (state mismatch)')
-    }
-
-    const callbackUrl = `${window.location.origin}/auth/callback`
-    const res = await fetch(`${apiBase}/api/auth/google/code`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, redirect_uri: callbackUrl }),
-    })
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      throw new Error(`ログイン失敗 (${res.status}): ${body}`)
-    }
-
-    const data: AuthResponse = await res.json()
-    setTokens(data)
+  /**
+   * auth-worker が配布した `logi_auth_token` cookie からログイン状態を確立する (#434)。
+   * cookie は HttpOnly でない (Domain=.ippoan.org / Secure / SameSite=Lax) ため JS から
+   * 読める。Google / auth-worker login 後の callback と init で呼ぶ。cookie 無しなら false。
+   */
+  function consumeAuthCookie(): boolean {
+    if (!isClient) return false
+    const raw = document.cookie.match(/(?:^|;\s*)logi_auth_token=([^;]+)/)?.[1]
+    if (!raw) return false
+    const token = decodeURIComponent(raw)
+    accessToken.value = token
+    try {
+      const parts = token.split('.')
+      if (!parts[1]) throw new Error('Invalid JWT')
+      const payload = decodeJwtPayload(parts[1])
+      const tenantId = payload.tenant_id || payload.org || ''
+      user.value = {
+        id: payload.sub || payload.user_id || '',
+        email: payload.email || '',
+        name: payload.name || '',
+        tenant_id: tenantId,
+        role: payload.role || 'viewer',
+      }
+      if (tenantId) activateDevice(tenantId)
+    } catch { /* デコード失敗してもログイン状態は維持 */ }
+    return true
   }
 
   /** Refresh token で access token を更新 */
@@ -178,24 +177,6 @@ export function useAuth() {
       }
     } catch {
       // デコード失敗してもログイン状態は維持
-    }
-
-    scheduleAutoRefresh()
-    startInactivityWatch()
-  }
-
-  /** トークンをセットして state を更新 */
-  function setTokens(data: AuthResponse) {
-    accessToken.value = data.access_token
-    user.value = data.user
-
-    if (isClient) {
-      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
-    }
-
-    // 初回ログイン時に端末をアクティベート
-    if (data.user.tenant_id) {
-      activateDevice(data.user.tenant_id)
     }
 
     scheduleAutoRefresh()
@@ -405,7 +386,7 @@ export function useAuth() {
     isDeviceActivated,
     init,
     loginWithGoogleRedirect,
-    handleGoogleCallback,
+    consumeAuthCookie,
     handleLineworksHash,
     refreshAccessToken,
     logout,
