@@ -1,8 +1,3 @@
-export default defineEventHandler(async (event): Promise<unknown> => {
-  const config = useRuntimeConfig()
-  const body = await readBody(event)
-  return $fetch(`${config.public.apiBase}/api/tenko-call/tenko`, {
-    method: 'POST',
-    body,
-  })
-})
+// TenkoCall 点呼送信 (認証なし public 経路)。lockdown 対応で auth-worker
+// /alc-internal-proxy 経由に forward する (Refs ippoan/rust-alc-api#434 caller #5)。
+export default createInternalIngestHandler('/api/tenko-call/tenko')
