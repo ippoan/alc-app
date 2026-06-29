@@ -1,4 +1,4 @@
-import type { AuthUser, RefreshResponse } from '~/types'
+import type { AuthUser } from '~/types'
 import { isClient } from '~/utils/env'
 
 /** Base64url → UTF-8 JSON デコード (マルチバイト文字対応) */
@@ -31,42 +31,27 @@ const deviceSettingsToken = ref<string | null>(
 )
 
 let initialized = false
-let refreshTimerId: ReturnType<typeof setTimeout> | null = null
 let inactivityTimerId: ReturnType<typeof setTimeout> | null = null
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000 // 5分
 
 export function useAuth() {
   const config = useRuntimeConfig()
-  const apiBase = (config.public.apiBase as string).replace(/\/$/, '')
 
   const isAuthenticated = computed(() => !!accessToken.value)
   const isDeviceActivated = computed(() => !!deviceTenantId.value)
 
-  /** アプリ起動時に呼ぶ: localStorage から復元 + token refresh 試行 */
+  /** アプリ起動時に呼ぶ: cookie からログイン復元 + device 復元 + staging bypass */
   async function init() {
     if (initialized) return
     initialized = true
 
     // deviceTenantId はモジュールスコープで既に復元済み
 
-    // #434: auth-worker が logi_auth_token cookie でログインを保持するので、まず cookie を
+    // #434: auth-worker が logi_auth_token cookie でログインを保持するので、cookie を
     // 消費してログイン状態を復元する (Google login 後の再訪・別タブ等)。cookie 無し /
-    // SSR では no-op。
+    // SSR では no-op。cookie session モデルでは silent な token refresh は無く、cookie が
+    // 唯一の真実 (失効時は再ログイン)。
     consumeAuthCookie()
-
-    // Refresh token があれば自動ログイン試行
-    const refreshToken = isClient
-      ? localStorage.getItem(REFRESH_TOKEN_KEY)
-      : null
-
-    if (refreshToken) {
-      try {
-        await refreshAccessToken(refreshToken)
-      } catch {
-        // Refresh 失敗 — トークンをクリア (refreshToken が非 null = isClient は常に true)
-        localStorage.removeItem(REFRESH_TOKEN_KEY)
-      }
-    }
 
     // Device Owner 自動アクティベーション
     if (!isDeviceActivated.value && isClient) {
@@ -142,63 +127,40 @@ export function useAuth() {
       }
       if (tenantId) activateDevice(tenantId)
     } catch { /* デコード失敗してもログイン状態は維持 */ }
+    // ログイン確立 → 無操作 auto-logout の監視を開始
+    startInactivityWatch()
     return true
   }
 
-  /** Refresh token で access token を更新 */
-  async function refreshAccessToken(refreshToken?: string): Promise<void> {
-    const token = refreshToken || (isClient ? localStorage.getItem(REFRESH_TOKEN_KEY) : null)
-    if (!token) throw new Error('Refresh token がありません')
-
-    const res = await fetch(`${apiBase}/api/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: token }),
-    })
-
-    if (!res.ok) {
-      throw new Error('Token refresh に失敗しました')
+  /**
+   * セッションを再確立する (#434)。cookie session モデルでは silent な token refresh は
+   * 無く、auth-worker が配布した logi_auth_token cookie が唯一の真実。API 層の
+   * 401→refresh→retry と各ページ mount 時の復元から呼ばれ、cookie を読み直す。cookie が
+   * 無い (= 失効 / 未ログイン) 場合は reject し、呼び出し側はログイン画面へ誘導する
+   * (rust の /api/auth/refresh は lockdown で到達不可になるため叩かない)。
+   */
+  function refreshAccessToken(): Promise<void> {
+    if (!consumeAuthCookie()) {
+      return Promise.reject(new Error('セッションがありません (再ログインが必要です)'))
     }
-
-    const data: RefreshResponse = await res.json()
-    accessToken.value = data.access_token
-
-    // access token からユーザー情報をデコード (JWT payload)
-    try {
-      const parts = data.access_token.split('.')
-      if (!parts[1]) throw new Error('Invalid JWT')
-      const payload = decodeJwtPayload(parts[1])
-      user.value = {
-        id: payload.sub,
-        email: payload.email,
-        name: payload.name,
-        tenant_id: payload.tenant_id,
-        role: payload.role,
-      }
-    } catch {
-      // デコード失敗してもログイン状態は維持
-    }
-
-    scheduleAutoRefresh()
-    startInactivityWatch()
+    return Promise.resolve()
   }
 
-  /** 無操作タイマーをリセット (操作があるたびに呼ばれる) */
+  /** 無操作タイマーをリセット (操作があるたびに呼ばれる)。
+   *  startInactivityWatch (= ログイン確立後) 経由でのみ呼ばれるため accessToken は非 null。 */
   function resetInactivityTimer() {
     if (inactivityTimerId) {
       clearTimeout(inactivityTimerId)
     }
-    if (!accessToken.value) return
-
     inactivityTimerId = setTimeout(() => {
       console.log('[Auth] 5分間無操作のため自動ログアウト')
       logout()
     }, INACTIVITY_TIMEOUT_MS)
   }
 
-  /** ユーザー操作イベントの監視を開始 */
+  /** ユーザー操作イベントの監視を開始。
+   *  consumeAuthCookie / handleLineworksHash (= isClient ガード済み) からのみ呼ばれる。 */
   function startInactivityWatch() {
-    if (!isClient) return
     const events = ['mousedown', 'keydown', 'touchstart', 'scroll'] as const
     for (const event of events) {
       window.addEventListener(event, resetInactivityTimer, { passive: true })
@@ -219,75 +181,21 @@ export function useAuth() {
     }
   }
 
-  /** JWT の exp から逆算して期限前に自動リフレッシュをスケジュール
-   *  setTokens / refreshAccessToken の直後に呼ばれるため accessToken は常に非 null */
-  function scheduleAutoRefresh() {
-    if (refreshTimerId) {
-      clearTimeout(refreshTimerId)
-      refreshTimerId = null
-    }
-
-    const token = accessToken.value!
-
-    try {
-      const parts = token.split('.')
-      if (!parts[1]) return
-      const payload = decodeJwtPayload(parts[1])
-      if (!payload.exp) return
-
-      const expiresAt = payload.exp * 1000
-      const now = Date.now()
-      // 期限の60秒前にリフレッシュ
-      const refreshIn = expiresAt - now - 60_000
-
-      if (refreshIn <= 0) {
-        // 既に期限切れ or 間もなく切れる → 即リフレッシュ
-        refreshAccessToken().catch(() => {})
-        return
-      }
-
-      refreshTimerId = setTimeout(() => {
-        refreshAccessToken().catch(() => {})
-      }, refreshIn)
-    } catch {
-      // JWT デコードエラー
-    }
-  }
-
   /** ログアウト (端末の tenant_id は保持) */
-  async function logout() {
-    // タイマーをクリア
-    if (refreshTimerId) {
-      clearTimeout(refreshTimerId)
-      refreshTimerId = null
-    }
-
-    // バックエンドの refresh token を無効化
-    if (accessToken.value) {
-      try {
-        await fetch(`${apiBase}/api/auth/logout`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${accessToken.value}` },
-        })
-      } catch {
-        // ログアウト API 失敗しても続行
-      }
-    }
-
-    // 無操作タイマー停止
+  function logout() {
+    // 無操作タイマー停止 + ローカル state クリア
     stopInactivityWatch()
-
     accessToken.value = null
     user.value = null
+
     if (isClient) {
       localStorage.removeItem(REFRESH_TOKEN_KEY)
-
-      // Google の OAuth セッションをクリア (iframe で非同期実行)
-      const iframe = document.createElement('iframe')
-      iframe.style.display = 'none'
-      iframe.src = 'https://accounts.google.com/Logout'
-      document.body.appendChild(iframe)
-      setTimeout(() => iframe.remove(), 3000)
+      // #434: logi_auth_token cookie (Domain=.ippoan.org) のクリアと Google セッション
+      // 破棄は auth-worker /logout に委譲する (rust は dumb backend で logout endpoint を
+      // 持たない)。/logout 後は ?redirect_uri のログイン画面へ戻る。
+      const authWorker = (config.public.authWorkerUrl as string).replace(/\/$/, '')
+      const redirectUri = `${window.location.origin}/login`
+      window.location.href = `${authWorker}/logout?redirect_uri=${encodeURIComponent(redirectUri)}`
     }
     // deviceTenantId は意図的に保持 (キオスクモード継続)
   }
@@ -365,6 +273,8 @@ export function useAuth() {
       // tenant_id があればデバイスをアクティベート (X-Tenant-ID ヘッダー用)
       if (tenantId) activateDevice(tenantId)
     } catch { /* デコード失敗してもログイン状態は維持 */ }
+    // ログイン確立 → 無操作 auto-logout の監視を開始
+    startInactivityWatch()
 
     // hash をクリア（lw_callback パラメータも除去）
     const cleanSearch = new URLSearchParams(search.slice(1))
