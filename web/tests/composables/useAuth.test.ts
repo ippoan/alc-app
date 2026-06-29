@@ -690,24 +690,17 @@ describe('useAuth', () => {
   })
 
   describe('loginWithGoogleRedirect', () => {
-    it('should redirect to Google OAuth and store state in sessionStorage', async () => {
-      const mockUUID = '550e8400-e29b-41d4-a716-446655440000'
-      vi.stubGlobal('crypto', {
-        ...crypto,
-        randomUUID: () => mockUUID,
-      })
-
+    it('redirects to auth-worker /oauth/google/redirect with callback redirect_uri', async () => {
       const { useAuth } = await import('~/composables/useAuth')
       const { loginWithGoogleRedirect } = useAuth()
 
-      // Mock window.location
       const hrefSetter = vi.fn()
       const originalLocation = window.location
       Object.defineProperty(window, 'location', {
         value: {
           ...originalLocation,
           origin: 'https://example.com',
-          href: 'https://example.com',
+          href: '',
           set href(val: string) { hrefSetter(val) },
         },
         writable: true,
@@ -716,25 +709,22 @@ describe('useAuth', () => {
 
       loginWithGoogleRedirect('/dashboard')
 
-      expect(sessionStorage.getItem('oauth_state')).toBe(mockUUID)
       expect(sessionStorage.getItem('oauth_redirect')).toBe('/dashboard')
+      const url = hrefSetter.mock.calls[0]?.[0] as string
+      expect(url).toContain('/oauth/google/redirect')
+      expect(url).toContain(`redirect_uri=${encodeURIComponent('https://example.com/auth/callback')}`)
 
-      // Restore
       Object.defineProperty(window, 'location', { value: originalLocation, writable: true, configurable: true })
     })
 
     it('should not store redirect when not provided', async () => {
-      vi.stubGlobal('crypto', {
-        ...crypto,
-        randomUUID: () => 'test-uuid',
-      })
-
       const { useAuth } = await import('~/composables/useAuth')
       const { loginWithGoogleRedirect } = useAuth()
 
+      const hrefSetter = vi.fn()
       const originalLocation = window.location
       Object.defineProperty(window, 'location', {
-        value: { ...originalLocation, origin: 'https://example.com', href: '' },
+        value: { ...originalLocation, origin: 'https://example.com', href: '', set href(val: string) { hrefSetter(val) } },
         writable: true,
         configurable: true,
       })
@@ -742,128 +732,103 @@ describe('useAuth', () => {
       loginWithGoogleRedirect()
 
       expect(sessionStorage.getItem('oauth_redirect')).toBeNull()
+      expect(hrefSetter).toHaveBeenCalled()
 
       Object.defineProperty(window, 'location', { value: originalLocation, writable: true, configurable: true })
     })
-  })
 
-  describe('handleGoogleCallback', () => {
-    it('should exchange code for tokens', async () => {
-      sessionStorage.setItem('oauth_state', 'valid-state')
+    it('is a no-op on the server (isClient=false)', async () => {
+      envMock.isClient = false
+      const { useAuth } = await import('~/composables/useAuth')
+      const { loginWithGoogleRedirect } = useAuth()
 
-      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          access_token: fakeJwt,
-          refresh_token: 'rt_new',
-          expires_in: 3600,
-          user: {
-            id: 'user-1',
-            email: 'test@example.com',
-            name: 'Test User',
-            tenant_id: 'tenant-1',
-            role: 'admin',
-          },
-        }),
+      const hrefSetter = vi.fn()
+      const originalLocation = window.location
+      Object.defineProperty(window, 'location', {
+        value: { ...originalLocation, origin: 'https://example.com', href: '', set href(val: string) { hrefSetter(val) } },
+        writable: true,
+        configurable: true,
       })
 
+      loginWithGoogleRedirect('/x')
+
+      expect(hrefSetter).not.toHaveBeenCalled()
+
+      Object.defineProperty(window, 'location', { value: originalLocation, writable: true, configurable: true })
+      envMock.isClient = true
+    })
+  })
+
+  describe('consumeAuthCookie', () => {
+    function setDocCookie(value: string) {
+      Object.defineProperty(document, 'cookie', { value, writable: true, configurable: true })
+    }
+    afterEach(() => setDocCookie(''))
+
+    it('returns false when no logi_auth_token cookie present', async () => {
+      setDocCookie('other=1')
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
+      expect(auth.consumeAuthCookie()).toBe(false)
+      expect(auth.isAuthenticated.value).toBe(false)
+    })
 
-      await auth.handleGoogleCallback('auth-code-123', 'valid-state')
+    it('returns false on the server (isClient=false)', async () => {
+      envMock.isClient = false
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      expect(auth.consumeAuthCookie()).toBe(false)
+      envMock.isClient = true
+    })
 
+    it('establishes session and activates device from cookie JWT', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      expect(auth.consumeAuthCookie()).toBe(true)
       expect(auth.isAuthenticated.value).toBe(true)
       expect(auth.user.value?.email).toBe('test@example.com')
-      expect(localStorage.getItem('alc_refresh_token')).toBe('rt_new')
-      // setTokens also activates device
       expect(auth.deviceTenantId.value).toBe('tenant-1')
     })
 
-    it('should not activate device when tenant_id is empty', async () => {
-      sessionStorage.setItem('oauth_state', 'valid-state')
-
-      const fakeJwt = createFakeJwtWithExp({
-        ...defaultPayload,
-        tenant_id: '',
-      }, 3600)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          access_token: fakeJwt,
-          refresh_token: 'rt_new',
-          user: {
-            id: 'user-1',
-            email: 'test@example.com',
-            name: 'Test User',
-            tenant_id: '',
-            role: 'admin',
-          },
-        }),
-      })
-
+    it('does not activate device when tenant_id is empty', async () => {
+      const fakeJwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: '', org: '' }, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-
-      await auth.handleGoogleCallback('code', 'valid-state')
-
-      expect(auth.isAuthenticated.value).toBe(true)
-      // tenant_id is empty → activateDevice not called
+      expect(auth.consumeAuthCookie()).toBe(true)
       expect(auth.deviceTenantId.value).toBeNull()
     })
 
-    it('should throw on state mismatch', async () => {
-      sessionStorage.setItem('oauth_state', 'correct-state')
-
+    it('keeps login state even when JWT payload is malformed', async () => {
+      setDocCookie('logi_auth_token=not-a-jwt')
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-
-      await expect(
-        auth.handleGoogleCallback('code', 'wrong-state'),
-      ).rejects.toThrow('不正なリクエスト (state mismatch)')
+      expect(auth.consumeAuthCookie()).toBe(true)
+      expect(auth.accessToken.value).toBe('not-a-jwt')
     })
 
-    it('should throw when no saved state', async () => {
+    it('uses fallback claim fields (user_id / org) and defaults for missing email/name/role', async () => {
+      const fakeJwt = createFakeJwtWithExp({ user_id: 'uid-9', org: 'org-9' }, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-
-      await expect(
-        auth.handleGoogleCallback('code', 'any-state'),
-      ).rejects.toThrow('不正なリクエスト (state mismatch)')
+      expect(auth.consumeAuthCookie()).toBe(true)
+      expect(auth.user.value).toEqual({ id: 'uid-9', email: '', name: '', tenant_id: 'org-9', role: 'viewer' })
+      expect(auth.deviceTenantId.value).toBe('org-9')
     })
 
-    it('should throw on API error', async () => {
-      sessionStorage.setItem('oauth_state', 'valid-state')
-
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        text: () => Promise.resolve('Bad Request'),
-      })
-
+    it('defaults id to empty string when neither sub nor user_id present', async () => {
+      const fakeJwt = createFakeJwtWithExp({ org: 'org-2' }, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
-
-      await expect(
-        auth.handleGoogleCallback('bad-code', 'valid-state'),
-      ).rejects.toThrow('ログイン失敗 (400): Bad Request')
-    })
-
-    it('should handle text() failure in error response', async () => {
-      sessionStorage.setItem('oauth_state', 'valid-state')
-
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        text: () => Promise.reject(new Error('read failed')),
-      })
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      await expect(
-        auth.handleGoogleCallback('bad-code', 'valid-state'),
-      ).rejects.toThrow('ログイン失敗 (500): ')
+      expect(auth.consumeAuthCookie()).toBe(true)
+      expect(auth.user.value?.id).toBe('')
+      expect(auth.user.value?.tenant_id).toBe('org-2')
     })
   })
 
@@ -1344,30 +1309,6 @@ describe('useAuth', () => {
       expect(auth.isAuthenticated.value).toBe(false)
     })
 
-    it('setTokens skips localStorage via handleGoogleCallback in SSR', async () => {
-      const { useAuth } = await import('~/composables/useAuth')
-      const auth = useAuth()
-
-      // Setup CSRF state
-      sessionStorage.setItem('oauth_state', 'test-state')
-
-      const jwt = createFakeJwt(defaultPayload)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          access_token: jwt,
-          refresh_token: 'rt-ssr',
-          user: { id: 'user-1', email: 'test@example.com', name: 'Test', tenant_id: 'tenant-1', role: 'admin' },
-        }),
-      })
-
-      await auth.handleGoogleCallback('code-1', 'test-state')
-
-      // Token is set in memory
-      expect(auth.isAuthenticated.value).toBe(true)
-      // But localStorage is not touched (isClient=false)
-      expect(localStorage.getItem('alc_refresh_token')).toBeNull()
-    })
   })
 
   describe('staging auth bypass', () => {
