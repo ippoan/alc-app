@@ -935,6 +935,10 @@ export async function deleteGuidanceRecord(id: string): Promise<void> {
 }
 
 export async function uploadGuidanceAttachment(recordId: string, file: File): Promise<GuidanceRecordAttachment> {
+  // FormData 構築前に未初期化を fail-fast する。Node の undici FormData は append 値の
+  // 型検証が厳格 (Node 24 で File を弾くケースあり) なので、proxyRawFetch まで進めると
+  // 'API 未初期化' ではなく append エラーで落ちる。proxyRawFetch fallback と同じ条件。
+  if (!apiBase && !getAccessToken?.() && !getKioskDeviceJwt) throw new Error('API 未初期化')
   const formData = new FormData()
   formData.append('file', file, file.name)
   const res = await proxyRawFetch(`/api/guidance-records/${recordId}/attachments`, {
