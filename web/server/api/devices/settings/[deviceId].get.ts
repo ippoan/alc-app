@@ -1,5 +1,5 @@
-export default defineEventHandler(async (event): Promise<unknown> => {
-  const config = useRuntimeConfig()
-  const deviceId = getRouterParam(event, 'deviceId')
-  return $fetch(`${config.public.apiBase}/api/devices/settings/${deviceId}`)
-})
+// AlcoholChecker のデバイス設定取得 (device 経路)。device JWT Bearer があれば
+// auth-worker /alc-proxy 経由、無ければ直叩き fallback (Refs ippoan/rust-alc-api#434 caller #5)。
+export default createDeviceProxyHandler(
+  (event) => `/api/devices/settings/${getRouterParam(event, 'deviceId')}`,
+)
