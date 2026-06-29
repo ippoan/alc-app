@@ -1,8 +1,3 @@
-export default defineEventHandler(async (event): Promise<unknown> => {
-  const config = useRuntimeConfig()
-  const body = await readBody(event)
-  return $fetch(`${config.public.apiBase}/api/devices/report-version`, {
-    method: 'PUT',
-    body,
-  })
-})
+// AlcoholChecker のバージョン報告 (device 経路)。device JWT Bearer があれば
+// auth-worker /alc-proxy 経由、無ければ直叩き fallback (Refs ippoan/rust-alc-api#434 caller #5)。
+export default createDeviceProxyHandler('/api/devices/report-version')
