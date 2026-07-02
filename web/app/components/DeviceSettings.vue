@@ -135,7 +135,38 @@ const wsConnected = ref<boolean | null>(null)
 const fcmRegistered = ref<boolean | null>(null)
 const fcmTokenPresent = ref<boolean | null>(null)
 const appVersion = ref<string | null>(null)
+const currentVersionCode = ref<number | null>(null)
 let diagTimer: ReturnType<typeof setInterval> | null = null
+
+// 最新リリースの versionCode。GitHub Releases API `releases/latest` の
+// `tag_name` (形式: `v<versionName>+<run_number>`、release.yml が run_number を
+// versionCode として焼き込むため run_number == versionCode) から抽出する。
+// 取得できない場合は「比較不能」として更新ボタンを従来どおり表示する (fail-open、
+// 誤って更新を隠してしまうより誤って出す方が安全)。
+const latestVersionCode = ref<number | null>(null)
+const latestVersionCheckFailed = ref(false)
+async function fetchLatestVersionCode() {
+  try {
+    const res = await fetch('https://api.github.com/repos/ippoan/AlcoholChecker/releases/latest')
+    if (!res.ok) {
+      latestVersionCheckFailed.value = true
+      return
+    }
+    const data = await res.json() as { tag_name?: string }
+    const match = data.tag_name?.match(/\+(\d+)$/)
+    latestVersionCode.value = match ? Number(match[1]) : null
+    if (!match) latestVersionCheckFailed.value = true
+  } catch {
+    latestVersionCheckFailed.value = true
+  }
+}
+// 現在バージョンより新しい版が releases/latest にある時だけ「更新」ボタンを出す。
+// 比較不能 (取得失敗 / 旧 APK で versionCode 未取得) な間は従来どおり表示する。
+const updateAvailable = computed(() => {
+  if (latestVersionCheckFailed.value) return true
+  if (latestVersionCode.value == null || currentVersionCode.value == null) return true
+  return latestVersionCode.value > currentVersionCode.value
+})
 
 function refreshDeviceDiag() {
   const android = (window as unknown as { Android?: AndroidDiag }).Android
@@ -153,6 +184,7 @@ function refreshDeviceDiag() {
     if (ver) {
       const v = JSON.parse(ver) as { versionName?: string, versionCode?: number }
       appVersion.value = v.versionName ? `${v.versionName} (${v.versionCode ?? '?'})` : null
+      currentVersionCode.value = v.versionCode ?? null
     }
     // 直近の OTA 更新結果 (成功/失敗/理由)。署名不一致等の「無音失敗」を UI に出す。
     const upd = android.getLastUpdateResult?.()
@@ -169,6 +201,7 @@ onMounted(() => {
   if (isAndroidApp) {
     refreshDeviceDiag()
     diagTimer = setInterval(refreshDeviceDiag, 3000) // 3秒ごとに更新
+    fetchLatestVersionCode()
   }
   // 登録済みだが credential が欠落している端末 (rust-alc-api#480 の取りこぼし等) は、
   // 管理者が window を開けていれば起動時の自動 1 回試行だけで無人復旧できる。
@@ -420,12 +453,14 @@ async function syncFc1200Date() {
           <p v-if="isAndroidApp" class="flex items-center gap-2">
             <span>アプリ: <span class="font-medium text-gray-700">{{ appVersion ?? '取得中...' }}</span></span>
             <button
+              v-if="updateAvailable"
               class="px-2 py-0.5 text-[11px] rounded bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50"
               :disabled="updating"
               @click="checkForUpdate"
             >
               {{ updating ? '更新中...' : '更新' }}
             </button>
+            <span v-else class="text-[11px] text-gray-400">最新です</span>
           </p>
           <!-- 直近の OTA 更新結果 (署名不一致等の無音失敗を可視化) -->
           <p
