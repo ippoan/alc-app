@@ -17,6 +17,41 @@ export default {
       return new Response('ok');
     }
 
+    // POST /device-log → 端末診断ログを observability に流す (cf_logging で読める)。
+    // 認証なし・値は log のみ。RoomWatcher の接続挙動や fileLog を端末から送って
+    // リモートで WS 未接続の原因を切り分けるための経路 (Refs ippoan/rust-alc-api#480)。
+    if (request.method === 'POST' && url.pathname === '/device-log') {
+      let body: { device_id?: string; tag?: string; message?: string; lines?: string[] } = {};
+      try {
+        body = await request.json();
+      } catch { /* ignore parse error */ }
+      const dev = (body.device_id || '(none)').slice(0, 64);
+      const tag = (body.tag || 'device').slice(0, 32);
+      const msgs = body.lines && Array.isArray(body.lines)
+        ? body.lines
+        : [body.message ?? ''];
+      // 1 行ずつ console.log (observability の 1 event = 1 行、長すぎる行は切る)。
+      for (const m of msgs.slice(0, 200)) {
+        console.log(`[device-log] dev=${dev} tag=${tag} ${String(m).slice(0, 2000)}`);
+      }
+      return new Response(null, {
+        status: 204,
+        headers: { 'Access-Control-Allow-Origin': '*' },
+      });
+    }
+
+    // OPTIONS preflight (device-log を fetch で叩く webview 向け CORS)
+    if (request.method === 'OPTIONS' && url.pathname === '/device-log') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        },
+      });
+    }
+
     // GET /active-rooms → list rooms with device connected
     if (request.method === 'GET' && url.pathname === '/active-rooms') {
       const id = env.ROOM_REGISTRY.idFromName('registry');

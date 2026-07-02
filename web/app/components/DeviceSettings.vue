@@ -28,6 +28,28 @@ type AndroidDiag = {
   getFcmStatus?: () => string
   getAppVersion?: () => string
   checkForUpdate?: () => void
+  uploadDeviceLog?: () => void
+}
+
+// 端末ログを signaling worker (/device-log) に送信 (observability で読める、WS 診断用)。
+const uploadingLog = ref(false)
+const logUploadMsg = ref('')
+function uploadDeviceLog() {
+  const android = (window as unknown as { Android?: AndroidDiag }).Android
+  if (!android?.uploadDeviceLog) {
+    logUploadMsg.value = 'この APK は未対応 (更新してください)'
+    return
+  }
+  uploadingLog.value = true
+  logUploadMsg.value = ''
+  try {
+    android.uploadDeviceLog()
+    logUploadMsg.value = 'ログを送信しました'
+  } catch {
+    logUploadMsg.value = '送信に失敗しました'
+  } finally {
+    setTimeout(() => { uploadingLog.value = false }, 3000)
+  }
 }
 
 // アプリ更新 (releases/latest を DL・インストール、Android ブリッジ checkForUpdate)。
@@ -356,6 +378,21 @@ async function syncFc1200Date() {
         <p class="text-[10px] text-gray-400">
           着信が来ない / FCM が届かない / 環境を切り替えた後に使ってください。リセット後は再登録が必要です。
         </p>
+
+        <!-- ログ送信 (Android のみ、WS 診断用) -->
+        <div v-if="isAndroidApp" class="pt-1">
+          <button
+            class="px-3 py-1.5 text-xs border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            :disabled="uploadingLog"
+            @click="uploadDeviceLog"
+          >
+            {{ uploadingLog ? '送信中...' : '診断ログを送信' }}
+          </button>
+          <span v-if="logUploadMsg" class="ml-2 text-[11px] text-gray-500">{{ logUploadMsg }}</span>
+          <p class="text-[10px] text-gray-400 mt-1">
+            RoomWatcher / 登録の動作ログを signaling worker に送ります (サポート診断用)。
+          </p>
+        </div>
       </div>
     </div>
 
