@@ -221,6 +221,12 @@ export function useAuth() {
         if (android?.setDeviceId) {
           android.setDeviceId(devId)
         }
+        // setDeviceId は native の settings_token を remove するため、直後に必ず
+        // setSettingsToken で再設定する (旧APK互換で guard。呼び忘れが settings_token=false
+        // の直接原因だった、Refs rust-alc-api#480)。
+        if (android?.setSettingsToken) {
+          android.setSettingsToken(settingsToken ?? '')
+        }
       }
       if (settingsToken) {
         localStorage.setItem(DEVICE_SETTINGS_TOKEN_KEY, settingsToken)
@@ -249,6 +255,14 @@ export function useAuth() {
     activateDevice(res.tenant_id, res.device_id, res.settings_token)
     if (res.auth_device_id && res.device_secret) {
       useDeviceToken().storeKioskCredential(res.auth_device_id, res.device_secret)
+      // native (Android) にも credential を渡す。DeviceToken が device JWT を mint
+      // するのに必要 (無いと settings / register-fcm-token 等が 403、FCM 登録が通らない)。
+      // activateDevice() が setDeviceId → setSettingsToken を済ませた後に呼ぶこと
+      // (setDeviceCredential は最後、Refs rust-alc-api#480)。
+      const android = (window as any).Android
+      if (android?.setDeviceCredential) {
+        android.setDeviceCredential(res.auth_device_id, res.device_secret)
+      }
     }
   }
 
@@ -261,8 +275,15 @@ export function useAuth() {
       localStorage.removeItem(DEVICE_TENANT_KEY)
       localStorage.removeItem(DEVICE_ID_KEY)
       localStorage.removeItem(DEVICE_SETTINGS_TOKEN_KEY)
+      // web 側 kiosk credential も破棄 (localStorage)
+      useDeviceToken().clearKioskCredential()
       const android = (window as any).Android
-      if (android?.setDeviceId) {
+      // native も完全リセット (device_id / settings_token / auth_device_id /
+      // device_secret クリア + RoomWatcher 停止)。旧APK は resetDeviceRegistration が
+      // 無いので setDeviceId('') に degrade (Refs rust-alc-api#480)。
+      if (android?.resetDeviceRegistration) {
+        android.resetDeviceRegistration()
+      } else if (android?.setDeviceId) {
         android.setDeviceId('')
       }
     }

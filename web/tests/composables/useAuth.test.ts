@@ -196,6 +196,77 @@ describe('useAuth', () => {
 
       expect(deviceTenantId.value).toBeNull()
     })
+
+    it('should call Android.setSettingsToken after setDeviceId in order (Refs rust-alc-api#480)', async () => {
+      const order: string[] = []
+      ;(window as any).Android = {
+        setDeviceId: vi.fn(() => order.push('setDeviceId')),
+        setSettingsToken: vi.fn(() => order.push('setSettingsToken')),
+      }
+
+      const { useAuth } = await import('~/composables/useAuth')
+      useAuth().activateDevice('tenant-1', 'dev-1', 'stok')
+
+      expect((window as any).Android.setSettingsToken).toHaveBeenCalledWith('stok')
+      // 順序が重要: setDeviceId が native の settings_token を remove するので後に再設定
+      expect(order).toEqual(['setDeviceId', 'setSettingsToken'])
+      delete (window as any).Android
+    })
+
+    it('should call Android.setSettingsToken("") when no settings token given', async () => {
+      const mockSetSettingsToken = vi.fn()
+      ;(window as any).Android = { setDeviceId: vi.fn(), setSettingsToken: mockSetSettingsToken }
+
+      const { useAuth } = await import('~/composables/useAuth')
+      useAuth().activateDevice('tenant-1', 'dev-1')
+
+      expect(mockSetSettingsToken).toHaveBeenCalledWith('')
+      delete (window as any).Android
+    })
+
+    it('activateFromRegistration should pass credential to Android.setDeviceCredential last (Refs rust-alc-api#480)', async () => {
+      const order: string[] = []
+      ;(window as any).Android = {
+        setDeviceId: vi.fn(() => order.push('setDeviceId')),
+        setSettingsToken: vi.fn(() => order.push('setSettingsToken')),
+        setDeviceCredential: vi.fn(() => order.push('setDeviceCredential')),
+      }
+
+      const { useAuth } = await import('~/composables/useAuth')
+      useAuth().activateFromRegistration({
+        tenant_id: 'tenant-reg',
+        device_id: 'dev-reg',
+        settings_token: 'token-reg',
+        auth_device_id: 'auth-dev-reg',
+        device_secret: 'secret-reg',
+      })
+
+      expect((window as any).Android.setDeviceCredential).toHaveBeenCalledWith('auth-dev-reg', 'secret-reg')
+      // credential は setDeviceId → setSettingsToken の後 (最後) に渡す
+      expect(order).toEqual(['setDeviceId', 'setSettingsToken', 'setDeviceCredential'])
+      delete (window as any).Android
+    })
+
+    it('deactivateDevice calls Android.resetDeviceRegistration and clears kiosk credential (Refs rust-alc-api#480)', async () => {
+      const mockReset = vi.fn()
+      ;(window as any).Android = { setDeviceId: vi.fn(), resetDeviceRegistration: mockReset }
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateFromRegistration, deactivateDevice } = useAuth()
+
+      activateFromRegistration({
+        tenant_id: 'tenant-reg',
+        device_id: 'dev-reg',
+        auth_device_id: 'auth-dev-reg',
+        device_secret: 'secret-reg',
+      })
+      deactivateDevice()
+
+      expect(mockReset).toHaveBeenCalled()
+      const { useDeviceToken } = await import('~/composables/useDeviceToken')
+      expect(useDeviceToken().kioskDeviceId.value).toBeNull()
+      delete (window as any).Android
+    })
   })
 
   describe('session refresh (cookie)', () => {
