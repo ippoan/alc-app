@@ -37,6 +37,7 @@ import {
   approveDevice, approveDeviceByCode, rejectDevice, disableDevice, enableDevice, deleteDevice,
   getDeviceSettings, updateDeviceCallSettings, updateDeviceLastLogin,
   testFcmNotification, testFcmAll, triggerUpdate,
+  authorizeRepair, rePairDevice,
   // Carrying items
   getCarryingItems, createCarryingItem, updateCarryingItem, deleteCarryingItem, submitCarryingItemChecks,
   // Driver info
@@ -715,6 +716,7 @@ describe('api', () => {
       ['rejectDevice', () => rejectDevice(SEED_DEVICE_ID), `/api/devices/reject/${SEED_DEVICE_ID}`],
       ['disableDevice', () => disableDevice(SEED_DEVICE_ID), `/api/devices/disable/${SEED_DEVICE_ID}`],
       ['enableDevice', () => enableDevice(SEED_DEVICE_ID), `/api/devices/enable/${SEED_DEVICE_ID}`],
+      ['authorizeRepair', () => authorizeRepair(SEED_DEVICE_ID), `/api/devices/${SEED_DEVICE_ID}/authorize-repair`],
       ['testFcmNotification', () => testFcmNotification(SEED_DEVICE_ID), `/api/devices/${SEED_DEVICE_ID}/test-fcm`],
       ['testFcmAll', () => testFcmAll(), '/api/devices/test-fcm-all'],
       ['triggerUpdate', () => triggerUpdate(), '/api/devices/trigger-update'],
@@ -808,6 +810,26 @@ describe('api', () => {
       stubResponse(ok204())
       const result = await checkDeviceRegistrationStatus(SEED_REG_CODE)
       expect(result).toBeUndefined()
+    })
+
+    // re-pair (再認証、Refs rust-alc-api#495): 端末側は claimDeviceRegistration 等と同じ
+    // public ingest 経路 (same-origin, 認証情報なし)。
+    it.skipIf(isLive)('rePairDevice uses same-origin path (not apiBase)', async () => {
+      stubOk({ auth_device_id: 'dev-1', device_secret: 'secret-1' })
+      const result = await rePairDevice({ device_id: SEED_DEVICE_ID, hardware_id: 'hw-1' })
+      expect(mockFetch.mock.calls[0][0]).toBe('/api/devices/re-pair')
+      expect(mockFetch.mock.calls[0][1].method).toBe('POST')
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+      expect(body.device_id).toBe(SEED_DEVICE_ID)
+      expect(body.hardware_id).toBe('hw-1')
+      expect(result.auth_device_id).toBe('dev-1')
+    })
+
+    it.skipIf(isLive)('rePairDevice surfaces non-2xx as API エラー (window 外 / cooldown 等)', async () => {
+      stubResponse(errResponse(404))
+      await expect(
+        rePairDevice({ device_id: SEED_DEVICE_ID }),
+      ).rejects.toThrow('API エラー (404)')
     })
 
     it('createDeviceUrlToken with opts', async () => {

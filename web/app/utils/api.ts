@@ -16,6 +16,7 @@ import type {
   Device, DeviceRegistrationRequest, CreateRegistrationResponse, RegistrationStatusResponse,
   ClaimRegistrationRequest, ClaimRegistrationResponse, CreateTokenResponse, CreatePermanentQrResponse, ApproveDeviceResponse,
   DeviceSettingsResponse, CallSchedule,
+  AuthorizeRepairResponse, RePairRequest, RePairResponse,
   DailyHealthResponse, VehicleCategories,
   GuidanceRecord, CreateGuidanceRecord, GuidanceRecordsResponse, GuidanceRecordAttachment,
   CommunicationItem, CreateCommunicationItem, CommunicationItemsResponse,
@@ -800,6 +801,24 @@ export async function enableDevice(id: string): Promise<void> {
 
 export async function deleteDevice(id: string): Promise<void> {
   return request<void>(`/api/devices/${id}`, { method: 'DELETE' })
+}
+
+// --- 再認証 (re-pair、Refs rust-alc-api#495) ---
+
+// 管理者: 対象端末に時限 window を開ける (admin JWT 必須、テナント認証付き API)
+export async function authorizeRepair(id: string, resetBinding = false): Promise<AuthorizeRepairResponse> {
+  return request<AuthorizeRepairResponse>(`/api/devices/${id}/authorize-repair`, {
+    method: 'POST',
+    body: JSON.stringify({ reset_binding: resetBinding }),
+  })
+}
+
+// 端末: window 内で device credential を再取得 (認証不要、public ingest 経路)
+export async function rePairDevice(data: RePairRequest): Promise<RePairResponse> {
+  return publicIngestRequest<RePairResponse>('/api/devices/re-pair', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
 }
 
 export async function getDeviceSettings(

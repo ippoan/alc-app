@@ -9,8 +9,25 @@ const BLE_GW_DEVICES = [
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
-const { deactivateDevice, deviceTenantId, deviceId: activatedDeviceId } = useAuth()
-const { clearKioskCredential } = useDeviceToken()
+const { deactivateDevice, deviceTenantId, deviceId: activatedDeviceId, reAuthenticateDevice } = useAuth()
+const { clearKioskCredential, hasKioskCredential } = useDeviceToken()
+
+// 再認証 (re-pair、Refs rust-alc-api#495)。管理者が端末一覧で「再認証を許可」した
+// window 内でのみ成功する。credential 欠落状態 (hasKioskCredential=false) なら
+// 登録済み端末でも起動時に自動で1回だけ試す (管理者が許可すれば端末に触れずリモート復旧)。
+const reAuthing = ref(false)
+const reAuthResult = ref<'success' | 'failure' | null>(null)
+async function reAuthenticate() {
+  if (reAuthing.value) return
+  reAuthing.value = true
+  reAuthResult.value = null
+  try {
+    const ok = await reAuthenticateDevice()
+    reAuthResult.value = ok ? 'success' : 'failure'
+  } finally {
+    reAuthing.value = false
+  }
+}
 
 // 端末登録リセット (WebView localStorage + Android native SharedPreferences 両方をクリア)
 const resetting = ref(false)
@@ -115,6 +132,12 @@ onMounted(() => {
   if (isAndroidApp) {
     refreshDeviceDiag()
     diagTimer = setInterval(refreshDeviceDiag, 3000) // 3秒ごとに更新
+  }
+  // 登録済みだが credential が欠落している端末 (rust-alc-api#480 の取りこぼし等) は、
+  // 管理者が window を開けていれば起動時の自動 1 回試行だけで無人復旧できる。
+  // 未許可 (window 外) なら黙って失敗する (再認証ボタンが常時案内として残る)。
+  if (activatedDeviceId && !hasKioskCredential.value) {
+    reAuthenticate()
   }
 })
 onUnmounted(() => {
@@ -392,6 +415,26 @@ async function syncFc1200Date() {
             更新
           </button>
         </div>
+
+        <!-- 再認証 (credential 欠落からのリモート復旧、Refs rust-alc-api#495) -->
+        <div v-if="activatedDeviceId" class="flex items-center gap-2 flex-wrap">
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs"
+            :class="hasKioskCredential ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700'">
+            <span class="w-1.5 h-1.5 rounded-full" :class="hasKioskCredential ? 'bg-green-500' : 'bg-yellow-500'" />
+            認証情報: {{ hasKioskCredential ? '取得済み' : '未取得' }}
+          </span>
+          <button
+            class="px-2 py-1 text-xs border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            :disabled="reAuthing"
+            @click="reAuthenticate"
+          >
+            {{ reAuthing ? '再認証中...' : '再認証' }}
+          </button>
+        </div>
+        <p v-if="reAuthResult" class="text-[11px] rounded px-2 py-1"
+          :class="reAuthResult === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'">
+          {{ reAuthResult === 'success' ? '✓ 再認証に成功しました' : '⚠ 再認証に失敗しました (管理者に「再認証を許可」を依頼してください)' }}
+        </p>
 
         <button
           class="px-3 py-1.5 text-xs border rounded-lg transition-colors disabled:opacity-50"

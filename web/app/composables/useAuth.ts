@@ -1,5 +1,7 @@
 import type { AuthUser } from '~/types'
 import { isClient } from '~/utils/env'
+import { rePairDevice } from '~/utils/api'
+import { getOrCreateWebInstallId } from '~/utils/webInstallId'
 
 /** Base64url → UTF-8 JSON デコード (マルチバイト文字対応) */
 function decodeJwtPayload(base64url: string): any {
@@ -337,6 +339,36 @@ export function useAuth() {
     return true
   }
 
+  /**
+   * 管理者が時限 window を開けた後、端末が device credential を再取得する
+   * (再認証、Refs rust-alc-api#495)。deviceId 未登録なら何もせず false。
+   * hardware_id は Android bridge (`getHardwareId`、PR4/任意) があればそれを、
+   * 無ければ web install id (localStorage 永続の乱数) を送る。成功したら
+   * activateFromRegistration と同じ保存先 (kiosk credential + Android native)
+   * に反映して true を返す。失敗理由は呼び出し側に区別させない (window 外 /
+   * cooldown / TOFU 不一致いずれも false、詳細は rust 側ログにのみ出る)。
+   */
+  async function reAuthenticateDevice(): Promise<boolean> {
+    if (!deviceId.value) return false
+    try {
+      const android = (window as any).Android
+      const hardwareId: string = android?.getHardwareId?.() || getOrCreateWebInstallId()
+      const res = await rePairDevice({
+        device_id: deviceId.value,
+        hardware_id: hardwareId,
+        ...(deviceSettingsToken.value ? { settings_token: deviceSettingsToken.value } : {}),
+      })
+      if (!res.auth_device_id || !res.device_secret) return false
+      useDeviceToken().storeKioskCredential(res.auth_device_id, res.device_secret)
+      if (android?.setDeviceCredential) {
+        android.setDeviceCredential(res.auth_device_id, res.device_secret)
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
   return {
     user: readonly(user),
     accessToken: readonly(accessToken),
@@ -356,5 +388,6 @@ export function useAuth() {
     activateFromRegistration,
     deactivateDevice,
     applyStagingBypass,
+    reAuthenticateDevice,
   }
 }
