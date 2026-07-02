@@ -319,6 +319,7 @@ async function syncFc1200Date() {
             <button
               class="px-2 py-0.5 text-[11px] rounded bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50"
               :disabled="updating"
+              title="最新版 (releases/latest) を取得してインストールします"
               @click="checkForUpdate"
             >
               {{ updating ? '更新中...' : '更新' }}
