@@ -79,6 +79,10 @@ function resetDeviceRegistration() {
     // kiosk credential を消し RoomWatcher を停止する (stale device_id 起因の WS未接続・FCM未 を解消)。
     const android = (window as unknown as { Android?: { resetDeviceRegistration?: () => void } }).Android
     android?.resetDeviceRegistration?.()
+    // staging の auth バイパス (NUXT_PUBLIC_STAGING_TENANT_ID) はリロード時に tenant を
+    // 自動再アクティベートするため、リセット直後は 1 回スキップして「未登録」を出し、
+    // 実登録 (device_id を入れる) の導線を通す。
+    sessionStorage.setItem('alc_skip_staging_bypass', '1')
     // 登録画面へ戻す
     window.location.href = '/'
   } finally {

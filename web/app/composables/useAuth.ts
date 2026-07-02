@@ -79,8 +79,15 @@ export function useAuth() {
     isLoading.value = false
   }
 
-  /** staging 環境で NUXT_PUBLIC_STAGING_TENANT_ID が設定されていれば自動 activateDevice */
+  /** staging 環境で NUXT_PUBLIC_STAGING_TENANT_ID が設定されていれば自動 activateDevice。
+   *  ただし端末登録リセット直後 (sessionStorage フラグ) は 1 回だけスキップし、実登録
+   *  (URL/QR claim で device_id を入れる) の導線を通す。バイパスは tenant のみで device_id
+   *  を持たないため、これが残ると WS/FCM が繋がらないまま「登録済み」に見えてしまう。 */
   function applyStagingBypass(stagingTenantId: string) {
+    if (isClient && sessionStorage.getItem('alc_skip_staging_bypass')) {
+      sessionStorage.removeItem('alc_skip_staging_bypass')
+      return
+    }
     if (stagingTenantId && !isAuthenticated.value && !isDeviceActivated.value) {
       activateDevice(stagingTenantId)
     }
