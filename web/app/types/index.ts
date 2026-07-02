@@ -840,6 +840,9 @@ export interface RegistrationStatusResponse {
   device_name?: string
   /** 承認時に発行される device 保有 token (approved 時のみ、Refs rust-alc-api#388) */
   settings_token?: string
+  /** 承認時に発行される kiosk device credential (approved 時のみ、Refs rust-alc-api#480) */
+  auth_device_id?: string
+  device_secret?: string
 }
 
 export interface ClaimRegistrationRequest {
@@ -856,6 +859,9 @@ export interface ClaimRegistrationResponse {
   message?: string
   /** 即時登録フローで発行される device 保有 token (Refs rust-alc-api#388) */
   settings_token?: string
+  /** 即時登録フローで発行される kiosk device credential (Refs rust-alc-api#480) */
+  auth_device_id?: string
+  device_secret?: string
 }
 
 export interface CreateTokenResponse {
