@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { DeviceSettingsResponse } from '~/types'
+
 // BLE Gateway の既知 VID:PID (CH340, CP210x, Espressif, FTDI FT232R)
 const BLE_GW_DEVICES = [
   { vid: 0x1A86 },            // CH340/CH552
@@ -9,8 +11,43 @@ const BLE_GW_DEVICES = [
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
-const { deactivateDevice, deviceTenantId, deviceId: activatedDeviceId, reAuthenticateDevice } = useAuth()
+const {
+  deactivateDevice, deviceTenantId, deviceId: activatedDeviceId, deviceSettingsToken,
+  reAuthenticateDevice,
+} = useAuth()
 const { clearKioskCredential, hasKioskCredential } = useDeviceToken()
+
+// 常時起動 ON/OFF (端末自身での切替)。call_enabled / call_schedule は現在値を
+// 保持したまま always_on だけ差し替える (updateDeviceCallSettings は全項目送信の
+// ため、取得済み設定を持たずに叩くと他項目を意図せず上書きする)。
+const deviceSettings = ref<DeviceSettingsResponse | null>(null)
+const alwaysOnToggling = ref(false)
+async function refreshDeviceSettings() {
+  if (!activatedDeviceId.value) return
+  try {
+    deviceSettings.value = await getDeviceSettings(activatedDeviceId.value, deviceSettingsToken.value)
+  } catch {
+    // 取得失敗時は表示なし (トグルボタンを非表示にする、Refs #480 パターンに準拠)
+  }
+}
+async function toggleAlwaysOnSelf() {
+  if (!activatedDeviceId.value || !deviceSettings.value || alwaysOnToggling.value) return
+  alwaysOnToggling.value = true
+  const next = !deviceSettings.value.always_on
+  try {
+    await updateDeviceCallSettings(
+      activatedDeviceId.value,
+      deviceSettings.value.call_enabled,
+      deviceSettings.value.call_schedule,
+      next,
+    )
+    deviceSettings.value = { ...deviceSettings.value, always_on: next }
+  } catch {
+    // 失敗時は表示を変えない (再取得は次回リロード時)
+  } finally {
+    alwaysOnToggling.value = false
+  }
+}
 
 // 再認証 (re-pair、Refs rust-alc-api#495)。管理者が端末一覧で「再認証を許可」した
 // window 内でのみ成功する。credential 欠落状態 (hasKioskCredential=false) なら
@@ -139,6 +176,7 @@ onMounted(() => {
   if (activatedDeviceId && !hasKioskCredential.value) {
     reAuthenticate()
   }
+  refreshDeviceSettings()
 })
 onUnmounted(() => {
   if (diagTimer) clearInterval(diagTimer)
@@ -435,6 +473,20 @@ async function syncFc1200Date() {
           :class="reAuthResult === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'">
           {{ reAuthResult === 'success' ? '✓ 再認証に成功しました' : '⚠ 再認証に失敗しました (管理者に「再認証を許可」を依頼してください)' }}
         </p>
+
+        <!-- 常時起動 ON/OFF (端末自身での切替) -->
+        <div v-if="deviceSettings" class="flex items-center gap-2">
+          <button
+            class="px-3 py-1.5 text-xs rounded-lg transition-colors disabled:opacity-50"
+            :class="deviceSettings.always_on
+              ? 'bg-green-100 text-green-700 hover:bg-green-200'
+              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+            :disabled="alwaysOnToggling"
+            @click="toggleAlwaysOnSelf"
+          >
+            {{ alwaysOnToggling ? '更新中...' : `常時起動${deviceSettings.always_on ? 'ON' : 'OFF'}` }}
+          </button>
+        </div>
 
         <button
           class="px-3 py-1.5 text-xs border rounded-lg transition-colors disabled:opacity-50"
