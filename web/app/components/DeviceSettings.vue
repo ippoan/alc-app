@@ -28,6 +28,7 @@ type AndroidDiag = {
   getFcmStatus?: () => string
   getAppVersion?: () => string
   checkForUpdate?: () => void
+  getLastUpdateResult?: () => string
   uploadDeviceLog?: () => void
 }
 
@@ -54,9 +55,15 @@ function uploadDeviceLog() {
 
 // アプリ更新 (releases/latest を DL・インストール、Android ブリッジ checkForUpdate)。
 const updating = ref(false)
+// 直近の OTA 更新結果 (ネイティブ UpdateStatusStore 由来、無音失敗を UI に可視化)。
+const updateResult = ref<{ ok: boolean, hint: string, version?: string } | null>(null)
 function checkForUpdate() {
   const android = (window as unknown as { Android?: AndroidDiag }).Android
-  if (!android?.checkForUpdate) return
+  if (!android?.checkForUpdate) {
+    // 旧 APK は checkForUpdate 未実装。無言で握りつぶさず理由を出す。
+    updateResult.value = { ok: false, hint: 'この APK は更新機能に未対応です (手動で再インストールしてください)' }
+    return
+  }
   updating.value = true
   try {
     android.checkForUpdate()
@@ -87,6 +94,14 @@ function refreshDeviceDiag() {
     if (ver) {
       const v = JSON.parse(ver) as { versionName?: string, versionCode?: number }
       appVersion.value = v.versionName ? `${v.versionName} (${v.versionCode ?? '?'})` : null
+    }
+    // 直近の OTA 更新結果 (成功/失敗/理由)。署名不一致等の「無音失敗」を UI に出す。
+    const upd = android.getLastUpdateResult?.()
+    if (upd) {
+      const u = JSON.parse(upd) as { ok?: boolean, hint?: string, version?: string }
+      updateResult.value = typeof u.ok === 'boolean'
+        ? { ok: u.ok, hint: u.hint ?? '', version: u.version }
+        : null
     }
   } catch { /* ブリッジ未実装の旧 APK 等は無視 */ }
 }
@@ -345,6 +360,14 @@ async function syncFc1200Date() {
             >
               {{ updating ? '更新中...' : '更新' }}
             </button>
+          </p>
+          <!-- 直近の OTA 更新結果 (署名不一致等の無音失敗を可視化) -->
+          <p
+            v-if="updateResult"
+            class="text-[11px] rounded px-2 py-1"
+            :class="updateResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'"
+          >
+            {{ updateResult.ok ? '✓' : '⚠' }} {{ updateResult.hint }}
           </p>
         </div>
 
