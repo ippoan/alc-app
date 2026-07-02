@@ -74,18 +74,20 @@ async function resolveSecret(binding: unknown): Promise<string | null> {
 }
 
 /**
- * 固定 rustPath の public ingest 経路を `/alc-internal-proxy` 経由で forward する
- * Nitro server route handler を生成する。
+ * 固定 (または event から解決する) rustPath の public ingest 経路を `/alc-internal-proxy`
+ * 経由で forward する Nitro server route handler を生成する。`rustPath` は固定文字列 or
+ * event から解決する関数 (device-claim status の `[code]` 埋め込み用)。
  *
  * `forwardInternalSecret: true` の時は incoming request の `X-Internal-Secret` を
  * pass-through する (dev OTA = trigger-update-dev 用。auth-worker 側 internal-secret クラスが
  * これを rust に中継し、rust が FCM_INTERNAL_SECRET で検証する)。
  */
 export function createInternalIngestHandler(
-  rustPath: string,
+  rustPathInput: string | ((event: H3Event) => string),
   opts: { forwardInternalSecret?: boolean } = {},
 ) {
   return defineEventHandler(async (event) => {
+    const rustPath = typeof rustPathInput === 'function' ? rustPathInput(event) : rustPathInput
     const env = cfEnv(event)
     const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET)
     if (!sharedSecret) {

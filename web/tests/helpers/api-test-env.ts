@@ -187,8 +187,12 @@ function installLiveIdentityFetch() {
   const rewriteProxyUrl = (url: string): string => {
     const marker = '/api/proxy/'
     const i = url.indexOf(marker)
-    if (i === -1) return url
-    return `${API_BASE}/api/${url.slice(i + marker.length)}`
+    if (i !== -1) return `${API_BASE}/api/${url.slice(i + marker.length)}`
+    // 端末登録前の public ingest (same-origin Nitro route、Refs rust-alc-api#480)。
+    // live 統合テストには Nuxt server が無いため、rust-alc-api を直叩きする
+    // (本番の auth-worker /alc-internal-proxy 経由の検証は各 repo の unit test 側で担保)。
+    if (url.startsWith('/api/devices/register/')) return `${API_BASE}${url}`
+    return url
   }
   const wrapped = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = new Headers(

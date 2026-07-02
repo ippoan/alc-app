@@ -597,7 +597,6 @@ describe('api', () => {
       ['getTimecardCardByCardId', () => getTimecardCardByCardId(SEED_CARD_NFC), `/api/timecard/cards/by-card/${SEED_CARD_NFC}`],
       ['listDevices', () => listDevices(), '/api/devices'],
       ['listPendingDeviceRegistrations', () => listPendingDeviceRegistrations(), '/api/devices/pending'],
-      ['checkDeviceRegistrationStatus', () => checkDeviceRegistrationStatus(SEED_REG_CODE), `/api/devices/register/status/${SEED_REG_CODE}`],
       ['getDeviceSettings', () => getDeviceSettings(SEED_DEVICE_ID), `/api/devices/settings/${SEED_DEVICE_ID}`],
       ['getCarryingItems', () => getCarryingItems(), '/api/carrying-items'],
       ['getDriverInfo', () => getDriverInfo(TEST_EMPLOYEE_ID), `/api/tenko/driver-info/${TEST_EMPLOYEE_ID}`],
@@ -708,8 +707,6 @@ describe('api', () => {
       ['createFailure', () => createFailure(createEquipmentFailureBody as any), '/api/tenko/equipment-failures'],
       ['createTimecardCard', () => createTimecardCard({ card_id: `NFC-POST-${Date.now()}`, employee_id: TEST_EMPLOYEE_ID } as any), '/api/timecard/cards'],
       ['punchTimecard', () => punchTimecard(SEED_CARD_NFC), '/api/timecard/punch'],
-      ['createDeviceRegistrationRequest', () => createDeviceRegistrationRequest(), '/api/devices/register/request'],
-      ['claimDeviceRegistration', () => claimDeviceRegistration({ registration_code: 'DUMMY-CLAIM-CODE' } as any), '/api/devices/register/claim'],
       ['createDeviceUrlToken', () => createDeviceUrlToken(), '/api/devices/register/create-token'],
       ['createPermanentQr', () => createPermanentQr(), '/api/devices/register/create-permanent-qr'],
       ['createDeviceOwnerToken', () => createDeviceOwnerToken(), '/api/devices/register/create-device-owner-token'],
@@ -761,6 +758,35 @@ describe('api', () => {
       assertMock(() => {
         const body = JSON.parse(mockFetch.mock.calls[0][1].body)
         expect(body.device_name).toBe('My Device')
+      })
+    })
+
+    // 端末登録前の public ingest 系 (認証情報なし) は same-origin Nitro server route
+    // (server/api/devices/register/*) を叩く — rust-alc-api の apiBase に直接 fetch すると
+    // Cloud Run IAM lockdown 後は 403 (CORS ヘッダー無し) で "Failed to fetch" になる
+    // (Refs ippoan/rust-alc-api#480)。
+    it.skipIf(isLive)('createDeviceRegistrationRequest uses same-origin path (not apiBase)', async () => {
+      stubOk({})
+      await callApi(() => createDeviceRegistrationRequest('My Device'))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/devices/register/request')
+      })
+    })
+
+    it.skipIf(isLive)('checkDeviceRegistrationStatus uses same-origin path (not apiBase)', async () => {
+      stubOk({})
+      await callApi(() => checkDeviceRegistrationStatus(SEED_REG_CODE))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe(`/api/devices/register/status/${SEED_REG_CODE}`)
+      })
+    })
+
+    it.skipIf(isLive)('claimDeviceRegistration uses same-origin path (not apiBase)', async () => {
+      stubOk({})
+      await callApi(() => claimDeviceRegistration({ registration_code: 'DUMMY-CLAIM-CODE' } as any))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/devices/register/claim')
+        expect(mockFetch.mock.calls[0][1].method).toBe('POST')
       })
     })
 

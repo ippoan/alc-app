@@ -125,6 +125,28 @@ async function proxyRequest<T>(path: string, jwt: string, options: RequestInit):
 }
 
 /**
+ * 端末登録前 (認証情報が一切無い) の public ingest 経路専用。alc-app 自身の Nitro server
+ * route (`server/api/devices/register/{request,status/[code],claim}`) を same-origin で
+ * 叩く。これらの route は auth-worker `/alc-internal-proxy` 経由で rust に forward される
+ * (Refs ippoan/rust-alc-api#480)。
+ *
+ * `request()` の X-Tenant-ID 直 fetch fallback をここで使うと、rust-alc-api の Cloud Run
+ * IAM lockdown 後は直叩きが 403 (CORS ヘッダー無し) になり「Failed to fetch」になる —
+ * この関数はその bug を踏まないための専用経路。
+ */
+async function publicIngestRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers)
+  if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const res = await fetch(path, { ...options, headers })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`API エラー (${res.status}): ${body || res.statusText}`)
+  }
+  if (res.status === 204) return undefined as T
+  return (await res.json()) as T
+}
+
+/**
  * blob / FormData 系の raw fetch を認証付きで投げ Response をそのまま返す (#434 step 3d)。
  * admin browser JWT or device JWT があれば same-origin proxy (/api/proxy) 経由
  * (proxy が X-Tenant-ID 注入 + OIDC mint)。どちらも無ければ従来の `${apiBase}` 直叩き
@@ -701,20 +723,21 @@ export async function getTenkoCallDrivers(): Promise<TenkoCallDriver[]> {
 
 // ============ Device Registration ============
 
-// 公開API (認証不要)
+// 公開API (認証不要、端末登録前なので admin/device JWT が無い。same-origin Nitro
+// server route 経由で叩く。Refs ippoan/rust-alc-api#480)
 export async function createDeviceRegistrationRequest(deviceName?: string): Promise<CreateRegistrationResponse> {
-  return request<CreateRegistrationResponse>('/api/devices/register/request', {
+  return publicIngestRequest<CreateRegistrationResponse>('/api/devices/register/request', {
     method: 'POST',
     body: JSON.stringify({ device_name: deviceName }),
   })
 }
 
 export async function checkDeviceRegistrationStatus(code: string): Promise<RegistrationStatusResponse> {
-  return request<RegistrationStatusResponse>(`/api/devices/register/status/${code}`)
+  return publicIngestRequest<RegistrationStatusResponse>(`/api/devices/register/status/${code}`)
 }
 
 export async function claimDeviceRegistration(data: ClaimRegistrationRequest): Promise<ClaimRegistrationResponse> {
-  return request<ClaimRegistrationResponse>('/api/devices/register/claim', {
+  return publicIngestRequest<ClaimRegistrationResponse>('/api/devices/register/claim', {
     method: 'POST',
     body: JSON.stringify(data),
   })
