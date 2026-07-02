@@ -27,6 +27,21 @@ type AndroidDiag = {
   isCallEnabled?: () => boolean
   getFcmStatus?: () => string
   getAppVersion?: () => string
+  checkForUpdate?: () => void
+}
+
+// アプリ更新 (releases/latest を DL・インストール、Android ブリッジ checkForUpdate)。
+const updating = ref(false)
+function checkForUpdate() {
+  const android = (window as unknown as { Android?: AndroidDiag }).Android
+  if (!android?.checkForUpdate) return
+  updating.value = true
+  try {
+    android.checkForUpdate()
+  } finally {
+    // ダウンロード〜インストールはネイティブ側で進むので、少し待ってボタンを戻す。
+    setTimeout(() => { updating.value = false }, 5000)
+  }
 }
 const wsConnected = ref<boolean | null>(null)
 const fcmRegistered = ref<boolean | null>(null)
@@ -299,8 +314,15 @@ async function syncFc1200Date() {
             </span>
           </p>
           <p v-if="activatedDeviceId" class="font-mono text-gray-400 break-all">device: {{ activatedDeviceId }}</p>
-          <p v-if="isAndroidApp">アプリ:
-            <span class="font-medium text-gray-700">{{ appVersion ?? '取得中...' }}</span>
+          <p v-if="isAndroidApp" class="flex items-center gap-2">
+            <span>アプリ: <span class="font-medium text-gray-700">{{ appVersion ?? '取得中...' }}</span></span>
+            <button
+              class="px-2 py-0.5 text-[11px] rounded bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50"
+              :disabled="updating"
+              @click="checkForUpdate"
+            >
+              {{ updating ? '更新中...' : '更新' }}
+            </button>
           </p>
         </div>
 
