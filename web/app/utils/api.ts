@@ -136,7 +136,7 @@ async function proxyRequest<T>(path: string, jwt: string, options: RequestInit):
  */
 async function publicIngestRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
-  if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (options.body) headers.set('Content-Type', 'application/json')
   const res = await fetch(path, { ...options, headers })
   if (!res.ok) {
     const body = await res.text()

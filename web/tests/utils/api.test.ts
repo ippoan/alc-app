@@ -790,6 +790,26 @@ describe('api', () => {
       })
     })
 
+    it.skipIf(isLive)('claimDeviceRegistration surfaces non-2xx as API エラー', async () => {
+      stubResponse(errResponse(503, 'INTERNAL_SHARED_SECRET binding が未設定です'))
+      await expect(
+        claimDeviceRegistration({ registration_code: 'DUMMY-CLAIM-CODE' } as any),
+      ).rejects.toThrow('API エラー (503)')
+    })
+
+    it.skipIf(isLive)('claimDeviceRegistration falls back to statusText when body is empty', async () => {
+      stubResponse(errResponse(500))
+      await expect(
+        claimDeviceRegistration({ registration_code: 'DUMMY-CLAIM-CODE' } as any),
+      ).rejects.toThrow('API エラー (500): Error')
+    })
+
+    it.skipIf(isLive)('checkDeviceRegistrationStatus handles 204 (no content)', async () => {
+      stubResponse(ok204())
+      const result = await checkDeviceRegistrationStatus(SEED_REG_CODE)
+      expect(result).toBeUndefined()
+    })
+
     it('createDeviceUrlToken with opts', async () => {
       stubOk({})
       await callApi(() => createDeviceUrlToken('dev', { is_device_owner: true, is_dev_device: true }))
