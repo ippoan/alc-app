@@ -17,7 +17,10 @@ on:
     # を catch-all で含める。個別 file 列挙だと新規 workflow を追加する PR
     # (例: ci-shape-report.yml) で required check が来ず "2 expected checks" の
     # デッドロックになる (上記コメント参照)。
-    paths: ['web/**', '.claude/**', '.github/workflows/**']
+    # cf-alc-signaling/** も含める: signaling-only の PR (例: wrangler.toml の
+    # account_id 追加) でも required check (ci / Vitest+Coverage, ci / PR Limit Check)
+    # を発火させないと "2 expected checks" で永遠に blocked になるため (上記デッドロック)。
+    paths: ['web/**', '.claude/**', '.github/workflows/**', 'cf-alc-signaling/**']
 
 permissions:
   contents: write
