@@ -1,0 +1,51 @@
+name: Signaling Deploy
+
+# cf-alc-signaling (WebRTC signaling worker) の deploy CI。
+#
+# この worker は Durable Object (SignalingRoom / RoomRegistry) を持つため、
+# frontend-ci.yml は使えない — frontend-ci は release script の `wrangler deploy` を
+# `wrangler versions upload` (no-traffic) へ global 置換するが、DO worker はそれと
+# 相性が悪い (durable-object-worker skill 参照)。よって real `wrangler deploy` を
+# 行う bespoke workflow にする。単一環境運用 (staging/prod 分割なし)。
+#
+# migration (v1 SignalingRoom / v2 RoomRegistry) は既に適用済みなので、新規
+# migration を追加しない限り通常の `wrangler deploy` で反映される。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cf-alc-signaling/**'
+      - '.github/workflows/signaling-deploy.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cf-alc-signaling/**'
+      - '.github/workflows/signaling-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cf-alc-signaling
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22' # wrangler v4 は Node 22+ 必須
+          cache: 'npm'
+          cache-dependency-path: cf-alc-signaling/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      # deploy は PR では skip (typecheck による gate のみ)。push / dispatch で反映。
+      - name: Deploy
+        if: github.event_name != 'pull_request'
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
