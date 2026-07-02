@@ -79,7 +79,7 @@ const doProvisioningQrDataUrl = ref('')
 const doRegistrationCode = ref('')
 // APK 署名証明書の SHA-256 (URL-safe base64) — 署名鍵が変わらない限り固定
 const APK_SIGNATURE_CHECKSUM = 'K8l47tzAs9fdijA5qdm8o4Duq62WWkGa97sffd3KUZk'
-const apkDownloadUrl = 'https://yhonda-ohishi-alc.github.io/AlcoholChecker/app-release.apk'
+const apkDownloadUrl = 'https://ippoan.github.io/AlcoholChecker/app-release.apk'
 
 // QR 拡大モーダル
 const zoomedQrSrc = ref('')
@@ -559,7 +559,7 @@ async function triggerDeviceUpdate(deviceId: string) {
 
 // 更新用 QR コード
 const updateQrDataUrl = ref('')
-const apkLatestUrl = 'https://github.com/yhonda-ohishi-alc/AlcoholChecker/releases/latest/download/app-release.apk'
+const apkLatestUrl = 'https://github.com/ippoan/AlcoholChecker/releases/latest/download/app-release.apk'
 
 async function showUpdateQr() {
   if (updateQrDataUrl.value) {
@@ -568,6 +568,12 @@ async function showUpdateQr() {
   }
   updateQrDataUrl.value = await QRCode.toDataURL(apkLatestUrl, { width: 400, margin: 2 })
 }
+
+// アプリダウンロード QR (新規インストール用、常設表示)
+const appDownloadQrDataUrl = ref('')
+onMounted(async () => {
+  appDownloadQrDataUrl.value = await QRCode.toDataURL(apkDownloadUrl, { width: 300, margin: 2 })
+})
 
 async function syncScheduleToDO(deviceId: string, schedule: CallSchedule) {
   if (!signalingUrl) return
@@ -601,6 +607,22 @@ onMounted(() => refresh())
 <template>
   <div class="space-y-6">
     <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+
+    <!-- Android アプリのダウンロード -->
+    <div class="bg-white rounded-xl shadow-sm p-4">
+      <h3 class="text-sm font-medium text-gray-800 mb-2">Android アプリのダウンロード</h3>
+      <p class="text-xs text-gray-500 mb-3">端末カメラでQRを読み込むとAPKの直接ダウンロードが始まります (「提供元不明のアプリ」を許可してインストール)。</p>
+      <div v-if="appDownloadQrDataUrl" class="text-center space-y-2">
+        <img
+          :src="appDownloadQrDataUrl"
+          alt="Androidアプリダウンロード用QR"
+          class="mx-auto cursor-pointer w-[180px]"
+          @click="zoomedQrSrc = appDownloadQrDataUrl"
+        />
+        <p v-if="latestApkVersion" class="text-xs text-gray-500">最新バージョン: {{ latestApkVersion }}</p>
+        <p class="text-[10px] text-gray-400 break-all">{{ apkDownloadUrl }}</p>
+      </div>
+    </div>
 
     <!-- この端末をキオスクにする (#434 P1 / 方式1) -->
     <div class="bg-white rounded-xl shadow-sm p-4">
