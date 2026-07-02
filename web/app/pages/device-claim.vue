@@ -22,6 +22,15 @@ const flowType = ref<DeviceFlowType | ''>('')
 const errorMessage = ref('')
 let pollingTimer: ReturnType<typeof setInterval> | null = null
 
+// Android App Links (autoVerify) はサイドロード配布 (Play 経由でない) だと自動検証が
+// 効かず、ブラウザ (Chrome) でこのページが開かれてしまうことがある。window.Android
+// bridge が無ければブラウザ経由と判断し、intent:// URI で AlcoholChecker アプリを
+// package 明示で確実に起動するフォールバックボタンを出す (autoVerify のドメイン検証に
+// 依存しない経路)。Chrome for Developers: https://developer.chrome.com/docs/android/intents
+const ANDROID_PACKAGE = 'com.example.alcoholchecker'
+const hasAndroidBridge = ref(true) // SSR/初期描画中はボタンを出さない (hydration mismatch 回避)
+const appIntentUrl = ref('')
+
 async function submit() {
   if (!token.value) {
     errorMessage.value = '登録トークンが指定されていません'
@@ -100,6 +109,7 @@ onMounted(async () => {
   }
 
   const android = (window as any).Android
+  hasAndroidBridge.value = !!android
   if (android?.getPhoneNumber) {
     try {
       const number = android.getPhoneNumber()
@@ -111,6 +121,12 @@ onMounted(async () => {
     window.addEventListener('phone-number', ((e: CustomEvent) => {
       if (e.detail && !phoneNumber.value) phoneNumber.value = e.detail
     }) as EventListener)
+  } else {
+    // ブラウザ経由 (App Links 未検証等) — アプリ起動用 intent:// URI を組み立てる
+    const url = new URL(window.location.href)
+    const rest = `${url.host}${url.pathname}${url.search}`
+    const fallback = encodeURIComponent(url.href)
+    appIntentUrl.value = `intent://${rest}#Intent;scheme=https;package=${ANDROID_PACKAGE};S.browser_fallback_url=${fallback};end`
   }
 })
 
@@ -122,6 +138,17 @@ onUnmounted(() => stopPolling())
     <div class="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
       <h1 class="text-lg font-bold text-gray-800 mb-2 text-center">端末登録</h1>
       <p class="text-xs text-gray-500 text-center mb-6">デバイス名を入力して登録してください。電話番号は任意です。</p>
+
+      <!-- App Links (autoVerify) が効かずブラウザで開かれた場合のフォールバック -->
+      <div v-if="!hasAndroidBridge && appIntentUrl" class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
+        <p class="text-xs text-amber-700 mb-2">ブラウザで開かれています。電話番号の自動入力にはアプリでの表示が必要です。</p>
+        <a
+          :href="appIntentUrl"
+          class="inline-block px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700"
+        >
+          AlcoholChecker アプリで開く
+        </a>
+      </div>
 
       <!-- 入力フォーム -->
       <div v-if="status === 'form' || status === 'error'" class="space-y-4">
