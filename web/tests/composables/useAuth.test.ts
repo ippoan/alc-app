@@ -269,6 +269,137 @@ describe('useAuth', () => {
     })
   })
 
+  describe('reAuthenticateDevice (再認証、Refs rust-alc-api#495)', () => {
+    it('returns false when device is not registered (no deviceId)', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const { reAuthenticateDevice } = useAuth()
+
+      expect(await reAuthenticateDevice()).toBe(false)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+
+    it('stores credential and returns true on success', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ auth_device_id: 'auth-dev-1', device_secret: 'secret-1' }),
+      })
+
+      const ok = await auth.reAuthenticateDevice()
+
+      expect(ok).toBe(true)
+      expect(mockFetch.mock.calls[0][0]).toBe('/api/devices/re-pair')
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+      expect(body.device_id).toBe('dev-1')
+      const { useDeviceToken } = await import('~/composables/useDeviceToken')
+      expect(useDeviceToken().kioskDeviceId.value).toBe('auth-dev-1')
+    })
+
+    it('returns false on non-2xx without surfacing the reason (window 外 / cooldown / TOFU 不一致等)', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404, statusText: 'Not Found', text: async () => '' })
+
+      expect(await auth.reAuthenticateDevice()).toBe(false)
+    })
+
+    it('returns false when response is missing credential fields', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) })
+
+      expect(await auth.reAuthenticateDevice()).toBe(false)
+    })
+
+    it('prefers Android.getHardwareId() and calls setDeviceCredential on success', async () => {
+      const setDeviceCredential = vi.fn()
+      ;(window as any).Android = { getHardwareId: vi.fn(() => 'hw-android'), setDeviceCredential }
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ auth_device_id: 'auth-dev-2', device_secret: 'secret-2' }),
+      })
+
+      await auth.reAuthenticateDevice()
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+      expect(body.hardware_id).toBe('hw-android')
+      expect(setDeviceCredential).toHaveBeenCalledWith('auth-dev-2', 'secret-2')
+      delete (window as any).Android
+    })
+
+    it('falls back to web install id when Android bridge is absent', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ auth_device_id: 'auth-dev-3', device_secret: 'secret-3' }),
+      })
+
+      await auth.reAuthenticateDevice()
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+      expect(typeof body.hardware_id).toBe('string')
+      expect(body.hardware_id.length).toBeGreaterThan(0)
+    })
+
+    it('includes settings_token in the request body when present', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1', 'stok-1')
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ auth_device_id: 'auth-dev-4', device_secret: 'secret-4' }),
+      })
+
+      await auth.reAuthenticateDevice()
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+      expect(body.settings_token).toBe('stok-1')
+    })
+
+    it('falls back to web install id when Android bridge lacks getHardwareId (old APK)', async () => {
+      ;(window as any).Android = { setDeviceCredential: vi.fn() }
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ auth_device_id: 'auth-dev-5', device_secret: 'secret-5' }),
+      })
+
+      await auth.reAuthenticateDevice()
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+      expect(typeof body.hardware_id).toBe('string')
+      expect(body.hardware_id.length).toBeGreaterThan(0)
+      delete (window as any).Android
+    })
+
+    it('returns false when fetch throws (network error)', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'dev-1')
+      mockFetch.mockRejectedValueOnce(new Error('network down'))
+
+      expect(await auth.reAuthenticateDevice()).toBe(false)
+    })
+  })
+
   describe('session refresh (cookie)', () => {
     function setDocCookie(value: string) {
       Object.defineProperty(document, 'cookie', { value, writable: true, configurable: true })

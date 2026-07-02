@@ -801,6 +801,11 @@ export interface Device {
   watchdog_running?: boolean | null
   created_at: string
   updated_at: string
+  /** re-pair (再認証) 状態。管理者が開けた時限 window の期限 (Refs rust-alc-api#495) */
+  re_pair_authorized_until?: string | null
+  last_re_pair_at?: string | null
+  re_pair_count: number
+  hardware_id?: string | null
 }
 
 export interface DeviceSettingsResponse {
@@ -877,6 +882,23 @@ export interface ApproveDeviceResponse {
   success: boolean
   device_id: string
   tenant_id: string
+}
+
+// --- 再認証 (re-pair、Refs rust-alc-api#495) ---
+
+export interface AuthorizeRepairResponse {
+  authorized_until: string
+}
+
+export interface RePairRequest {
+  device_id: string
+  hardware_id?: string
+  settings_token?: string
+}
+
+export interface RePairResponse {
+  auth_device_id: string
+  device_secret: string
 }
 
 // --- 携行品 ---

@@ -6,6 +6,7 @@ import {
   createDeviceUrlToken, createPermanentQr, createDeviceOwnerToken,
   approveDevice, rejectDevice, disableDevice, enableDevice, deleteDevice,
   updateDeviceCallSettings, testFcmNotification, testFcmAll, triggerUpdate,
+  authorizeRepair,
 } from '~/utils/api'
 import type { TestFcmAllResult } from '~/utils/api'
 
@@ -267,6 +268,31 @@ async function handleDelete(id: string) {
   } catch (e) {
     error.value = e instanceof Error ? e.message : '削除に失敗しました'
   }
+}
+
+// 再認証 window を開ける (Refs rust-alc-api#495)。端末が起動時 auto-retry や
+// 「再認証」ボタンで credential を再取得できるようになる (既定 15 分間)。
+const repairAuthorizing = ref<Set<string>>(new Set())
+async function handleAuthorizeRepair(id: string) {
+  repairAuthorizing.value = new Set([...repairAuthorizing.value, id])
+  try {
+    await authorizeRepair(id)
+    await refresh()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '再認証許可に失敗しました'
+  } finally {
+    const next = new Set(repairAuthorizing.value)
+    next.delete(id)
+    repairAuthorizing.value = next
+  }
+}
+
+/** 再認証 window の残り時間を「N分」表示用に算出する (期限切れ/未設定は null)。 */
+function repairWindowRemaining(authorizedUntil?: string | null): string | null {
+  if (!authorizedUntil) return null
+  const remainingMs = new Date(authorizedUntil).getTime() - Date.now()
+  if (remainingMs <= 0) return null
+  return `残り${Math.ceil(remainingMs / 60000)}分`
 }
 
 // 生成済みトークンのQR再表示用
@@ -1046,6 +1072,13 @@ Latest Release: {{ latestApkVersion || '取得中...' }}</pre>
                     class="text-green-600"
                   >(管理者)</span>
                 </p>
+                <p v-if="dev.re_pair_count > 0 || dev.re_pair_authorized_until" class="text-xs text-gray-400">
+                  再認証: {{ dev.re_pair_count }}回
+                  <span v-if="dev.last_re_pair_at">(最終 {{ dev.last_re_pair_at.slice(0, 16).replace('T', ' ') }})</span>
+                  <span v-if="repairWindowRemaining(dev.re_pair_authorized_until)" class="text-yellow-600">
+                    / window {{ repairWindowRemaining(dev.re_pair_authorized_until) }}
+                  </span>
+                </p>
               </div>
             </div>
             <div class="flex gap-1">
@@ -1103,6 +1136,18 @@ Latest Release: {{ latestApkVersion || '取得中...' }}</pre>
                 @click="triggerDeviceUpdate(dev.id)"
               >
                 {{ otaUpdatingDevice === dev.id ? '送信中...' : '更新' }}
+              </button>
+              <!-- 再認証を許可 (Refs rust-alc-api#495) -->
+              <button
+                v-if="dev.status === 'active'"
+                class="px-2 py-1 text-xs rounded"
+                :class="repairWindowRemaining(dev.re_pair_authorized_until)
+                  ? 'bg-yellow-100 text-yellow-700'
+                  : 'bg-purple-100 text-purple-700 hover:bg-purple-200'"
+                :disabled="repairAuthorizing.has(dev.id)"
+                @click="handleAuthorizeRepair(dev.id)"
+              >
+                {{ repairAuthorizing.has(dev.id) ? '許可中...' : repairWindowRemaining(dev.re_pair_authorized_until) || '再認証を許可' }}
               </button>
               <!-- スケジュール展開 -->
               <button
