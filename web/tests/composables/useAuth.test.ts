@@ -159,6 +159,43 @@ describe('useAuth', () => {
       expect(mockSetDeviceId).toHaveBeenCalledWith('')
       delete (window as any).Android
     })
+
+    it('activateFromRegistration should activate device and store kiosk credential when present (Refs rust-alc-api#480)', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateFromRegistration, deviceTenantId, deviceId } = useAuth()
+
+      activateFromRegistration({
+        tenant_id: 'tenant-reg',
+        device_id: 'dev-reg',
+        settings_token: 'token-reg',
+        auth_device_id: 'auth-dev-reg',
+        device_secret: 'secret-reg',
+      })
+
+      expect(deviceTenantId.value).toBe('tenant-reg')
+      expect(deviceId.value).toBe('dev-reg')
+      const { useDeviceToken } = await import('~/composables/useDeviceToken')
+      const { kioskDeviceId } = useDeviceToken()
+      expect(kioskDeviceId.value).toBe('auth-dev-reg')
+    })
+
+    it('activateFromRegistration should activate device without credential when absent', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateFromRegistration, deviceTenantId } = useAuth()
+
+      activateFromRegistration({ tenant_id: 'tenant-nocred' })
+
+      expect(deviceTenantId.value).toBe('tenant-nocred')
+    })
+
+    it('activateFromRegistration should be a no-op when tenant_id is missing', async () => {
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateFromRegistration, deviceTenantId } = useAuth()
+
+      activateFromRegistration({})
+
+      expect(deviceTenantId.value).toBeNull()
+    })
   })
 
   describe('session refresh (cookie)', () => {

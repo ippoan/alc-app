@@ -2,7 +2,7 @@
 import QRCode from 'qrcode'
 import { createDeviceRegistrationRequest, checkDeviceRegistrationStatus } from '~/utils/api'
 
-const { isDeviceActivated, activateDevice, loginWithGoogleRedirect } = useAuth()
+const { isDeviceActivated, activateFromRegistration, loginWithGoogleRedirect } = useAuth()
 
 const registrationCode = ref('')
 const qrDataUrl = ref('')
@@ -38,7 +38,7 @@ function startPolling() {
       const res = await checkDeviceRegistrationStatus(registrationCode.value)
       if (res.status === 'approved' && res.tenant_id && res.device_id) {
         stopPolling()
-        activateDevice(res.tenant_id, res.device_id, res.settings_token)
+        activateFromRegistration(res)
         status.value = 'approved'
       } else if (res.status === 'expired') {
         stopPolling()

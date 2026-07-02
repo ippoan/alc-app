@@ -221,6 +221,30 @@ export function useAuth() {
     }
   }
 
+  /**
+   * device 登録 API (claim / status polling) のレスポンスを丸ごと受けて activate する
+   * 漏斗関数。tenant/device/settings_token に加え、含まれていれば kiosk device
+   * credential (auth_device_id/device_secret) も同時に保存する。
+   *
+   * activateDevice() を呼び出し箇所ごとに個別に呼ぶと credential 保存を忘れやすい
+   * (実際に device-claim.vue で発生した、Refs rust-alc-api#480)。呼び出し箇所は
+   * 必ずこちらを使うこと。credential が無ければ (旧 backend / qr_permanent 未承認等)
+   * activate 自体は非破壊で続行する。
+   */
+  function activateFromRegistration(res: {
+    tenant_id?: string
+    device_id?: string
+    settings_token?: string
+    auth_device_id?: string
+    device_secret?: string
+  }) {
+    if (!res.tenant_id) return
+    activateDevice(res.tenant_id, res.device_id, res.settings_token)
+    if (res.auth_device_id && res.device_secret) {
+      useDeviceToken().storeKioskCredential(res.auth_device_id, res.device_secret)
+    }
+  }
+
   /** 端末のアクティベーションを解除 */
   function deactivateDevice() {
     deviceTenantId.value = null
@@ -301,6 +325,7 @@ export function useAuth() {
     refreshAccessToken,
     logout,
     activateDevice,
+    activateFromRegistration,
     deactivateDevice,
     applyStagingBypass,
   }

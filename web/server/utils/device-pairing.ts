@@ -82,6 +82,38 @@ async function resolveSecret(binding: unknown): Promise<string | null> {
 }
 
 /**
+ * rust レスポンス (claim or status) に tenant_id があれば device credential を mint し、
+ * レスポンスへ { auth_device_id, device_secret } を merge して返す共通処理 (pure 相当、
+ * fetch は注入された authWorker 経由)。mint 失敗時は元レスポンスをそのまま返す
+ * (provisioning 失敗で claim/status 自体を壊さない、非破壊 fallback)。
+ */
+async function mintAndMergeCredential(
+  sharedSecret: string,
+  authWorker: { fetch: typeof fetch },
+  res: ClaimResponse,
+): Promise<ClaimResponse> {
+  const tenantId = res.tenant_id
+  if (!tenantId) return res
+  try {
+    const pair = buildPairInternalForward({
+      sharedSecret,
+      tenantId,
+      label: (res.device_id as string | undefined) || 'alc-device',
+    })
+    const pairRes = await authWorker.fetch(pair.url, pair.init)
+    if (pairRes.ok) {
+      const cred = (await pairRes.json()) as PairInternalResponse
+      if (cred.device_id && cred.device_secret) {
+        return { ...res, auth_device_id: cred.device_id, device_secret: cred.device_secret }
+      }
+    }
+  } catch {
+    // pairing 失敗は呼び出し元のレスポンスをそのまま返す。
+  }
+  return res
+}
+
+/**
  * claim を rust に forward → 成功かつ tenant_id が取れたら device credential を mint して
  * レスポンスに merge する Nitro server route handler。
  */
@@ -121,25 +153,57 @@ export function createClaimWithPairingHandler() {
 
     // ② 即承認 flow (tenant_id あり) のみ device credential を mint して merge。
     if (claimRes.ok && claim.success && claim.tenant_id) {
-      try {
-        const pair = buildPairInternalForward({
-          sharedSecret,
-          tenantId: claim.tenant_id,
-          label: (claim.device_id as string | undefined) || 'alc-device',
-        })
-        const pairRes = await authWorker.fetch(pair.url, pair.init)
-        if (pairRes.ok) {
-          const cred = (await pairRes.json()) as PairInternalResponse
-          if (cred.device_id && cred.device_secret) {
-            return { ...claim, auth_device_id: cred.device_id, device_secret: cred.device_secret }
-          }
-        }
-        // pairing 失敗は claim 自体を壊さない (端末は従来 X-Device-Token 経路で動作継続)。
-      } catch {
-        // 同上: provisioning 失敗時も claim レスポンスは返す。
-      }
+      return mintAndMergeCredential(sharedSecret, authWorker, claim)
     }
 
     return claim
+  })
+}
+
+/**
+ * QR永久登録の承認状態確認 (ポーリング用) を rust に forward → status が approved かつ
+ * tenant_id が取れたら device credential を mint して merge する Nitro server route
+ * handler (Refs ippoan/rust-alc-api#480)。
+ *
+ * claim.post.ts と同じ pairing ロジックを共有する。フロントは approved を検知した時点で
+ * polling を止めるため通常は 1 回しか mint されないが、理論上は approved 応答が複数回
+ * 届くと credential も複数回 mint される (dormant credential が残るだけで実害は小さい)。
+ * 冪等化は将来課題。
+ */
+export function createStatusWithPairingHandler() {
+  return defineEventHandler(async (event): Promise<unknown> => {
+    const env = cfEnv(event)
+    const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET)
+    if (!sharedSecret) {
+      throw createError({ statusCode: 503, statusMessage: 'INTERNAL_SHARED_SECRET binding が未設定です' })
+    }
+    const authWorker = env.AUTH_WORKER as { fetch: typeof fetch } | undefined
+    if (!authWorker) {
+      throw createError({ statusCode: 503, statusMessage: 'AUTH_WORKER service binding が未設定です' })
+    }
+
+    const code = getRouterParam(event, 'code')
+    const { url, init } = buildInternalProxyForward({
+      sharedSecret,
+      rustPath: `/api/devices/register/status/${code}`,
+      method: 'GET',
+    })
+    const statusRes = await authWorker.fetch(url, init)
+    const statusText = await statusRes.text()
+    let status: ClaimResponse
+    try {
+      status = JSON.parse(statusText) as ClaimResponse
+    } catch {
+      setResponseStatus(event, statusRes.status)
+      return statusText
+    }
+
+    setResponseStatus(event, statusRes.status)
+
+    if (statusRes.ok && status.status === 'approved' && status.tenant_id) {
+      return mintAndMergeCredential(sharedSecret, authWorker, status)
+    }
+
+    return status
   })
 }

@@ -4,7 +4,7 @@ import type { DeviceFlowType } from '~/types'
 
 const config = useRuntimeConfig()
 const route = useRoute()
-const { activateDevice, accessToken, deviceTenantId, refreshAccessToken } = useAuth()
+const { activateFromRegistration, accessToken, deviceTenantId, refreshAccessToken } = useAuth()
 
 // API 初期化 (device-claim は index.vue を経由しない場合がある)
 initApi(
@@ -51,8 +51,8 @@ async function submit() {
     flowType.value = res.flow_type
 
     if (res.flow_type === 'url' && res.device_id && res.tenant_id) {
-      // URLフロー: 即アクティベート
-      activateDevice(res.tenant_id, res.device_id, res.settings_token)
+      // URLフロー: 即アクティベート (kiosk device credential も含めて保存、Refs rust-alc-api#480)
+      activateFromRegistration(res)
       status.value = 'activated'
     } else if (res.flow_type === 'qr_permanent') {
       // QR永久: 承認待ち
@@ -75,7 +75,7 @@ function startPolling() {
       const res = await checkDeviceRegistrationStatus(token.value)
       if (res.status === 'approved' && res.tenant_id && res.device_id) {
         stopPolling()
-        activateDevice(res.tenant_id, res.device_id, res.settings_token)
+        activateFromRegistration(res)
         status.value = 'activated'
       } else if (res.status === 'rejected') {
         stopPolling()
