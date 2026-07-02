@@ -9,6 +9,30 @@ const BLE_GW_DEVICES = [
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
+const { deactivateDevice, deviceTenantId, deviceId: activatedDeviceId } = useAuth()
+const { clearKioskCredential } = useDeviceToken()
+
+// 端末登録リセット (WebView localStorage + Android native SharedPreferences 両方をクリア)
+const resetting = ref(false)
+
+function resetDeviceRegistration() {
+  if (resetting.value) return
+  if (!window.confirm('この端末の登録を解除します。着信・FCM・送信の設定がすべて消え、再登録が必要になります。よろしいですか？')) return
+  resetting.value = true
+  try {
+    // WebView 側 (localStorage): tenant / device_id / settings_token / kiosk credential
+    deactivateDevice()
+    clearKioskCredential()
+    // Android native 側 (SharedPreferences): device_id / settings_token / fcm 登録マーク /
+    // kiosk credential を消し RoomWatcher を停止する (stale device_id 起因の WS未接続・FCM未 を解消)。
+    const android = (window as unknown as { Android?: { resetDeviceRegistration?: () => void } }).Android
+    android?.resetDeviceRegistration?.()
+    // 登録画面へ戻す
+    window.location.href = '/'
+  } finally {
+    resetting.value = false
+  }
+}
 
 // FC-1200 composable
 const fc1200 = useFc1200Serial()
@@ -197,6 +221,34 @@ async function syncFc1200Date() {
 
 <template>
   <div class="w-full max-w-lg mx-auto px-4 py-4 space-y-6">
+    <!-- 端末登録リセット -->
+    <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+      <div class="px-4 py-3 bg-gray-50 border-b">
+        <h3 class="text-sm font-medium text-gray-800">端末登録</h3>
+        <p class="text-xs text-gray-500">この端末に保存された登録情報 (テナント・device ID・着信/FCM 設定)</p>
+      </div>
+      <div class="p-4 space-y-3">
+        <div class="text-xs text-gray-600 space-y-1">
+          <p>状態:
+            <span :class="deviceTenantId ? 'text-green-600 font-medium' : 'text-gray-400'">
+              {{ deviceTenantId ? '登録済み' : '未登録' }}
+            </span>
+          </p>
+          <p v-if="activatedDeviceId" class="font-mono text-gray-400 break-all">device: {{ activatedDeviceId }}</p>
+        </div>
+        <button
+          class="px-3 py-1.5 text-xs text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+          :disabled="resetting"
+          @click="resetDeviceRegistration"
+        >
+          {{ resetting ? 'リセット中...' : '端末登録をリセット' }}
+        </button>
+        <p class="text-[10px] text-gray-400">
+          着信が来ない / FCM が届かない / 環境を切り替えた後に使ってください。リセット後は再登録が必要です。
+        </p>
+      </div>
+    </div>
+
     <!-- Android WebView: WebSocket ブリッジ経由のテスト -->
     <template v-if="isAndroidApp">
       <!-- FC-1200 セクション (Android) -->
