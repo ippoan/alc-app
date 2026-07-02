@@ -5,7 +5,7 @@ const config = useRuntimeConfig()
 const route = useRoute()
 
 // Auth + API init (全タブ共通)
-const { accessToken, isAuthenticated, deviceTenantId, refreshAccessToken, handleLineworksHash } = useAuth()
+const { accessToken, isAuthenticated, deviceTenantId, refreshAccessToken, handleLineworksHash, activateFromRegistration } = useAuth()
 
 // LINE WORKS コールバック処理 (hash fragment からトークン取得)
 onMounted(() => { handleLineworksHash() })
@@ -147,7 +147,11 @@ onMounted(() => {
           phone_number: phoneNumber,
         })
         if (res.device_id) {
-          ;(window as any).Android?.setDeviceId?.(res.device_id)
+          // funnel を通して activate する。raw setDeviceId だと settings_token /
+          // device credential (auth_device_id/device_secret) を native に渡さず、
+          // device JWT が mint できず register-fcm-token 等が 403 になる
+          // (アプリ内 QR スキャン経路の credential 取りこぼし、Refs rust-alc-api#480)。
+          activateFromRegistration(res)
           qrResult.value = `登録完了: ${res.device_id.slice(0, 8)}...`
         } else {
           qrResult.value = res.message || '登録に失敗しました'
