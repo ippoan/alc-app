@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:8ce334234fdb434832dfb73cd76513f2f3654ab8
+generated-from: alc-app:3bdd4d0f02f9ad31ae0ef5b295aeed2cc98254ee
 paths: [web/, cf-alc-signaling/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「alc.ippoan.org」等。
 ---
@@ -39,7 +39,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | **components** | `Tenko*.vue` (多数: Kiosk/VideoCall/RemoteAdminView/ScheduleManager 等) `*Dashboard.vue` `FaceAuth.vue` `AlcMeasurement.vue` `Device*.vue` | 点呼 UI / ダッシュボード / 測定 / デバイス管理 |
 | **utils** | `web/app/utils/{api,env,face-approval,face-db,fc1200,human-config,license,offline-queue,video-store}.ts` | API client / 顔 DB (IndexedDB) / FC-1200 / human 設定 / オフラインキュー |
 | **worker** | `web/app/workers/face-detect.worker.ts` | 顔検出 Web Worker (@vladmandic/human) |
-| **server route** | `web/server/api/{proxy/[...path],tenko-call/{register,tenko},devices/*,github-checksum.get}.ts` | **proxy/** = auth-worker proxy (`createAuthWorkerProxyHandler`、#434 step 3 / 方式 B): cookie/Bearer JWT + X-Alc-Proxy-Secret (=INTERNAL_SHARED_SECRET) を AUTH_WORKER service binding 経由で auth-worker `/alc-proxy/*` に thin-forward。introspect / ACL / OIDC mint / X-Tenant-ID + X-User-* 注入は auth-worker 側に集約 (SA key 排除)。**admin / device JWT を伴う呼び出しは `app/utils/api.ts` の `request()` / `proxyRawFetch` が `/api/proxy` 経由に寄せる (#434 step 3d caller #3、admin 直叩き撤去)**。残る `tenko-call/{register,tenko}` (public) と `devices/*` (FCM token / version / watchdog / claim、Android 直叩き) は browser JWT 無しのため lockdown 化は caller #5 (Android)。NFC bridge checksum |
+| **server route** | `web/server/api/{proxy/[...path],tenko-call/{register,tenko},devices/*,github-checksum.get}.ts` | **proxy/** = auth-worker proxy (`createAuthWorkerProxyHandler`、#434 step 3 / 方式 B): cookie/Bearer JWT + X-Alc-Proxy-Secret (=INTERNAL_SHARED_SECRET) を AUTH_WORKER service binding 経由で auth-worker `/alc-proxy/*` に thin-forward。introspect / ACL / OIDC mint / X-Tenant-ID + X-User-* 注入は auth-worker 側に集約 (SA key 排除)。**admin / device JWT を伴う呼び出しは `app/utils/api.ts` の `request()` / `proxyRawFetch` が `/api/proxy` 経由に寄せる (#434 step 3d caller #3、admin 直叩き撤去)**。残る `tenko-call/{register,tenko}` (public) と `devices/*` (FCM token / version / watchdog / claim / **re-pair**、Android 直叩き) は browser JWT 無しのため lockdown 化は caller #5 (Android)。`devices/re-pair.post.ts` は kiosk 端末再認証 (rust-alc-api#495)。管理者側の window 発行 (`authorizeRepair`) はテナント認証付きなので `request()` → `/api/proxy` 経由。NFC bridge checksum |
 | **型 (生成)** | `web/app/types/generated/*` (91 file) + `web/app/types/index.ts` | rust-alc-api models.rs から **ts-rs 自動生成** (`Backend` namespace)。手動編集禁止。フロント固有型は index.ts に手動定義 |
 | **middleware** | `web/app/middleware/auth.global.ts` | 全ルート認証ガード |
 
