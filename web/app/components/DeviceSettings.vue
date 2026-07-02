@@ -14,6 +14,10 @@ const { clearKioskCredential } = useDeviceToken()
 
 // 端末登録リセット (WebView localStorage + Android native SharedPreferences 両方をクリア)
 const resetting = ref(false)
+// 2段階タップ確認。Android WebView は onJsConfirm 未実装だと window.confirm() が常に
+// false を返すため使えない (「リセットできない」の原因)。in-page で確認する。
+const resetConfirming = ref(false)
+let resetConfirmTimer: ReturnType<typeof setTimeout> | null = null
 
 // WS (着信) / FCM の接続・登録状態 (Android ブリッジから取得、診断用)。
 // isCallConnected() = RoomWatcher が signaling に WS 接続中か。
@@ -50,11 +54,22 @@ onMounted(() => {
 })
 onUnmounted(() => {
   if (diagTimer) clearInterval(diagTimer)
+  if (resetConfirmTimer) clearTimeout(resetConfirmTimer)
 })
 
 function resetDeviceRegistration() {
   if (resetting.value) return
-  if (!window.confirm('この端末の登録を解除します。着信・FCM・送信の設定がすべて消え、再登録が必要になります。よろしいですか？')) return
+  // 1タップ目: 確認状態にして 4秒だけ「本当にリセット」ボタンを出す (window.confirm は
+  // WebView で効かないため in-page 確認)。2タップ目で実行。
+  if (!resetConfirming.value) {
+    resetConfirming.value = true
+    if (resetConfirmTimer) clearTimeout(resetConfirmTimer)
+    resetConfirmTimer = setTimeout(() => { resetConfirming.value = false }, 4000)
+    return
+  }
+  // 2タップ目: 実行
+  if (resetConfirmTimer) clearTimeout(resetConfirmTimer)
+  resetConfirming.value = false
   resetting.value = true
   try {
     // WebView 側 (localStorage): tenant / device_id / settings_token / kiosk credential
@@ -292,11 +307,14 @@ async function syncFc1200Date() {
         </div>
 
         <button
-          class="px-3 py-1.5 text-xs text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+          class="px-3 py-1.5 text-xs border rounded-lg transition-colors disabled:opacity-50"
+          :class="resetConfirming
+            ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
+            : 'text-red-600 border-red-300 hover:bg-red-50'"
           :disabled="resetting"
           @click="resetDeviceRegistration"
         >
-          {{ resetting ? 'リセット中...' : '端末登録をリセット' }}
+          {{ resetting ? 'リセット中...' : resetConfirming ? '本当にリセット？(もう一度タップ)' : '端末登録をリセット' }}
         </button>
         <p class="text-[10px] text-gray-400">
           着信が来ない / FCM が届かない / 環境を切り替えた後に使ってください。リセット後は再登録が必要です。
