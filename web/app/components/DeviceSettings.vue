@@ -15,6 +15,43 @@ const { clearKioskCredential } = useDeviceToken()
 // 端末登録リセット (WebView localStorage + Android native SharedPreferences 両方をクリア)
 const resetting = ref(false)
 
+// WS (着信) / FCM の接続・登録状態 (Android ブリッジから取得、診断用)。
+// isCallConnected() = RoomWatcher が signaling に WS 接続中か。
+// getFcmStatus() = {token_present, registered} JSON。
+type AndroidDiag = {
+  isCallConnected?: () => boolean
+  isCallEnabled?: () => boolean
+  getFcmStatus?: () => string
+}
+const wsConnected = ref<boolean | null>(null)
+const fcmRegistered = ref<boolean | null>(null)
+const fcmTokenPresent = ref<boolean | null>(null)
+let diagTimer: ReturnType<typeof setInterval> | null = null
+
+function refreshDeviceDiag() {
+  const android = (window as unknown as { Android?: AndroidDiag }).Android
+  if (!android) return
+  try {
+    wsConnected.value = android.isCallConnected?.() ?? null
+    const raw = android.getFcmStatus?.()
+    if (raw) {
+      const s = JSON.parse(raw) as { token_present?: boolean, registered?: boolean }
+      fcmTokenPresent.value = s.token_present ?? null
+      fcmRegistered.value = s.registered ?? null
+    }
+  } catch { /* ブリッジ未実装の旧 APK 等は無視 */ }
+}
+
+onMounted(() => {
+  if (isAndroidApp) {
+    refreshDeviceDiag()
+    diagTimer = setInterval(refreshDeviceDiag, 3000) // 3秒ごとに更新
+  }
+})
+onUnmounted(() => {
+  if (diagTimer) clearInterval(diagTimer)
+})
+
 function resetDeviceRegistration() {
   if (resetting.value) return
   if (!window.confirm('この端末の登録を解除します。着信・FCM・送信の設定がすべて消え、再登録が必要になります。よろしいですか？')) return
@@ -236,6 +273,24 @@ async function syncFc1200Date() {
           </p>
           <p v-if="activatedDeviceId" class="font-mono text-gray-400 break-all">device: {{ activatedDeviceId }}</p>
         </div>
+
+        <!-- WS (着信) / FCM 状態 (Android アプリのみ、診断用) -->
+        <div v-if="isAndroidApp" class="flex flex-wrap gap-2 text-xs">
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
+            :class="wsConnected ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'">
+            <span class="w-1.5 h-1.5 rounded-full" :class="wsConnected ? 'bg-green-500' : 'bg-gray-400'" />
+            着信WS: {{ wsConnected === null ? '不明' : wsConnected ? '接続中' : '未接続' }}
+          </span>
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
+            :class="fcmRegistered ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'">
+            <span class="w-1.5 h-1.5 rounded-full" :class="fcmRegistered ? 'bg-green-500' : 'bg-gray-400'" />
+            FCM: {{ fcmRegistered === null ? '不明' : fcmRegistered ? '登録済み' : (fcmTokenPresent ? '未登録(token有)' : '未登録') }}
+          </span>
+          <button class="px-2 py-1 rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100" @click="refreshDeviceDiag">
+            更新
+          </button>
+        </div>
+
         <button
           class="px-3 py-1.5 text-xs text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
           :disabled="resetting"
