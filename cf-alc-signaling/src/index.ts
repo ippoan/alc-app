@@ -21,18 +21,23 @@ export default {
     // 認証なし・値は log のみ。RoomWatcher の接続挙動や fileLog を端末から送って
     // リモートで WS 未接続の原因を切り分けるための経路 (Refs ippoan/rust-alc-api#480)。
     if (request.method === 'POST' && url.pathname === '/device-log') {
-      let body: { device_id?: string; tag?: string; message?: string; lines?: string[] } = {};
+      let body: { device_id?: unknown; tag?: unknown; message?: unknown; lines?: unknown } = {};
       try {
         body = await request.json();
       } catch { /* ignore parse error */ }
-      const dev = (body.device_id || '(none)').slice(0, 64);
-      const tag = (body.tag || 'device').slice(0, 32);
-      const msgs = body.lines && Array.isArray(body.lines)
-        ? body.lines
-        : [body.message ?? ''];
-      // 1 行ずつ console.log (observability の 1 event = 1 行、長すぎる行は切る)。
-      for (const m of msgs.slice(0, 200)) {
-        console.log(`[device-log] dev=${dev} tag=${tag} ${String(m).slice(0, 2000)}`);
+      // 非認証エンドポイントなので log injection (CR/LF で偽 log 行を捏造) を防ぐ:
+      // 文字列に強制し、制御文字 (C0) を空白へ潰してから 1 行に収める。
+      const clean = (v: unknown, max: number): string =>
+        (typeof v === 'string' ? v : '')
+          // eslint-disable-next-line no-control-regex
+          .replace(/[\u0000-\u001F\u007F]/g, ' ')
+          .slice(0, max);
+      const dev = clean(body.device_id, 64) || '(none)';
+      const tag = clean(body.tag, 32) || 'device';
+      const rawMsgs: unknown[] = Array.isArray(body.lines) ? body.lines : [body.message];
+      // 1 行ずつ console.log (observability の 1 event = 1 行、制御文字除去済み)。
+      for (const m of rawMsgs.slice(0, 200)) {
+        console.log(`[device-log] dev=${dev} tag=${tag} ${clean(m, 2000)}`);
       }
       return new Response(null, {
         status: 204,
