@@ -26,10 +26,12 @@ type AndroidDiag = {
   isCallConnected?: () => boolean
   isCallEnabled?: () => boolean
   getFcmStatus?: () => string
+  getAppVersion?: () => string
 }
 const wsConnected = ref<boolean | null>(null)
 const fcmRegistered = ref<boolean | null>(null)
 const fcmTokenPresent = ref<boolean | null>(null)
+const appVersion = ref<string | null>(null)
 let diagTimer: ReturnType<typeof setInterval> | null = null
 
 function refreshDeviceDiag() {
@@ -42,6 +44,12 @@ function refreshDeviceDiag() {
       const s = JSON.parse(raw) as { token_present?: boolean, registered?: boolean }
       fcmTokenPresent.value = s.token_present ?? null
       fcmRegistered.value = s.registered ?? null
+    }
+    // アプリ (APK) のバージョン。旧 APK は getAppVersion 未実装なので null のまま。
+    const ver = android.getAppVersion?.()
+    if (ver) {
+      const v = JSON.parse(ver) as { versionName?: string, versionCode?: number }
+      appVersion.value = v.versionName ? `${v.versionName} (${v.versionCode ?? '?'})` : null
     }
   } catch { /* ブリッジ未実装の旧 APK 等は無視 */ }
 }
@@ -291,6 +299,9 @@ async function syncFc1200Date() {
             </span>
           </p>
           <p v-if="activatedDeviceId" class="font-mono text-gray-400 break-all">device: {{ activatedDeviceId }}</p>
+          <p v-if="isAndroidApp">アプリ:
+            <span class="font-medium text-gray-700">{{ appVersion ?? '取得中...' }}</span>
+          </p>
         </div>
 
         <!-- WS (着信) / FCM 状態 (Android アプリのみ、診断用) -->
