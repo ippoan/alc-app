@@ -1151,5 +1151,22 @@ describe('useAuth', () => {
       // 既にアクティベート済みなので変更されない
       expect(auth.deviceTenantId.value).toBe('existing-tenant')
     })
+
+    it('should skip bypass once when alc_skip_staging_bypass flag is set (post-reset)', async () => {
+      sessionStorage.setItem('alc_skip_staging_bypass', '1')
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+
+      // フラグが立っている間はバイパスをスキップ (未登録のまま)
+      auth.applyStagingBypass('staging-tenant-123')
+      expect(auth.isDeviceActivated.value).toBe(false)
+      // フラグは 1 回で消費される
+      expect(sessionStorage.getItem('alc_skip_staging_bypass')).toBeNull()
+
+      // 次回はバイパスが効く
+      auth.applyStagingBypass('staging-tenant-123')
+      expect(auth.isDeviceActivated.value).toBe(true)
+      expect(auth.deviceTenantId.value).toBe('staging-tenant-123')
+    })
   })
 })
