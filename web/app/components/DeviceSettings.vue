@@ -29,6 +29,7 @@ type AndroidDiag = {
   getAppVersion?: () => string
   checkForUpdate?: () => void
   getLastUpdateResult?: () => string
+  setWebVersion?: (version: string) => void
   uploadDeviceLog?: () => void
 }
 
@@ -44,6 +45,10 @@ function uploadDeviceLog() {
   uploadingLog.value = true
   logUploadMsg.value = ''
   try {
+    // web (alc-app) の版を native に渡してから送る。診断ログの web= に出て
+    // web/native の版ズレ判別に使う (旧 APK は setWebVersion 未実装 → guard)。
+    const webVersion = String(useRuntimeConfig().public.appVersion ?? 'dev')
+    android.setWebVersion?.(webVersion)
     android.uploadDeviceLog()
     logUploadMsg.value = 'ログを送信しました'
   } catch {
