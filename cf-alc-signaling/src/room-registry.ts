@@ -260,6 +260,11 @@ export class RoomRegistry extends DurableObject<Env> {
       // Find watcher WebSocket tagged with this device_id
       const allSockets = this.ctx.getWebSockets(`device:${deviceId}`);
       if (allSockets.length === 0) {
+        // 接続中の device_id を一覧して mismatch を診断可能にする (app が別 id で接続 or 全く未接続かを判別)
+        const connected = this.ctx.getWebSockets()
+          .map(s => (this.ctx.getTags(s).find(t => t.startsWith('device:')) || 'device:(none)').slice(7))
+          .filter((v, i, a) => a.indexOf(v) === i);
+        console.log(`[test-call] device=${deviceId} NOT connected. connected device_ids=[${connected.join(', ')}] total_ws=${this.ctx.getWebSockets().length}`);
         return new Response(JSON.stringify({ error: 'device_not_connected' }), {
           status: 404,
           headers: { 'Content-Type': 'application/json' },

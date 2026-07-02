@@ -2,6 +2,11 @@ name = "alc-signaling"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
+# Workers Logs を有効化 (console.log を永続化し dashboard / cf_logging MCP からクエリ可能にする)
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [vars]
 BACKEND_API_URL = "https://rust-alc-api-566bls5vfq-an.a.run.app"
 
