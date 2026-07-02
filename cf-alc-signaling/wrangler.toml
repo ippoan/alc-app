@@ -1,6 +1,10 @@
 name = "alc-signaling"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
+# account_id を明示 (web/wrangler.jsonc と同値)。未指定だと wrangler が /memberships を
+# 列挙し、account-scoped な CLOUDFLARE_API_TOKEN では Authentication error [code: 10000] で
+# deploy が落ちる (CI 実測)。
+account_id = "24b45709d060d957340180e995f0d373"
 
 # Workers Logs を有効化 (console.log を永続化し dashboard / cf_logging MCP からクエリ可能にする)
 [observability]
