@@ -102,6 +102,32 @@ CEの新フローを小さく検証し、価値が確認できた時点で一本
       `ippoan/alc-app#72` のdevice pairing (RFC 8628スタイル) 実装パターンが流用できそう
 - [ ] TenkoCallアプリ側のHCEサービス実装 (Android `HostApduService`) の設計
 
+## StackChan (M5StackChan) でのNFC実装例 (参考)
+
+参考: https://docs.m5stack.com/ja/arduino/stackchan/nfc
+
+M5StackChan (Arduino) 向けの `M5Unit-NFC` 統合ライブラリの使用例。上記のUnit NFC
+(ST25R3916) と同系統のユニットを、I2C接続でM5Unified経由から扱うArduino実装の参考。
+
+- **接続**: `M5Unit-NFC` をI2C接続 (Grove I2C)、M5UnitUnifiedマネージャー経由で初期化
+- **ライブラリ要件**: `M5Unified` >= 0.2.11 / `M5StackChan` >= 1.0.0 / `M5UnitUnifiedNFC`
+- **対応モード**: Reader/Writer (カード検出・認証・読み書き) / Card Emulation
+  (StackChan自体がNFCタグとして振る舞う) / NDEF形式メッセージ交換
+- **対応カード/タグ**: MIFARE Classic 1K/4K、MIFARE Ultralight シリーズ、
+  MIFARE DESFire シリーズ、NTAGシリーズ (213等)、MIFARE Plus
+- **主要機能**: クロスブロック連続読み書き、シングルブロック読み書き、NDEF形式
+  メッセージ読み書き、タグエミュレーション
+
+### TenkoCall計画との関連
+
+「段階的ハードウェア構成」の「キオスク(エミュ)→スマホ読取」方向で必要な
+**M5 NFCユニットのCEモード** を、Arduino/M5UnitUnifiedNFC経由で動かす場合の
+API・ライブラリレベルの実装参考になる (`M5Unit-NFC`統合ライブラリはCard
+Emulationをタグエミュレーション機能として提供しており、上記「ST25R3916の動作
+モード」節のCard Emulation (CE) と対応する)。ただし、これはArduino/M5StackChan
+向けのライブラリであり、キオスク側のCEモード実装をRust (ESP-IDF系) 等の別環境
+で行う場合はプロトコル理解の参考に留め、そのままの流用はできない点に注意。
+
 ## 関連
 
 - Refs #90 — 点呼キオスク構成の全体図・NFC調査（NanoC6 + Unit NFC案を不採用と判断）
@@ -110,3 +136,4 @@ CEの新フローを小さく検証し、価値が確認できた時点で一本
 - `ippoan/TenkoCall` — 中間点呼アプリ (電話番号でICカード相当として機能させる想定の起点)
 - `ippoan/rust-nfc-bridge` — 既存キオスクNFCリーダー実装 (`pcsc` crate、`src/nfc/reader.rs`)
 - `ippoan/rust-alc-api#480`, `ippoan/alc-app#72` — device credential / auth-worker device pairing (RFC 8628スタイル) の既存実装パターン
+- https://docs.m5stack.com/ja/arduino/stackchan/nfc — M5StackChanのNFC実装例 (M5Unit-NFC統合ライブラリ)
