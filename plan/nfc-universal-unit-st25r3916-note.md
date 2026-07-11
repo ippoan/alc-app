@@ -46,13 +46,67 @@ Custom Protocolモード（またはCard Emulation + カスタムAID/APDUハン�
 ## alc-appとの関連・注意点
 
 - 点呼キオスク構成のNFCは #90 の結論通り rust-nfc-bridge + 既存NFCリーダーで確定運用中。
-  本メモの内容でこの判断を覆す想定はない。
+  本メモの内容でこの判断を覆す想定はない（下記「TenkoCallアプリでの双方向情報受け渡し計画」は
+  既存のカード読取運用に追加するものであり、置き換えではない）。
 - 将来、CoreS3統合ハブ化 (#91) 相当の構成を再検討する場合、あるいは全く別用途
   （例: 何らかのデバイス⇔スマホ間の簡易データ受け渡し）でST25R3916系ユニットを使う機会が
   あれば、モード選定の一次参照としてこのメモを使う。
+
+## TenkoCallアプリでの双方向情報受け渡し計画 (検討中)
+
+TenkoCall (電話番号でICカード相当として機能する想定) を使い、点呼準備をスマホ側/キオスク側
+どちらから開始しても本人確認情報を受け渡せるようにする構想の検討メモ。
+
+### 想定フロー
+
+| フロー | 流れ |
+|---|---|
+| **スマホ発信** | 顔認証をTenkoCallアプリ内で実施 → 結果をトークン化しHCEで待機 → キオスクのNFCリーダーが1タップで読み取る |
+| **キオスク発信** | キオスクがチャレンジをNFCエミュでスマホに提示 → アプリが認証 → 結果をHCEでキオスクが読み取る |
+
+技術的には HCE (Card Emulation) + Custom Protocol (APDUの往復) の組み合わせで、決済カードや
+FIDO2 NFCキーと同じ仕組み。1回のタップ（フィールド保持）内でSELECT AID→チャレンジ→レスポンス
+の複数往復が可能。
+
+### 方向別の必要ハードウェア
+
+| 方向 | 必要ハード | 現状 |
+|---|---|---|
+| スマホ(HCE)→キオスク読取 | 既存PCSCリーダー (rust-nfc-bridge) | 追加ハード不要。`Cargo.toml`は`pcsc`crate依存、`src/nfc/reader.rs`は`card.transmit()`で生APDU送信済みのため、SELECT AID一往復の疎通確認から着手できる |
+| キオスク(エミュ)→スマホ読取 | CE対応チップ (M5 NFCユニット/ST25R3916) が別途必要 | 既存PCSCリーダーはWindows標準PCSC/CCIDドライバ層がReader(Initiator)機能しか露出せずCE不可のため不可。新規追加が必要 |
+
+### iOS非対応の扱い
+
+HCE (スマホがカードになりすます側) はAndroidのみネイティブ対応、iOSはサードパーティアプリに
+事実上開放されていない。QRコードによるフォールバックも検討したが、**QRはスクリーンショット等で
+物理的な近接なしに複製・共有できてしまう（なりすまし・窃盗リスク）ため不採用**。点呼のような
+本人確認が絡む用途ではNFCの「近接必須」という性質を優先し、iOS対応は当面スコープ外とする
+(TenkoCallは元々Android専用の設計と一致)。
+
+### 段階的ハードウェア構成 (フェーズ分け)
+
+| フェーズ | 構成 | 既存への影響 |
+|---|---|---|
+| 近い将来 | 既存PCSCリーダー + M5 NFCユニット (CE専用、新規追加) を並行稼働 | 既存の`rust-nfc-bridge`ロジック(免許証APDU読取・従業員カード`nfc_id`)は無変更 |
+| 将来 (一本化) | M5 NFCユニット1台に統合 (Reader/Writer + CE 両方) | 既存PCSCリーダー・`rust-nfc-bridge`のPCSC依存を退役し、既存読取ロジックをM5側に移植 |
+
+一本化を「今すぐ」ではなく「将来」に置く理由: `rust-nfc-bridge`の`license.rs`(免許証APDU読取)や
+従業員カード読取ロジックはPCSC/ACR122U系リーダー前提で本番稼働中。移植コストがあるため、まず
+CEの新フローを小さく検証し、価値が確認できた時点で一本化を判断する。
+
+### 未検証・要検討事項
+
+- [ ] 既存PCSCリーダーでSELECT AID→レスポンス1往復の疎通確認 (スマホ発信フローの読取側、新規ハード不要)
+- [ ] M5 NFCユニットのCEモードでキオスク→スマホへのチャレンジ提示が実機で成立するか確認
+- [ ] リプレイ攻撃対策 (ワンタイムトークン+署名+短期失効)。`ippoan/rust-alc-api#480` /
+      `ippoan/alc-app#72` のdevice pairing (RFC 8628スタイル) 実装パターンが流用できそう
+- [ ] TenkoCallアプリ側のHCEサービス実装 (Android `HostApduService`) の設計
 
 ## 関連
 
 - Refs #90 — 点呼キオスク構成の全体図・NFC調査（NanoC6 + Unit NFC案を不採用と判断）
 - Refs #91 — CoreS3統合ハブ化検討（Unit NFCをCoreS3のGrove I2Cに接続する案を検討）
 - `plan/cores3-hub-consolidation.md` — 上記の統合ハブ化検討の詳細メモ
+- `ippoan/TenkoCall` — 中間点呼アプリ (電話番号でICカード相当として機能させる想定の起点)
+- `ippoan/rust-nfc-bridge` — 既存キオスクNFCリーダー実装 (`pcsc` crate、`src/nfc/reader.rs`)
+- `ippoan/rust-alc-api#480`, `ippoan/alc-app#72` — device credential / auth-worker device pairing (RFC 8628スタイル) の既存実装パターン
