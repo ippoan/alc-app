@@ -163,6 +163,30 @@ Core2 + RS232F Module 13.2 で同種の問題が実際に報告・解決済み:
 - 回答者コメント: 同じ原理はCoreS3にも適用される、各デバイスのGPIO変換表を
   参照すべき
 
+### RS232サンプルコード (M5Stack公式 examples、参考)
+
+参考: https://github.com/m5stack/M5Stack/blob/master/examples/Modules/RS232/RS232.ino
+
+無印M5Stack Core向けのRS232モジュールサンプル。UART初期化APIの形自体は
+CoreS3移植時も参考になるが、**ピン番号はそのまま流用不可**(上記「既知の実例」の
+GPIO16/17→GPIO13/14翻訳と同じ注意が必要)。
+
+- **ライブラリ**: `M5Stack.h` (v0.4.6以上)
+- **ピン定義**: `RX_PIN = GPIO16` / `TX_PIN = GPIO17` (無印Core向けModule13.2
+  RS232F/M定義。CoreS3では上記バス接続表の通り別ピンになる)
+- **初期化**: `Serial2.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN)`
+  (115200bps, 8N1)
+- **送信**: `Serial2.write(...)` / **受信**: `Serial2.available()` +
+  `Serial2.read()` のポーリング
+
+### M5Module-LAN-13.2 リポジトリ (参考)
+
+参考: https://github.com/m5stack/M5Module-LAN-13.2
+
+上記「LAN Module 13.2 の CoreS3 ピン」節で引用した`examples/LinkStatus/
+LinkStatus.ino`の一次ソース。依存ライブラリ: `M5_Ethernet` / `M5GFX` /
+`M5Unified` / `PubSubClient` / `ArduinoHttpClient`。
+
 ### ハードウェア調査の結論
 
 「Windows排除案」のCoreS3 + RS232M Module + LAN Module 13.2 の組み合わせは、
