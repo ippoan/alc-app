@@ -20,7 +20,9 @@ on:
     # cf-alc-signaling/** も含める: signaling-only の PR (例: wrangler.toml の
     # account_id 追加) でも required check (ci / Vitest+Coverage, ci / PR Limit Check)
     # を発火させないと "2 expected checks" で永遠に blocked になるため (上記デッドロック)。
-    paths: ['web/**', '.claude/**', '.github/workflows/**', 'cf-alc-signaling/**']
+    # plan/** も含める: 設計ドキュメントのみの PR (#92) でも同じデッドロックを踏んだため
+    # (Refs #93)。
+    paths: ['web/**', '.claude/**', '.github/workflows/**', 'cf-alc-signaling/**', 'plan/**']
 
 permissions:
   contents: write
