@@ -6,7 +6,7 @@
 
 ## 構成・詳細
 
-- `web/` (Nuxt 4 PWA, Cloudflare Workers) / `fc1200-wasm/` (WASM, ソース秘匿) / `cf-alc-signaling/` (WebRTC signaling, Durable Objects) — このリポジトリ
+- `web/` (Nuxt 4 PWA, Cloudflare Workers) / `fc1200-wasm/` (WASM, ソース秘匿) / `cf-alc-signaling/` (WebRTC signaling, Durable Objects) / `cf-alc-recorder/` (CoreS3 測定データ WS 受口, Durable Objects) — このリポジトリ
 - `~/rust/rust-nfc-bridge` / `~/rust/rust-alc-api` — 別リポジトリ (`alc-app` symlink あり)
 - 技術スタック・デプロイ手順・遠隔点呼 WebRTC 実装・テスト全パターン (モック/live 両対応・型同期・CI 等) の詳細は
   `.claude/skills/alc-app-map/SKILL.md` の「CLAUDE.md から移設」節を参照。

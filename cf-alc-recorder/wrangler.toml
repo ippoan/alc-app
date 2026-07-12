@@ -1,0 +1,67 @@
+# cf-alc-recorder — CoreS3 (alc-app-s3) 測定データの WebSocket 受口 Worker
+# (Refs ippoan/alc-app#106)。
+#
+# 経路: CoreS3 →(WSS + device JWT)→ 本 Worker →(AUTH_WORKER service binding)→
+#       auth-worker /alc-internal-proxy → rust-alc-api POST /api/hub/measurements
+#
+# cf-alc-signaling (単一環境) と違い、alc-app 標準 (web/wrangler.jsonc) に合わせて
+# prod (top-level) / staging (env.staging) の 2 面。named env は top-level binding を
+# 継承しないので observability / durable_objects / services / secrets_store_secrets を
+# env.staging 側でも再宣言する。
+
+name = "alc-recorder"
+main = "src/index.ts"
+compatibility_date = "2025-07-15"
+# account_id を明示 (web/wrangler.jsonc / cf-alc-signaling と同値)。未指定だと wrangler が
+# /memberships を列挙し、account-scoped な CLOUDFLARE_API_TOKEN では Authentication
+# error [code: 10000] で deploy が落ちる (signaling-deploy CI 実測)。
+account_id = "24b45709d060d957340180e995f0d373"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# テナント単位の Durable Object (Hibernatable WebSockets)。
+[durable_objects]
+bindings = [
+  { name = "RECORDER_HUB", class_name = "RecorderHub" }
+]
+
+# 新規 class は SQLite backend で作る (new_classes は legacy KV backend)。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RecorderHub"]
+
+# WSS ハンドシェイクの device JWT を auth-worker /auth/introspect で検証し、
+# 測定データを /alc-internal-proxy に転送するための service binding。
+[[services]]
+binding = "AUTH_WORKER"
+service = "auth-worker"
+
+# /auth/introspect の consumer proof + /alc-internal-proxy の X-Alc-Proxy-Secret
+# (web/ の kiosk proxy と同じ CF Secrets Store entry を物理共有)。
+[[secrets_store_secrets]]
+binding = "INTERNAL_SHARED_SECRET"
+store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
+secret_name = "INTERNAL_SHARED_SECRET"
+
+[env.staging]
+name = "alc-recorder-staging"
+
+[env.staging.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "RECORDER_HUB", class_name = "RecorderHub" }
+]
+
+[[env.staging.services]]
+binding = "AUTH_WORKER"
+service = "auth-worker-staging"
+
+[[env.staging.secrets_store_secrets]]
+binding = "INTERNAL_SHARED_SECRET"
+store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
+secret_name = "INTERNAL_SHARED_SECRET"
