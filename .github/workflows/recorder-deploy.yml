@@ -1,0 +1,89 @@
+name: Recorder Deploy
+
+# cf-alc-recorder (CoreS3 測定データ WS 受口 worker) の CI (Refs ippoan/alc-app#106)。
+#
+# signaling-deploy.yml と同じく Durable Object を持つため frontend-ci.yml は使えず
+# (release script の `wrangler deploy` → `versions upload` 置換が DO worker と相性が
+# 悪い、durable-object-worker skill 参照)、bespoke workflow で real `wrangler deploy`
+# を行う。signaling と違い alc-app 標準 (web/wrangler.jsonc) に合わせた 2 面:
+#   - main push  → staging (`alc-recorder-staging`)
+#   - `v*` tag   → production (`alc-recorder`)
+#
+# push 側に paths フィルタを付けない理由は test.yml と同じ — GitHub Actions は tag
+# push でも paths を評価するため、cf-alc-recorder/ を変更しない `v*` tag リリースで
+# production deploy が発火しなくなるのを防ぐ (deploy は冪等なので空 deploy は無害)。
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cf-alc-recorder/**'
+      - '.github/workflows/recorder-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cf-alc-recorder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22' # wrangler v4 は Node 22+ 必須
+          cache: 'npm'
+          cache-dependency-path: cf-alc-recorder/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Test
+        run: npx vitest run
+
+  # main push → staging。auth-worker-staging に service binding される (wrangler.toml)。
+  deploy-staging:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cf-alc-recorder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: cf-alc-recorder/package-lock.json
+      - run: npm ci
+      - name: Deploy (staging)
+        run: npx wrangler deploy --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  # v* tag → production。
+  deploy-production:
+    needs: test
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cf-alc-recorder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: cf-alc-recorder/package-lock.json
+      - run: npm ci
+      - name: Deploy (production)
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
