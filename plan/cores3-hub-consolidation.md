@@ -4,10 +4,12 @@ Refs #90 (close済み、旧3台構成の設計メモ), #91 (close済み、本ド
 
 > **⚠️ 方針変更 (2026-07-12, [ippoan/sesame#1](https://github.com/ippoan/sesame/issues/1) 結論)**:
 > 当面の目標は alc-app + alc-app-s3 + TenkoCall の3構成での運用とし、
-> 顔認証・点呼・車検証/免許証読み取りは TenkoCall 側に実装、AlcoholChecker は
-> 予備 (kiosk専任) に役割縮小。本ドキュメントの「顔認証(タブレット側カメラ)→QR→測定」
-> フローは **`plan/tenkocall-hce-tenko-flow.md` の HCE 分割セッション方式に差し替え**
-> (QRはスクリーンショット複製リスクにより不採用、`plan/nfc-universal-unit-st25r3916-note.md` 参照)。
+> 顔認証・点呼・車検証/免許証読み取りは TenkoCall 側に実装 (AlcoholChecker 実装済み機能の移植)、
+> AlcoholChecker は予備 (kiosk専任) に役割縮小。本ドキュメントの
+> 「顔認証(タブレット側カメラ)→QR→測定」フローは **`plan/tenkocall-hce-tenko-flow.md` の
+> 「顔認証(TenkoCall) + BLE端末距離確認 + CoreS3署名による顔認証保証 + HCE測定引き継ぎ」
+> 方式に差し替え** (QRはスクリーンショット複製リスクにより不採用、
+> `plan/nfc-universal-unit-st25r3916-note.md` 参照)。
 > CoreS3ハブ (RS232M/LAN/BLE集約) のハードウェア調査部分は引き続き有効。
 
 ## 背景
