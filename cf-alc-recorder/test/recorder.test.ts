@@ -240,6 +240,137 @@ describe("measurement → ingest 転送 → ack", () => {
   });
 });
 
+describe("POST /measurements (Wi-Fi 客の上りバッチ)", () => {
+  /** POST /measurements を投げるヘルパー。 */
+  async function postMeasurements(body: unknown, token?: string): Promise<Response> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return SELF.fetch(`${BASE}/measurements`, {
+      method: "POST",
+      headers,
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+
+  it("認証は /ws と同じ: Bearer なし 401 / active:false 401 / kiosk role 403", async () => {
+    expect((await postMeasurements([])).status).toBe(401);
+    expect((await postMeasurements([], "expired-token")).status).toBe(401);
+    const res = await postMeasurements([], "kiosk-token");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden_role" });
+  });
+
+  it("バッチを 1 回の ingest で転送し、受理 seq 一覧を返す。tenant/device は JWT claims から注入", async () => {
+    const res = await postMeasurements(
+      [
+        {
+          seq: 1,
+          recorded_at_ms: 1752300000000,
+          payload: {
+            type: "temperature",
+            value: 36.5,
+            // ペイロード側の識別子は無視される (詐称不可)
+            device_id: "spoofed-device",
+            tenant_id: "spoofed-tenant",
+          },
+        },
+        { seq: 2, kind: "alcohol", payload: { value: 0.0 } },
+      ],
+      "hub-token-1",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: [1, 2] });
+
+    const calls = await spyIngest();
+    expect(calls.length).toBe(1);
+    expect(calls[0].tenantId).toBe("tenant-1");
+    expect(calls[0].items.length).toBe(2);
+    // device_id は JWT の sub、kind はトップレベル優先 / payload.type fallback
+    expect(calls[0].items[0].device_id).toBe("device-1");
+    expect(calls[0].items[0].kind).toBe("temperature");
+    expect(calls[0].items[0].recorded_at_ms).toBe(1752300000000);
+    expect(calls[0].items[1].kind).toBe("alcohol");
+    expect(calls[0].items[1].recorded_at_ms).toBeNull();
+    expect((calls[0].items[0].payload as Record<string, unknown>).value).toBe(36.5);
+  });
+
+  it("同じ seq の再送も accept される (重複排除は rust 側 UNIQUE で冪等)", async () => {
+    const batch = [{ seq: 7, kind: "alcohol", payload: { value: 0.0 } }];
+    expect((await postMeasurements(batch, "hub-token-1")).status).toBe(200);
+    expect((await postMeasurements(batch, "hub-token-1")).status).toBe(200);
+    expect((await spyIngest()).length).toBe(2);
+  });
+
+  it("不正 body は 400: invalid JSON / 非配列 / 上限超過", async () => {
+    const invalid = await postMeasurements("not-json{", "hub-token-1");
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "invalid_json" });
+
+    const nonArray = await postMeasurements({ seq: 1 }, "hub-token-1");
+    expect(nonArray.status).toBe(400);
+    expect(await nonArray.json()).toEqual({ error: "invalid_body" });
+
+    const tooMany = await postMeasurements(
+      Array.from({ length: 101 }, (_, i) => ({ seq: i, kind: "alcohol", payload: {} })),
+      "hub-token-1",
+    );
+    expect(tooMany.status).toBe(400);
+    expect(await tooMany.json()).toEqual({ error: "too_many_items" });
+
+    expect(await spyIngest()).toEqual([]);
+  });
+
+  it("1 件でも不正な item があれば batch ごと 400 (index 付き)、ingest は呼ばれない", async () => {
+    const cases: Array<{ body: unknown[]; error: string; index: number }> = [
+      { body: ["str"], error: "invalid_item", index: 0 },
+      { body: [{ seq: "x", payload: {} }], error: "invalid_seq", index: 0 },
+      {
+        body: [
+          { seq: 1, kind: "alcohol", payload: {} },
+          { seq: 2, payload: "str" },
+        ],
+        error: "invalid_payload",
+        index: 1,
+      },
+      { body: [{ seq: 3, payload: { value: 1 } }], error: "missing_kind", index: 0 },
+    ];
+    for (const c of cases) {
+      const res = await postMeasurements(c.body, "hub-token-1");
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: c.error, index: c.index });
+    }
+    expect(await spyIngest()).toEqual([]);
+  });
+
+  it("空バッチは上流を叩かず accepted:[] を返す", async () => {
+    const res = await postMeasurements([], "hub-token-1");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: [] });
+    expect(await spyIngest()).toEqual([]);
+  });
+
+  it("上流エラー時は 502 (詳細は echo しない)。端末は同じ batch を再送できる", async () => {
+    const res = await postMeasurements(
+      [{ seq: 2, kind: "boom", payload: { x: 1 } }],
+      "hub-token-1",
+    );
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "upstream_500" });
+
+    const retry = await postMeasurements(
+      [{ seq: 2, kind: "alcohol", payload: { x: 1 } }],
+      "hub-token-1",
+    );
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ accepted: [2] });
+  });
+
+  it("GET /measurements は 404 (POST のみ)", async () => {
+    const res = await SELF.fetch(`${BASE}/measurements`);
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("下り command push / command_result", () => {
   it("接続中デバイスへ command を push し、command_result を取得できる", async () => {
     const { ws, messages } = await connectAccepted("hub-token-tenant-cmd");

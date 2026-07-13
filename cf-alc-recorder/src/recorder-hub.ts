@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
 import { resolveSecret } from "./auth";
+import { forwardMeasurements, parseMeasurementItem } from "./measurements";
 
 /**
  * RecorderHub — テナント単位の Durable Object (Hibernatable WebSockets)。
@@ -53,13 +54,6 @@ const CMD_RESULT_TTL_MS = 10 * 60 * 1000;
 
 /** 上り 1 メッセージの上限 (これ以上は parse せず reject)。 */
 const MAX_MESSAGE_BYTES = 64 * 1024;
-
-/**
- * service binding fetch は host を無視するが、path が auth-worker 側 route
- * (`/alc-internal-proxy/...`) と一致する必要がある (web/server/utils/internal-proxy.ts と同形)。
- */
-const INGEST_URL =
-  "https://alc-internal-proxy.internal/alc-internal-proxy/api/hub/measurements";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -191,36 +185,18 @@ export class RecorderHub extends DurableObject<Env> {
     attachment: WsAttachment,
     msg: InboundMessage,
   ): Promise<void> {
-    const seq = msg.seq;
-    if (typeof seq !== "number" || !Number.isFinite(seq)) {
-      this.send(ws, { type: "error", message: "invalid_seq" });
+    // 検証 + 転送は POST /measurements (Wi-Fi 客の上り) と共有 (measurements.ts)。
+    const parsed = parseMeasurementItem(msg);
+    if (!parsed.ok) {
+      this.send(
+        ws,
+        parsed.seq !== undefined
+          ? { type: "error", seq: parsed.seq, message: parsed.error }
+          : { type: "error", message: parsed.error },
+      );
       return;
     }
-    const payload =
-      msg.payload && typeof msg.payload === "object" && !Array.isArray(msg.payload)
-        ? (msg.payload as Record<string, unknown>)
-        : null;
-    if (!payload) {
-      this.send(ws, { type: "error", seq, message: "invalid_payload" });
-      return;
-    }
-    // kind はトップレベル優先、無ければ ble-medical-gateway 互換 JSON の `type` に
-    // fallback (temperature / blood_pressure / alcohol / fc1200_raw)。enum 検証は
-    // rust 側 (source of truth) に任せ、ここでは空でないことだけ確認する。
-    const kind =
-      typeof msg.kind === "string" && msg.kind
-        ? msg.kind
-        : typeof payload.type === "string" && payload.type
-          ? payload.type
-          : "";
-    if (!kind) {
-      this.send(ws, { type: "error", seq, message: "missing_kind" });
-      return;
-    }
-    const recordedAtMs =
-      typeof msg.recorded_at_ms === "number" && Number.isFinite(msg.recorded_at_ms)
-        ? msg.recorded_at_ms
-        : null;
+    const seq = parsed.item.seq;
 
     const sharedSecret = await resolveSecret(this.env.INTERNAL_SHARED_SECRET);
     if (!sharedSecret) {
@@ -228,40 +204,17 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
 
-    // tenant_id は X-Tenant-ID ヘッダー、device_id は item に注入 — どちらも
-    // introspect 済み JWT claims 由来 (ペイロード内の同名 field は使わない)。
-    const item = {
-      device_id: attachment.deviceId,
-      kind,
-      seq,
-      recorded_at_ms: recordedAtMs,
-      payload,
-    };
-    let res: Response;
-    try {
-      res = await this.env.AUTH_WORKER.fetch(INGEST_URL, {
-        method: "POST",
-        headers: {
-          "X-Alc-Proxy-Secret": sharedSecret,
-          "X-Tenant-ID": attachment.tenantId,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify([item]),
-      });
-    } catch (e) {
-      console.log(
-        `[measurement] upstream unreachable tenant=${attachment.tenantId} device=${attachment.deviceId} seq=${seq}`,
-        e,
-      );
-      this.send(ws, { type: "error", seq, message: "upstream_unreachable" });
-      return;
-    }
-    if (!res.ok) {
+    // tenant_id / device_id は WS attachment (= introspect 済み JWT claims) から注入。
+    const result = await forwardMeasurements(
+      this.env.AUTH_WORKER,
+      sharedSecret,
+      attachment.tenantId,
+      attachment.deviceId,
+      [parsed.item],
+    );
+    if (!result.ok) {
       // 詳細 (body) は response に echo しない。status のみ端末へ返し log に残す。
-      console.log(
-        `[measurement] upstream ${res.status} tenant=${attachment.tenantId} device=${attachment.deviceId} seq=${seq}`,
-      );
-      this.send(ws, { type: "error", seq, message: `upstream_${res.status}` });
+      this.send(ws, { type: "error", seq, message: result.error });
       return;
     }
     this.send(ws, { type: "ack", seq });
