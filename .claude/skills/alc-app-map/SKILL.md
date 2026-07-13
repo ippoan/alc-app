@@ -1,8 +1,8 @@
 ---
 name: alc-app-map
 generated-from: alc-app:3bdd4d0f02f9ad31ae0ef5b295aeed2cc98254ee
-paths: [web/, cf-alc-signaling/]
-description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「alc.ippoan.org」等。
+paths: [web/, cf-alc-signaling/, cf-alc-recorder/]
+description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・cf-alc-recorder/ (CoreS3 測定データ受口 DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「cf-alc-recorder」「alc-recorder」「CoreS3 測定」「alc.ippoan.org」等。
 ---
 
 # alc-app-map — yhonda-ohishi-alc/alc-app 構造ナビゲーション
@@ -21,6 +21,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 |---|---|---|
 | **`web/`** | Nuxt 4 PWA (`app/` 構成) + `server/` + `wrangler.jsonc` | フロント本体 (Cloudflare Workers `cloudflare_module`)。下表参照 |
 | **`cf-alc-signaling/`** | `src/{index,signaling-room,room-registry}.ts` + `wrangler.toml` | WebRTC signaling worker。Durable Objects (Hibernatable WS) で SDP/ICE リレー。worker 名 `alc-signaling` |
+| **`cf-alc-recorder/`** | `src/{index,recorder-hub,auth,measurements}.ts` + `wrangler.toml` + `test/` | CoreS3 (alc-app-s3) 測定データ受口 worker (#106/#108)。上りは WS (`/ws`、テナント単位 DO `RecorderHub`) と Wi-Fi 客向け `POST /measurements` バッチ (#109、ステートレス) の 2 経路 — どちらも device JWT introspect (`device-hub` role) → auth-worker `/alc-internal-proxy` → rust-alc-api `POST /api/hub/measurements` に転送。下り command push は WS のみ。worker 名 `alc-recorder` |
 | **`fc1200-wasm/`** | (git ignored) Rust → WASM | FC-1200 RS232C プロトコル実装を WASM に compile して**ソース秘匿**。`web` から `fc1200-wasm` import |
 | **`docs/`** | mkdocs (`mkdocs.yml`, admin/ operator/) | 運用ドキュメント。`docs/*.pdf` = Tanita Confidential で **.gitignore** |
 | **`plan/`** | `implementation-plan.md` `initialplan.md` | 実装計画 |
@@ -48,6 +49,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 - **web nitro**: `web/nuxt.config.ts` → `nitro.preset = "cloudflare_module"`、`main = .output/server/index.mjs` (`web/wrangler.jsonc`)。`vite-plugin-wasm` + `optimizeDeps.exclude: ['fc1200-wasm']`。
 - **web wrangler (jsonc)**: top-level = prod (`alc-app`, alc.ippoan.org)。`env.staging` = `alc-app-staging` (alc-staging.ippoan.org)。`NUXT_PUBLIC_{API_BASE,GOOGLE_CLIENT_ID,AUTH_WORKER_URL,STAGING_TENANT_ID,SIGNALING_URL}` を env で切替。
 - **signaling**: `cf-alc-signaling/src/index.ts` (worker entry) → DO `SignalingRoom` (device/admin 2 ピア間リレー) + `RoomRegistry`。`wrangler.toml` に migration v1/v2、`BACKEND_API_URL` var。secret 不要 (STUN P2P のみ、TURN 後日)。
+- **recorder**: `cf-alc-recorder/src/index.ts` (worker entry)。`/ws` → introspect 後にテナント単位 DO `RecorderHub` (Hibernatable WS、identity は WS attachment) へ routing。`POST /measurements` → DO を経由せず Worker 直で検証 + ingest 転送 (`src/measurements.ts` を WS 経路と共有)。下り `POST /tenants/:t/devices/:d/command` 等は `INTERNAL_SHARED_SECRET` の内部 API。binding: `AUTH_WORKER` (service) + `INTERNAL_SHARED_SECRET` (Secrets Store)。prod/staging 2 面 (`env.staging`)。
 - **接続**: `NUXT_PUBLIC_SIGNALING_URL` に signaling worker URL。Room ID = `tenko_session_id`。
 
 ## gotcha
@@ -62,7 +64,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 ## CCoW/CI から見た立ち位置
 
 - rust-alc-api を叩く consumer 群の親玉 (carins / nuxt-trouble / nuxt_dtako_logs の兄弟だが最も大きい)。認証は `@ippoan/auth-client` + auth-worker (auth.ippoan.org)。
-- CI: `.github/workflows/{test,tag-release,docs}.yml`。test = `web/**` パス変更時 `npm ci` → `vitest run --coverage` → `check_coverage_100.mjs` → Job Summary/artifact。`docs.yml` = mkdocs。`coverage_100.toml` で 100% リグレッション検出。
+- CI: `.github/workflows/{test,tag-release,docs,recorder-deploy,signaling-deploy,skills-check}.yml`。test = `web/**` パス変更時 `npm ci` → `vitest run --coverage` → `check_coverage_100.mjs` → Job Summary/artifact。`recorder-deploy.yml` = cf-alc-recorder の vitest + deploy。`docs.yml` = mkdocs。`coverage_100.toml` で 100% リグレッション検出。
 - **main 直 push 禁止** (branch protection)。`gh pr merge --squash --auto` で CI 通過後 auto-merge (`enforce_admins: false`)。
 - `.claude/skills/` に repo 固有 skill (`next-session` `resume-session`) あり。`.githooks/` も。
 
@@ -85,6 +87,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | `web/` | Nuxt 4 PWA フロントエンド (Cloudflare Workers) | このリポジトリ |
 | `fc1200-wasm/` | FC-1200 RS232C プロトコル WASM (ソース秘匿) | このリポジトリ |
 | `cf-alc-signaling/` | WebRTC シグナリング (Cloudflare Durable Objects + Hibernatable WS) | このリポジトリ |
+| `cf-alc-recorder/` | CoreS3 測定データ受口 (WS + POST バッチ → rust-alc-api 転送) | このリポジトリ |
 | `~/rust/rust-nfc-bridge/` | NFC リーダー → 仮想シリアルポート (Windows) | 別リポジトリ (symlink: alc-app) |
 | `~/rust/rust-alc-api/` | バックエンド API (GCP Cloud Run + PostgreSQL RLS) | 別リポジトリ (symlink: alc-app) |
 | `plan/` | 実装計画ドキュメント | このリポジトリ |
@@ -111,6 +114,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 - **cf-alc-signaling (Cloudflare Workers)**: `cd cf-alc-signaling && wrangler deploy`
   - URL: https://alc-signaling.m-tama-ramu.workers.dev
   - シークレット不要 (現在 STUN P2P のみ。TURN は後日対応予定)
+- **cf-alc-recorder (Cloudflare Workers)**: CI 経由 (`recorder-deploy.yml`: `npx vitest run` → staging / release deploy)。手動 fallback: `cd cf-alc-recorder && wrangler deploy`
 - **rust-alc-api (GCP Cloud Run)**: 別リポジトリで管理
 - **rust-nfc-bridge**: `v*` タグ push で GitHub Actions が自動リリース (Windows ビルド + MSI 作成 + GitHub Release にアップロード)
   - 手順: `Cargo.toml` の version を上げる → commit & push → `gh release create v0.x.x` → Actions が MSI を追加
