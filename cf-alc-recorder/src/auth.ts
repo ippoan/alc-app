@@ -29,8 +29,21 @@ export interface RecorderAuthDecision {
   deviceId: string;
 }
 
-/** CoreS3 組み込みハブ専用 role (auth-worker src/lib/device.ts の allowlist に追加、#363)。 */
+/** CoreS3 組み込みハブ role (auth-worker src/lib/device.ts の allowlist、#363)。 */
 export const DEVICE_ROLE_HUB = "device-hub";
+
+/** AtomS3 印刷ブリッジ role (ippoan/alc-app-s3#38。下り print/ota command の待受に WS 接続する)。 */
+export const DEVICE_ROLE_PRINT = "device-print";
+
+/**
+ * recorder への接続を許可する device role の allowlist。
+ * kiosk / uploader 等の他 role は従来どおり 403 (blast radius 分離) —
+ * 広げるのは「recorder の下り command で遠隔管理したいデバイス」だけ。
+ */
+export const RECORDER_DEVICE_ROLES: ReadonlySet<string> = new Set([
+  DEVICE_ROLE_HUB,
+  DEVICE_ROLE_PRINT,
+]);
 
 /** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
 export async function resolveSecret(binding: unknown): Promise<string | null> {
@@ -86,7 +99,8 @@ export async function introspectToken(
  * introspect 結果から WS ハンドシェイクの可否を決める (純粋関数)。
  *
  * - `active` でない (署名不正 / exp 切れ / env 不一致 / ACL 不許可テナント) → 401
- * - role が `device-hub` 以外 (kiosk / uploader 等) → 403 (blast radius 分離)
+ * - role が allowlist (device-hub / device-print) 以外 (kiosk / uploader 等) →
+ *   403 (blast radius 分離)
  * - tenant_id / sub (device_id) 欠落 → 401 (identity 注入に必須なので fail-closed)
  */
 export function decideRecorderAuth(
@@ -95,7 +109,7 @@ export function decideRecorderAuth(
   if (!result || result.active !== true || !result.tenant_id || !result.sub) {
     return { status: 401, tenantId: "", deviceId: "" };
   }
-  if (result.role !== DEVICE_ROLE_HUB) {
+  if (typeof result.role !== "string" || !RECORDER_DEVICE_ROLES.has(result.role)) {
     return { status: 403, tenantId: "", deviceId: "" };
   }
   return { status: 101, tenantId: result.tenant_id, deviceId: result.sub };

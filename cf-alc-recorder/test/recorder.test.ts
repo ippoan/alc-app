@@ -119,6 +119,17 @@ describe("ハンドシェイク認証 (introspect)", () => {
     ).toBe(401);
     expect(decideRecorderAuth(null).status).toBe(401);
   });
+
+  it("decideRecorderAuth: allowlist role の判定 (hub/print は 101、他は 403)", () => {
+    const claims = { active: true, tenant_id: "t", sub: "d" };
+    // AtomS3 印刷ブリッジ (ippoan/alc-app-s3#38) — 下り print/ota command 待受
+    expect(decideRecorderAuth({ ...claims, role: "device-print" }).status).toBe(101);
+    expect(decideRecorderAuth({ ...claims, role: "device-hub" }).status).toBe(101);
+    // blast radius 分離: 他 role・role 欠落は従来どおり 403
+    expect(decideRecorderAuth({ ...claims, role: "device-kiosk" }).status).toBe(403);
+    expect(decideRecorderAuth({ ...claims, role: "device-uploader" }).status).toBe(403);
+    expect(decideRecorderAuth({ ...claims }).status).toBe(403);
+  });
 });
 
 describe("measurement → ingest 転送 → ack", () => {
