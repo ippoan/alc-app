@@ -25,6 +25,13 @@ import { forwardMeasurements, parseMeasurementItem } from "./measurements";
  *
  * Hibernation 復帰: 接続 identity は in-memory に持たず、毎メッセージ
  * `ws.deserializeAttachment()` から読む (= 復帰後も転送先 tenant/device が壊れない)。
+ *
+ * 下り (server → browser、device/setup ページの live update、Refs auth-worker
+ * live update 要望): `GET /events` は SSE で接続中デバイス一覧の変化を push する。
+ * `sseControllers` は in-memory (DO storage 非永続) — SSE は接続維持中しか
+ * hibernation しない (ハンドラの fetch が生きている間は isolate も生きる) ため
+ * 一覧を毎回 `getWebSockets()` から再計算すれば問題ない。SSE 接続自体が切れたら
+ * (タブを閉じる等) controller を配列から外すだけで DO 側の状態は増えない。
  */
 
 /** WS attachment。hibernation を跨いで identity を保持する。 */
@@ -63,6 +70,9 @@ function json(data: unknown, status = 200): Response {
 }
 
 export class RecorderHub extends DurableObject<Env> {
+  /** 接続中の SSE クライアント (`/events`)。DO storage には持たない (in-memory のみ)。 */
+  private readonly sseControllers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // keepalive ping は hibernation を起こさず runtime が応答する (文字列完全一致)。
@@ -90,6 +100,9 @@ export class RecorderHub extends DurableObject<Env> {
     }
     if (url.pathname === "/devices" && request.method === "GET") {
       return this.handleDevices();
+    }
+    if (url.pathname === "/events" && request.method === "GET") {
+      return this.handleEvents();
     }
     const resultMatch = url.pathname.match(/^\/command-result\/([^/]+)$/);
     if (resultMatch && request.method === "GET") {
@@ -125,6 +138,7 @@ export class RecorderHub extends DurableObject<Env> {
     const attachment: WsAttachment = { tenantId, deviceId };
     pair[1].serializeAttachment(attachment);
     this.send(pair[1], { type: "connected" });
+    this.broadcastDevices();
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -172,6 +186,7 @@ export class RecorderHub extends DurableObject<Env> {
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
     ws.close(code, reason);
+    this.broadcastDevices();
   }
 
   async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
@@ -282,13 +297,60 @@ export class RecorderHub extends DurableObject<Env> {
     return json({ id, delivered: sockets.length }, 202);
   }
 
-  private handleDevices(): Response {
+  private currentDeviceIds(): string[] {
     const ids = new Set<string>();
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as WsAttachment | null;
       if (attachment?.deviceId) ids.add(attachment.deviceId);
     }
-    return json({ devices: [...ids].sort() });
+    return [...ids].sort();
+  }
+
+  private handleDevices(): Response {
+    return json({ devices: this.currentDeviceIds() });
+  }
+
+  /** GET /events — 接続中デバイス一覧の変化を push する SSE ストリーム。 */
+  private handleEvents(): Response {
+    const encoder = new TextEncoder();
+    const hub = this;
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controllerRef = controller;
+        hub.sseControllers.add(controller);
+        // 接続直後に現在のスナップショットを送る (browser 側の初期表示用)。
+        controller.enqueue(
+          encoder.encode(`event: devices\ndata: ${JSON.stringify({ devices: hub.currentDeviceIds() })}\n\n`),
+        );
+      },
+      cancel() {
+        if (controllerRef) hub.sseControllers.delete(controllerRef);
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store",
+        Connection: "keep-alive",
+      },
+    });
+  }
+
+  /** 接続中デバイス一覧を全 SSE クライアントへ push する (接続/切断のたびに呼ぶ)。 */
+  private broadcastDevices(): void {
+    if (this.sseControllers.size === 0) return;
+    const encoder = new TextEncoder();
+    const frame = encoder.encode(
+      `event: devices\ndata: ${JSON.stringify({ devices: this.currentDeviceIds() })}\n\n`,
+    );
+    for (const controller of this.sseControllers) {
+      try {
+        controller.enqueue(frame);
+      } catch {
+        this.sseControllers.delete(controller);
+      }
+    }
   }
 
   private async handleCommandResultGet(id: string): Promise<Response> {

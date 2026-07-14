@@ -463,6 +463,27 @@ describe("下り command push / command_result", () => {
     const body = (await res.json()) as { devices: string[] };
     expect(body.devices).toContain("device-cmd");
   });
+
+  it("SSE (/events) は接続直後に接続中デバイス一覧のスナップショットを送る", async () => {
+    const { ws } = await connectAccepted("hub-token-tenant-sse");
+    openSockets.push(ws);
+    const res = await SELF.fetch(`${BASE}/tenants/tenant-sse/events`, {
+      headers: { Authorization: SHARED_SECRET },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/event-stream");
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    const chunk = new TextDecoder().decode(value);
+    expect(chunk).toContain("event: devices");
+    expect(JSON.parse(chunk.split("data: ")[1]!)).toEqual({ devices: ["device-sse"] });
+    await reader.cancel();
+  });
+
+  it("SSE (/events) も shared secret 必須 (欠落は 401)", async () => {
+    const res = await SELF.fetch(`${BASE}/tenants/tenant-cmd/events`);
+    expect(res.status).toBe(401);
+  });
 });
 
 describe("hibernation 復帰 / テナント分離", () => {

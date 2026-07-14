@@ -36,6 +36,14 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  "hub-token-tenant-sse": {
+    active: true,
+    tenant_id: "tenant-sse",
+    role: "device-hub",
+    sub: "device-sse",
+    email: "",
+    exp: 9999999999,
+  },
   "kiosk-token": {
     active: true,
     tenant_id: "tenant-1",
