@@ -4,6 +4,7 @@ import { resolveSecret } from "./auth";
 import {
   CRASH_LOG_KIND,
   forwardMeasurements,
+  notifyCrashByEmail,
   parseMeasurementItem,
   storeCrashLog,
 } from "./measurements";
@@ -238,6 +239,8 @@ export class RecorderHub extends DurableObject<Env> {
         return;
       }
       this.send(ws, { type: "ack", seq });
+      // メール通知は best-effort (ack 済み。失敗は log のみ)
+      await notifyCrashByEmail(this.env, attachment.tenantId, attachment.deviceId, parsed.item);
       return;
     }
 

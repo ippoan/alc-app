@@ -107,6 +107,63 @@ export async function storeCrashLog(
   console.log(`[crash_log] stored key=${key} reason=${reason}`);
 }
 
+/** crash_log メール通知に必要な env の部分型 (index.ts の Env が満たす)。 */
+export interface CrashEmailEnv {
+  CRASH_EMAIL?: SendEmail;
+  NOTIFY_EMAIL_FROM?: string;
+  NOTIFY_EMAIL_TO?: string;
+}
+
+/**
+ * crash_log をメール通知する (best-effort、security-notification-app と同じ
+ * Email Routing send_email binding + mimetext 方式)。
+ *
+ * R2 保存が正でメールは通知のみ — binding / vars 未設定 (テスト・未構成環境) は
+ * 黙って skip、送信失敗も log のみで ack を妨げない。クラッシュは稀なので
+ * 集約せずイベント毎に 1 通送る。
+ */
+export async function notifyCrashByEmail(
+  env: CrashEmailEnv,
+  tenantId: string,
+  deviceId: string,
+  item: ParsedMeasurement,
+): Promise<void> {
+  const binding = env.CRASH_EMAIL;
+  const from = env.NOTIFY_EMAIL_FROM;
+  const to = env.NOTIFY_EMAIL_TO;
+  if (!binding || !from || !to) return;
+  try {
+    const p = item.payload;
+    const str = (v: unknown): string => (typeof v === "string" ? v : "?");
+    const reason = str(p.reset_reason);
+    const body = [
+      `CoreS3 が異常リセットから復帰しました (crash_log)。`,
+      ``,
+      `reset_reason: ${reason} (code=${typeof p.reset_code === "number" ? p.reset_code : "?"})`,
+      `device_id:    ${deviceId}`,
+      `tenant_id:    ${tenantId}`,
+      `seq:          ${item.seq}`,
+      `firmware:     ${str(p.version)} (${str(p.slot)})`,
+      `R2 object:    alc-crash-logs/${crashLogKey(tenantId, deviceId, item.seq)}`,
+      ``,
+      `--- panic 前ログ (末尾) ---`,
+      typeof p.log === "string" && p.log ? p.log : "(ログなし — RAM 未保持の可能性)",
+    ].join("\n");
+
+    const { EmailMessage } = await import("cloudflare:email");
+    const { createMimeMessage } = await import("mimetext");
+    const msg = createMimeMessage();
+    msg.setSender({ name: "ALC Crash Notifier", addr: from });
+    msg.setRecipient(to);
+    msg.setSubject(`[alc] CoreS3 crash: ${reason} (${deviceId})`);
+    msg.addMessage({ contentType: "text/plain", data: body });
+    await binding.send(new EmailMessage(from, to, msg.asRaw()));
+    console.log(`[crash_log] email sent device=${deviceId} reason=${reason}`);
+  } catch (e) {
+    console.log(`[crash_log] email notify failed tenant=${tenantId} device=${deviceId}`, e);
+  }
+}
+
 /**
  * service binding fetch は host を無視するが、path が auth-worker 側 route
  * (`/alc-internal-proxy/...`) と一致する必要がある (web/server/utils/internal-proxy.ts と同形)。

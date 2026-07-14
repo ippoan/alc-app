@@ -31,6 +31,7 @@ import {
 import {
   CRASH_LOG_KIND,
   forwardMeasurements,
+  notifyCrashByEmail,
   parseMeasurementItem,
   storeCrashLog,
   type MeasurementInput,
@@ -46,6 +47,10 @@ export interface Env {
   INTERNAL_SHARED_SECRET: unknown;
   /** crash_log (kind=crash_log) の保存先。backend へは転送しない (alc-app-s3#43) */
   CRASH_LOGS: R2Bucket;
+  /** crash_log のメール通知 (Email Routing send_email binding)。テスト環境は未設定 = skip */
+  CRASH_EMAIL?: SendEmail;
+  NOTIFY_EMAIL_FROM?: string;
+  NOTIFY_EMAIL_TO?: string;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -184,6 +189,10 @@ async function handleMeasurementsPost(request: Request, env: Env, url: URL): Pro
   } catch (e) {
     console.log(`[crash_log] R2 put failed tenant=${auth.tenantId} device=${auth.deviceId}`, e);
     return json({ error: "storage_error" }, 502);
+  }
+  // メール通知は best-effort (失敗しても accept は返す)
+  for (const item of crashItems) {
+    await notifyCrashByEmail(env, auth.tenantId, auth.deviceId, item);
   }
 
   if (forwardItems.length > 0) {
