@@ -1,7 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
 import { resolveSecret } from "./auth";
-import { forwardMeasurements, parseMeasurementItem } from "./measurements";
+import {
+  CRASH_LOG_KIND,
+  forwardMeasurements,
+  parseMeasurementItem,
+  storeCrashLog,
+} from "./measurements";
 
 /**
  * RecorderHub — テナント単位の Durable Object (Hibernatable WebSockets)。
@@ -212,6 +217,29 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
     const seq = parsed.item.seq;
+
+    // crash_log (CoreS3 の異常リセット復帰レポート、alc-app-s3#43) は backend へ
+    // 転送せず R2 へ直接保存して ack する。key は seq ベースで再送冪等
+    if (parsed.item.kind === CRASH_LOG_KIND) {
+      try {
+        await storeCrashLog(
+          this.env.CRASH_LOGS,
+          attachment.tenantId,
+          attachment.deviceId,
+          parsed.item,
+          Date.now(),
+        );
+      } catch (e) {
+        console.log(
+          `[crash_log] R2 put failed tenant=${attachment.tenantId} device=${attachment.deviceId} seq=${seq}`,
+          e,
+        );
+        this.send(ws, { type: "error", seq, message: "storage_error" });
+        return;
+      }
+      this.send(ws, { type: "ack", seq });
+      return;
+    }
 
     const sharedSecret = await resolveSecret(this.env.INTERNAL_SHARED_SECRET);
     if (!sharedSecret) {

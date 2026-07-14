@@ -64,6 +64,50 @@ export function parseMeasurementItem(msg: MeasurementInput): ParseMeasurementRes
 }
 
 /**
+ * crash_log (CoreS3 の異常リセット復帰レポート: reset reason + panic 前ログ、
+ * Refs ippoan/alc-app-s3#43) はバックエンド (rust-alc-api hub_measurements) へ
+ * 転送せず、受口の DO/Worker が R2 (`CRASH_LOGS`) へ直接保存して完結させる。
+ */
+export const CRASH_LOG_KIND = "crash_log";
+
+/**
+ * crash_log の R2 object key。seq ベースなので同 seq の再送は同じ key を
+ * 上書きする (= 冪等、ack 前の再送で重複オブジェクトを作らない)。
+ * seq は 12 桁 0 詰めにして prefix 一覧が数値順に並ぶようにする。
+ */
+export function crashLogKey(tenantId: string, deviceId: string, seq: number): string {
+  return `${tenantId}/${deviceId}/${String(seq).padStart(12, "0")}.json`;
+}
+
+/**
+ * crash_log 1 件を R2 へ保存する。reset reason は Workers Observability から
+ * 集計できるよう log にも 1 行残す (値は payload 由来 = untrusted だが log のみ)。
+ */
+export async function storeCrashLog(
+  bucket: R2Bucket,
+  tenantId: string,
+  deviceId: string,
+  item: ParsedMeasurement,
+  receivedAtMs: number,
+): Promise<void> {
+  const key = crashLogKey(tenantId, deviceId, item.seq);
+  await bucket.put(
+    key,
+    JSON.stringify({
+      tenant_id: tenantId,
+      device_id: deviceId,
+      seq: item.seq,
+      recorded_at_ms: item.recorded_at_ms,
+      received_at_ms: receivedAtMs,
+      payload: item.payload,
+    }),
+    { httpMetadata: { contentType: "application/json" } },
+  );
+  const reason = typeof item.payload.reset_reason === "string" ? item.payload.reset_reason : "?";
+  console.log(`[crash_log] stored key=${key} reason=${reason}`);
+}
+
+/**
  * service binding fetch は host を無視するが、path が auth-worker 側 route
  * (`/alc-internal-proxy/...`) と一致する必要がある (web/server/utils/internal-proxy.ts と同形)。
  */

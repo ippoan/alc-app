@@ -207,6 +207,41 @@ describe("measurement → ingest 転送 → ack", () => {
     expect(calls[0].items[0].kind).toBe("fc1200_raw");
   });
 
+  it("crash_log は backend へ転送せず R2 に保存して ack する (alc-app-s3#43)", async () => {
+    const { ws, messages } = await connectAccepted("hub-token-1");
+    openSockets.push(ws);
+
+    const frame = JSON.stringify({
+      type: "measurement",
+      seq: 42,
+      recorded_at_ms: 0,
+      kind: "crash_log",
+      payload: { type: "crash_log", reset_reason: "panic", reset_code: 4, log: "PANIC: boom\n" },
+    });
+    ws.send(frame);
+    expect(await messages.next()).toEqual({ type: "ack", seq: 42 });
+
+    // backend (ingest) は呼ばれない
+    expect((await spyIngest()).length).toBe(0);
+
+    // R2 に seq ベースの key で保存される (tenant/device は JWT claims 由来)
+    const obj = await env.CRASH_LOGS.get("tenant-1/device-1/000000000042.json");
+    expect(obj).not.toBeNull();
+    const stored = JSON.parse(await obj!.text()) as Record<string, unknown>;
+    expect(stored.tenant_id).toBe("tenant-1");
+    expect(stored.device_id).toBe("device-1");
+    expect(stored.seq).toBe(42);
+    expect(stored.recorded_at_ms).toBe(0);
+    expect(typeof stored.received_at_ms).toBe("number");
+    expect((stored.payload as Record<string, unknown>).reset_reason).toBe("panic");
+
+    // 同 seq の再送は同じ key を上書き (重複オブジェクトを作らない)
+    ws.send(frame);
+    expect(await messages.next()).toEqual({ type: "ack", seq: 42 });
+    const listed = await env.CRASH_LOGS.list({ prefix: "tenant-1/device-1/" });
+    expect(listed.objects.length).toBe(1);
+  });
+
   it("上流エラー時は error(seq) を返す (詳細は echo しない)。端末は再送できる", async () => {
     const { ws, messages } = await connectAccepted("hub-token-1");
     openSockets.push(ws);
@@ -310,6 +345,28 @@ describe("POST /measurements (Wi-Fi 客の上りバッチ)", () => {
     expect((await postMeasurements(batch, "hub-token-1")).status).toBe(200);
     expect((await postMeasurements(batch, "hub-token-1")).status).toBe(200);
     expect((await spyIngest()).length).toBe(2);
+  });
+
+  it("crash_log は R2 へ保存し、他の kind だけ ingest へ転送する (alc-app-s3#43)", async () => {
+    const res = await postMeasurements(
+      [
+        { seq: 100, kind: "crash_log", payload: { reset_reason: "task_wdt", log: "EVT HEAP ...\n" } },
+        { seq: 101, kind: "temperature", payload: { value: 36.6 } },
+      ],
+      "hub-token-1",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: [100, 101] });
+
+    // ingest へは crash_log 以外だけが渡る
+    const calls = await spyIngest();
+    expect(calls.length).toBe(1);
+    expect(calls[0].items.map((i) => i.seq)).toEqual([101]);
+
+    const obj = await env.CRASH_LOGS.get("tenant-1/device-1/000000000100.json");
+    expect(obj).not.toBeNull();
+    const stored = JSON.parse(await obj!.text()) as Record<string, unknown>;
+    expect((stored.payload as Record<string, unknown>).reset_reason).toBe("task_wdt");
   });
 
   it("不正 body は 400: invalid JSON / 非配列 / 上限超過", async () => {

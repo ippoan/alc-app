@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:3bdd4d0f02f9ad31ae0ef5b295aeed2cc98254ee
+generated-from: alc-app:aa5cd2ff81021d749b3a333a2afd16cf22d0a490
 paths: [web/, cf-alc-signaling/, cf-alc-recorder/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・cf-alc-recorder/ (CoreS3 測定データ受口 DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「cf-alc-recorder」「alc-recorder」「CoreS3 測定」「alc.ippoan.org」等。
 ---
@@ -21,7 +21,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 |---|---|---|
 | **`web/`** | Nuxt 4 PWA (`app/` 構成) + `server/` + `wrangler.jsonc` | フロント本体 (Cloudflare Workers `cloudflare_module`)。下表参照 |
 | **`cf-alc-signaling/`** | `src/{index,signaling-room,room-registry}.ts` + `wrangler.toml` | WebRTC signaling worker。Durable Objects (Hibernatable WS) で SDP/ICE リレー。worker 名 `alc-signaling` |
-| **`cf-alc-recorder/`** | `src/{index,recorder-hub,auth,measurements}.ts` + `wrangler.toml` + `test/` | CoreS3 (alc-app-s3) 測定データ受口 worker (#106/#108)。上りは WS (`/ws`、テナント単位 DO `RecorderHub`) と Wi-Fi 客向け `POST /measurements` バッチ (#109、ステートレス) の 2 経路 — どちらも device JWT introspect (role allowlist: `device-hub` = CoreS3 / `device-print` = AtomS3 印刷ブリッジ ippoan/alc-app-s3#38。他 role は 403) → auth-worker `/alc-internal-proxy` → rust-alc-api `POST /api/hub/measurements` に転送。下り command push は WS のみ。worker 名 `alc-recorder` |
+| **`cf-alc-recorder/`** | `src/{index,recorder-hub,auth,measurements}.ts` + `wrangler.toml` + `test/` | CoreS3 (alc-app-s3) 測定データ受口 worker (#106/#108)。上りは WS (`/ws`、テナント単位 DO `RecorderHub`) と Wi-Fi 客向け `POST /measurements` バッチ (#109、ステートレス) の 2 経路 — どちらも device JWT introspect (role allowlist: `device-hub` = CoreS3 / `device-print` = AtomS3 印刷ブリッジ ippoan/alc-app-s3#38。他 role は 403) → auth-worker `/alc-internal-proxy` → rust-alc-api `POST /api/hub/measurements` に転送。例外: `kind=crash_log` (CoreS3 異常リセット復帰レポート、ippoan/alc-app-s3#43) は backend へ転送せず R2 `CRASH_LOGS` (bucket `alc-crash-logs`、key `{tenant}/{device}/{seq 12桁0詰}.json`、再送冪等) へ直接保存して ack。下り command push は WS のみ。worker 名 `alc-recorder` |
 | **`fc1200-wasm/`** | (git ignored) Rust → WASM | FC-1200 RS232C プロトコル実装を WASM に compile して**ソース秘匿**。`web` から `fc1200-wasm` import |
 | **`docs/`** | mkdocs (`mkdocs.yml`, admin/ operator/) | 運用ドキュメント。`docs/*.pdf` = Tanita Confidential で **.gitignore** |
 | **`plan/`** | `implementation-plan.md` `initialplan.md` | 実装計画 |
@@ -49,7 +49,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 - **web nitro**: `web/nuxt.config.ts` → `nitro.preset = "cloudflare_module"`、`main = .output/server/index.mjs` (`web/wrangler.jsonc`)。`vite-plugin-wasm` + `optimizeDeps.exclude: ['fc1200-wasm']`。
 - **web wrangler (jsonc)**: top-level = prod (`alc-app`, alc.ippoan.org)。`env.staging` = `alc-app-staging` (alc-staging.ippoan.org)。`NUXT_PUBLIC_{API_BASE,GOOGLE_CLIENT_ID,AUTH_WORKER_URL,STAGING_TENANT_ID,SIGNALING_URL}` を env で切替。
 - **signaling**: `cf-alc-signaling/src/index.ts` (worker entry) → DO `SignalingRoom` (device/admin 2 ピア間リレー) + `RoomRegistry`。`wrangler.toml` に migration v1/v2、`BACKEND_API_URL` var。secret 不要 (STUN P2P のみ、TURN 後日)。
-- **recorder**: `cf-alc-recorder/src/index.ts` (worker entry)。`/ws` → introspect 後にテナント単位 DO `RecorderHub` (Hibernatable WS、identity は WS attachment) へ routing。`POST /measurements` → DO を経由せず Worker 直で検証 + ingest 転送 (`src/measurements.ts` を WS 経路と共有)。下り `POST /tenants/:t/devices/:d/command` 等は `INTERNAL_SHARED_SECRET` の内部 API。binding: `AUTH_WORKER` (service) + `INTERNAL_SHARED_SECRET` (Secrets Store)。prod/staging 2 面 (`env.staging`)。
+- **recorder**: `cf-alc-recorder/src/index.ts` (worker entry)。`/ws` → introspect 後にテナント単位 DO `RecorderHub` (Hibernatable WS、identity は WS attachment) へ routing。`POST /measurements` → DO を経由せず Worker 直で検証 + ingest 転送 (`src/measurements.ts` を WS 経路と共有)。下り `POST /tenants/:t/devices/:d/command` 等は `INTERNAL_SHARED_SECRET` の内部 API。binding: `AUTH_WORKER` (service) + `INTERNAL_SHARED_SECRET` (Secrets Store) + `CRASH_LOGS` (R2、crash_log 保存先)。prod/staging 2 面 (`env.staging`)。
 - **接続**: `NUXT_PUBLIC_SIGNALING_URL` に signaling worker URL。Room ID = `tenko_session_id`。
 
 ## gotcha
