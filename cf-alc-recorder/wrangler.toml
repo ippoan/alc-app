@@ -12,6 +12,10 @@
 name = "alc-recorder"
 main = "src/index.ts"
 compatibility_date = "2025-07-15"
+# mimetext (crash_log メール通知) が Node 組み込み (path / node:os) を参照するため必須
+# (security-notification-app と同じ)。compatibility_flags は inheritable key なので
+# env.staging にも継承される (bindings と違い再宣言不要)
+compatibility_flags = ["nodejs_compat"]
 # account_id を明示 (web/wrangler.jsonc / cf-alc-signaling と同値)。未指定だと wrangler が
 # /memberships を列挙し、account-scoped な CLOUDFLARE_API_TOKEN では Authentication
 # error [code: 10000] で deploy が落ちる (signaling-deploy CI 実測)。
