@@ -20,6 +20,7 @@ export default defineWorkersConfig({
         isolatedStorage: false,
         miniflare: {
           compatibilityDate: "2025-07-15",
+          compatibilityFlags: ["nodejs_compat"],
           durableObjects: {
             RECORDER_HUB: { className: "RecorderHub", useSQLite: true },
           },
