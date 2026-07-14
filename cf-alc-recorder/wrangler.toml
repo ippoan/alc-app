@@ -54,6 +54,18 @@ secret_name = "INTERNAL_SHARED_SECRET"
 binding = "CRASH_LOGS"
 bucket_name = "alc-crash-logs"
 
+# crash_log のメール通知 (best-effort。R2 が正、メールは通知のみ)。
+# security-notification-app と同じ Email Routing send_email binding 方式 —
+# 宛先は検証済み destination address であること。差出人 (NOTIFY_EMAIL_FROM) は
+# Email Routing を有効化済みの mtamaramu.com ドメインを使う。
+[[send_email]]
+name = "CRASH_EMAIL"
+destination_address = "m.tama.ramu@gmail.com"
+
+[vars]
+NOTIFY_EMAIL_FROM = "alc-crash@mtamaramu.com"
+NOTIFY_EMAIL_TO = "m.tama.ramu@gmail.com"
+
 [env.staging]
 name = "alc-recorder-staging"
 
@@ -78,3 +90,11 @@ secret_name = "INTERNAL_SHARED_SECRET"
 [[env.staging.r2_buckets]]
 binding = "CRASH_LOGS"
 bucket_name = "alc-crash-logs"
+
+[[env.staging.send_email]]
+name = "CRASH_EMAIL"
+destination_address = "m.tama.ramu@gmail.com"
+
+[env.staging.vars]
+NOTIFY_EMAIL_FROM = "alc-crash@mtamaramu.com"
+NOTIFY_EMAIL_TO = "m.tama.ramu@gmail.com"
