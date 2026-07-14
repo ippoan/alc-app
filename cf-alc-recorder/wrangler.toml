@@ -45,6 +45,15 @@ binding = "INTERNAL_SHARED_SECRET"
 store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
 secret_name = "INTERNAL_SHARED_SECRET"
 
+# crash_log (CoreS3 の異常リセット復帰レポート、ippoan/alc-app-s3#43) の保存先。
+# backend (rust-alc-api hub_measurements) へは転送せず R2 で完結させる。
+# key: {tenant_id}/{device_id}/{seq 12桁0詰}.json (再送冪等)。
+# バケットは prod/staging 共用 (tenant_id が別なので衝突しない)。
+# 初回 deploy 前に `npx wrangler r2 bucket create alc-crash-logs` が必要。
+[[r2_buckets]]
+binding = "CRASH_LOGS"
+bucket_name = "alc-crash-logs"
+
 [env.staging]
 name = "alc-recorder-staging"
 
@@ -65,3 +74,7 @@ service = "auth-worker-staging"
 binding = "INTERNAL_SHARED_SECRET"
 store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
 secret_name = "INTERNAL_SHARED_SECRET"
+
+[[env.staging.r2_buckets]]
+binding = "CRASH_LOGS"
+bucket_name = "alc-crash-logs"

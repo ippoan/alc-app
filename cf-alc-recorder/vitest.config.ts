@@ -25,6 +25,7 @@ export default defineWorkersConfig({
           },
           serviceBindings: { AUTH_WORKER: "auth-worker" },
           bindings: { INTERNAL_SHARED_SECRET: "test-shared-secret" },
+          r2Buckets: { CRASH_LOGS: "alc-crash-logs" },
           workers: [
             {
               name: "auth-worker",

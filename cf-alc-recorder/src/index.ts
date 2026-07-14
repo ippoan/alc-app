@@ -29,8 +29,10 @@ import {
   resolveSecret,
 } from "./auth";
 import {
+  CRASH_LOG_KIND,
   forwardMeasurements,
   parseMeasurementItem,
+  storeCrashLog,
   type MeasurementInput,
   type ParsedMeasurement,
 } from "./measurements";
@@ -42,6 +44,8 @@ export interface Env {
   AUTH_WORKER: Fetcher;
   /** CF Secrets Store binding (`.get()`)。テストでは文字列で注入する。 */
   INTERNAL_SHARED_SECRET: unknown;
+  /** crash_log (kind=crash_log) の保存先。backend へは転送しない (alc-app-s3#43) */
+  CRASH_LOGS: R2Bucket;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -169,16 +173,31 @@ async function handleMeasurementsPost(request: Request, env: Env, url: URL): Pro
     return json({ accepted: [] });
   }
 
-  const result = await forwardMeasurements(
-    env.AUTH_WORKER,
-    auth.sharedSecret,
-    auth.tenantId,
-    auth.deviceId,
-    items,
-  );
-  if (!result.ok) {
-    // 詳細 (上流 body) は echo しない。端末は同じ batch を再送できる。
-    return json({ error: result.error }, 502);
+  // crash_log は backend へ転送せず R2 に保存して完結 (alc-app-s3#43)。
+  // R2 put 失敗は batch ごと 502 (端末が同じ batch を再送、put は seq key で冪等)。
+  const crashItems = items.filter((item) => item.kind === CRASH_LOG_KIND);
+  const forwardItems = items.filter((item) => item.kind !== CRASH_LOG_KIND);
+  try {
+    for (const item of crashItems) {
+      await storeCrashLog(env.CRASH_LOGS, auth.tenantId, auth.deviceId, item, Date.now());
+    }
+  } catch (e) {
+    console.log(`[crash_log] R2 put failed tenant=${auth.tenantId} device=${auth.deviceId}`, e);
+    return json({ error: "storage_error" }, 502);
+  }
+
+  if (forwardItems.length > 0) {
+    const result = await forwardMeasurements(
+      env.AUTH_WORKER,
+      auth.sharedSecret,
+      auth.tenantId,
+      auth.deviceId,
+      forwardItems,
+    );
+    if (!result.ok) {
+      // 詳細 (上流 body) は echo しない。端末は同じ batch を再送できる。
+      return json({ error: result.error }, 502);
+    }
   }
   return json({ accepted: items.map((item) => item.seq) });
 }
