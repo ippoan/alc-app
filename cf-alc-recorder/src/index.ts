@@ -15,6 +15,8 @@
  *       (WS measurement frame と同形)。下りが無いためステートレス (DO 不要、Worker 直)。
  *   - POST /tenants/:tenantId/devices/:deviceId/command … 接続中デバイスへの下り push
  *   - GET  /tenants/:tenantId/devices                   … 接続中デバイス一覧 (debug)
+ *   - GET  /tenants/:tenantId/events                    … 接続中デバイス一覧の SSE push
+ *     (auth-worker /device/setup/events が透過。接続/切断のたびに `devices` event を配信)
  *   - GET  /tenants/:tenantId/commands/:id/result       … command_result の取得
  *     (下り 3 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の内部 API。
  *      auth-worker /auth/introspect と同じ server-to-server shared secret 認証)
@@ -219,6 +221,15 @@ export default {
       if (denied) return denied;
       return hubStub(env, decodeURIComponent(devicesMatch[1])).fetch(
         "https://recorder-hub.internal/devices",
+      );
+    }
+
+    const eventsMatch = url.pathname.match(/^\/tenants\/([^/]+)\/events$/);
+    if (eventsMatch && request.method === "GET") {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      return hubStub(env, decodeURIComponent(eventsMatch[1])).fetch(
+        "https://recorder-hub.internal/events",
       );
     }
 
