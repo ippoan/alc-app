@@ -2,7 +2,8 @@
 // operator 印刷 (Refs ippoan/alc-app-s3#38): PDF を選び、接続中の AtomS3
 // 印刷ブリッジへ WS push して LAN の 9100 プリンターで印字する。
 // PDF は base64 化して server route (/api/print/:deviceId) に渡すだけ。
-import { useAuth } from '@ippoan/auth-client'
+// useAuth はローカル composable (app/composables/useAuth.ts) を auto-import する
+// (accessToken を持つ。@ippoan/auth-client の useAuth とは別物)。
 
 const { accessToken } = useAuth()
 
