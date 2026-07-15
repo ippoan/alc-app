@@ -28,6 +28,12 @@
 		{
 			"binding": "AUTH_WORKER",
 			"service": "auth-worker"
+		},
+		{
+			// operator 印刷 (Refs ippoan/alc-app-s3#38): server route が
+			// cf-alc-recorder の内部 command endpoint に PDF チャンクを push する。
+			"binding": "RECORDER",
+			"service": "alc-recorder"
 		}
 	],
 	"secrets_store_secrets": [
@@ -64,6 +70,10 @@
 				{
 					"binding": "AUTH_WORKER",
 					"service": "auth-worker-staging"
+				},
+				{
+					"binding": "RECORDER",
+					"service": "alc-recorder-staging"
 				}
 			],
 			"secrets_store_secrets": [
