@@ -474,6 +474,44 @@ describe('useBleGateway', () => {
       await vi.advanceTimersByTimeAsync(500)
       expect(await promise).toBe(false)
     })
+
+    it('serial 接続成功 → 即 true (WS フォールバックなし)', async () => {
+      const { port } = createMockPort({
+        readValues: [{ value: null, done: true }],
+      })
+      installSerialMock({ getPorts: vi.fn(async () => [port]) })
+      const result = await gw.startAutoConnect(2, 10)
+      expect(result).toBe(true)
+      expect(gw.transport.value).toBe('serial')
+      expect(MockWebSocket.instances).toHaveLength(0)
+    })
+
+    it('serial ポート 0 件が続く → 2 回目以降 WS ブリッジへフォールバック (#123)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      const promise = gw.startAutoConnect(3, 10)
+      // 1 回目の失敗ではまだ WS を試さない
+      await vi.advanceTimersByTimeAsync(0)
+      expect(MockWebSocket.instances).toHaveLength(0)
+      // interval → 2 回目の serial 失敗 → WS フォールバック開始
+      await vi.advanceTimersByTimeAsync(10)
+      expect(MockWebSocket.instances).toHaveLength(1)
+      expect(MockWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:9877')
+      MockWebSocket.instances[0]!.simulateOpen()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(await promise).toBe(true)
+      expect(gw.transport.value).toBe('websocket')
+    })
+
+    it('serial 0 件 + WS ブリッジも不在 → WS を後始末して false (#123)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      const promise = gw.startAutoConnect(2, 10)
+      await vi.advanceTimersByTimeAsync(10)  // 1 回目失敗 + interval → 2 回目失敗 → WS フォールバック
+      await vi.advanceTimersByTimeAsync(500) // WS 未接続 → disconnect
+      expect(await promise).toBe(false)
+      expect(gw.isConnected.value).toBe(false)
+      expect(MockWebSocket.instances).toHaveLength(1)
+      expect(MockWebSocket.instances[0]!.readyState).toBe(MockWebSocket.CLOSED)
+    })
   })
 
   // =============================================

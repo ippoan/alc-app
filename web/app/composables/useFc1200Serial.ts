@@ -24,6 +24,10 @@ const FC1200_WS_URL = 'ws://127.0.0.1:9878'
 const FC1200_WS_RECONNECT_DELAY = 3000
 const FC1200_WS_MAX_RECONNECT = 10
 
+// serial ポート探索リトライ — 0 件が続いたら WS ブリッジへフォールバック (#123)
+const SERIAL_SCAN_ATTEMPTS = 3
+const SERIAL_SCAN_DELAY = 500
+
 function isBleGwPort(info: SerialPortInfo): boolean {
   // 呼び出し元で usbVendorId !== undefined を確認済み
   return BLE_GW_DEVICES.some(d =>
@@ -154,27 +158,23 @@ export function useFc1200Serial() {
 
   // --- WebSerial transport (PC) ---
 
-  /** 許可済みポートに自動接続（ダイアログなし） */
-  async function autoConnect(): Promise<boolean> {
-    error.value = null
-
-    // WebSerial 非対応 → WebSocket で接続
-    if (!isWebSerialSupported()) {
-      connectWebSocket()
-      await new Promise(r => setTimeout(r, 500))
-      return isConnected.value
-    }
-
+  /** FC-1200 候補の許可済みポートを探す (BLE GW 以外で USB VID があるポートを優先) */
+  async function findSerialPort(): Promise<SerialPort | null> {
     try {
       const ports = await navigator.serial.getPorts()
-      if (ports.length === 0) return false
-
-      // BLE GW 以外で USB VID があるポートを優先
-      port = ports.find(p => {
+      return ports.find((p) => {
         const info = p.getInfo()
         return info.usbVendorId !== undefined && !isBleGwPort(info)
       }) ?? null
-      if (!port) return false
+    }
+    catch {
+      return null
+    }
+  }
+
+  async function openSerialPort(candidate: SerialPort): Promise<boolean> {
+    try {
+      port = candidate
 
       await initFc1200Wasm()
       isWasmReady.value = true
@@ -204,6 +204,36 @@ export function useFc1200Serial() {
       await cleanup()
       return false
     }
+  }
+
+  /** 許可済みポートに自動接続（ダイアログなし）。serial ポート 0 件が続いたら WS ブリッジへフォールバック (#123) */
+  async function autoConnect(): Promise<boolean> {
+    error.value = null
+
+    // WebSerial 非対応 → WebSocket で接続
+    if (!isWebSerialSupported()) {
+      connectWebSocket()
+      await new Promise(r => setTimeout(r, 500))
+      return isConnected.value
+    }
+
+    for (let attempt = 0; attempt < SERIAL_SCAN_ATTEMPTS; attempt++) {
+      const candidate = await findSerialPort()
+      if (candidate) {
+        return openSerialPort(candidate)
+      }
+      if (attempt < SERIAL_SCAN_ATTEMPTS - 1) {
+        await new Promise(r => setTimeout(r, SERIAL_SCAN_DELAY))
+      }
+    }
+
+    // WebSerial はあるのにポートが見つからない (GW の WebView で Serial 無効化フラグが
+    // 効いていない等) → alc-gw / Android の WS ブリッジへフォールバック
+    connectWebSocket()
+    await new Promise(r => setTimeout(r, 500))
+    if (isConnected.value) return true
+    disconnectWebSocket()
+    return false
   }
 
   async function connect(): Promise<void> {

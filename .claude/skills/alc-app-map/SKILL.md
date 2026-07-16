@@ -33,7 +33,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | 区画 | 主要ファイル | 役割 |
 |---|---|---|
 | **pages** | `web/app/pages/{index,tenko,login,register,device-claim,device-approve,maintenance}.vue` + `pages/auth/` | 測定 / 点呼 / 認証 / デバイス登録承認 |
-| **composables (デバイス I/O)** | `useFc1200Serial.ts` (WebSerial) `useNfcWebSocket.ts` `useBleGateway.ts` `useSerialDeviceManager.ts` `useCamera.ts` | FC-1200 シリアル / NFC WS / BLE / シリアル管理 / カメラ |
+| **composables (デバイス I/O)** | `useFc1200Serial.ts` (WebSerial) `useNfcWebSocket.ts` `useBleGateway.ts` `useSerialDeviceManager.ts` `useCamera.ts` | FC-1200 シリアル / NFC WS / BLE / シリアル管理 / カメラ。`useFc1200Serial.autoConnect` / `useBleGateway.startAutoConnect` は serial ポート 0 件が続くと `ws://127.0.0.1:{9878,9877}` の WS ブリッジ (alc-gw / Android) へ自動フォールバック (#123) |
 | **composables (顔認証)** | `useFaceAuth.ts` `useFaceDetection.ts` `useFaceSync.ts` `useFingerprint.ts` | 顔検出 (Web Worker) / 同期 / 指紋 |
 | **composables (点呼/通話)** | `useWebRtc.ts` `useTenkoKiosk.ts` `useTenkoAdmin.ts` `useScreenShare.ts` `useVideoRecorder.ts` | WebRTC 通話 / 点呼キオスク / 管理者 / 画面共有 / 録画 |
 | **composables (その他)** | `useAuth.ts` `useManagerAuth.ts` `useOfflineSync.ts` `useDemoMode.ts` `useAndroidLandscape.ts` `useNfcBridgeUpdate.ts` | 認証 / オフライン同期 / デモ / Android |
@@ -57,7 +57,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 - **public repo + 秘匿ファイル**: repo は public。`docs/*.pdf` (FC-1200 通信仕様 = Tanita Confidential)・`fc1200-wasm/{src,Cargo.toml,Cargo.lock}` は **.gitignore 済み = 絶対コミットしない** (WASM に compile してプロトコル秘匿)。
 - **semver patch のみ**: バージョンアップは常に patch (0.2.1→0.2.2)。minor/major は上げない。
 - **WebRTC は Hibernatable WebSockets API 必須** (Durable Objects)。
-- **テスト (CLAUDE.md に詳細)**: Vitest 4 + `@nuxt/test-utils` (happy-dom)。fc1200-wasm は `tests/mocks/` でモック (CI に wasm-pack 不要)。ブラウザ API (WebSerial/BLE/NFC) は `Object.defineProperty(navigator, ...)` でモック。**`v8 ignore` 禁止** (`withSetup` / テスト追加 / 到達不能コード削除で対処)。モジュールスコープ状態を持つ composable (`useBleGateway` `useFaceDetection` `useFc1200Serial`) は `vi.resetModules()` + dynamic import で分離。
+- **テスト (CLAUDE.md に詳細)**: Vitest 4 + `@nuxt/test-utils` (happy-dom)。fc1200-wasm と `virtual:pwa-register/vue` は `tests/mocks/` でモック (CI に wasm-pack 不要 / Windows での virtual module 解決エラー回避)。ブラウザ API (WebSerial/BLE/NFC) は `Object.defineProperty(navigator, ...)` でモック。**`v8 ignore` 禁止** (`withSetup` / テスト追加 / 到達不能コード削除で対処)。モジュールスコープ状態を持つ composable (`useBleGateway` `useFaceDetection` `useFc1200Serial`) は `vi.resetModules()` + dynamic import で分離。
 - **mock/live 統一テスト**: `web/tests/utils/api.test.ts` は 1 ファイルで mock と live (実 rust-alc-api コンテナ) 両対応。`API_BASE_URL` 環境変数の有無で切替。fake ID 禁止 (`api-test-data.ts` の実在 UUID を使う)。`docker-compose.test.yml` で GHCR `rust-alc-api:latest` + PG 起動。
 - **型同期**: `cd ~/rust/rust-alc-api && bash scripts/sync-types.sh` → `web/app/types/generated/` に生成 (git 管理、CI で差分チェック)。
 

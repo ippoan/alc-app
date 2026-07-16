@@ -25,6 +25,9 @@ const BLE_WS_URL = 'ws://127.0.0.1:9877'
 const BLE_WS_RECONNECT_DELAY = 3000
 const BLE_WS_MAX_RECONNECT = 10
 
+// serial 探索がこの回数連続で失敗したら WS ブリッジも試す (#123)
+const SERIAL_WS_FALLBACK_AFTER = 2
+
 // シングルトン: 全コンポーネントで共有
 const isConnected = ref(false)
 const error = ref<string | null>(null)
@@ -426,11 +429,25 @@ export function useBleGateway() {
     }
   }
 
-  /** 初回自動接続（複数回リトライ） */
+  /** WS ブリッジへの単発フォールバック試行 — 接続できなければ後始末して false */
+  async function tryWsFallback(): Promise<boolean> {
+    connectWebSocket()
+    await new Promise(r => setTimeout(r, 500))
+    if (isConnected.value) return true
+    disconnectWebSocket()
+    return false
+  }
+
+  /** 初回自動接続（複数回リトライ）。serial 探索の失敗が続いたら WS ブリッジへフォールバック (#123) */
   async function startAutoConnect(maxAttempts = 5, intervalMs = 3000): Promise<boolean> {
     for (let i = 0; i < maxAttempts; i++) {
       const success = await autoConnect()
       if (success) return true
+      // WebSerial があるのにポートが見つからない (GW の WebView で Serial 無効化フラグが
+      // 効いていない等) → alc-gw / Android の WS ブリッジを試す
+      if (isWebSerialSupported() && i + 1 >= SERIAL_WS_FALLBACK_AFTER) {
+        if (await tryWsFallback()) return true
+      }
       if (i < maxAttempts - 1) {
         await new Promise(r => setTimeout(r, intervalMs))
       }
