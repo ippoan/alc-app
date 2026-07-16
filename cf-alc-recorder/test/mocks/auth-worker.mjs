@@ -6,6 +6,9 @@
  * - `POST /alc-internal-proxy/api/hub/measurements` … ingest 転送のモック。
  *   `X-Alc-Proxy-Secret` を検証し、受けた body / X-Tenant-ID を記録する。
  *   item の kind に "boom" が含まれると 500 を返す (上流失敗の再現用)。
+ * - `GET /internal/hub-devices` … battery cron 用 hub device 一覧のモック。
+ *   `Authorization: <shared secret>` を要求。`POST /__spy/hub-devices` で
+ *   テストから内容を差し替えられる (既定は空配列)。
  * - `GET /__spy/ingest` / `POST /__spy/reset` … テストからの観測用。
  */
 
@@ -57,6 +60,7 @@ const TOKENS = {
 };
 
 let ingestCalls = [];
+let hubDevices = [];
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -104,11 +108,23 @@ export default {
       return json({ inserted: Array.isArray(items) ? items.length : 0 });
     }
 
+    if (url.pathname === "/internal/hub-devices" && request.method === "GET") {
+      if (request.headers.get("Authorization") !== SHARED_SECRET) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      return json({ devices: hubDevices });
+    }
+
     if (url.pathname === "/__spy/ingest" && request.method === "GET") {
       return json(ingestCalls);
     }
     if (url.pathname === "/__spy/reset" && request.method === "POST") {
       ingestCalls = [];
+      hubDevices = [];
+      return json({ ok: true });
+    }
+    if (url.pathname === "/__spy/hub-devices" && request.method === "POST") {
+      hubDevices = await request.json();
       return json({ ok: true });
     }
 
