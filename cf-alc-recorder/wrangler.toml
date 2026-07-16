@@ -25,6 +25,10 @@ account_id = "24b45709d060d957340180e995f0d373"
 enabled = true
 head_sampling_rate = 1
 
+# CoreS3 電源/バッテリー状態の定期取得 (Refs #121)。prod のみ (staging に実機フリートは無い)。
+[triggers]
+crons = ["*/30 * * * *"]
+
 # テナント単位の Durable Object (Hibernatable WebSockets)。
 [durable_objects]
 bindings = [
@@ -57,6 +61,17 @@ secret_name = "INTERNAL_SHARED_SECRET"
 [[r2_buckets]]
 binding = "CRASH_LOGS"
 bucket_name = "alc-crash-logs"
+
+# CoreS3 バッテリー snapshot cron (30分おき、Refs #121) の保存先。
+# key: {tenant_id}/{device_id}/{取得時刻ms}.json。rust-alc-api hub_measurements は
+# 使わない (診断値であって測定データではないため、crash_log と同じ持ち方)。
+# 7日で自動削除する Object Lifecycle Rule はバケット側の運用設定でコードでは制御不可 —
+# 初回 deploy 前に以下を実行すること:
+#   npx wrangler r2 bucket create alc-battery-history
+#   npx wrangler r2 bucket lifecycle add alc-battery-history --expire-days 7
+[[r2_buckets]]
+binding = "BATTERY_HISTORY"
+bucket_name = "alc-battery-history"
 
 # crash_log のメール通知 (best-effort。R2 が正、メールは通知のみ)。
 # security-notification-app と同じ Email Routing send_email binding 方式 —
@@ -94,6 +109,12 @@ secret_name = "INTERNAL_SHARED_SECRET"
 [[env.staging.r2_buckets]]
 binding = "CRASH_LOGS"
 bucket_name = "alc-crash-logs"
+
+# staging は cron ([triggers] は top-level のみ) を持たないが、binding 自体は
+# 手動 scheduled() 検証用に prod と同じバケットを共有する (tenant_id で衝突しない)。
+[[env.staging.r2_buckets]]
+binding = "BATTERY_HISTORY"
+bucket_name = "alc-battery-history"
 
 [[env.staging.send_email]]
 name = "CRASH_EMAIL"

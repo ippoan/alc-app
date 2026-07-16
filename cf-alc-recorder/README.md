@@ -53,6 +53,25 @@ CoreS3 →(WSS + device JWT)→ cf-alc-recorder →(AUTH_WORKER service binding)
 { "type": "command", "id": "<uuid>", "payload": { } }    // MEASURE 指示 / timecard イベント / 設定変更
 ```
 
+## バッテリー snapshot cron (Refs #121)
+
+CoreS3 の電源/バッテリー状態 (`/device/setup` の手動照会と同じ WS command
+`{action:"battery"}` → `command_result`) を 30 分おきに自動取得し R2
+(`BATTERY_HISTORY`) へ保存する。対象 device (tenant_id/device_id) は
+auth-worker `GET /internal/hub-devices` から取得する — 本 worker は tenant/device
+の registry を持たない。未接続デバイス・応答 timeout は silent skip (best-effort、
+次周期に譲る)。rust-alc-api hub_measurements は使わない (診断値であって測定データ
+ではないため、crash_log と同じ R2 直接保存)。
+
+保存先の key は `{tenant_id}/{device_id}/{取得時刻ms}.json`。**7日で自動削除**する
+Object Lifecycle Rule はコードでは制御できないバケット側の運用設定 — 初回 deploy
+前に手動で以下を実行すること:
+
+```sh
+npx wrangler r2 bucket create alc-battery-history
+npx wrangler r2 bucket lifecycle add alc-battery-history --expire-days 7
+```
+
 ## 開発
 
 ```sh
@@ -65,7 +84,9 @@ npm test          # @cloudflare/vitest-pool-workers (introspect モックは tes
 
 CI (`.github/workflows/recorder-deploy.yml`) 経由:
 main push → staging (`alc-recorder-staging`、auth-worker-staging に binding)、
-`v*` tag push → production (`alc-recorder`)。
+`v*` tag push → production (`alc-recorder`)。cron ([triggers]) は prod のみ
+(staging に実機フリートは無い)。
 
 依存: rust-alc-api の受け口 (ippoan/rust-alc-api#564)、auth-worker の `device-hub`
-role + `/alc-internal-proxy` allowlist (ippoan/auth-worker#363)。
+role + `/alc-internal-proxy` allowlist (ippoan/auth-worker#363)、
+`GET /internal/hub-devices` (ippoan/auth-worker#401)。

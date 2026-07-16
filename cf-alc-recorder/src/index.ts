@@ -20,6 +20,9 @@
  *   - GET  /tenants/:tenantId/commands/:id/result       … command_result の取得
  *     (下り 3 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の内部 API。
  *      auth-worker /auth/introspect と同じ server-to-server shared secret 認証)
+ *
+ * cron (`*` / prod のみ、Refs #121): CoreS3 電源/バッテリー状態を 30 分おきに
+ * 定期取得し R2 (`BATTERY_HISTORY`) へ保存する (battery-snapshot.ts)。
  */
 import {
   bearerToken,
@@ -37,6 +40,7 @@ import {
   type MeasurementInput,
   type ParsedMeasurement,
 } from "./measurements";
+import { runBatterySnapshotCron } from "./battery-snapshot";
 
 export { RecorderHub } from "./recorder-hub";
 
@@ -51,6 +55,8 @@ export interface Env {
   CRASH_EMAIL?: SendEmail;
   NOTIFY_EMAIL_FROM?: string;
   NOTIFY_EMAIL_TO?: string;
+  /** バッテリー snapshot cron の保存先 (7日 lifecycle rule はバケット側で設定、Refs #121) */
+  BATTERY_HISTORY: R2Bucket;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -271,5 +277,23 @@ export default {
     }
 
     return new Response("Not Found", { status: 404 });
+  },
+
+  /**
+   * cron (`wrangler.toml` `[triggers]`、30分おき・prod のみ、Refs #121)。
+   * INTERNAL_SHARED_SECRET 未設定なら auth-worker を呼べないので何もしない
+   * (server_error を返す先が無い cron なので log のみ)。
+   */
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
+        if (!sharedSecret) {
+          console.log("[battery_cron] INTERNAL_SHARED_SECRET not configured, skip");
+          return;
+        }
+        await runBatterySnapshotCron(env, sharedSecret, Date.now());
+      })(),
+    );
   },
 } satisfies ExportedHandler<Env>;
