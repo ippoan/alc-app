@@ -39,6 +39,10 @@ path = "app/composables/useFingerprint.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useGwStatus.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useManagerAuth.ts"
 branches = true
 

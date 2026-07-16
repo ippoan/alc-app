@@ -554,6 +554,9 @@ async function syncFc1200Date() {
       </div>
     </div>
 
+    <!-- Windows GW (alc-gw) 確認 (#124)。GW 未検出環境では折りたたまれる -->
+    <GwStatusCard />
+
     <!-- Android WebView: WebSocket ブリッジ経由のテスト -->
     <template v-if="isAndroidApp">
       <!-- FC-1200 セクション (Android) -->
