@@ -455,17 +455,66 @@ describe('useFc1200Serial', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
     })
 
-    it('getPorts empty -> returns false', async () => {
+    it('getPorts empty (3 回) -> WS ブリッジへフォールバック、未接続なら false (#123)', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500) // scan retry 1
+      await vi.advanceTimersByTimeAsync(500) // scan retry 2
+      expect(MockWebSocket.instances.length).toBe(1)
+      expect(MockWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:9878')
+      await vi.advanceTimersByTimeAsync(500) // WS 接続待ち
+      expect(await promise).toBe(false)
+      // フォールバック失敗時は WS を後始末 (バックグラウンド再接続を残さない)
+      expect(MockWebSocket.instances[0]!.readyState).toBe(MockWebSocket.CLOSED)
     })
 
-    it('port found but is BLE GW -> returns false', async () => {
+    it('getPorts empty -> WS フォールバックが接続成功 -> true, transport=websocket (#123)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500) // scan retry 1
+      await vi.advanceTimersByTimeAsync(500) // scan retry 2
+      MockWebSocket.instances[0]!.simulateOpen()
+      await vi.advanceTimersByTimeAsync(500) // WS 接続待ち
+      expect(await promise).toBe(true)
+      expect(fc.isConnected.value).toBe(true)
+      expect(fc.transport.value).toBe('websocket')
+    })
+
+    it('getPorts throws -> ポートなし扱いで WS フォールバック (#123)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => { throw new Error('boom') }) })
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(await promise).toBe(false)
+      expect(MockWebSocket.instances.length).toBe(1)
+    })
+
+    it('2 回目のスキャンでポート検出 -> serial 接続 (#123)', async () => {
+      const { port } = createMockPort({
+        getInfoResult: { usbVendorId: 0x9999 },
+        readValues: [{ value: null, done: true }],
+      })
+      const getPorts = vi.fn(async () => [])
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([port])
+      installSerialMock({ getPorts })
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500) // scan retry 1 → 検出
+      expect(await promise).toBe(true)
+      expect(fc.transport.value).toBe('serial')
+      expect(MockWebSocket.instances.length).toBe(0)
+    })
+
+    it('port found but is BLE GW -> ポートなし扱いで WS フォールバック', async () => {
       const { port } = createMockPort({ getInfoResult: { usbVendorId: 0x1A86 } }) // CH340
       installSerialMock({ getPorts: vi.fn(async () => [port]) })
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(await promise).toBe(false)
+      expect(fc.transport.value).toBeNull()
     })
 
     it('port found, connects successfully -> returns true', async () => {
@@ -1328,32 +1377,38 @@ describe('useFc1200Serial', () => {
   // ---------- isBleGwPort ----------
 
   describe('isBleGwPort (tested via autoConnect port filtering)', () => {
+    // 候補ポート 0 件の autoConnect は scan retry ×2 + WS フォールバック (#123)
+    // のタイマーを進めて完走させる
+    async function autoConnectNoCandidate(): Promise<boolean> {
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500) // scan retry 1
+      await vi.advanceTimersByTimeAsync(500) // scan retry 2
+      await vi.advanceTimersByTimeAsync(500) // WS 接続待ち
+      return promise
+    }
+
     it('VID matches CH340 -> excluded (BLE GW)', async () => {
       const { port } = createMockPort({ getInfoResult: { usbVendorId: 0x1A86 } })
       installSerialMock({ getPorts: vi.fn(async () => [port]) })
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      expect(await autoConnectNoCandidate()).toBe(false)
     })
 
     it('VID matches CP210x -> excluded', async () => {
       const { port } = createMockPort({ getInfoResult: { usbVendorId: 0x10C4 } })
       installSerialMock({ getPorts: vi.fn(async () => [port]) })
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      expect(await autoConnectNoCandidate()).toBe(false)
     })
 
     it('VID matches Espressif -> excluded', async () => {
       const { port } = createMockPort({ getInfoResult: { usbVendorId: 0x303A } })
       installSerialMock({ getPorts: vi.fn(async () => [port]) })
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      expect(await autoConnectNoCandidate()).toBe(false)
     })
 
     it('VID matches FTDI with matching PID -> excluded', async () => {
       const { port } = createMockPort({ getInfoResult: { usbVendorId: 0x0403, usbProductId: 0x6001 } })
       installSerialMock({ getPorts: vi.fn(async () => [port]) })
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      expect(await autoConnectNoCandidate()).toBe(false)
     })
 
     it('VID matches FTDI but PID does not -> not excluded', async () => {
@@ -1371,8 +1426,7 @@ describe('useFc1200Serial', () => {
       installSerialMock({ getPorts: vi.fn(async () => [port]) })
       // usbVendorId is undefined -> isBleGwPort returns false
       // but autoConnect also requires usbVendorId !== undefined to select port
-      const result = await fc.autoConnect()
-      expect(result).toBe(false)
+      expect(await autoConnectNoCandidate()).toBe(false)
     })
 
     it('unknown VID -> not excluded', async () => {
@@ -1605,8 +1659,12 @@ describe('useFc1200Serial', () => {
 
       // usbVendorId=undefined → isBleGwPort returns false → port is NOT a BLE GW
       // But port also has undefined usbVendorId so autoConnect's find() skips it
-      const result = await fc.autoConnect()
-      expect(result).toBe(false) // No suitable port found
+      // → 候補 0 件 → scan retry ×2 + WS フォールバック (#123) のタイマーを進める
+      const promise = fc.autoConnect()
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(await promise).toBe(false) // No suitable port found
     })
 
     it('sendWsCommand: ws=null → no crash (optional chaining)', async () => {

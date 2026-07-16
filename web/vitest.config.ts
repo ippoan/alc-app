@@ -26,6 +26,8 @@ export default defineVitestConfig({
   resolve: {
     alias: {
       'fc1200-wasm': resolve(import.meta.dirname!, 'tests/mocks/fc1200-wasm.ts'),
+      // Windows で virtual module の file URL 解決が落ちるためスタブに差し替え
+      'virtual:pwa-register/vue': resolve(import.meta.dirname!, 'tests/mocks/pwa-register.ts'),
     },
   },
 })
