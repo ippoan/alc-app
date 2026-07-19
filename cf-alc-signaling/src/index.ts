@@ -1,9 +1,11 @@
 export { SignalingRoom } from './signaling-room';
 export { RoomRegistry } from './room-registry';
+export { CameraSignalingRoom } from './camera-signaling-room';
 
 export interface Env {
   SIGNALING_ROOM: DurableObjectNamespace;
   ROOM_REGISTRY: DurableObjectNamespace;
+  CAMERA_SIGNALING_ROOM: DurableObjectNamespace;
   BACKEND_API_URL?: string;
   FCM_INTERNAL_SECRET?: string;
 }
@@ -190,10 +192,26 @@ export default {
       return stub.fetch(new Request(`https://registry/watch?device_id=${encodeURIComponent(deviceId)}`, request));
     }
 
+    // WebSocket endpoint: /cam-room/:siteId → 拠点カメラ中継 (RoomRegistryを
+    // 経由しない独立系統、ippoan/alc-app#129)
+    const camMatch = url.pathname.match(/^\/cam-room\/([a-zA-Z0-9_-]+)$/);
+    if (camMatch) {
+      const roomId = camMatch[1];
+      const role = url.searchParams.get('role');
+      if (role !== 'device' && role !== 'admin') {
+        return new Response('Missing or invalid role query param. Use ?role=device or ?role=admin', {
+          status: 400,
+        });
+      }
+      const id = env.CAMERA_SIGNALING_ROOM.idFromName(roomId);
+      const stub = env.CAMERA_SIGNALING_ROOM.get(id);
+      return stub.fetch(request);
+    }
+
     // WebSocket endpoint: /room/:roomId
     const match = url.pathname.match(/^\/room\/([a-zA-Z0-9_-]+)$/);
     if (!match) {
-      return new Response('Not Found. Use /room/:roomId', { status: 404 });
+      return new Response('Not Found. Use /room/:roomId or /cam-room/:siteId', { status: 404 });
     }
 
     const roomId = match[1];
