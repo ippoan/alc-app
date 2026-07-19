@@ -17,7 +17,8 @@ BACKEND_API_URL = "https://rust-alc-api-566bls5vfq-an.a.run.app"
 [durable_objects]
 bindings = [
   { name = "SIGNALING_ROOM", class_name = "SignalingRoom" },
-  { name = "ROOM_REGISTRY", class_name = "RoomRegistry" }
+  { name = "ROOM_REGISTRY", class_name = "RoomRegistry" },
+  { name = "CAMERA_SIGNALING_ROOM", class_name = "CameraSignalingRoom" }
 ]
 
 [[migrations]]
@@ -27,3 +28,7 @@ new_classes = ["SignalingRoom"]
 [[migrations]]
 tag = "v2"
 new_classes = ["RoomRegistry"]
+
+[[migrations]]
+tag = "v3"
+new_classes = ["CameraSignalingRoom"]
