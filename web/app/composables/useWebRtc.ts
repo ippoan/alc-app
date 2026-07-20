@@ -10,6 +10,12 @@ export function useWebRtc(role: 'device' | 'admin') {
   let pc: RTCPeerConnection | null = null
   let localStream: MediaStream | null = null
   let pingTimer: ReturnType<typeof setInterval> | null = null
+  // cam-room の device peer (P4/alc-gw-p4) は non-trickle 実装で、admin からの
+  // ice_candidate メッセージを受信しても無視する (alc-gw-p4/main/signaling_client.c)。
+  // そのため admin 側は answer を即送信せず、ICE gathering 完了を待って全候補を
+  // answer SDP 本体に埋め込んでから送る必要がある (path='cam-room' の時のみ)。
+  let waitForGatheringBeforeAnswer = false
+  const ICE_GATHERING_TIMEOUT_MS = 5000
 
   const rtcConfig: RTCConfiguration = {
     iceServers: [
@@ -112,6 +118,26 @@ export function useWebRtc(role: 'device' | 'admin') {
     return pc
   }
 
+  /** pc.iceGatheringState が 'complete' になるまで待つ (タイムアウト付き)。 */
+  function waitForIceGatheringComplete(): Promise<void> {
+    if (pc!.iceGatheringState === 'complete') return Promise.resolve()
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        pc!.removeEventListener('icegatheringstatechange', onChange)
+        log('waitForIceGatheringComplete: timeout, send with whatever gathered so far')
+        resolve()
+      }, ICE_GATHERING_TIMEOUT_MS)
+      const onChange = () => {
+        if (pc!.iceGatheringState === 'complete') {
+          clearTimeout(timeoutId)
+          pc!.removeEventListener('icegatheringstatechange', onChange)
+          resolve()
+        }
+      }
+      pc!.addEventListener('icegatheringstatechange', onChange)
+    })
+  }
+
   async function handleOffer(sdp: string) {
     log('handleOffer: sdp received, length=', sdp.length)
     if (!pc) createPeerConnection()
@@ -119,7 +145,19 @@ export function useWebRtc(role: 'device' | 'admin') {
     const answer = await pc!.createAnswer()
     await pc!.setLocalDescription(answer)
     log('handleOffer: answer created, length=', answer.sdp?.length)
-    sendSignaling({ type: 'sdp_answer', sdp: answer.sdp! })
+
+    if (waitForGatheringBeforeAnswer) {
+      // non-trickle peer (P4) は ice_candidate メッセージを無視するため、
+      // 全候補が embed された localDescription を待ってから送る。
+      log('handleOffer: non-trickle peer, waiting for ICE gathering to complete before sending answer')
+      await waitForIceGatheringComplete()
+    }
+
+    // gathering を待った場合は候補が追記された最新の localDescription を使う
+    // (createAnswer() が返した answer オブジェクトは候補を含まない静的スナップショット)。
+    const sdpToSend = pc!.localDescription!.sdp
+    log('handleOffer: sending answer, length=', sdpToSend.length, waitForGatheringBeforeAnswer ? '(候補embed済み)' : '(trickle)')
+    sendSignaling({ type: 'sdp_answer', sdp: sdpToSend })
   }
 
   async function handleAnswer(sdp: string) {
@@ -186,6 +224,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     error.value = null
     disconnect()
 
+    waitForGatheringBeforeAnswer = path === 'cam-room'
     createPeerConnection()
 
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
