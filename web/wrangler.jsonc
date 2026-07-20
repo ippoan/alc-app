@@ -62,7 +62,7 @@
 				// 未設定だと nuxt.config.ts のデフォルト (http://localhost:8787) にフォールバックし、
 				// 管理画面の一斉テスト/着信テストが ERR_CONNECTION_REFUSED になる。cf-alc-signaling は
 				// 単一環境運用なので prod と同じ URL (Refs ippoan/rust-alc-api#480)。
-				"NUXT_PUBLIC_SIGNALING_URL": "https://alc-signaling.m-tama-ramu.workers.dev"
+				"NUXT_PUBLIC_SIGNALING_URL": "https://alc-signaling.ippoan.org"
 			},
 			// named env は top-level binding を継承しないので再宣言する。
 			// staging は auth-worker-staging を叩く。
@@ -91,7 +91,7 @@
 		"NUXT_ALC_API_URL": "https://alc-api.ippoan.org",
 		"NUXT_PUBLIC_GOOGLE_CLIENT_ID": "747065218280-ugkrbgaoik32f5mmi94sso4b0026j3cp.apps.googleusercontent.com",
 		"NUXT_PUBLIC_AUTH_WORKER_URL": "https://auth.ippoan.org",
-		"NUXT_PUBLIC_SIGNALING_URL": "https://alc-signaling.m-tama-ramu.workers.dev"
+		"NUXT_PUBLIC_SIGNALING_URL": "https://alc-signaling.ippoan.org"
 	},
 	"routes": [
 		{
