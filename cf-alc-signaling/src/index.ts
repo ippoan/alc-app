@@ -1,3 +1,5 @@
+import { introspectToken, resolveSecret, decideCamAdminAuth } from './auth';
+
 export { SignalingRoom } from './signaling-room';
 export { RoomRegistry } from './room-registry';
 export { CameraSignalingRoom } from './camera-signaling-room';
@@ -8,6 +10,8 @@ export interface Env {
   CAMERA_SIGNALING_ROOM: DurableObjectNamespace;
   BACKEND_API_URL?: string;
   FCM_INTERNAL_SECRET?: string;
+  AUTH_WORKER: Fetcher;
+  INTERNAL_SHARED_SECRET: unknown;
 }
 
 export default {
@@ -203,6 +207,26 @@ export default {
           status: 400,
         });
       }
+
+      // admin (ブラウザ) 接続のみ、Google ログイン JWT (role=admin) を要求する。
+      // device (P4/alc-gw) 側は cam-relay-token の転送経路が未整備のため、
+      // このステップでは未着手 (別途調整、Refs alc-app#129)。
+      if (role === 'admin') {
+        const token = url.searchParams.get('token');
+        if (!token) {
+          return new Response('Missing token query param for role=admin', { status: 401 });
+        }
+        const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
+        if (!sharedSecret) {
+          return new Response('Server misconfigured', { status: 503 });
+        }
+        const result = await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin);
+        const status = decideCamAdminAuth(result);
+        if (status !== 101) {
+          return new Response('Unauthorized', { status });
+        }
+      }
+
       const id = env.CAMERA_SIGNALING_ROOM.idFromName(roomId);
       const stub = env.CAMERA_SIGNALING_ROOM.get(id);
       return stub.fetch(request);
