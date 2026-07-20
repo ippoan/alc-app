@@ -14,6 +14,13 @@ head_sampling_rate = 1
 [vars]
 BACKEND_API_URL = "https://rust-alc-api-566bls5vfq-an.a.run.app"
 
+# workers.dev はプロダクション非推奨 (Cloudflare 公式にも custom domain 推奨と明記)。
+# P4/alc-gw ファームウェアの RELAY_SIGNALING_URL に埋め込む先を安定させるため、
+# 他 Worker (auth.ippoan.org / alc.ippoan.org) と揃えて custom domain を付ける。
+[[routes]]
+pattern = "alc-signaling.ippoan.org"
+custom_domain = true
+
 # cam-room admin (ブラウザ) 接続の Google ログイン JWT を auth-worker /auth/introspect
 # で検証するための service binding (cf-alc-recorder/src/auth.ts と同パターン、Refs alc-app#129)。
 [[services]]
