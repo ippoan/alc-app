@@ -119,12 +119,17 @@ export class CameraSignalingRoom extends DurableObject {
     }
   }
 
-  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+  async webSocketClose(ws: WebSocket, _code: number, _reason: string): Promise<void> {
+    // ws は runtime 側で既に close 済み (このハンドラが呼ばれる契機そのもの)。
+    // 再度 ws.close() を呼ぶと、abrupt disconnect (ページリロード等) で
+    // client 側が返す予約コード (1005 "No Status Received" 等) をそのまま
+    // 渡すことになり InvalidAccessError で例外になる。例外になると DO 側の
+    // タグ解除が完了せず、再接続が「role already connected」(409) で
+    // 弾かれ続けるゾンビ状態になっていた。
     const role = this.getRole(ws);
     if (role) {
       this.notifyPeer(role, { type: 'peer_left', role });
     }
-    ws.close(code, reason);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
@@ -132,7 +137,6 @@ export class CameraSignalingRoom extends DurableObject {
     if (role) {
       this.notifyPeer(role, { type: 'peer_left', role });
     }
-    ws.close(1011, 'WebSocket error');
   }
 
   private getRole(ws: WebSocket): ClientRole | null {

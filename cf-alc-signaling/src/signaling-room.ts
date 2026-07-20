@@ -116,7 +116,13 @@ export class SignalingRoom extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
+  // ws は runtime 側で既に close 済み (このハンドラが呼ばれる契機そのもの)。
+  // 再度 ws.close() を呼ぶと、abrupt disconnect (ページリロード等) で client
+  // 側が返す予約コード (1005 "No Status Received" 等) をそのまま渡すことに
+  // なり InvalidAccessError で例外になる。例外になると DO 側のタグ解除が
+  // 完了せず、再接続が「role already connected」(409) で弾かれ続ける
+  // ゾンビ状態になっていた (ippoan/alc-app cam-room で実機検証中に発覚)。
+  async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
     const role = this.getRole(ws);
     if (role) {
       this.notifyPeer(role, { type: 'peer_left', role });
@@ -126,7 +132,6 @@ export class SignalingRoom extends DurableObject<Env> {
         if (roomId) await this.registryRequest('DELETE', roomId);
       }
     }
-    ws.close(code, reason);
   }
 
   async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
@@ -138,7 +143,6 @@ export class SignalingRoom extends DurableObject<Env> {
         if (roomId) await this.registryRequest('DELETE', roomId);
       }
     }
-    ws.close(1011, 'WebSocket error');
   }
 
   /** Get the role tag attached to a WebSocket */
