@@ -109,14 +109,15 @@ export function useWebRtc(role: 'device' | 'admin') {
     sendSignaling({ type: 'sdp_offer', sdp: offer.sdp! })
   }
 
-  /** シグナリングサーバーに接続 */
-  async function connect(signalingUrl: string, roomId: string) {
+  /** シグナリングサーバーに接続。token は cam-room 等サーバー側で認証を要求する path 向け (省略可) */
+  async function connect(signalingUrl: string, roomId: string, path: 'room' | 'cam-room' = 'room', token?: string) {
     error.value = null
     disconnect()
 
     createPeerConnection()
 
-    const url = `${signalingUrl}/room/${roomId}?role=${role}`
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+    const url = `${signalingUrl}/${path}/${roomId}?role=${role}${tokenParam}`
     ws = new WebSocket(url)
 
     ws.onopen = () => {

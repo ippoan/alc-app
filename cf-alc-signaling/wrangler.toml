@@ -14,6 +14,19 @@ head_sampling_rate = 1
 [vars]
 BACKEND_API_URL = "https://rust-alc-api-566bls5vfq-an.a.run.app"
 
+# cam-room admin (ブラウザ) 接続の Google ログイン JWT を auth-worker /auth/introspect
+# で検証するための service binding (cf-alc-recorder/src/auth.ts と同パターン、Refs alc-app#129)。
+[[services]]
+binding = "AUTH_WORKER"
+service = "auth-worker"
+
+# /auth/introspect の consumer proof。cf-alc-recorder / web/ の kiosk proxy と同じ
+# CF Secrets Store entry を物理共有 (新規 secret ではない)。
+[[secrets_store_secrets]]
+binding = "INTERNAL_SHARED_SECRET"
+store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
+secret_name = "INTERNAL_SHARED_SECRET"
+
 [durable_objects]
 bindings = [
   { name = "SIGNALING_ROOM", class_name = "SignalingRoom" },

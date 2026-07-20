@@ -93,6 +93,20 @@ describe('useWebRtc', () => {
     expect(rtc.isConnected.value).toBe(true)
   })
 
+  it('connect: path="cam-room" 指定で /cam-room/:siteId に接続する', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'site-1', 'cam-room')
+    const ws = getWs()
+    expect(ws.url).toBe('wss://sig.example.com/cam-room/site-1?role=admin')
+  })
+
+  it('connect: token 指定時は &token=... がURLに付与される', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'site-1', 'cam-room', 'jwt.abc def')
+    const ws = getWs()
+    expect(ws.url).toBe('wss://sig.example.com/cam-room/site-1?role=admin&token=jwt.abc%20def')
+  })
+
   it('connect: onopen で ping timer が開始される', async () => {
     const rtc = useWebRtc('admin')
     await rtc.connect('wss://sig.example.com', 'room-1')
