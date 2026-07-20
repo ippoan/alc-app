@@ -44,16 +44,36 @@ class MockRTCPeerConnection {
   iceGatheringState = 'new'
   iceConnectionState = 'new'
   signalingState = 'stable'
+  localDescription: any = null
+
+  private gatheringListeners: Array<() => void> = []
 
   createOffer = vi.fn().mockResolvedValue({ type: 'offer', sdp: 'mock-offer-sdp' })
   createAnswer = vi.fn().mockResolvedValue({ type: 'answer', sdp: 'mock-answer-sdp' })
-  setLocalDescription = vi.fn().mockResolvedValue(undefined)
+  setLocalDescription = vi.fn(async (desc: any) => { this.localDescription = desc })
   setRemoteDescription = vi.fn().mockResolvedValue(undefined)
   addIceCandidate = vi.fn().mockResolvedValue(undefined)
   addTrack = vi.fn()
   getSenders = vi.fn().mockReturnValue([])
   getStats = vi.fn().mockResolvedValue(new Map())
   close = vi.fn()
+
+  addEventListener = vi.fn((type: string, listener: () => void) => {
+    if (type === 'icegatheringstatechange') this.gatheringListeners.push(listener)
+  })
+
+  removeEventListener = vi.fn((type: string, listener: () => void) => {
+    if (type === 'icegatheringstatechange') {
+      this.gatheringListeners = this.gatheringListeners.filter(l => l !== listener)
+    }
+  })
+
+  /** テストヘルパー: iceGatheringState を変更し on* ハンドラ + addEventListener 登録分の両方に通知する */
+  setIceGatheringState(state: string) {
+    this.iceGatheringState = state
+    this.onicegatheringstatechange?.()
+    for (const listener of [...this.gatheringListeners]) listener()
+  }
 
   constructor(_config?: any) {
     pcInstances.push(this)
@@ -217,6 +237,83 @@ describe('useWebRtc', () => {
     expect(pc.setRemoteDescription).toHaveBeenCalledWith({ type: 'offer', sdp: 'remote-offer-sdp' })
     expect(pc.createAnswer).toHaveBeenCalled()
     expect(pc.setLocalDescription).toHaveBeenCalledWith({ type: 'answer', sdp: 'mock-answer-sdp' })
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sdp_answer', sdp: 'mock-answer-sdp' }))
+  })
+
+  // --- non-trickle peer (path='cam-room') 向け: ICE gathering 完了を待ってから answer 送信 ---
+
+  it('cam-room 接続時: ICE gathering 完了を待ってから answer を送信する (候補embed済みのlocalDescriptionを使う)', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'site-1', 'cam-room')
+    const ws = getWs()
+    const pc = getPc()
+    ws.onopen?.()
+    ws.send.mockClear()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'remote-offer-sdp' }) } as any)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // gathering 未完了のうちは answer を送らない
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('sdp_answer'))
+
+    // 'gathering' への遷移 (complete 以外) では待ち続ける (onChange の else 分岐)
+    pc.setIceGatheringState('gathering')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('sdp_answer'))
+
+    // 候補が追記された状態を模して localDescription を更新してから gathering 完了を通知
+    pc.localDescription = { type: 'answer', sdp: 'mock-answer-sdp\r\na=candidate:1 ...\r\n' }
+    pc.setIceGatheringState('complete')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'sdp_answer',
+      sdp: 'mock-answer-sdp\r\na=candidate:1 ...\r\n',
+    }))
+  })
+
+  it('cam-room 接続時: gathering が既に complete なら即座に answer を送信する', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'site-1', 'cam-room')
+    const ws = getWs()
+    const pc = getPc()
+    ws.onopen?.()
+    pc.iceGatheringState = 'complete'
+    ws.send.mockClear()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'remote-offer-sdp' }) } as any)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sdp_answer', sdp: 'mock-answer-sdp' }))
+  })
+
+  it('cam-room 接続時: gathering がタイムアウトしても、その時点のlocalDescriptionで送信する', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'site-1', 'cam-room')
+    const ws = getWs()
+    const pc = getPc()
+    ws.onopen?.()
+    ws.send.mockClear()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'remote-offer-sdp' }) } as any)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // gathering を complete にしないままタイムアウトまで進める
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sdp_answer', sdp: 'mock-answer-sdp' }))
+  })
+
+  it('room (通常) 接続時: gathering を待たず即座に answer を送信する', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'room-1') // path='room' (既定)
+    const ws = getWs()
+    ws.onopen?.()
+    ws.send.mockClear()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'remote-offer-sdp' }) } as any)
+    await vi.advanceTimersByTimeAsync(0)
+
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sdp_answer', sdp: 'mock-answer-sdp' }))
   })
 
