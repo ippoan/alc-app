@@ -35,6 +35,9 @@ export const DEVICE_ROLE_HUB = "device-hub";
 /** AtomS3 印刷ブリッジ role (ippoan/alc-app-s3#38。下り print/ota command の待受に WS 接続する)。 */
 export const DEVICE_ROLE_PRINT = "device-print";
 
+/** P4 GW (Unit PoE-P4) role (ippoan/alc-gw-p4#15。下り version/ota command の待受に WS 接続する)。 */
+export const DEVICE_ROLE_GATEWAY = "device-gateway";
+
 /**
  * recorder への接続を許可する device role の allowlist。
  * kiosk / uploader 等の他 role は従来どおり 403 (blast radius 分離) —
@@ -43,6 +46,7 @@ export const DEVICE_ROLE_PRINT = "device-print";
 export const RECORDER_DEVICE_ROLES: ReadonlySet<string> = new Set([
   DEVICE_ROLE_HUB,
   DEVICE_ROLE_PRINT,
+  DEVICE_ROLE_GATEWAY,
 ]);
 
 /** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
