@@ -1,7 +1,11 @@
 <script setup lang="ts">
+import { isClient } from '~/utils/env'
+
 const config = useRuntimeConfig()
 const { accessToken } = useAuth()
 const webRtc = useWebRtc('admin')
+
+const SITE_ID_STORAGE_KEY = 'alc_camera_site_id'
 
 const siteIdInput = ref('')
 const connectedSiteId = ref<string | null>(null)
@@ -32,6 +36,9 @@ async function startViewing() {
     connectError.value = 'ログインセッションが見つかりません。再ログインしてください。'
     return
   }
+
+  // デバッグ用: 次回このページを開いた時に site_id を再入力しなくて済むように保存
+  if (isClient) localStorage.setItem(SITE_ID_STORAGE_KEY, siteId)
 
   if (isViewActive.value) {
     webRtc.disconnect()
@@ -66,6 +73,10 @@ watch(() => webRtc.remoteStream.value, (stream) => {
 })
 
 onMounted(() => {
+  if (isClient) {
+    const saved = localStorage.getItem(SITE_ID_STORAGE_KEY)
+    if (saved) siteIdInput.value = saved
+  }
   document.addEventListener('fullscreenchange', () => {
     isFullscreen.value = !!document.fullscreenElement
   })

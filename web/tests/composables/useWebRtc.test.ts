@@ -37,7 +37,13 @@ class MockRTCPeerConnection {
   onicecandidate: any = null
   ontrack: any = null
   onconnectionstatechange: any = null
+  onicegatheringstatechange: any = null
+  oniceconnectionstatechange: any = null
+  onsignalingstatechange: any = null
   connectionState = 'new'
+  iceGatheringState = 'new'
+  iceConnectionState = 'new'
+  signalingState = 'stable'
 
   createOffer = vi.fn().mockResolvedValue({ type: 'offer', sdp: 'mock-offer-sdp' })
   createAnswer = vi.fn().mockResolvedValue({ type: 'answer', sdp: 'mock-answer-sdp' })
@@ -46,6 +52,7 @@ class MockRTCPeerConnection {
   addIceCandidate = vi.fn().mockResolvedValue(undefined)
   addTrack = vi.fn()
   getSenders = vi.fn().mockReturnValue([])
+  getStats = vi.fn().mockResolvedValue(new Map())
   close = vi.fn()
 
   constructor(_config?: any) {
@@ -499,6 +506,94 @@ describe('useWebRtc', () => {
 
     pc.ontrack?.({ streams: [] } as any)
     expect(rtc.remoteStream.value).toBeNull()
+  })
+
+  // --- pc.onicegatheringstatechange / oniceconnectionstatechange / onsignalingstatechange ---
+
+  it('pc.onicegatheringstatechange → ログのみ (例外にならない)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const pc = getPc()
+
+    pc.iceGatheringState = 'gathering'
+    expect(() => pc.onicegatheringstatechange?.()).not.toThrow()
+  })
+
+  it('pc.oniceconnectionstatechange → ログのみ (例外にならない)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const pc = getPc()
+
+    pc.iceConnectionState = 'checking'
+    expect(() => pc.oniceconnectionstatechange?.()).not.toThrow()
+  })
+
+  it('pc.onsignalingstatechange → ログのみ (例外にならない)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const pc = getPc()
+
+    pc.signalingState = 'have-local-offer'
+    expect(() => pc.onsignalingstatechange?.()).not.toThrow()
+  })
+
+  // --- 統計ログ (startStatsLogging / stopStatsLogging) ---
+
+  it('ontrack 後、5秒ごとに getStats が呼ばれ inbound-rtp video を集計する', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const pc = getPc()
+
+    const statsReport = new Map([
+      ['rtp1', {
+        type: 'inbound-rtp', kind: 'video', bytesReceived: 1000,
+        framesDecoded: 10, framesDropped: 0, packetsLost: 0, jitter: 0.01,
+      }],
+      // video 以外 / inbound-rtp 以外は集計対象外 (if 分岐の else 相当を踏む)
+      ['rtp2', { type: 'inbound-rtp', kind: 'audio', bytesReceived: 500 }],
+    ])
+    pc.getStats.mockResolvedValue(statsReport)
+
+    pc.ontrack?.({ streams: [{ id: 's1' } as any as MediaStream] } as any)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(pc.getStats).toHaveBeenCalled()
+
+    // 2回目: bytesReceived の差分 (delta) 計算分岐も踏む
+    statsReport.set('rtp1', { ...statsReport.get('rtp1'), bytesReceived: 2000 } as any)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(pc.getStats).toHaveBeenCalledTimes(2)
+  })
+
+  it('pc が null になった後の統計tick → getStats を呼ばず早期return', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const pc = getPc()
+
+    pc.ontrack?.({ streams: [{ id: 's1' } as any as MediaStream] } as any)
+    rtc.disconnect() // pc=null, かつ stopStatsLogging でタイマー自体もクリアされる
+
+    // タイマーは止まっているはずなので getStats はこれ以上増えない
+    const callsBefore = pc.getStats.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(pc.getStats.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('onconnectionstatechange: failed で統計タイマーも停止する (2回目の failed でも安全)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const pc = getPc()
+
+    pc.ontrack?.({ streams: [{ id: 's1' } as any as MediaStream] } as any)
+    pc.connectionState = 'failed'
+    pc.onconnectionstatechange?.()
+
+    const callsAtFail = pc.getStats.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(pc.getStats.mock.calls.length).toBe(callsAtFail)
+
+    // 既にタイマーが無い状態で再度 failed → stopStatsLogging の if(statsTimer) が false 分岐
+    expect(() => pc.onconnectionstatechange?.()).not.toThrow()
   })
 
   // --- pc.onconnectionstatechange ---
