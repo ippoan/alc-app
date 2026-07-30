@@ -26,9 +26,13 @@ export default defineNuxtConfig({
     preset: 'cloudflare_module',
   },
 
+  // chunk load 失敗 (immutable キャッシュされた `/_nuxt/*.js` の 404) からの自動復旧。
+  // `experimental.emitRouteChunkError = 'manual'` と transpile 登録も module 側が行う
+  // ので consumer は 1 行で済む (Refs ippoan/auth-worker#452)。
   modules: [
     '@nuxtjs/tailwindcss',
     '@vite-pwa/nuxt',
+    '@ippoan/auth-client/module',
   ],
 
   vite: {
