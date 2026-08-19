@@ -11,6 +11,7 @@ export interface MeasurementInput {
   seq?: unknown;
   recorded_at_ms?: unknown;
   kind?: unknown;
+  session_id?: unknown;
   payload?: unknown;
 }
 
@@ -19,7 +20,32 @@ export interface ParsedMeasurement {
   seq: number;
   kind: string;
   recorded_at_ms: number | null;
+  /** 1 回の点呼を束ねる端末発番の識別子。点呼外の単発計測では null。 */
+  session_id: string | null;
   payload: Record<string, unknown>;
+}
+
+/** session_id の長さ上限 (rust-alc-api の MAX_SESSION_ID_LEN と一致)。 */
+const MAX_SESSION_ID_LEN = 64;
+
+/** rust 側 `valid_session_id` と同じ字種。端末発番の短い文字列だけを通す。 */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * session_id を正規化する (Refs ippoan/alc-app-s3#112)。
+ *
+ * **不正値は測定ごと弾かず null に落とす。** session_id は付加情報で、これを理由に
+ * 測定を落とすと点呼の記録そのものを失うため (損害が大きい方を避ける)。落とした
+ * ことが後から追えるよう log を 1 行残す。上流の rust-alc-api も同じ制約で 400 を
+ * 返すが、あちらは本 worker 以外の経路に対する多層防御として残す。
+ */
+export function normalizeSessionId(value: unknown, seq: number): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.length <= MAX_SESSION_ID_LEN && SESSION_ID_RE.test(value)) {
+    return value;
+  }
+  console.log(`[measurement] dropped invalid session_id seq=${seq}`);
+  return null;
 }
 
 export type ParseMeasurementResult =
@@ -34,6 +60,7 @@ export type ParseMeasurementResult =
  * - kind: トップレベル優先、無ければ ble-medical-gateway 互換 JSON の `payload.type` に
  *   fallback。enum 検証は rust 側 (source of truth) に任せ、ここでは空でないことだけ確認
  * - recorded_at_ms: 数値以外は null (サーバ受信時刻扱いは rust 側)
+ * - session_id: 字種・長さが外れたら測定ごと弾かず null に落とす (normalizeSessionId)
  */
 export function parseMeasurementItem(msg: MeasurementInput): ParseMeasurementResult {
   const seq = msg.seq;
@@ -60,7 +87,16 @@ export function parseMeasurementItem(msg: MeasurementInput): ParseMeasurementRes
     typeof msg.recorded_at_ms === "number" && Number.isFinite(msg.recorded_at_ms)
       ? msg.recorded_at_ms
       : null;
-  return { ok: true, item: { seq, kind, recorded_at_ms: recordedAtMs, payload } };
+  return {
+    ok: true,
+    item: {
+      seq,
+      kind,
+      recorded_at_ms: recordedAtMs,
+      session_id: normalizeSessionId(msg.session_id, seq),
+      payload,
+    },
+  };
 }
 
 /**
@@ -191,6 +227,7 @@ export async function forwardMeasurements(
     kind: item.kind,
     seq: item.seq,
     recorded_at_ms: item.recorded_at_ms,
+    session_id: item.session_id,
     payload: item.payload,
   }));
   let res: Response;

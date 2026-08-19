@@ -13,7 +13,7 @@ import {
  * RecorderHub — テナント単位の Durable Object (Hibernatable WebSockets)。
  *
  * 上り (CoreS3 → server):
- *   - `{ type: "measurement", seq, recorded_at_ms?, kind?, payload }`
+ *   - `{ type: "measurement", seq, recorded_at_ms?, kind?, session_id?, payload }`
  *       → auth-worker `/alc-internal-proxy` 経由で rust-alc-api
  *         `POST /api/hub/measurements` へ転送 → `{ type: "ack", seq }` を返す。
  *       転送失敗時は `{ type: "error", seq, message }` (端末は同じ seq で再送する。
@@ -51,6 +51,7 @@ interface InboundMessage {
   type?: unknown;
   seq?: unknown;
   recorded_at_ms?: unknown;
+  session_id?: unknown;
   kind?: unknown;
   payload?: unknown;
   id?: unknown;
