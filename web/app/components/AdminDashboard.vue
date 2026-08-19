@@ -25,7 +25,7 @@ function disconnectRtc() {
   isRtcActive.value = false
 }
 
-type TabKey = 'employees' | 'license' | 'queue' | 'webhooks' | 'tenko_call' | 'camera' | 'site_camera' | 'timecard' | 'devices'
+type TabKey = 'employees' | 'license' | 'queue' | 'webhooks' | 'tenko_call' | 'camera' | 'site_camera' | 'timecard' | 'devices' | 'hub_measurements'
 const activeTab = ref<TabKey>('employees')
 const cameraActive = computed(() => activeTab.value === 'camera')
 </script>
@@ -45,6 +45,7 @@ const cameraActive = computed(() => activeTab.value === 'camera')
             { key: 'site_camera', label: '拠点カメラ' },
             { key: 'timecard', label: 'タイムカード' },
             { key: 'devices', label: 'デバイス管理' },
+            { key: 'hub_measurements', label: 'ハブ測定値' },
           ]"
           :key="tab.key"
           class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
@@ -91,6 +92,11 @@ const cameraActive = computed(() => activeTab.value === 'camera')
 
       <div v-if="activeTab === 'devices'">
         <DeviceRegistrationManager />
+      </div>
+
+      <!-- CoreS3 統合ハブ (alc-app-s3) の測定値 (Refs ippoan/rust-alc-api#592) -->
+      <div v-if="activeTab === 'hub_measurements'">
+        <HubMeasurementsViewer />
       </div>
 
       <div v-if="activeTab === 'camera'" class="space-y-4">

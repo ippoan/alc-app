@@ -4,7 +4,7 @@ export default defineNuxtRouteMiddleware((to) => {
   const config = useRuntimeConfig()
   if (config.public.stagingTenantId) return
 
-  const protectedPaths = ['/register', '/maintenance', '/hub-measurements']
+  const protectedPaths = ['/register', '/maintenance']
 
   if (!protectedPaths.some(p => to.path.startsWith(p))) {
     return // 測定ページ・ログインページは認証不要
