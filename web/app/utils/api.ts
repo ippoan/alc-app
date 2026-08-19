@@ -20,6 +20,8 @@ import type {
   DailyHealthResponse, VehicleCategories,
   GuidanceRecord, CreateGuidanceRecord, GuidanceRecordsResponse, GuidanceRecordAttachment,
   CommunicationItem, CreateCommunicationItem, CommunicationItemsResponse,
+  // Hub measurements (CoreS3 統合ハブ)
+  HubMeasurementsResponse,
 } from '~/types'
 import { createAuthFetch } from '@ippoan/auth-client'
 
@@ -1027,4 +1029,25 @@ export async function updateCommunicationItem(id: string, data: Partial<Communic
 
 export async function deleteCommunicationItem(id: string): Promise<void> {
   await request<void>(`/api/communication-items/${id}`, { method: 'DELETE' })
+}
+
+// --- Hub measurements (CoreS3 統合ハブ、Refs ippoan/rust-alc-api#592) ---
+
+/**
+ * CoreS3 ハブ測定の一覧。並びは `created_at DESC` 固定。
+ *
+ * `from` / `to` は `created_at` に対する閉区間 (端末計時 `recorded_at` は時計未同期で
+ * null になり得るため基準に使わない)。`limit` は backend が 1〜200 に clamp し、
+ * 実際に適用された値がレスポンスの `limit` に入る。総件数は返らないので、
+ * 次ページの有無は `has_more` を見る。
+ */
+export async function listHubMeasurements(filter: {
+  device_id?: string
+  kind?: string
+  from?: string
+  to?: string
+  limit?: number
+  offset?: number
+} = {}): Promise<HubMeasurementsResponse> {
+  return request<HubMeasurementsResponse>(`/api/hub/measurements${toParams(filter)}`)
 }

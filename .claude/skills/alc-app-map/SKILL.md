@@ -32,7 +32,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 
 | 区画 | 主要ファイル | 役割 |
 |---|---|---|
-| **pages** | `web/app/pages/{index,tenko,login,register,device-claim,device-approve,maintenance}.vue` + `pages/auth/` | 測定 / 点呼 / 認証 / デバイス登録承認 |
+| **pages** | `web/app/pages/{index,tenko,login,register,device-claim,device-approve,maintenance,hub-measurements}.vue` + `pages/auth/` | 測定 / 点呼 / 認証 / デバイス登録承認 / ハブ測定値ビューア。`hub-measurements.vue` は CoreS3 統合ハブ (alc-app-s3) が cf-alc-recorder 経由で溜めた測定を `GET /api/hub/measurements` (Refs ippoan/rust-alc-api#592) から読む閲覧専用ページ — 絞り込みは device_id / kind / 受信日時 (`created_at` の閉区間) で、並びは backend 固定の `created_at DESC`。**総件数は API が返さない** (ingest テーブルが伸び続けるため) ので、ページャは `has_more` + offset だけで組んである。`payload` は JSONB 素通しなので既定は畳んで JSON 表示。admin 認証必須 (`middleware/auth.global.ts` の protectedPaths) |
 | **composables (デバイス I/O)** | `useFc1200Serial.ts` (WebSerial) `useNfcWebSocket.ts` `useBleGateway.ts` `useSerialDeviceManager.ts` `useCamera.ts` | FC-1200 シリアル / NFC WS / BLE / シリアル管理 / カメラ。`useFc1200Serial.autoConnect` / `useBleGateway.startAutoConnect` は serial ポート 0 件が続くと `ws://127.0.0.1:{9878,9877}` の WS ブリッジ (alc-gw / Android) へ自動フォールバック (#123) |
 | **composables (顔認証)** | `useFaceAuth.ts` `useFaceDetection.ts` `useFaceSync.ts` `useFingerprint.ts` | 顔検出 (Web Worker) / 同期 / 指紋 |
 | **composables (点呼/通話)** | `useWebRtc.ts` `useTenkoKiosk.ts` `useTenkoAdmin.ts` `useScreenShare.ts` `useVideoRecorder.ts` | WebRTC 通話 / 点呼キオスク / 管理者 / 画面共有 / 録画 |
