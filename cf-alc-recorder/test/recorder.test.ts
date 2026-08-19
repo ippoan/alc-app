@@ -169,6 +169,54 @@ describe("measurement → ingest 転送 → ack", () => {
     expect((item.payload as Record<string, unknown>).value).toBe(36.5);
   });
 
+  it("session_id はトップレベルで素通しされ、不正値は測定を落とさず null になる", async () => {
+    // Refs ippoan/alc-app-s3#112 — 1 回の点呼を束ねる端末発番の識別子。
+    const { ws, messages } = await connectAccepted("hub-token-1");
+    openSockets.push(ws);
+
+    // 正常値はそのまま転送される
+    ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 20,
+        kind: "alcohol",
+        session_id: "s-42_7",
+        payload: { value: 0.0 },
+      }),
+    );
+    expect(await messages.next()).toEqual({ type: "ack", seq: 20 });
+
+    // 字種が外れた値: 測定は通し、session_id だけ null に落とす
+    // (session_id を理由に測定を捨てると点呼の記録そのものを失うため)
+    ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 21,
+        kind: "alcohol",
+        session_id: "bad id/x",
+        payload: { value: 0.0 },
+      }),
+    );
+    expect(await messages.next()).toEqual({ type: "ack", seq: 21 });
+
+    // 未指定 (旧ファーム / 点呼外の単発計測) は null
+    ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 22,
+        kind: "temperature",
+        payload: { value: 36.5 },
+      }),
+    );
+    expect(await messages.next()).toEqual({ type: "ack", seq: 22 });
+
+    const calls = await spyIngest();
+    const bySeq = new Map(calls.flatMap((c) => c.items).map((i) => [i.seq, i]));
+    expect(bySeq.get(20)?.session_id).toBe("s-42_7");
+    expect(bySeq.get(21)?.session_id).toBeNull();
+    expect(bySeq.get(22)?.session_id).toBeNull();
+  });
+
   it("同じ seq の再送も ack される (重複排除は rust 側 UNIQUE で冪等)", async () => {
     const { ws, messages } = await connectAccepted("hub-token-1");
     openSockets.push(ws);
