@@ -54,6 +54,8 @@ import {
   listCommunicationItems, getActiveCommunicationItems, createCommunicationItem, updateCommunicationItem, deleteCommunicationItem,
   // TenkoCall admin (#434 step 3d)
   getTenkoCallNumbers, addTenkoCallNumber, deleteTenkoCallNumber, getTenkoCallDrivers,
+  // Hub measurements (CoreS3 統合ハブ、Refs ippoan/rust-alc-api#592)
+  listHubMeasurements,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -649,6 +651,7 @@ describe('api', () => {
       ['listGuidanceRecords', () => listGuidanceRecords({}), '/api/guidance-records'],
       ['listCommunicationItems', () => listCommunicationItems({}), '/api/communication-items'],
       ['getDtakoDailyHours', () => getDtakoDailyHours({}), '/api/daily-hours'],
+      ['listHubMeasurements', () => listHubMeasurements(), '/api/hub/measurements'],
     ] as [string, () => Promise<unknown>, string][])(
       '%s({}) → GET %s',
       async (_name, fn, expectedPath) => {
@@ -657,6 +660,25 @@ describe('api', () => {
         assertMock(() => { expect(mockFetch.mock.calls[0][0]).toBe(`https://api.example.com${expectedPath}`) })
       },
     )
+
+    it('listHubMeasurements with filter', async () => {
+      await verifyApi(() => listHubMeasurements({
+        device_id: 'hub-dev-1',
+        kind: 'alcohol',
+        from: '2026-08-01T00:00:00.000Z',
+        to: '2026-08-31T23:59:59.000Z',
+        limit: 50,
+        offset: 50,
+      }))
+      assertMock(() => {
+        const url = String(mockFetch.mock.calls[0][0])
+        expect(url).toContain('/api/hub/measurements?')
+        expect(url).toContain('device_id=hub-dev-1')
+        expect(url).toContain('kind=alcohol')
+        expect(url).toContain('limit=50')
+        expect(url).toContain('offset=50')
+      })
+    })
 
     it('listTimecardCards without employeeId', async () => {
       await verifyApi(() => listTimecardCards(), [])

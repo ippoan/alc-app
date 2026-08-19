@@ -1123,6 +1123,39 @@ export interface DtakoDailyHoursResponse {
   per_page: number
 }
 
+// --- Hub measurements (CoreS3 統合ハブ、Refs ippoan/rust-alc-api#592) ---
+
+/** `GET /api/hub/measurements` の 1 行。`payload` は JSONB 素通し (kind 別の型付けは別 issue)。 */
+export interface HubMeasurement {
+  id: string
+  tenant_id: string
+  device_id: string
+  /** temperature / blood_pressure / alcohol / fc1200_raw */
+  kind: string
+  payload: unknown
+  seq: number
+  /** 端末計時。時計未同期端末では null */
+  recorded_at: string | null
+  /** サーバ受信時刻。一覧の並び順・期間絞り込みはこの列が基準 */
+  created_at: string
+}
+
+/**
+ * `GET /api/hub/measurements` のレスポンス。
+ * 総件数は返らない (ingest テーブルが伸び続けるため) ので、次ページの有無は
+ * `has_more` で判断する。
+ */
+export interface HubMeasurementsResponse {
+  items: HubMeasurement[]
+  /** 実際に適用された limit (backend で clamp 済み) */
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
+/** 受理される測定種別 (backend の HUB_MEASUREMENT_KINDS と一致。allowlist 外は 400)。 */
+export const HUB_MEASUREMENT_KINDS = ['temperature', 'blood_pressure', 'alcohol', 'fc1200_raw'] as const
+
 // --- ts-rs 自動生成型 (Rust backend → TypeScript) ---
 // `cargo test -p alc-core --features ts-export --test export_ts` で再生成
 // 段階的に手動型からの移行を進める。まずは Backend prefix 付きで参照可能にする。
