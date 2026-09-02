@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { ApiEmployee, NfcLicenseReadEvent } from '~/types'
-import { getEmployees, updateEmployeeLicense, updateEmployeeNfcId } from '~/utils/api'
+import type { ApiEmployee, DriverMasterSyncResult, NfcLicenseReadEvent } from '~/types'
+import { getEmployees, runDriverMasterSync, updateEmployeeLicense, updateEmployeeNfcId } from '~/utils/api'
 import {
   parseLicenseIssueDate,
   parseLicenseExpiryDate,
@@ -124,6 +124,35 @@ async function fetchData() {
   }
 }
 
+// theearth 乗務員マスタ同期 (Refs ippoan/alc-app-s3#125)。免許の交付日・有効期限の正は
+// theearth 側で、relay が cron で流している。管理者が今すぐ回して結果を見るためのボタン。
+const isSyncing = ref(false)
+const syncResult = ref<DriverMasterSyncResult | null>(null)
+// server route (server/api/driver-master/run.post.ts) は role=admin 以外を 403 にする。
+// 押してから 403 を見せるより先に分かるよう、viewer にはボタンを disabled で出す
+// (最終判定は route 側。ここは表示だけ)。
+const { user } = useAuth()
+const canSyncDriverMaster = computed(() => user.value?.role === 'admin')
+
+async function handleDriverMasterSync() {
+  isSyncing.value = true
+  error.value = null
+  syncResult.value = null
+  try {
+    syncResult.value = await runDriverMasterSync()
+    // 免許日付が入った行が増えるので一覧を再読込
+    await fetchData()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '同期エラー'
+  } finally {
+    isSyncing.value = false
+  }
+}
+
+function syncStatusLabel(status: number): string {
+  return status === 200 ? '成功' : `HTTP ${status}`
+}
+
 function statusLabel(status: LicenseExpiryStatus | null): string {
   switch (status) {
     case 'valid': return '有効'
@@ -166,12 +195,61 @@ onMounted(() => {
             NFC {{ isConnected ? '接続中' : '未接続' }}
           </span>
           <button
+            :disabled="isSyncing || !canSyncDriverMaster"
+            :title="canSyncDriverMaster ? '' : '管理者のみ'"
+            class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            @click="handleDriverMasterSync"
+          >
+            {{ isSyncing ? '同期中...' : 'theearth から乗務員マスタを同期' }}
+          </button>
+          <button
             class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors"
             @click="fetchData"
           >
             更新
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- 乗務員マスタ同期の結果 (comp = theearth の会社 ごと) -->
+    <div v-if="syncResult" class="bg-white rounded-xl p-4 shadow-sm mb-4 text-sm">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium text-gray-800">乗務員マスタ同期の結果</span>
+        <button class="text-xs text-gray-500 hover:text-gray-700" @click="syncResult = null">閉じる</button>
+      </div>
+      <div v-if="syncResult.results.length === 0" class="text-gray-500">
+        同期対象の会社がありません
+      </div>
+      <div v-for="r in syncResult.results" :key="r.comp_id" class="border-t border-gray-100 py-2">
+        <div class="flex items-center gap-4">
+          <span class="font-mono text-gray-800">comp {{ r.comp_id }}</span>
+          <span
+            class="inline-block px-2 py-0.5 rounded-full text-xs font-medium"
+            :class="r.status === 200 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
+          >
+            {{ syncStatusLabel(r.status) }}
+          </span>
+          <template v-if="!r.error">
+            <span>作成: <strong class="text-gray-800">{{ r.created ?? '-' }}</strong></span>
+            <span>更新: <strong class="text-gray-800">{{ r.updated ?? '-' }}</strong></span>
+          </template>
+          <span v-if="r.error" class="text-red-700">{{ r.error }}</span>
+        </div>
+        <table v-if="r.skipped && r.skipped.length > 0" class="mt-2 text-xs">
+          <thead class="text-gray-500">
+            <tr>
+              <th class="pr-4 text-left font-medium">スキップした社員番号</th>
+              <th class="text-left font-medium">理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="sk in r.skipped" :key="sk.code">
+              <td class="pr-4 font-mono text-gray-800">{{ sk.code }}</td>
+              <td class="text-amber-700">{{ sk.reason }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 

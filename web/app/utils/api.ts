@@ -22,6 +22,8 @@ import type {
   CommunicationItem, CreateCommunicationItem, CommunicationItemsResponse,
   // Hub measurements (CoreS3 統合ハブ)
   HubMeasurementsResponse,
+  // Driver master sync (Refs ippoan/alc-app-s3#125)
+  DriverMasterSyncResult,
 } from '~/types'
 import { createAuthFetch } from '@ippoan/auth-client'
 
@@ -115,10 +117,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 /** device JWT を Bearer に載せて same-origin proxy (/api/proxy) に転送する。 */
 async function proxyRequest<T>(path: string, jwt: string, options: RequestInit): Promise<T> {
-  const proxyPath = toProxyPath(path)
+  return bearerRequest<T>(toProxyPath(path), jwt, options)
+}
+
+/** JWT を Bearer に載せて same-origin URL を叩く (proxy 経路と server route 直叩きの共通部)。 */
+async function bearerRequest<T>(url: string, jwt: string, options: RequestInit): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Authorization', `Bearer ${jwt}`)
-  const res = await fetch(proxyPath, { ...options, headers })
+  const res = await fetch(url, { ...options, headers })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`API エラー (${res.status}): ${body || res.statusText}`)
@@ -328,6 +334,19 @@ export async function updateEmployeeLicense(
       license_expiry_date: licenseExpiryDate ?? null,
     }),
   })
+}
+
+/**
+ * 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
+ * rust-alc-api ではなく alc-app 自身の server route `/api/driver-master/run` を
+ * same-origin で叩く (proxy 経由にしない)。route が admin browser JWT を introspect
+ * して tenant_id を決め、dtako-scraper-relay に同期を依頼する — ここからは
+ * tenant_id を送らない (送っても route は読まない)。
+ */
+export async function runDriverMasterSync(): Promise<DriverMasterSyncResult> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<DriverMasterSyncResult>('/api/driver-master/run', jwt, { method: 'POST' })
 }
 
 /** 測定の顔写真を取得 (認証付きプロキシ経由) */
