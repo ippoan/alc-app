@@ -34,6 +34,14 @@
 			// cf-alc-recorder の内部 command endpoint に PDF チャンクを push する。
 			"binding": "RECORDER",
 			"service": "alc-recorder"
+		},
+		{
+			// 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125):
+			// server route (server/api/driver-master/run.post.ts) が nuxt-dtako-admin の
+			// dtako-scraper-relay `POST /kintai-relay/driver-master-run` を叩く。認証は
+			// X-Alc-Proxy-Secret (= 上の INTERNAL_SHARED_SECRET、relay / kyuyo-mcp と同じ entry)。
+			"binding": "SCRAPER_RELAY",
+			"service": "nuxt-dtako-admin-scraper-relay"
 		}
 	],
 	"secrets_store_secrets": [
@@ -74,6 +82,10 @@
 				{
 					"binding": "RECORDER",
 					"service": "alc-recorder-staging"
+				},
+				{
+					"binding": "SCRAPER_RELAY",
+					"service": "nuxt-dtako-admin-scraper-relay-staging"
 				}
 			],
 			"secrets_store_secrets": [

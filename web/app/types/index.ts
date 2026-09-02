@@ -1156,6 +1156,25 @@ export interface HubMeasurementsResponse {
 /** 受理される測定種別 (backend の HUB_MEASUREMENT_KINDS と一致。allowlist 外は 400)。 */
 export const HUB_MEASUREMENT_KINDS = ['temperature', 'blood_pressure', 'alcohol', 'fc1200_raw'] as const
 
+// ============================================================
+// Driver master sync (theearth 乗務員マスタ → alc employees、Refs ippoan/alc-app-s3#125)
+// ============================================================
+
+/** 1 comp (theearth の会社) 分の同期結果。`status` は relay が DO から受けた HTTP status。 */
+export interface DriverMasterSyncCompResult {
+  comp_id: string
+  status: number
+  created?: number | null
+  updated?: number | null
+  skipped?: Array<{ code: string; reason: string }>
+  error?: string
+}
+
+/** `POST /api/driver-master/run` (same-origin server route) の応答。 */
+export interface DriverMasterSyncResult {
+  results: DriverMasterSyncCompResult[]
+}
+
 // --- ts-rs 自動生成型 (Rust backend → TypeScript) ---
 // `cargo test -p alc-core --features ts-export --test export_ts` で再生成
 // 段階的に手動型からの移行を進める。まずは Backend prefix 付きで参照可能にする。

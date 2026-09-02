@@ -56,6 +56,8 @@ import {
   getTenkoCallNumbers, addTenkoCallNumber, deleteTenkoCallNumber, getTenkoCallDrivers,
   // Hub measurements (CoreS3 統合ハブ、Refs ippoan/rust-alc-api#592)
   listHubMeasurements,
+  // Driver master sync (theearth 乗務員マスタ、Refs ippoan/alc-app-s3#125)
+  runDriverMasterSync,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -1976,6 +1978,46 @@ restoreNativeApis()
       initApi(API_BASE, () => 'invalid-token')
       await expect(getEmployees()).rejects.toThrow()
     })
+  })
+})
+
+// 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
+// alc-app 自身の server route (/api/driver-master/run) を same-origin で叩くので
+// mock 専用 (live の rust-alc-api には無い)。
+describe.skipIf(isLive)('runDriverMasterSync (#125)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('admin JWT を Bearer に載せて /api/driver-master/run に POST (proxy 経由にしない・body 無し)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const payload = { results: [{ comp_id: '1', status: 200, created: 1, updated: 2, skipped: [] }] }
+    mockFetch.mockResolvedValueOnce(okJson(payload))
+    const result = await runDriverMasterSync()
+    expect(result).toEqual(payload)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/driver-master/run')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer admin-jwt')
+    expect(h.get('X-Tenant-ID')).toBeNull()
+  })
+
+  it('admin JWT が無ければ fetch せずに throw', async () => {
+    initApi(API_BASE, () => null, () => 'tid')
+    await expect(runDriverMasterSync()).rejects.toThrow('ログインが必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('route の 403 (role 不許可) は API エラーとして throw', async () => {
+    initApi(API_BASE, () => 'viewer-jwt')
+    mockFetch.mockResolvedValueOnce(errResponse(403, '乗務員マスタ同期は管理者のみ実行できます'))
+    await expect(runDriverMasterSync()).rejects.toThrow('API エラー (403): 乗務員マスタ同期は管理者のみ実行できます')
   })
 })
 
