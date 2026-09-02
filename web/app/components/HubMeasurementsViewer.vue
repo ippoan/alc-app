@@ -10,8 +10,8 @@
 //
 // 並びは backend 固定で `created_at DESC`。総件数は返らない (ingest テーブルが
 // 伸び続けるため) ので、ページャは has_more と offset だけで組む。
-import { listHubMeasurements } from '~/utils/api'
-import { HUB_MEASUREMENT_KINDS, type HubMeasurement } from '~/types'
+import { getEmployees, listHubMeasurements } from '~/utils/api'
+import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type HubMeasurement } from '~/types'
 
 const PAGE_SIZE = 50
 
@@ -25,8 +25,68 @@ const items = ref<HubMeasurement[]>([])
 const hasMore = ref(false)
 const isLoading = ref(false)
 const error = ref<string | null>(null)
-/** payload を展開している行の id。JSONB は 1 行が長いので既定は畳んでおく。 */
+/** payload を展開している行のキー。JSONB は 1 行が長いので既定は畳んでおく。 */
 const expanded = ref<Set<string>>(new Set())
+/** nfc_id → 乗務員。免許証の測定を「誰の点呼か」に読み替えるためだけに使う。
+ * 引けなくても一覧は出す (名前が出ないだけ)。 */
+const employeeByNfc = ref<Map<string, ApiEmployee>>(new Map())
+
+/** 1 回の点呼 (同じ session_id) を 1 行に畳んだもの。 */
+interface SessionRow {
+  key: string
+  /** 束ねた測定 (受信が新しい順)。 */
+  items: HubMeasurement[]
+  /** 行に出す受信日時 / デバイス (束ねた中で一番新しい測定のもの)。
+   * ★ template で `items[0]!` と書くと Vue のテンプレート式は TS ではないので
+   * 壊れる。畳む側で決めておく。 */
+  createdAt: string
+  deviceId: string
+  /** 免許証の測定。点呼を免許証から始めていなければ null。 */
+  license: { nfcId: string, issue: string | null, expiry: string | null } | null
+}
+
+/** 免許証の payload から nfc_id / 交付 / 有効期限 を取り出す (形が違えば null)。 */
+function readLicense(payload: unknown): SessionRow['license'] {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as { nfc_id?: unknown, issue?: unknown, expiry?: unknown }
+  if (typeof p.nfc_id !== 'string' || p.nfc_id === '') return null
+  return {
+    nfcId: p.nfc_id,
+    issue: typeof p.issue === 'string' ? p.issue : null,
+    expiry: typeof p.expiry === 'string' ? p.expiry : null,
+  }
+}
+
+/** `YYYYMMDD` を `YYYY-MM-DD` にする (読めない形はそのまま返す)。 */
+function formatLicenseDate(raw: string | null): string {
+  if (!raw) return '—'
+  const m = raw.match(/^(\d{4})(\d{2})(\d{2})$/)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : raw
+}
+
+/**
+ * 同じ点呼を 1 行に畳む。
+ *
+ * **`session_id` が無い測定は 1 件で 1 行**にする (点呼外の単発計測と、
+ * session_id を送っていなかった頃の行)。まとめてしまうと別々の測定が
+ * 同じ点呼に見える。並び順は API の `created_at DESC` をそのまま保つ。
+ */
+const sessions = computed<SessionRow[]>(() => {
+  const rows: SessionRow[] = []
+  const byKey = new Map<string, SessionRow>()
+  for (const item of items.value) {
+    const key = item.session_id ? `s:${item.session_id}` : `i:${item.id}`
+    let row = byKey.get(key)
+    if (!row) {
+      row = { key, items: [], createdAt: item.created_at, deviceId: item.device_id, license: null }
+      byKey.set(key, row)
+      rows.push(row)
+    }
+    row.items.push(item)
+    if (item.kind === 'license' && !row.license) row.license = readLicense(item.payload)
+  }
+  return rows
+})
 
 /** `datetime-local` の値 (ローカル時刻、TZ 無し) を API に渡す ISO 文字列にする。 */
 function toIso(local: string): string | undefined {
@@ -106,12 +166,42 @@ function formatPayload(payload: unknown): string {
 function kindClass(k: string): string {
   if (k === 'alcohol') return 'bg-amber-100 text-amber-800'
   if (k === 'fc1200_raw') return 'bg-gray-100 text-gray-600'
+  if (k === 'license') return 'bg-green-100 text-green-800'
   return 'bg-blue-100 text-blue-800'
 }
 
-const pageLabel = computed(() => `${offset.value + 1}〜${offset.value + items.value.length} 件目`)
+/** 免許証の nfc_id で引ける乗務員。引けなければ null (= alc に未登録)。 */
+function employeeOf(row: SessionRow): ApiEmployee | null {
+  return row.license ? (employeeByNfc.value.get(row.license.nfcId) ?? null) : null
+}
 
-onMounted(load)
+// ★ 畳むのは**このページに載っている測定だけ**。点呼がページ境界をまたぐと
+// 前後のページに分かれて出る (API は測定単位で offset を切るため)。件数表示に
+// 測定と点呼の両方を出して、行数と件数が合わないのを迷わせない。
+const pageLabel = computed(
+  () => `${offset.value + 1}〜${offset.value + items.value.length} 件目 (${sessions.value.length} 点呼)`,
+)
+
+/** 乗務員は一覧を 1 回だけ引いて nfc_id で索く。**失敗しても一覧は出す** —
+ * 名前が出ないことと測定が読めないことは別なので、ここでエラーにしない。 */
+async function loadEmployees() {
+  try {
+    const list = await getEmployees()
+    const map = new Map<string, ApiEmployee>()
+    for (const e of list) {
+      if (e.nfc_id) map.set(e.nfc_id, e)
+    }
+    employeeByNfc.value = map
+  }
+  catch {
+    employeeByNfc.value = new Map()
+  }
+}
+
+onMounted(() => {
+  void loadEmployees()
+  void load()
+})
 </script>
 
 <template>
@@ -189,32 +279,56 @@ onMounted(load)
           <thead class="bg-gray-50">
             <tr>
               <th class="px-2 py-2 text-left text-gray-500">受信日時</th>
-              <th class="px-2 py-2 text-left text-gray-500">端末計時</th>
               <th class="px-2 py-2 text-left text-gray-500">デバイスID</th>
+              <th class="px-2 py-2 text-left text-gray-500">乗務員</th>
+              <th class="px-2 py-2 text-left text-gray-500">免許 有効期限</th>
               <th class="px-2 py-2 text-left text-gray-500">種別</th>
-              <th class="px-2 py-2 text-right text-gray-500">seq</th>
               <th class="px-2 py-2 text-left text-gray-500">内容</th>
             </tr>
           </thead>
           <tbody>
-            <template v-for="item in items" :key="item.id">
+            <!-- 1 行 = 1 点呼 (同じ session_id)。session_id が無い測定は 1 件で 1 行。 -->
+            <template v-for="row in sessions" :key="row.key">
               <tr class="border-t border-gray-100">
-                <td class="px-2 py-2 text-gray-700 whitespace-nowrap">{{ formatDateTime(item.created_at) }}</td>
-                <td class="px-2 py-2 text-gray-500 whitespace-nowrap">{{ formatDateTime(item.recorded_at) }}</td>
-                <td class="px-2 py-2 font-mono text-gray-700">{{ item.device_id }}</td>
-                <td class="px-2 py-2">
-                  <span class="px-2 py-0.5 rounded text-xs font-medium" :class="kindClass(item.kind)">{{ item.kind }}</span>
+                <td class="px-2 py-2 text-gray-700 whitespace-nowrap">{{ formatDateTime(row.createdAt) }}</td>
+                <td class="px-2 py-2 font-mono text-gray-700">{{ row.deviceId }}</td>
+                <td class="px-2 py-2 whitespace-nowrap">
+                  <span v-if="!row.license" class="text-gray-400">—</span>
+                  <span v-else-if="employeeOf(row)" class="text-gray-700">
+                    {{ employeeOf(row)?.name }}
+                    <span class="text-gray-400 text-xs">({{ employeeOf(row)?.code || '社員番号なし' }})</span>
+                  </span>
+                  <span v-else class="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">未登録</span>
                 </td>
-                <td class="px-2 py-2 text-right text-gray-500">{{ item.seq }}</td>
+                <td class="px-2 py-2 whitespace-nowrap text-gray-700">
+                  <template v-if="row.license">
+                    {{ formatLicenseDate(row.license.expiry) }}
+                    <span class="text-gray-400 text-xs">交付 {{ formatLicenseDate(row.license.issue) }}</span>
+                  </template>
+                  <span v-else class="text-gray-400">—</span>
+                </td>
                 <td class="px-2 py-2">
-                  <button class="text-blue-600 hover:underline text-xs" @click="toggle(item.id)">
-                    {{ expanded.has(item.id) ? '閉じる' : 'JSON を表示' }}
+                  <span
+                    v-for="item in row.items"
+                    :key="item.id"
+                    class="px-2 py-0.5 mr-1 rounded text-xs font-medium"
+                    :class="kindClass(item.kind)"
+                  >{{ item.kind }}</span>
+                </td>
+                <td class="px-2 py-2">
+                  <button class="text-blue-600 hover:underline text-xs" @click="toggle(row.key)">
+                    {{ expanded.has(row.key) ? '閉じる' : `JSON を表示 (${row.items.length})` }}
                   </button>
                 </td>
               </tr>
-              <tr v-if="expanded.has(item.id)" class="bg-gray-50">
+              <tr v-if="expanded.has(row.key)" class="bg-gray-50">
                 <td colspan="6" class="px-2 py-2">
-                  <pre class="text-xs text-gray-700 overflow-x-auto">{{ formatPayload(item.payload) }}</pre>
+                  <div v-for="item in row.items" :key="item.id" class="mb-2 last:mb-0">
+                    <div class="text-xs text-gray-500">
+                      {{ item.kind }} / seq {{ item.seq }} / 端末計時 {{ formatDateTime(item.recorded_at) }}
+                    </div>
+                    <pre class="text-xs text-gray-700 overflow-x-auto">{{ formatPayload(item.payload) }}</pre>
+                  </div>
                 </td>
               </tr>
             </template>

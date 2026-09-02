@@ -1134,6 +1134,8 @@ export interface HubMeasurement {
   kind: string
   payload: unknown
   seq: number
+  /** 1 回の点呼を束ねる端末発番の識別子。点呼外の単発計測と旧データでは null */
+  session_id?: string | null
   /** 端末計時。時計未同期端末では null */
   recorded_at: string | null
   /** サーバ受信時刻。一覧の並び順・期間絞り込みはこの列が基準 */
@@ -1154,7 +1156,7 @@ export interface HubMeasurementsResponse {
 }
 
 /** 受理される測定種別 (backend の HUB_MEASUREMENT_KINDS と一致。allowlist 外は 400)。 */
-export const HUB_MEASUREMENT_KINDS = ['temperature', 'blood_pressure', 'alcohol', 'fc1200_raw'] as const
+export const HUB_MEASUREMENT_KINDS = ['temperature', 'blood_pressure', 'alcohol', 'license', 'fc1200_raw'] as const
 
 // ============================================================
 // Driver master sync (theearth 乗務員マスタ → alc employees、Refs ippoan/alc-app-s3#125)
