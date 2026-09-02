@@ -128,6 +128,11 @@ async function fetchData() {
 // theearth 側で、relay が cron で流している。管理者が今すぐ回して結果を見るためのボタン。
 const isSyncing = ref(false)
 const syncResult = ref<DriverMasterSyncResult | null>(null)
+// server route (server/api/driver-master/run.post.ts) は role=admin 以外を 403 にする。
+// 押してから 403 を見せるより先に分かるよう、viewer にはボタンを disabled で出す
+// (最終判定は route 側。ここは表示だけ)。
+const { user } = useAuth()
+const canSyncDriverMaster = computed(() => user.value?.role === 'admin')
 
 async function handleDriverMasterSync() {
   isSyncing.value = true
@@ -190,8 +195,9 @@ onMounted(() => {
             NFC {{ isConnected ? '接続中' : '未接続' }}
           </span>
           <button
-            :disabled="isSyncing"
-            class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors disabled:opacity-50"
+            :disabled="isSyncing || !canSyncDriverMaster"
+            :title="canSyncDriverMaster ? '' : '管理者のみ'"
+            class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             @click="handleDriverMasterSync"
           >
             {{ isSyncing ? '同期中...' : 'theearth から乗務員マスタを同期' }}
