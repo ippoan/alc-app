@@ -25,7 +25,7 @@ function disconnectRtc() {
   isRtcActive.value = false
 }
 
-type TabKey = 'employees' | 'license' | 'queue' | 'webhooks' | 'tenko_call' | 'camera' | 'site_camera' | 'timecard' | 'devices' | 'hub_measurements'
+type TabKey = 'employees' | 'license' | 'queue' | 'webhooks' | 'tenko_call' | 'camera' | 'site_camera' | 'timecard' | 'devices' | 'tenko' | 'hub_measurements'
 const activeTab = ref<TabKey>('employees')
 const cameraActive = computed(() => activeTab.value === 'camera')
 </script>
@@ -45,6 +45,7 @@ const cameraActive = computed(() => activeTab.value === 'camera')
             { key: 'site_camera', label: '拠点カメラ' },
             { key: 'timecard', label: 'タイムカード' },
             { key: 'devices', label: 'デバイス管理' },
+            { key: 'tenko', label: '点呼' },
             { key: 'hub_measurements', label: 'ハブ測定値' },
           ]"
           :key="tab.key"
@@ -94,7 +95,14 @@ const cameraActive = computed(() => activeTab.value === 'camera')
         <DeviceRegistrationManager />
       </div>
 
-      <!-- CoreS3 統合ハブ (alc-app-s3) の測定値 (Refs ippoan/rust-alc-api#592) -->
+      <!-- 点呼だけ (打刻を除く)。打刻は 1 タップ 1 行で数が多く、混ぜると
+           点呼が埋もれる (Refs ippoan/alc-app-s3#134) -->
+      <div v-if="activeTab === 'tenko'">
+        <HubMeasurementsViewer scope="tenko" />
+      </div>
+
+      <!-- CoreS3 統合ハブ (alc-app-s3) の測定値 (Refs ippoan/rust-alc-api#592)。
+           点呼と打刻の両方を出す「全部入り」ビュー -->
       <div v-if="activeTab === 'hub_measurements'">
         <HubMeasurementsViewer />
       </div>

@@ -15,6 +15,32 @@ import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type HubMeasurement } from '~/
 
 const PAGE_SIZE = 50
 
+/** 打刻 (NFC タイムカード端末、Refs ippoan/alc-app-s3#134) の kind。
+ * 点呼の測定と混ざると 1 行 1 タップの行が延々挟まって読めなくなるので、
+ * タブごとにどちらを見るかを決める。 */
+const KIND_TIMECARD = 'timecard'
+
+const props = withDefaults(defineProps<{
+  /**
+   * 表示する範囲。
+   * - `tenko`   … 点呼の測定だけ (打刻を除く)
+   * - `timecard`… 打刻だけ
+   * - `all`     … 両方 (既定。従来の「ハブ測定値」タブ)
+   *
+   * `timecard` は API の kind 絞り込みに載せられるが、`tenko` は「timecard 以外」
+   * という否定条件で API 側に無いので**取得後に落とす**。そのため 1 ページの
+   * 表示件数が PAGE_SIZE より少なくなることがある (次ページは has_more で辿れる)。
+   */
+  scope?: 'all' | 'tenko' | 'timecard'
+}>(), { scope: 'all' })
+
+/** 種別プルダウンに出す選択肢。範囲外の kind は選ばせない。 */
+const kindOptions = computed(() => {
+  if (props.scope === 'timecard') return [KIND_TIMECARD]
+  if (props.scope === 'tenko') return HUB_MEASUREMENT_KINDS.filter(k => k !== KIND_TIMECARD)
+  return [...HUB_MEASUREMENT_KINDS]
+})
+
 const deviceId = ref('')
 const kind = ref('')
 const from = ref('')
@@ -47,6 +73,27 @@ interface SessionRow {
   alcohol: { value: number | null, result: string | null } | null
   /** 体温 (℃)。測っていなければ null。 */
   temperature: number | null
+  /** 打刻 (kind=timecard)。かざしたカードの生値と種別。打刻でなければ null。 */
+  card: { cardId: string, cardKind: string | null } | null
+}
+
+/** 打刻の payload から card_id / card_kind を取り出す (形が違えば null)。 */
+function readCard(payload: unknown): SessionRow['card'] {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as { card_id?: unknown, card_kind?: unknown }
+  if (typeof p.card_id !== 'string' || p.card_id === '') return null
+  return {
+    cardId: p.card_id,
+    cardKind: typeof p.card_kind === 'string' ? p.card_kind : null,
+  }
+}
+
+/** card_kind の表示名。未知の値はそのまま出す (隠すと診断できない)。 */
+function cardKindLabel(k: string | null): string {
+  if (k === 'felica_idm') return '交通系IC等'
+  if (k === 'license') return '免許証'
+  if (k === 'nfca_uid') return 'NFC-A'
+  return k ?? 'カード'
 }
 
 /** 免許証の payload から nfc_id / 交付 / 有効期限 を取り出す (形が違えば null)。 */
@@ -111,6 +158,7 @@ const sessions = computed<SessionRow[]>(() => {
         license: null,
         alcohol: null,
         temperature: null,
+        card: null,
       }
       byKey.set(key, row)
       rows.push(row)
@@ -120,6 +168,7 @@ const sessions = computed<SessionRow[]>(() => {
     if (item.kind === 'license' && !row.license) row.license = readLicense(item.payload)
     if (item.kind === 'alcohol' && !row.alcohol) row.alcohol = readAlcohol(item.payload)
     if (item.kind === 'temperature' && row.temperature === null) row.temperature = readTemperature(item.payload)
+    if (item.kind === KIND_TIMECARD && !row.card) row.card = readCard(item.payload)
   }
   return rows
 })
@@ -135,15 +184,19 @@ async function load() {
   isLoading.value = true
   error.value = null
   try {
+    // scope=timecard は kind を API 側で固定できる。scope=tenko は
+    // 「timecard 以外」= 否定条件で API に無いので取得後に落とす (props の doc 参照)
     const res = await listHubMeasurements({
       device_id: deviceId.value || undefined,
-      kind: kind.value || undefined,
+      kind: kind.value || (props.scope === 'timecard' ? KIND_TIMECARD : undefined),
       from: toIso(from.value),
       to: toIso(to.value),
       limit: PAGE_SIZE,
       offset: offset.value,
     })
-    items.value = res.items
+    items.value = props.scope === 'tenko'
+      ? res.items.filter(i => i.kind !== KIND_TIMECARD)
+      : res.items
     hasMore.value = res.has_more
     expanded.value = new Set()
   }
@@ -268,14 +321,14 @@ onMounted(() => {
             @keyup.enter="search"
           >
         </label>
-        <label class="flex flex-col gap-1">
+        <label v-if="scope !== 'timecard'" class="flex flex-col gap-1">
           <span class="text-sm text-gray-500">種別</span>
           <select
             v-model="kind"
             class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">すべて</option>
-            <option v-for="k in HUB_MEASUREMENT_KINDS" :key="k" :value="k">{{ k }}</option>
+            <option v-for="k in kindOptions" :key="k" :value="k">{{ k }}</option>
           </select>
         </label>
         <label class="flex flex-col gap-1">
@@ -333,6 +386,7 @@ onMounted(() => {
               <th class="px-2 py-2 text-left text-gray-500">免許 有効期限</th>
               <th class="px-2 py-2 text-left text-gray-500">アルコール</th>
               <th class="px-2 py-2 text-left text-gray-500">体温</th>
+              <th v-if="scope !== 'tenko'" class="px-2 py-2 text-left text-gray-500">カード</th>
               <th class="px-2 py-2 text-left text-gray-500">種別</th>
               <th class="px-2 py-2 text-left text-gray-500">内容</th>
             </tr>
@@ -376,6 +430,15 @@ onMounted(() => {
                   <template v-if="row.temperature !== null">{{ row.temperature.toFixed(1) }} &#8451;</template>
                   <span v-else class="text-gray-400">—</span>
                 </td>
+                <!-- 打刻 (kind=timecard) の中身。これが無いと「—」だらけの
+                     読み取れない行になる (Refs ippoan/alc-app-s3#134) -->
+                <td v-if="scope !== 'tenko'" class="px-2 py-2 whitespace-nowrap">
+                  <template v-if="row.card">
+                    <span class="font-mono text-gray-700">{{ row.card.cardId }}</span>
+                    <span class="ml-1 text-gray-400 text-xs">{{ cardKindLabel(row.card.cardKind) }}</span>
+                  </template>
+                  <span v-else class="text-gray-400">—</span>
+                </td>
                 <td class="px-2 py-2">
                   <span
                     v-for="item in row.items"
@@ -391,7 +454,7 @@ onMounted(() => {
                 </td>
               </tr>
               <tr v-if="expanded.has(row.key)" class="bg-gray-50">
-                <td colspan="8" class="px-2 py-2">
+                <td :colspan="scope === 'tenko' ? 8 : 9" class="px-2 py-2">
                   <div v-for="item in row.items" :key="item.id" class="mb-2 last:mb-0">
                     <div class="text-xs text-gray-500">
                       {{ item.kind }} / seq {{ item.seq }} / 端末計時 {{ formatDateTime(item.recorded_at) }}
