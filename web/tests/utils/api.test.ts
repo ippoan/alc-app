@@ -731,7 +731,6 @@ describe('api', () => {
       ['createBaseline', () => createBaseline(createHealthBaselineBody as any), '/api/tenko/health-baselines'],
       ['createFailure', () => createFailure(createEquipmentFailureBody as any), '/api/tenko/equipment-failures'],
       ['createTimecardCard', () => createTimecardCard({ card_id: `NFC-POST-${Date.now()}`, employee_id: TEST_EMPLOYEE_ID } as any), '/api/timecard/cards'],
-      ['punchTimecard', () => punchTimecard(SEED_CARD_NFC), '/api/timecard/punch'],
       ['createDeviceUrlToken', () => createDeviceUrlToken(), '/api/devices/register/create-token'],
       ['createPermanentQr', () => createPermanentQr(), '/api/devices/register/create-permanent-qr'],
       ['createDeviceOwnerToken', () => createDeviceOwnerToken(), '/api/devices/register/create-device-owner-token'],
@@ -758,25 +757,6 @@ describe('api', () => {
         })
       },
     )
-
-    it('punchTimecard with deviceId', async () => {
-      stubOk({})
-      await callApi(() => punchTimecard(SEED_CARD_NFC, SEED_DEVICE_ID))
-      assertMock(() => {
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
-        expect(body.card_id).toBe(SEED_CARD_NFC)
-        expect(body.device_id).toBe(SEED_DEVICE_ID)
-      })
-    })
-
-    it('punchTimecard with null deviceId omits device_id', async () => {
-      stubOk({})
-      await callApi(() => punchTimecard(SEED_CARD_NFC, null))
-      assertMock(() => {
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
-        expect(body.device_id).toBeUndefined()
-      })
-    })
 
     it('createDeviceRegistrationRequest with deviceName', async () => {
       stubOk({})
@@ -1767,10 +1747,12 @@ restoreNativeApis()
       expect(cards.length).toBeGreaterThanOrEqual(1)
     })
 
-    it('should punch timecard', async () => {
-      stubOk({ employee_name: 'Test Driver' })
-      const punch = await punchTimecard(nfcCardId)
-      expect(punch.employee_name).toBeDefined()
+    // punchTimecard は same-origin server route (/api/timecard/punch → recorder)
+    // に移ったので live の rust-alc-api には無い (Refs ippoan/alc-app-s3#134)
+    it.skipIf(isLive)('should punch timecard', async () => {
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+      stubOk({ seq: 1 })
+      await expect(punchTimecard(nfcCardId)).resolves.toBeUndefined()
     })
 
     it('should list time punches', async () => {
@@ -1988,6 +1970,59 @@ restoreNativeApis()
       initApi(API_BASE, () => 'invalid-token')
       await expect(getEmployees()).rejects.toThrow()
     })
+  })
+})
+
+// ブラウザ打刻 (Refs ippoan/alc-app-s3#134)。rust-alc-api ではなく alc-app 自身の
+// server route (/api/timecard/punch → cf-alc-recorder → DO) を same-origin で叩く
+// ので mock 専用 (live の rust-alc-api には無い)。
+describe.skipIf(isLive)('punchTimecard (#134 worker 経由)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('★ browser JWT を Bearer に載せて same-origin の server route へ POST (proxy 経由にしない)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson({ seq: 1 }))
+
+    await expect(punchTimecard('CARD-1')).resolves.toBeUndefined()
+
+    const [url, init] = mockFetch.mock.calls[0]
+    // **/api/proxy/ にも rust-alc-api にも行かない** — worker を通さないと
+    // 打刻更新の合図 (/watch-timecard) が鳴らない
+    expect(url).toBe('/api/timecard/punch')
+    expect(init.method).toBe('POST')
+    expect(init.headers.get('Authorization')).toBe('Bearer admin-jwt')
+    expect(init.headers.get('Content-Type')).toBe('application/json')
+    // tenant_id / device_id は route が JWT から決めるので送らない
+    expect(JSON.parse(init.body)).toEqual({ card_id: 'CARD-1' })
+  })
+
+  it('admin JWT が無ければキオスクの device JWT を使う', async () => {
+    initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ seq: 2 }))
+
+    await punchTimecard('CARD-2')
+
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/timecard/punch')
+    expect(init.headers.get('Authorization')).toBe('Bearer kiosk-jwt')
+  })
+
+  it('どちらの JWT も無ければ fetch せずに失敗する (未ペアリング端末)', async () => {
+    initApi(API_BASE, () => null, () => 'tid')
+    await expect(punchTimecard('CARD-3')).rejects.toThrow('認証が必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('server route のエラーは status 付きで投げる', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(errResponse(401, 'unauthorized'))
+    await expect(punchTimecard('CARD-4')).rejects.toThrow('API エラー (401)')
   })
 })
 

@@ -11,7 +11,7 @@ import type {
   EmployeeHealthBaseline, CreateHealthBaseline, UpdateHealthBaseline,
   EquipmentFailure, CreateEquipmentFailure, UpdateEquipmentFailure, EquipmentFailureFilter, EquipmentFailuresResponse,
   // Timecard
-  TimecardCard, CreateTimecardCard, TimePunchWithEmployee, TimePunchFilter, TimePunchesResponse,
+  TimecardCard, CreateTimecardCard, TimePunchFilter, TimePunchesResponse,
   // Device Registration
   Device, DeviceRegistrationRequest, CreateRegistrationResponse, RegistrationStatusResponse,
   ClaimRegistrationRequest, ClaimRegistrationResponse, CreateTokenResponse, CreatePermanentQrResponse, ApproveDeviceResponse,
@@ -690,10 +690,27 @@ export async function getTimecardCardByCardId(cardId: string): Promise<TimecardC
   return request<TimecardCard>(`/api/timecard/cards/by-card/${encodeURIComponent(cardId)}`)
 }
 
-export async function punchTimecard(cardId: string, deviceId?: string | null): Promise<TimePunchWithEmployee> {
-  return request<TimePunchWithEmployee>('/api/timecard/punch', {
+/**
+ * 打刻する (Refs ippoan/alc-app-s3#134)。
+ *
+ * **rust-alc-api ではなく alc-app 自身の server route** (`/api/timecard/punch`) を
+ * same-origin で叩く (`runDriverMasterSync` と同型)。route が cf-alc-recorder →
+ * Durable Object と通し、**そこで打刻更新の合図 (`/watch-timecard`) が出る** —
+ * rust に直行すると、この打刻だけ他の画面に即時反映されない。
+ *
+ * **応答は使わない (void)。** 端末の打刻と同じ ingest 経路に乗るので、
+ * 社員名も当日一覧も返らない (社員の解決は ingest 側で凍結される)。
+ * 呼び出し側は打刻後に `listTimePunches` を引き直すこと。
+ *
+ * tenant_id / device_id は route が JWT から決めるので**ここからは送らない**。
+ */
+export async function punchTimecard(cardId: string): Promise<void> {
+  const jwt = getAccessToken?.() ?? (getKioskDeviceJwt ? await getKioskDeviceJwt() : null)
+  if (!jwt) throw new Error('認証が必要です')
+  await bearerRequest<unknown>('/api/timecard/punch', jwt, {
     method: 'POST',
-    body: JSON.stringify({ card_id: cardId, device_id: deviceId || undefined }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ card_id: cardId }),
   })
 }
 

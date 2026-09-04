@@ -2,11 +2,14 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
 import { resolveSecret } from "./auth";
 import {
+  buildTimecardPunch,
   CRASH_LOG_KIND,
   forwardMeasurements,
   notifyCrashByEmail,
   parseMeasurementItem,
   storeCrashLog,
+  TIMECARD_KIND,
+  type TimecardPunchInput,
 } from "./measurements";
 
 /**
@@ -24,6 +27,10 @@ import {
  *       `GET /command-result/:id` で取得)。
  *   - `{ type: "ping" }` → `{ type: "pong" }` (setWebSocketAutoResponse で
  *       hibernation を起こさず応答。完全一致しない serialization は handler fallback)。
+ *
+ * 上り (ブラウザ → server、Refs ippoan/alc-app-s3#134):
+ *   - `POST /timecard-punch` (worker の内部 HTTP API から) → 端末の WS 打刻と
+ *     **同じ 1 か所**で ingest 転送 + 購読者への合図を行う。
  *
  * 下り (server → CoreS3、issue #106 設計レビュー決定):
  *   - `POST /command` (worker の内部 HTTP API から) → 接続中デバイスへ
@@ -87,11 +94,6 @@ const WATCH_TAG = "watch:timecard";
  */
 export const WATCH_SUBPROTOCOL = "alc.timecard.v1";
 
-/** 打刻更新の合図。**行の中身は送らない** — ブラウザが API を引き直す。
- * 行の形 (区分 / card_id / 社員解決の凍結 / JST 境界) は rust-alc-api 側に
- * 作り込んであり、Worker に 2 実装目を作ると必ずズレるため。 */
-const TIMECARD_KIND = "timecard";
-
 /** command_result の storage key prefix。 */
 const CMD_RESULT_PREFIX = "cmdres:";
 
@@ -111,6 +113,13 @@ function json(data: unknown, status = 200): Response {
 export class RecorderHub extends DurableObject<Env> {
   /** 接続中の SSE クライアント (`/events`)。DO storage には持たない (in-memory のみ)。 */
   private readonly sseControllers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+
+  /**
+   * ブラウザ打刻に採番した直近の seq (in-memory)。**永続化しない** —
+   * hibernation から復帰すると 0 に戻るが、そのときは `Date.now()` の方が
+   * 大きいので単調性は壊れない。
+   */
+  private lastPunchSeq = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -136,6 +145,9 @@ export class RecorderHub extends DurableObject<Env> {
     }
     if (url.pathname === "/watch") {
       return this.handleWatch(request);
+    }
+    if (url.pathname === "/timecard-punch" && request.method === "POST") {
+      return this.handleTimecardPunch(request);
     }
     if (url.pathname === "/command" && request.method === "POST") {
       return this.handleCommand(request);
@@ -192,17 +204,20 @@ export class RecorderHub extends DurableObject<Env> {
    *
    * # 何が通知され、何が通知されないか
    *
-   * 通知するのは **WS 経由の打刻 (NFC タイムカード端末)** だけ。次の 2 つは
-   * この DO を通らないので通知されない:
+   * 通知するのは **この DO を通った打刻**:
    *
-   * - **ブラウザ版の打刻** (`POST /api/timecard/punch`) — rust-alc-api へ直行する。
-   *   ただし打った本人の画面は応答でその場更新するので、体感上の問題は
-   *   「他の画面に即時反映されない」だけ
-   * - `POST /measurements` (Wi-Fi 客の上り) — Worker 側で処理し DO を経由しない
+   * - WS 経由の打刻 (NFC タイムカード端末) — `handleMeasurement`
+   * - ブラウザ (キオスク / 管理画面) の打刻 — `handleTimecardPunch`。
+   *   alc-app の server route (`POST /api/timecard/punch`) が RECORDER binding
+   *   でここへ回す。**rust-alc-api を直に叩かせない**のは、直行させると
+   *   この合図が鳴らないため (Refs ippoan/alc-app-s3#134)
    *
-   * 常設の打刻端末が主用途なので、まずここだけを覆う。広げるなら
-   * **通知の発生源を増やすのではなく**、rust-alc-api 側から 1 か所で出す形を
-   * 検討すること (発生源が増えるほど「鳴らない経路」が生まれる)。
+   * 通らないのは `POST /measurements` (Wi-Fi 客の上り) だけ — Worker 側で
+   * 処理して DO を経由しない。あちらは打刻端末の経路ではない。
+   *
+   * **発生源はこの 1 メソッドのまま保つこと。** 呼び出し側を増やすのは
+   * 「打刻を作る経路」がここを通るようにする形でだけ行う — 別の場所から
+   * 合図を出し始めると、増えるたびに「鳴らない経路」が生まれる。
    */
   private notifyTimecardPunch(): void {
     for (const ws of this.ctx.getWebSockets(WATCH_TAG)) {
@@ -291,6 +306,68 @@ export class RecorderHub extends DurableObject<Env> {
 
   async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
     ws.close(1011, "WebSocket error");
+  }
+
+  // ── 上り: ブラウザ打刻 → ingest 転送 + 合図 ───────────────────────────────
+
+  /**
+   * ブラウザ (キオスク / 管理画面) の打刻 (Refs ippoan/alc-app-s3#134)。
+   *
+   * 認証は worker 側で完了している (`INTERNAL_SHARED_SECRET` + browser/kiosk JWT
+   * の introspect)。identity はヘッダーで受け取り、**body からは読まない**。
+   *
+   * **DO を経由させるのがこの経路の目的**: ingest 転送のあとに
+   * `notifyTimecardPunch()` を呼ぶ 1 か所を、端末の WS 打刻と共有できる。
+   *
+   * 端末と違って再送の仕組みが無い (ブラウザは応答を見て諦める) ので、
+   * seq は冪等キーではなく**衝突しない採番**でよい。`Date.now()` を基準に、
+   * 同じミリ秒に 2 件来ても DO 内で単調増加させる
+   * (`UNIQUE (tenant_id, device_id, seq)` に当たらないため)。
+   */
+  private async handleTimecardPunch(request: Request): Promise<Response> {
+    const tenantId = request.headers.get("X-Recorder-Tenant-Id") ?? "";
+    const deviceId = request.headers.get("X-Recorder-Device-Id") ?? "";
+    if (!tenantId || !deviceId) {
+      return json({ error: "missing_identity" }, 400);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json({ error: "invalid_body" }, 400);
+    }
+    const built = buildTimecardPunch(body as TimecardPunchInput, this.nextPunchSeq(Date.now()));
+    if (!built.ok) {
+      return json({ error: built.error }, 400);
+    }
+    const sharedSecret = await resolveSecret(this.env.INTERNAL_SHARED_SECRET);
+    if (!sharedSecret) {
+      return json({ error: "server_error" }, 503);
+    }
+    const result = await forwardMeasurements(
+      this.env.AUTH_WORKER,
+      sharedSecret,
+      tenantId,
+      deviceId,
+      [built.item],
+    );
+    if (!result.ok) {
+      // 詳細 (上流 body) は echo しない。ブラウザは打ち直せる
+      return json({ error: result.error }, 502);
+    }
+    // 合図は backend が受理した後 (WS 経路の ack と同じ順序)
+    this.notifyTimecardPunch();
+    return json({ seq: built.item.seq }, 202);
+  }
+
+  /** ブラウザ打刻の seq を採番する (同ミリ秒でも DO 内で単調増加)。 */
+  private nextPunchSeq(nowMs: number): number {
+    const seq = Math.max(nowMs, this.lastPunchSeq + 1);
+    this.lastPunchSeq = seq;
+    return seq;
   }
 
   // ── 上り: measurement → ingest 転送 ───────────────────────────────────────

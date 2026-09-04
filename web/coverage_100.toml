@@ -83,6 +83,10 @@ path = "app/composables/useTenkoKiosk.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useTimecardWatch.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useVideoRecorder.ts"
 branches = true
 

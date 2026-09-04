@@ -12,6 +12,9 @@ export default defineNuxtConfig({
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:3001',
       signalingUrl: process.env.NUXT_PUBLIC_SIGNALING_URL || 'http://localhost:8787',
+      // cf-alc-recorder (打刻更新の購読 WS `/watch-timecard`、Refs
+      // ippoan/alc-app-s3#134)。`https://` を渡す — composable が `ws://` に直す
+      recorderUrl: process.env.NUXT_PUBLIC_RECORDER_URL || 'https://alc-recorder.m-tama-ramu.workers.dev',
       tenantId: process.env.NUXT_PUBLIC_TENANT_ID || 'default',
       googleClientId: process.env.NUXT_PUBLIC_GOOGLE_CLIENT_ID || '',
       authWorkerUrl: process.env.NUXT_PUBLIC_AUTH_WORKER_URL || 'https://auth.ippoan.org',

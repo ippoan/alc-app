@@ -28,7 +28,12 @@ export interface PrintCommand {
   chunk?: string
 }
 
-const RECORDER_BASE = 'https://alc-recorder.internal'
+/**
+ * recorder への forward 先 (service binding は host を無視するが、path は
+ * Worker 側 route と一致する必要がある)。**打刻中継 (timecard-relay.ts) と共有** —
+ * 2 か所に書くと片方だけ変えたときに静かにずれる。
+ */
+export const RECORDER_BASE = 'https://alc-recorder.internal'
 const AUTH_WORKER_BASE = 'https://auth-worker.internal'
 
 /**
@@ -81,6 +86,21 @@ export function buildRecorderDevicesForward(input: { sharedSecret: string; tenan
     url: `${RECORDER_BASE}/tenants/${encodeURIComponent(input.tenantId)}/devices`,
     init: { method: 'GET', headers: { Authorization: input.sharedSecret } },
   }
+}
+
+/**
+ * auth-worker `/auth/introspect` 応答のうち server route が見る field。
+ *
+ * **server/utils/* は Nitro が auto-import する**ので、同じ名前を 2 つの
+ * ファイルで export すると片方が黙って無視される。introspect を使う route が
+ * 増えてもここ 1 つを使うこと。
+ */
+export interface IntrospectClaims {
+  active?: boolean
+  tenant_id?: string
+  role?: string
+  /** device JWT なら device_id、利用者の JWT ならユーザー識別子。 */
+  sub?: string
 }
 
 /**

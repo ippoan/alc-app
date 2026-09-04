@@ -24,12 +24,21 @@ CoreS3 →(WSS + device JWT)→ cf-alc-recorder →(AUTH_WORKER service binding)
 |---|---|
 | `GET /health` | 死活確認 |
 | `GET /ws` | WS 受口 (`Upgrade: websocket` + `Authorization: Bearer <device JWT>`) |
+| `GET /watch-timecard` | 打刻更新の購読 WS (読み取り専用)。トークンは `Sec-WebSocket-Protocol: alc.timecard.v1, <jwt>`。受信は `{"type":"timecard_punch"}` の**合図だけ** — 行の中身は送らないので、ブラウザは `GET /api/timecard/punches` を引き直す |
+| `POST /tenants/:tenantId/devices/:deviceId/timecard-punch` | ブラウザ (キオスク / 管理画面) の打刻 (`{ card_id }` → 202 `{ seq }`)。**`kind` と `seq` はサーバが立てる** — クライアントには指定させない |
 | `POST /tenants/:tenantId/devices/:deviceId/command` | 接続中デバイスへの下り push (`{ id?, payload }` → 202 `{ id, delivered }` / 未接続 404) |
 | `GET /tenants/:tenantId/devices` | 接続中デバイス一覧 (debug) |
 | `GET /tenants/:tenantId/commands/:id/result` | `command_result` の取得 (未着 404、保持 10 分) |
 
-下り 3 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` (生の値、Bearer prefix
-なし) の server-to-server 認証 (auth-worker `/auth/introspect` と同方式・定数時間比較)。
+`/tenants/...` の endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` (生の値、
+Bearer prefix なし) の server-to-server 認証 (auth-worker `/auth/introspect` と
+同方式・定数時間比較)。呼び手は alc-app の server route など Worker 側に限られる。
+
+**ブラウザ打刻をこの Worker に通すのは、購読者への合図を 1 か所に保つため**
+(Refs ippoan/alc-app-s3#134)。rust-alc-api に直行させると、端末で打った時だけ
+`/watch-timecard` が鳴り、ブラウザで打った時は鳴らない、という経路依存の挙動になる。
+alc-app 側の入口は同一オリジンの server route (`POST /api/timecard/punch`) で、
+そこが browser/kiosk JWT を introspect して `tenant_id` / `device_id` を決める。
 
 ## WS プロトコル
 

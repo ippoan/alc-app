@@ -57,6 +57,7 @@ onMounted(() => {
   loadCards()
   // 既定が打刻履歴なので、初回は watch が発火しない (値が変わらないため)
   if (subTab.value === 'punches') loadPunches()
+  void punchWatch.connect()
 })
 
 async function registerCard() {
@@ -176,6 +177,20 @@ async function loadPunches() {
 
 watch(subTab, (tab) => {
   if (tab === 'punches') loadPunches()
+})
+
+/**
+ * 打刻更新の購読 (Refs ippoan/alc-app-s3#134)。**キオスクと同じ composable。**
+ * 端末・キオスク・この画面のどこで打たれても、合図を受けて引き直す。
+ *
+ * 引き直すのは打刻履歴タブを開いているときだけ (カード登録タブでは無駄)。
+ * **絞り込みが今日以外でも引き直す** — 条件付きにすると「今日を見ているときだけ
+ * 更新される」という説明の要る挙動になり、引き直しは安い。
+ */
+const { accessToken } = useAuth()
+const punchWatch = useTimecardWatch({
+  getToken: () => accessToken.value,
+  onChange: () => { if (subTab.value === 'punches') void loadPunches() },
 })
 
 function formatTime(iso: string): string {
