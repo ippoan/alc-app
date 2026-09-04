@@ -6,7 +6,17 @@ import {
 } from '~/utils/api'
 
 type SubTab = 'cards' | 'punches'
-const subTab = ref<SubTab>('cards')
+
+/**
+ * `?sub=punches` で打刻履歴を直接開けるようにする (初期値のみ)。
+ *
+ * 内側のタブがローカル ref だと **URL では到達できず、ログイン済みブラウザで
+ * クリックできる人しか確認できない**。管理タブを `?tab=` で開けるようにしたのと
+ * 同じ理由 (Refs ippoan/alc-app#156)。書き戻しはしない — 外側の `?tab=timecard`
+ * は index.vue が持っており、URL の組み立てを 2 か所に散らしたくないため。
+ */
+const route = useRoute()
+const subTab = ref<SubTab>(route.query.sub === 'punches' ? 'punches' : 'cards')
 
 // --- カード登録 ---
 const employees = ref<ApiEmployee[]>([])
@@ -43,6 +53,8 @@ onMounted(() => {
     nfcCardId.value = event.employee_id
   })
   loadCards()
+  // `?sub=punches` で直接開いたときは watch が発火しない (値が変わらないため)
+  if (subTab.value === 'punches') loadPunches()
 })
 
 async function registerCard() {
