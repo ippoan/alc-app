@@ -8,7 +8,7 @@ import {
   getEmployees, getEmployeeByNfcId, getEmployeeByCode, getEmployeeById,
   createEmployee, updateEmployee, deleteEmployee,
   updateEmployeeFace, approveFace, rejectFace, getFaceData,
-  updateEmployeeNfcId, updateEmployeeLicense,
+  updateEmployeeNfcId, updateEmployeeLicense, clearEmployeeLicense,
   // Face photo
   fetchFacePhoto, uploadFacePhoto, uploadReportAudio, uploadBlowVideo,
   // Tenko schedules
@@ -1067,6 +1067,16 @@ describe('api', () => {
         })
       },
     )
+
+    // 免許証の解除だけ 204 ではなく更新後の Employee を返すので it.each の外に置く
+    it('clearEmployeeLicense → DELETE /api/employees/{id}/license', async () => {
+      stubOk({})
+      await callApi(() => clearEmployeeLicense(DEL_EMPLOYEE_ID))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/api/employees/${DEL_EMPLOYEE_ID}/license`)
+        expect(mockFetch.mock.calls[0][1].method).toBe('DELETE')
+      })
+    })
   })
 
   // ============================================================
