@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { Env } from "../src/index";
-import { decideRecorderAuth } from "../src/auth";
+import {
+  decideRecorderAuth,
+  decideWatcherAuth,
+  RECORDER_DEVICE_ROLES,
+  DEVICE_ROLE_KIOSK,
+} from "../src/auth";
 
 const BASE = "https://alc-recorder.test";
 const SHARED_SECRET = "test-shared-secret";
@@ -642,5 +647,71 @@ describe("hibernation 復帰 / テナント分離", () => {
     });
     const body = (await res.json()) as { devices: string[] };
     expect(body.devices).not.toContain("device-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 打刻更新の購読 (GET /watch-timecard、Refs ippoan/alc-app-s3#134)
+//
+// **読み取り専用の口**。device 経路 (`/ws`) の allowlist とは別判定にしてある —
+// あちらは「下り command を受け取ってよいデバイス」なので、混ぜると購読者を
+// 増やすたびに command の宛先が増える。
+// ---------------------------------------------------------------------------
+
+describe("decideWatcherAuth", () => {
+  it("キオスクの device JWT と 管理者/運行管理者の user JWT を受ける", () => {
+    expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" })).toEqual({
+      status: 101,
+      tenantId: "t",
+    });
+    expect(decideWatcherAuth({ active: true, role: "admin", tenant_id: "t" }).status).toBe(101);
+    expect(decideWatcherAuth({ active: true, role: "manager", tenant_id: "t" }).status).toBe(101);
+  });
+
+  it("それ以外の role は 403 — 「tenant_id があれば通す」にしない", () => {
+    for (const role of ["viewer", "uploader", "device-uploader", ""]) {
+      expect(decideWatcherAuth({ active: true, role, tenant_id: "t" }).status).toBe(403);
+    }
+    // role 欠落も 403 (fail-closed)
+    expect(decideWatcherAuth({ active: true, tenant_id: "t" }).status).toBe(403);
+  });
+
+  it("active でない / tenant_id 欠落は 401 (fail-closed)", () => {
+    expect(decideWatcherAuth({ active: false, role: "admin", tenant_id: "t" }).status).toBe(401);
+    expect(decideWatcherAuth({ active: true, role: "admin" }).status).toBe(401);
+    expect(decideWatcherAuth(null).status).toBe(401);
+    expect(decideWatcherAuth(undefined).status).toBe(401);
+  });
+
+  it("★ device-kiosk を RECORDER_DEVICE_ROLES に足していない", () => {
+    // 足すと**キオスクが下り command の宛先になる** (blast radius 分離が崩れる)。
+    // 購読は読み取り専用なので、こちらの allowlist だけに入れる
+    expect(RECORDER_DEVICE_ROLES.has(DEVICE_ROLE_KIOSK)).toBe(false);
+    expect(decideRecorderAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t", sub: "d" }).status).toBe(403);
+  });
+
+  it("watcher に deviceId は要らない (sub 無しでも通る)", () => {
+    // sub を要求すると、DO の attachment に deviceId を載せたくなる。
+    // 載せると currentDeviceIds() が拾い、キオスクが「接続中デバイス」に現れる
+    expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" }).status).toBe(101);
+  });
+});
+
+describe("GET /watch-timecard のハンドシェイク", () => {
+  it("Upgrade が無ければ 426", async () => {
+    const res = await SELF.fetch(`${BASE}/watch-timecard`);
+    expect(res.status).toBe(426);
+  });
+
+  it("サブプロトコルが無い / トークンだけは 401", async () => {
+    const noProto = await SELF.fetch(`${BASE}/watch-timecard`, {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(noProto.status).toBe(401);
+
+    const onlyName = await SELF.fetch(`${BASE}/watch-timecard`, {
+      headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": "alc.timecard.v1" },
+    });
+    expect(onlyName.status).toBe(401);
   });
 });
