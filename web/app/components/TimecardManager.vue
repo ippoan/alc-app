@@ -4,6 +4,7 @@ import {
   getEmployees, listTimecardCards, createTimecardCard, deleteTimecardCard,
   listTimePunches, downloadTimePunchesCsv, listHubMeasurements,
 } from '~/utils/api'
+import { normalizeCardId } from '~/utils/card-id'
 
 type SubTab = 'cards' | 'punches'
 const subTab = ref<SubTab>('cards')
@@ -119,12 +120,19 @@ interface HistoryRow {
   dedupe?: string
 }
 
-/** card_id → 乗務員 (登録済みカード)。打刻を人に結びつける 1 本目の経路。 */
+/**
+ * card_id → 乗務員 (登録済みカード)。打刻を人に結びつける 1 本目の経路。
+ *
+ * **キーは正規化形にする。** ハブ測定値の payload には端末が読んだ生値
+ * (大文字 IDm) が入るのに対し、`timecard_cards.card_id` はサーバが正規化した
+ * 小文字なので、素の値で引くと登録済みカードが「未登録カード」に見える
+ * (Refs ippoan/alc-app-s3#134)。
+ */
 const employeeByCardId = computed(() => {
   const map = new Map<string, ApiEmployee>()
   for (const c of cards.value) {
     const emp = employeeMap.value[c.employee_id]
-    if (emp) map.set(c.card_id, emp)
+    if (emp) map.set(normalizeCardId(c.card_id), emp)
   }
   return map
 })
@@ -208,8 +216,11 @@ async function loadHubRows() {
       const cardId = p && typeof p.card_id === 'string' ? p.card_id : null
       // 登録済みカード → 免許証の 16 桁 (employees.nfc_id) の順に引く。
       // どちらでも引けなければ「誰の打刻か分からない」= カード未登録
+      // 登録カードは正規化形で引く。免許証 (employees.nfc_id) は 16 桁の数字で
+      // 正規化が no-op なので、生値のまま引いて既存の挙動を変えない
       const emp = cardId
-        ? employeeByCardId.value.get(cardId) ?? employeeByNfc.value.get(cardId)
+        ? employeeByCardId.value.get(normalizeCardId(cardId))
+          ?? employeeByNfc.value.get(cardId)
         : undefined
       if (filterEmployeeId.value && emp?.id !== filterEmployeeId.value) continue
       const name = emp?.name ?? (cardId ? `未登録カード ${cardId}` : '不明')
