@@ -92,27 +92,42 @@ const filterDate = ref(new Date().toISOString().slice(0, 10))
 const filterEmployeeId = ref('')
 
 /**
- * 点呼から拾った「打刻に相当する記録」(Refs ippoan/alc-app-s3#134)。
+ * ハブ (端末) 側に残っている記録から作る行 (Refs ippoan/alc-app-s3#134)。
  *
- * **始業点呼 = 始業打刻**のように、点呼そのものが打刻を兼ねることがあるため、
- * カードをかざした打刻 (`time_punches`) と同じ表に並べて出す。
+ * **打刻機にかざした = 打刻**。`time_punches` に行があるかどうかは
+ * サーバ側の中継が動いたかという実装の都合であって、**表示の条件にしない**。
+ * `hub_measurements` に `kind=timecard` の記録が残っているなら打刻として出す。
+ *
+ * 点呼 (`kind=license`) も同じ表に並べる — **始業点呼 = 始業打刻**のように
+ * 点呼そのものが打刻を兼ねることがあるため。
  *
  * **表示だけで `time_punches` に行は作らない。** 勤怠の一次データを画面の都合で
- * 書き足すと、あとから「これは実際に打刻されたのか」を区別できなくなる。
- * どちらから来た記録かは「区分」列で分かるようにしてある。
+ * 書き足さない (どこから来た記録かは「区分」列で分かる)。
  */
-const tenkoRows = ref<HistoryRow[]>([])
+const hubRows = ref<HistoryRow[]>([])
 
-/** 打刻履歴の 1 行。カード打刻と点呼を同じ形に均して並べる。 */
+/** 打刻履歴の 1 行。打刻と点呼を同じ形に均して並べる。 */
 interface HistoryRow {
   key: string
   /** 並び替えと表示に使う時刻 (ISO) */
   at: string
   employeeName: string
   deviceName: string
-  /** どこから来た記録か。`punch` = カードをかざした打刻、`tenko` = 点呼 */
+  /** `punch` = 打刻、`tenko` = 点呼 */
   origin: 'punch' | 'tenko'
+  /** 同じタップが time_punches と hub_measurements の両方にある場合の重複排除キー */
+  dedupe?: string
 }
+
+/** card_id → 乗務員 (登録済みカード)。打刻を人に結びつける 1 本目の経路。 */
+const employeeByCardId = computed(() => {
+  const map = new Map<string, ApiEmployee>()
+  for (const c of cards.value) {
+    const emp = employeeMap.value[c.employee_id]
+    if (emp) map.set(c.card_id, emp)
+  }
+  return map
+})
 
 /** nfc_id (免許証の交付日 8 桁 + 有効期限 8 桁) → 乗務員。点呼を人に結びつける。 */
 const employeeByNfc = computed(() => {
@@ -123,7 +138,13 @@ const employeeByNfc = computed(() => {
   return map
 })
 
-/** 打刻 + 点呼をまとめて新しい順に並べたもの。 */
+/**
+ * 打刻 + 点呼をまとめて新しい順に並べたもの。
+ *
+ * 同じタップが `time_punches` (中継が作った打刻) と `hub_measurements`
+ * (端末が送った記録) の両方にあることがあるので、**秒 + 乗務員名**で重複を落とす。
+ * 残すのは `time_punches` 側 (勤怠の一次データ)。
+ */
 const historyRows = computed<HistoryRow[]>(() => {
   const rows: HistoryRow[] = punches.value.map(p => ({
     key: `p:${p.id}`,
@@ -131,8 +152,13 @@ const historyRows = computed<HistoryRow[]>(() => {
     employeeName: employeeName(p.employee_id),
     deviceName: p.device_name ?? '-',
     origin: 'punch' as const,
+    dedupe: `${p.punched_at.slice(0, 19)}|${employeeName(p.employee_id)}`,
   }))
-  rows.push(...tenkoRows.value)
+  const seen = new Set(rows.map(r => r.dedupe))
+  for (const r of hubRows.value) {
+    if (r.dedupe && seen.has(r.dedupe)) continue
+    rows.push(r)
+  }
   // 表示は日付で絞ってあるので、同日内の新しい順に並べれば足りる
   return rows.sort((a, b) => b.at.localeCompare(a.at))
 })
@@ -154,30 +180,54 @@ async function loadPunches() {
   }
   catch { /* ignore */ }
   finally { isLoadingPunches.value = false }
-  await loadTenkoRows()
+  await loadHubRows()
 }
 
 /**
- * 同じ日の点呼 (ハブ測定値の `kind=license`) を拾って打刻履歴に混ぜる。
+ * 同じ日に端末が送った記録 (`hub_measurements`) を拾って打刻履歴に並べる。
  *
- * 失敗しても打刻履歴自体は出す (点呼が出ないだけ) — ハブ測定値の API は
- * 端末が繋がっていない環境では空でも正常なので、ここで表を落とさない。
- * 乗務員で絞っているときは、その人の点呼だけに絞る。
+ * **打刻 (`kind=timecard`) は中継の成否に関係なく出す。** 記録が残っている以上
+ * 「かざした = 打刻した」ので、表示をサーバ側の変換に依存させない。
+ * 点呼 (`kind=license`) も同じ表に並べる (始業点呼 = 始業打刻)。
+ *
+ * 失敗しても打刻履歴自体は出す (この行が出ないだけ)。
  */
-async function loadTenkoRows() {
+async function loadHubRows() {
+  const from = new Date(`${filterDate.value}T00:00:00+09:00`).toISOString()
+  const to = new Date(`${filterDate.value}T23:59:59+09:00`).toISOString()
   try {
-    const res = await listHubMeasurements({
-      kind: 'license',
-      from: new Date(`${filterDate.value}T00:00:00+09:00`).toISOString(),
-      to: new Date(`${filterDate.value}T23:59:59+09:00`).toISOString(),
-      limit: 200,
-    })
+    const [tc, lic] = await Promise.all([
+      listHubMeasurements({ kind: 'timecard', from, to, limit: 200 }),
+      listHubMeasurements({ kind: 'license', from, to, limit: 200 }),
+    ])
     const rows: HistoryRow[] = []
-    for (const item of res.items) {
-      const payload = item.payload as { nfc_id?: unknown } | null
-      const nfcId = payload && typeof payload.nfc_id === 'string' ? payload.nfc_id : null
+
+    // --- 打刻機のタップ ---
+    for (const item of tc.items) {
+      const p = item.payload as { card_id?: unknown } | null
+      const cardId = p && typeof p.card_id === 'string' ? p.card_id : null
+      // 登録済みカード → 免許証の 16 桁 (employees.nfc_id) の順に引く。
+      // どちらでも引けなければ「誰の打刻か分からない」= カード未登録
+      const emp = cardId
+        ? employeeByCardId.value.get(cardId) ?? employeeByNfc.value.get(cardId)
+        : undefined
+      if (filterEmployeeId.value && emp?.id !== filterEmployeeId.value) continue
+      const name = emp?.name ?? (cardId ? `未登録カード ${cardId}` : '不明')
+      rows.push({
+        key: `h:${item.id}`,
+        at: item.created_at,
+        employeeName: name,
+        deviceName: item.device_id,
+        origin: 'punch',
+        dedupe: `${item.created_at.slice(0, 19)}|${name}`,
+      })
+    }
+
+    // --- 点呼 (始業点呼 = 始業打刻) ---
+    for (const item of lic.items) {
+      const p = item.payload as { nfc_id?: unknown } | null
+      const nfcId = p && typeof p.nfc_id === 'string' ? p.nfc_id : null
       const emp = nfcId ? employeeByNfc.value.get(nfcId) : undefined
-      // 乗務員で絞り込み中は、その人の点呼だけ残す (誰か分からない点呼も落とす)
       if (filterEmployeeId.value && emp?.id !== filterEmployeeId.value) continue
       rows.push({
         key: `t:${item.id}`,
@@ -187,10 +237,10 @@ async function loadTenkoRows() {
         origin: 'tenko',
       })
     }
-    tenkoRows.value = rows
+    hubRows.value = rows
   }
   catch {
-    tenkoRows.value = []
+    hubRows.value = []
   }
 }
 
