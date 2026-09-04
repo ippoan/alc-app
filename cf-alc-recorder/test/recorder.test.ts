@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { Env } from "../src/index";
-import { decideRecorderAuth } from "../src/auth";
+import {
+  decideRecorderAuth,
+  decideWatcherAuth,
+  RECORDER_DEVICE_ROLES,
+  DEVICE_ROLE_KIOSK,
+} from "../src/auth";
 
 const BASE = "https://alc-recorder.test";
 const SHARED_SECRET = "test-shared-secret";
@@ -30,6 +35,16 @@ function messageQueue(ws: WebSocket) {
   });
   ws.accept();
   return {
+    /**
+     * まだ取り出していない受信数。
+     *
+     * **「何も来ない」の確認に `next()` を使ってはいけない** — タイムアウトで
+     * reject しても waiter が配列に残り、**次に届いたメッセージがその死んだ
+     * waiter に吸われて消える**。`await sleep(...)` してからこれを見ること。
+     */
+    pending(): number {
+      return queue.length;
+    },
     next(timeoutMs = 3000): Promise<unknown> {
       const head = queue.shift();
       if (head !== undefined) return Promise.resolve(head);
@@ -45,6 +60,20 @@ function messageQueue(ws: WebSocket) {
       });
     },
   };
+}
+
+/**
+ * 打刻更新の購読 WS を張る。トークンは `Sec-WebSocket-Protocol` の 2 つ目。
+ * **`connected` は送られない** (watcher は購読専用で、上りも下り command も無い)。
+ */
+async function connectWatcher(token: string) {
+  const res = await SELF.fetch(`${BASE}/watch-timecard`, {
+    headers: {
+      Upgrade: "websocket",
+      "Sec-WebSocket-Protocol": `alc.timecard.v1, ${token}`,
+    },
+  });
+  return { res, ws: res.webSocket ?? null };
 }
 
 /** 接続 + `connected` 受信までを行うヘルパー。 */
@@ -642,5 +671,187 @@ describe("hibernation 復帰 / テナント分離", () => {
     });
     const body = (await res.json()) as { devices: string[] };
     expect(body.devices).not.toContain("device-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 打刻更新の購読 (GET /watch-timecard、Refs ippoan/alc-app-s3#134)
+//
+// **読み取り専用の口**。device 経路 (`/ws`) の allowlist とは別判定にしてある —
+// あちらは「下り command を受け取ってよいデバイス」なので、混ぜると購読者を
+// 増やすたびに command の宛先が増える。
+// ---------------------------------------------------------------------------
+
+describe("decideWatcherAuth", () => {
+  it("キオスクの device JWT と 管理者/運行管理者の user JWT を受ける", () => {
+    expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" })).toEqual({
+      status: 101,
+      tenantId: "t",
+    });
+    expect(decideWatcherAuth({ active: true, role: "admin", tenant_id: "t" }).status).toBe(101);
+    expect(decideWatcherAuth({ active: true, role: "manager", tenant_id: "t" }).status).toBe(101);
+  });
+
+  it("それ以外の role は 403 — 「tenant_id があれば通す」にしない", () => {
+    for (const role of ["viewer", "uploader", "device-uploader", ""]) {
+      expect(decideWatcherAuth({ active: true, role, tenant_id: "t" }).status).toBe(403);
+    }
+    // role 欠落も 403 (fail-closed)
+    expect(decideWatcherAuth({ active: true, tenant_id: "t" }).status).toBe(403);
+  });
+
+  it("active でない / tenant_id 欠落は 401 (fail-closed)", () => {
+    expect(decideWatcherAuth({ active: false, role: "admin", tenant_id: "t" }).status).toBe(401);
+    expect(decideWatcherAuth({ active: true, role: "admin" }).status).toBe(401);
+    expect(decideWatcherAuth(null).status).toBe(401);
+    expect(decideWatcherAuth(undefined).status).toBe(401);
+  });
+
+  it("★ device-kiosk を RECORDER_DEVICE_ROLES に足していない", () => {
+    // 足すと**キオスクが下り command の宛先になる** (blast radius 分離が崩れる)。
+    // 購読は読み取り専用なので、こちらの allowlist だけに入れる
+    expect(RECORDER_DEVICE_ROLES.has(DEVICE_ROLE_KIOSK)).toBe(false);
+    expect(decideRecorderAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t", sub: "d" }).status).toBe(403);
+  });
+
+  it("watcher に deviceId は要らない (sub 無しでも通る)", () => {
+    // sub を要求すると、DO の attachment に deviceId を載せたくなる。
+    // 載せると currentDeviceIds() が拾い、キオスクが「接続中デバイス」に現れる
+    expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" }).status).toBe(101);
+  });
+});
+
+describe("GET /watch-timecard のハンドシェイク", () => {
+  it("Upgrade が無ければ 426", async () => {
+    const res = await SELF.fetch(`${BASE}/watch-timecard`);
+    expect(res.status).toBe(426);
+  });
+
+  it("サブプロトコルが無い / トークンだけは 401", async () => {
+    const noProto = await SELF.fetch(`${BASE}/watch-timecard`, {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(noProto.status).toBe(401);
+
+    const onlyName = await SELF.fetch(`${BASE}/watch-timecard`, {
+      headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": "alc.timecard.v1" },
+    });
+    expect(onlyName.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 購読 WS の振る舞い (Refs ippoan/alc-app-s3#134)
+// ---------------------------------------------------------------------------
+
+describe("/watch-timecard の振る舞い", () => {
+  it("キオスクの device JWT で 101、サブプロトコルは名前だけ echo される", async () => {
+    const { res, ws } = await connectWatcher("kiosk-token");
+    expect(res.status).toBe(101);
+    expect(ws).not.toBeNull();
+    openSockets.push(ws!);
+    // **トークンを echo し返してはいけない** (応答ヘッダーに秘密が乗る)
+    expect(res.headers.get("Sec-WebSocket-Protocol")).toBe("alc.timecard.v1");
+  });
+
+  it("★ watcher は下り command を受け取らない", async () => {
+    // 購読者を増やすことが command の宛先を増やすことにならない、を固定する。
+    // 崩れると「読み取り専用のつもりが遠隔操作の対象になっていた」になる
+    const { ws: watcherWs } = await connectWatcher("kiosk-token");
+    expect(watcherWs).not.toBeNull();
+    openSockets.push(watcherWs!);
+    const watcher = messageQueue(watcherWs!);
+
+    // 同じテナントの device に command を送る
+    const { ws: deviceWs, messages: deviceMessages } = await connectAccepted("hub-token-1");
+    openSockets.push(deviceWs);
+
+    const cmdRes = await SELF.fetch(`${BASE}/tenants/tenant-1/devices/device-1/command`, {
+      method: "POST",
+      headers: { Authorization: SHARED_SECRET, "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { action: "MEASURE" } }),
+    });
+    expect(cmdRes.status).toBe(202);
+    expect(((await cmdRes.json()) as { delivered: number }).delivered).toBe(1);
+
+    // device には届く
+    expect(((await deviceMessages.next()) as { type: string }).type).toBe("command");
+    // watcher には届かない
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
+  });
+
+  it("★ 打刻の合図は同じテナントの watcher にだけ届く", async () => {
+    const { ws: watcherWs } = await connectWatcher("kiosk-token"); // tenant-1
+    expect(watcherWs).not.toBeNull();
+    openSockets.push(watcherWs!);
+    const watcher = messageQueue(watcherWs!);
+
+    // **別テナント**の端末が打刻を送っても、tenant-1 の watcher には届かない
+    const other = await connectAccepted("hub-token-tenant-cmd"); // tenant-cmd
+    openSockets.push(other.ws);
+    other.ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 1,
+        recorded_at_ms: 1752300000000,
+        kind: "timecard",
+        payload: { card_id: "AAAA", card_kind: "felica_idm" },
+      }),
+    );
+    expect(((await other.messages.next()) as { type: string }).type).toBe("ack");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
+
+    // 同じテナントの端末なら届く。**合図だけで行の中身は含まない**
+    const same = await connectAccepted("hub-token-1"); // tenant-1
+    openSockets.push(same.ws);
+    same.ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 101,
+        recorded_at_ms: 1752300000000,
+        kind: "timecard",
+        payload: { card_id: "BBBB", card_kind: "felica_idm" },
+      }),
+    );
+    expect(((await same.messages.next()) as { type: string }).type).toBe("ack");
+    expect(await watcher.next()).toEqual({ type: "timecard_punch" });
+  });
+
+  it("打刻以外の kind では合図を出さない", async () => {
+    const { ws: watcherWs } = await connectWatcher("kiosk-token");
+    expect(watcherWs).not.toBeNull();
+    openSockets.push(watcherWs!);
+    const watcher = messageQueue(watcherWs!);
+
+    const device = await connectAccepted("hub-token-1");
+    openSockets.push(device.ws);
+    device.ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 201,
+        recorded_at_ms: 1752300000000,
+        payload: { type: "temperature", value: 36.5, unit: "celsius" },
+      }),
+    );
+    expect(((await device.messages.next()) as { type: string }).type).toBe("ack");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
+  });
+
+  it("★ watcher は「接続中デバイス」一覧に現れない", async () => {
+    // attachment に deviceId を載せると currentDeviceIds() が拾い、
+    // キオスクが管理画面のデバイス一覧に出てしまう
+    const { ws } = await connectWatcher("kiosk-token");
+    expect(ws).not.toBeNull();
+    openSockets.push(ws!);
+
+    const res = await SELF.fetch(`${BASE}/tenants/tenant-1/devices`, {
+      headers: { Authorization: SHARED_SECRET },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { devices: string[] };
+    expect(body.devices).not.toContain("device-kiosk-1");
   });
 });

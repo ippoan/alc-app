@@ -43,8 +43,22 @@ import {
 /** WS attachment。hibernation を跨いで identity を保持する。 */
 interface WsAttachment {
   tenantId: string;
-  deviceId: string;
+  /**
+   * device 接続のみ。**購読 (watcher) 接続では未設定にする** —
+   * `currentDeviceIds()` が全ソケットから拾うので、載せるとブラウザが
+   * 「接続中デバイス」一覧に現れる (Refs ippoan/alc-app-s3#134)。
+   */
+  deviceId?: string;
 }
+
+/**
+ * device 接続の attachment (`deviceId` が必ずある)。
+ *
+ * `WsAttachment.deviceId` は watcher のために optional なので、device 経路の
+ * ハンドラはこちらを受け取る。**`webSocketMessage` の guard を通った後だけ**
+ * 作れる — guard を消すと型でも落ちる。
+ */
+type DeviceAttachment = WsAttachment & { deviceId: string };
 
 /** 上りメッセージ (JSON parse 後、field は全て untrusted)。 */
 interface InboundMessage {
@@ -59,6 +73,24 @@ interface InboundMessage {
 
 /** getWebSockets の device 絞り込み用 tag。 */
 const DEVICE_TAG_PREFIX = "device:";
+
+/**
+ * 打刻更新の購読者 (ブラウザ) の tag。**device とは別の tag にする** —
+ * 下り command は `getWebSockets(DEVICE_TAG_PREFIX + ...)` で配るので、
+ * 別 tag にしておけば watcher には構造的に届かない (Refs ippoan/alc-app-s3#134)。
+ */
+const WATCH_TAG = "watch:timecard";
+
+/**
+ * 購読 WS のサブプロトコル名。ブラウザは `["alc.timecard.v1", "<jwt>"]` を送り、
+ * サーバはこちらだけを echo し返す (トークンを応答ヘッダーに乗せない)。
+ */
+export const WATCH_SUBPROTOCOL = "alc.timecard.v1";
+
+/** 打刻更新の合図。**行の中身は送らない** — ブラウザが API を引き直す。
+ * 行の形 (区分 / card_id / 社員解決の凍結 / JST 境界) は rust-alc-api 側に
+ * 作り込んであり、Worker に 2 実装目を作ると必ずズレるため。 */
+const TIMECARD_KIND = "timecard";
 
 /** command_result の storage key prefix。 */
 const CMD_RESULT_PREFIX = "cmdres:";
@@ -102,6 +134,9 @@ export class RecorderHub extends DurableObject<Env> {
     if (url.pathname === "/connect") {
       return this.handleConnect(request);
     }
+    if (url.pathname === "/watch") {
+      return this.handleWatch(request);
+    }
     if (url.pathname === "/command" && request.method === "POST") {
       return this.handleCommand(request);
     }
@@ -119,6 +154,61 @@ export class RecorderHub extends DurableObject<Env> {
   }
 
   // ── WS 受口 ────────────────────────────────────────────────────────────────
+
+  /**
+   * 打刻更新の購読 WS (読み取り専用)。
+   *
+   * **attachment に `deviceId` を載せない。** `currentDeviceIds()` は全ソケットを
+   * 走査して `attachment.deviceId` を拾うので、載せると**キオスクが「接続中
+   * デバイス」一覧に現れ、SSE で管理画面に配信される**。
+   *
+   * その結果 `webSocketMessage` は (deviceId が無いので) この接続からの上りを
+   * 1011 で切る。**それが意図した挙動** — watcher は購読専用で、上りを受けると
+   * 「ブラウザから DO を叩く口」になる。keep-alive の ping は constructor の
+   * `setWebSocketAutoResponse` が `webSocketMessage` を通さずに返すので成立する。
+   */
+  private handleWatch(request: Request): Response {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket", { status: 426 });
+    }
+    const tenantId = request.headers.get("X-Recorder-Tenant-Id") ?? "";
+    if (!tenantId) {
+      return json({ error: "missing_identity" }, 400);
+    }
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1], [WATCH_TAG]);
+    pair[1].serializeAttachment({ tenantId } satisfies WsAttachment);
+    // サブプロトコルを 1 つも返さないとブラウザが即座に閉じる。
+    // **トークン側を返してはいけない** (応答ヘッダーに秘密が乗る)
+    return new Response(null, {
+      status: 101,
+      webSocket: pair[0],
+      headers: { "Sec-WebSocket-Protocol": WATCH_SUBPROTOCOL },
+    });
+  }
+
+  /**
+   * 打刻が入ったことを購読者へ知らせる (**合図のみ**)。
+   *
+   * # 何が通知され、何が通知されないか
+   *
+   * 通知するのは **WS 経由の打刻 (NFC タイムカード端末)** だけ。次の 2 つは
+   * この DO を通らないので通知されない:
+   *
+   * - **ブラウザ版の打刻** (`POST /api/timecard/punch`) — rust-alc-api へ直行する。
+   *   ただし打った本人の画面は応答でその場更新するので、体感上の問題は
+   *   「他の画面に即時反映されない」だけ
+   * - `POST /measurements` (Wi-Fi 客の上り) — Worker 側で処理し DO を経由しない
+   *
+   * 常設の打刻端末が主用途なので、まずここだけを覆う。広げるなら
+   * **通知の発生源を増やすのではなく**、rust-alc-api 側から 1 か所で出す形を
+   * 検討すること (発生源が増えるほど「鳴らない経路」が生まれる)。
+   */
+  private notifyTimecardPunch(): void {
+    for (const ws of this.ctx.getWebSockets(WATCH_TAG)) {
+      this.send(ws, { type: "timecard_punch" });
+    }
+  }
 
   private handleConnect(request: Request): Response {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -168,12 +258,15 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
 
-    const attachment = ws.deserializeAttachment() as WsAttachment | null;
-    if (!attachment?.tenantId || !attachment?.deviceId) {
-      // 想定外 (accept 時に必ず載せている)。identity 不明のまま ingest しない。
+    const raw = ws.deserializeAttachment() as WsAttachment | null;
+    if (!raw?.tenantId || !raw.deviceId) {
+      // device 接続なら想定外 (accept 時に必ず載せている)。
+      // **購読 (watcher) 接続はここに落ちるのが正しい** — deviceId を持たず、
+      // 上りを一切受け付けないため (Refs ippoan/alc-app-s3#134)。
       ws.close(1011, "missing attachment");
       return;
     }
+    const attachment: DeviceAttachment = { tenantId: raw.tenantId, deviceId: raw.deviceId };
 
     switch (msg.type) {
       case "measurement":
@@ -204,7 +297,7 @@ export class RecorderHub extends DurableObject<Env> {
 
   private async handleMeasurement(
     ws: WebSocket,
-    attachment: WsAttachment,
+    attachment: DeviceAttachment,
     msg: InboundMessage,
   ): Promise<void> {
     // 検証 + 転送は POST /measurements (Wi-Fi 客の上り) と共有 (measurements.ts)。
@@ -265,13 +358,17 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
     this.send(ws, { type: "ack", seq });
+    // 打刻だけ購読者へ合図を出す (ack の後 = backend が受理した後)
+    if (parsed.item.kind === TIMECARD_KIND) {
+      this.notifyTimecardPunch();
+    }
   }
 
   // ── 上り: command_result → storage 保存 ───────────────────────────────────
 
   private async handleCommandResult(
     ws: WebSocket,
-    attachment: WsAttachment,
+    attachment: DeviceAttachment,
     msg: InboundMessage,
   ): Promise<void> {
     const id = typeof msg.id === "string" ? msg.id : "";

@@ -59,6 +59,60 @@ export const RECORDER_DEVICE_ROLES: ReadonlySet<string> = new Set([
   DEVICE_ROLE_TIMECARD,
 ]);
 
+/**
+ * キオスク端末 role。管理画面から self-pair して端末に保存する device credential
+ * (`web/app/composables/useDeviceToken.ts`、Refs ippoan/alc-app#434)。
+ *
+ * **`RECORDER_DEVICE_ROLES` には入れない。** あれは「下り command を受け取って
+ * よいデバイス」の allowlist なので、足すとキオスクが遠隔コマンドの対象になる。
+ * キオスクに要るのは読み取り専用の購読だけ。
+ */
+export const DEVICE_ROLE_KIOSK = "device-kiosk";
+
+/**
+ * 打刻の更新通知を購読してよい **user** role。打刻履歴を出す画面と同じ範囲
+ * (`AdminDashboard` / `ManagerDashboard` の「タイムカード」タブ)。
+ */
+export const WATCHER_USER_ROLES: ReadonlySet<string> = new Set(["admin", "manager"]);
+
+/** 同 **device** role。いまはキオスクだけ。 */
+export const WATCHER_DEVICE_ROLES: ReadonlySet<string> = new Set([DEVICE_ROLE_KIOSK]);
+
+/** watcher ハンドシェイクの判定結果。device と違い `deviceId` を持たない。 */
+export interface WatcherAuthDecision {
+  /** 101 = accept / 401 = token invalid / 403 = role 不許可 */
+  status: 101 | 401 | 403;
+  /** accept 時のみ非空。DO id (テナント単位) に使う。 */
+  tenantId: string;
+}
+
+/**
+ * 打刻更新の購読 (`GET /watch-timecard`) の可否を決める (純粋関数)。
+ *
+ * `decideRecorderAuth` と**別関数にしてある**のは、あちらが「下り command を
+ * 受け取ってよい device」の判定だから。混ぜると読み取り専用の購読者を増やす
+ * たびに command の宛先が増える。
+ *
+ * **user role と device role を明示的に受ける。** 「role が何であれ tenant_id が
+ * あれば通す」にすると、意図しない role (uploader 等) が入る。
+ *
+ * **`sub` は要求しない** — watcher に device 識別子は要らず、むしろ載せると
+ * DO の「接続中デバイス一覧」(`currentDeviceIds`) に現れてしまう。
+ */
+export function decideWatcherAuth(
+  result: IntrospectResult | null | undefined,
+): WatcherAuthDecision {
+  if (!result || result.active !== true || !result.tenant_id) {
+    return { status: 401, tenantId: "" };
+  }
+  const role = result.role;
+  if (typeof role !== "string") return { status: 403, tenantId: "" };
+  if (!WATCHER_USER_ROLES.has(role) && !WATCHER_DEVICE_ROLES.has(role)) {
+    return { status: 403, tenantId: "" };
+  }
+  return { status: 101, tenantId: result.tenant_id };
+}
+
 /** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
 export async function resolveSecret(binding: unknown): Promise<string | null> {
   if (typeof binding === "string") return binding;

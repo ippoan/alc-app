@@ -28,6 +28,7 @@ import {
   bearerToken,
   constantTimeEquals,
   decideRecorderAuth,
+  decideWatcherAuth,
   introspectToken,
   resolveSecret,
 } from "./auth";
@@ -43,6 +44,7 @@ import {
 import { runBatterySnapshotCron } from "./battery-snapshot";
 
 export { RecorderHub } from "./recorder-hub";
+import { WATCH_SUBPROTOCOL } from "./recorder-hub";
 
 export interface Env {
   RECORDER_HUB: DurableObjectNamespace;
@@ -140,6 +142,53 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   return hubStub(env, auth.tenantId).fetch(fwd);
 }
 
+/**
+ * 打刻更新の購読 WS (`GET /watch-timecard`)。**読み取り専用**。
+ *
+ * ブラウザは WS にヘッダーを付けられないので、トークンは
+ * `Sec-WebSocket-Protocol` で運ぶ: `["alc.timecard.v1", "<jwt>"]`。
+ *
+ * **サーバは `alc.timecard.v1` だけを echo し返す。** サブプロトコルを 1 つも
+ * 返さないとブラウザが即座に接続を閉じる。**トークンの方を echo してはいけない**
+ * (応答ヘッダーに秘密が乗る)。`?token=` にしないのは、常時表示のキオスクが
+ * 1 時間ごとに mint する device 資格情報が Worker のログと分析に残り続けるため。
+ */
+async function handleWatchTimecard(request: Request, env: Env, url: URL): Promise<Response> {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return new Response("Expected WebSocket. Use GET /watch-timecard with Upgrade header", {
+      status: 426,
+    });
+  }
+  const protocols = (request.headers.get("Sec-WebSocket-Protocol") ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (protocols[0] !== WATCH_SUBPROTOCOL || !protocols[1]) {
+    return json({ error: "missing_token" }, 401);
+  }
+  const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
+  if (!sharedSecret) {
+    return json({ error: "server_error" }, 503);
+  }
+  const result = await introspectToken(env.AUTH_WORKER, sharedSecret, protocols[1], url.origin);
+  if (result === null) {
+    return json({ error: "server_error" }, 503);
+  }
+  const decision = decideWatcherAuth(result);
+  if (decision.status !== 101) {
+    return json(
+      { error: decision.status === 403 ? "forbidden_role" : "invalid_token" },
+      decision.status,
+    );
+  }
+  // tenant は introspect 結果からのみ。**クライアントに名乗らせない** (既存の不変条件)
+  const fwd = new Request("https://recorder-hub.internal/watch", request);
+  fwd.headers.set("X-Recorder-Tenant-Id", decision.tenantId);
+  // device 経路のヘッダーが混ざらないよう明示的に落とす
+  fwd.headers.delete("X-Recorder-Device-Id");
+  return hubStub(env, decision.tenantId).fetch(fwd);
+}
+
 /** POST /measurements 1 リクエストの item 数上限 (WS の 64KB message 上限に相当する暴走ガード)。 */
 const MAX_BATCH_ITEMS = 100;
 
@@ -227,6 +276,9 @@ export default {
 
     if (url.pathname === "/ws") {
       return handleWebSocket(request, env, url);
+    }
+    if (url.pathname === "/watch-timecard") {
+      return handleWatchTimecard(request, env, url);
     }
 
     if (url.pathname === "/measurements" && request.method === "POST") {
