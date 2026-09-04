@@ -703,8 +703,35 @@ export interface TimePunchFilter {
   per_page?: number
 }
 
+/**
+ * 打刻一覧の 1 行 (`GET /api/timecard/punches`)。
+ *
+ * **`TimePunch` (POST /punch の応答) とは別物。** 一覧は
+ * `hub_measurements` からの導出で、`time_punches` の行ではない
+ * (Refs ippoan/alc-app-s3#134)。同じ interface で兼用すると、
+ * 一覧にしか無い `kind` / `card_id` や、一覧では null になる
+ * `employee_id` の扱いが混ざる。
+ */
+export interface TimePunchWithDevice {
+  id: string
+  tenant_id: string
+  /** 未登録カードのタップでは null (行は落とさない) */
+  employee_id: string | null
+  /** 常に null。端末は device_name を見る */
+  device_id: string | null
+  /** 打刻端末の device_id (auth-worker 発行の文字列) */
+  device_name: string | null
+  /** かざしたカードの値。未解決のとき「どのカードか」を出すのに使う */
+  card_id: string | null
+  /** 'timecard' (打刻) か 'license' (点呼)。**両方が同じ一覧に来る** */
+  kind: string
+  employee_name: string | null
+  punched_at: string
+  created_at: string
+}
+
 export interface TimePunchesResponse {
-  punches: TimePunch[]
+  punches: TimePunchWithDevice[]
   total: number
   page: number
   per_page: number
