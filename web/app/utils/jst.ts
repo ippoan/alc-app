@@ -25,3 +25,14 @@ export function jstTodayStartIso(now: Date = new Date()): string {
   // その暦日の JST 0 時 = UTC 0 時 − 9h
   return new Date(midnightUtc - JST_OFFSET_MS).toISOString()
 }
+
+/**
+ * JST の「今日」を `YYYY-MM-DD` で返す (`<input type="date">` の初期値用)。
+ *
+ * **`new Date().toISOString().slice(0, 10)` は UTC の日付**なので、JST の
+ * 00:00〜09:00 のあいだは「昨日」になる。日付を UTC で決めて範囲だけ `+09:00`
+ * で作ると、**正しい範囲を間違った日に対して**引くことになる。
+ */
+export function jstTodayDate(now: Date = new Date()): string {
+  return new Date(now.getTime() + JST_OFFSET_MS).toISOString().slice(0, 10)
+}
