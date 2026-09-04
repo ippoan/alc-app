@@ -127,7 +127,11 @@ async function bearerRequest<T>(url: string, jwt: string, options: RequestInit):
   const res = await fetch(url, { ...options, headers })
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`API エラー (${res.status}): ${body || res.statusText}`)
+    // **status を Error に載せる。** 呼び出し側 (TimecardManager 等) は既に
+    // `e?.status === 409` の形で見ているのに、ここが文字列しか投げていなかった
+    throw Object.assign(new Error(`API エラー (${res.status}): ${body || res.statusText}`), {
+      status: res.status,
+    })
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
@@ -691,6 +695,25 @@ export async function getTimecardCardByCardId(cardId: string): Promise<TimecardC
 }
 
 /**
+ * 打刻の失敗理由。**画面の文言を決めるためだけでなく、現地での切り分けのため**に
+ * 分けてある — 「打刻に失敗しました」だけだと、未ペアリング・権限不足・通信障害が
+ * 区別できず、実機の前に立った人が次に何をすればよいか分からない
+ * (Refs ippoan/alc-app-s3#134 の実機確認で実際に詰まった)。
+ */
+export type PunchFailure =
+  /** 端末に資格情報が無い / token が無効。ペアリングが要る */
+  | 'unpaired'
+  /** 認証は通ったが、この端末では打刻できない role */
+  | 'forbidden'
+  /** それ以外 (通信・上流エラー) */
+  | 'failed'
+
+/** `punchFailure` を載せた Error を作る。 */
+function punchError(failure: PunchFailure, message: string, status?: number): Error {
+  return Object.assign(new Error(message), { punchFailure: failure, status })
+}
+
+/**
  * 打刻する (Refs ippoan/alc-app-s3#134)。
  *
  * **rust-alc-api ではなく alc-app 自身の server route** (`/api/timecard/punch`) を
@@ -703,15 +726,28 @@ export async function getTimecardCardByCardId(cardId: string): Promise<TimecardC
  * 呼び出し側は打刻後に `listTimePunches` を引き直すこと。
  *
  * tenant_id / device_id は route が JWT から決めるので**ここからは送らない**。
+ *
+ * 失敗は `punchFailure` を載せて投げる (上の型を参照)。
  */
 export async function punchTimecard(cardId: string): Promise<void> {
   const jwt = getAccessToken?.() ?? (getKioskDeviceJwt ? await getKioskDeviceJwt() : null)
-  if (!jwt) throw new Error('認証が必要です')
-  await bearerRequest<unknown>('/api/timecard/punch', jwt, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ card_id: cardId }),
-  })
+  // **ここを 'failed' に落とさない。** 未ペアリング端末はこの分岐にだけ来るので、
+  // 一緒くたにすると「ペアリングすれば直る」と分からなくなる
+  if (!jwt) throw punchError('unpaired', '端末がペアリングされていません')
+  try {
+    await bearerRequest<unknown>('/api/timecard/punch', jwt, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_id: cardId }),
+    })
+  }
+  catch (e) {
+    const status = (e as { status?: number })?.status
+    const message = (e as Error)?.message || '打刻に失敗しました'
+    if (status === 401) throw punchError('unpaired', message, status)
+    if (status === 403) throw punchError('forbidden', message, status)
+    throw punchError('failed', message, status)
+  }
 }
 
 export async function listTimePunches(filter: TimePunchFilter = {}): Promise<TimePunchesResponse> {

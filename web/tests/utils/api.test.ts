@@ -2015,7 +2015,7 @@ describe.skipIf(isLive)('punchTimecard (#134 worker 経由)', () => {
 
   it('どちらの JWT も無ければ fetch せずに失敗する (未ペアリング端末)', async () => {
     initApi(API_BASE, () => null, () => 'tid')
-    await expect(punchTimecard('CARD-3')).rejects.toThrow('認証が必要です')
+    await expect(punchTimecard('CARD-3')).rejects.toThrow('端末がペアリングされていません')
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
@@ -2023,6 +2023,46 @@ describe.skipIf(isLive)('punchTimecard (#134 worker 経由)', () => {
     initApi(API_BASE, () => 'admin-jwt', () => 'tid')
     mockFetch.mockResolvedValueOnce(errResponse(401, 'unauthorized'))
     await expect(punchTimecard('CARD-4')).rejects.toThrow('API エラー (401)')
+  })
+
+  // ★ 失敗理由を潰さない (Refs ippoan/alc-app-s3#134 の実機確認)。
+  // 「打刻に失敗しました」だけだと、未ペアリング・権限不足・通信障害が
+  // 現地で区別できず、次の一手 (ペアリングし直す/待つ) を選べない
+  it.each([
+    [401, 'unpaired'],
+    [403, 'forbidden'],
+    [500, 'failed'],
+    [502, 'failed'],
+  ] as [number, string][])('HTTP %i の失敗理由は %s', async (status, failure) => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(errResponse(status, 'ng'))
+    await expect(punchTimecard('CARD-5')).rejects.toMatchObject({ punchFailure: failure, status })
+  })
+
+  it('★ JWT が無い場合の失敗理由は unpaired (通信障害と混ぜない)', async () => {
+    // ここを failed に落としていたせいで、未ペアリングの端末が
+    // 「打刻に失敗しました」としか出さず、原因の切り分けができなかった
+    initApi(API_BASE, () => null, () => 'tid')
+    await expect(punchTimecard('CARD-6')).rejects.toMatchObject({ punchFailure: 'unpaired' })
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('fetch 自体が失敗した場合も failed (status なし) で投げる', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockRejectedValueOnce(new Error('Failed to fetch'))
+    await expect(punchTimecard('CARD-7')).rejects.toMatchObject({
+      punchFailure: 'failed',
+      message: 'Failed to fetch',
+    })
+  })
+
+  it('message を持たない失敗でも文言が空にならない', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockRejectedValueOnce({})
+    await expect(punchTimecard('CARD-8')).rejects.toMatchObject({
+      punchFailure: 'failed',
+      message: '打刻に失敗しました',
+    })
   })
 })
 
