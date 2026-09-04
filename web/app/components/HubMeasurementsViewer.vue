@@ -43,6 +43,10 @@ interface SessionRow {
   deviceId: string
   /** 免許証の測定。点呼を免許証から始めていなければ null。 */
   license: { nfcId: string, issue: string | null, expiry: string | null } | null
+  /** アルコール測定 (吹込不良は result のみで value は信用しない)。 */
+  alcohol: { value: number | null, result: string | null } | null
+  /** 体温 (℃)。測っていなければ null。 */
+  temperature: number | null
 }
 
 /** 免許証の payload から nfc_id / 交付 / 有効期限 を取り出す (形が違えば null)。 */
@@ -55,6 +59,27 @@ function readLicense(payload: unknown): SessionRow['license'] {
     issue: typeof p.issue === 'string' ? p.issue : null,
     expiry: typeof p.expiry === 'string' ? p.expiry : null,
   }
+}
+
+/**
+ * アルコールの payload から値と判定を取り出す (形が違えば null)。
+ * CoreS3 は `{type:"alcohol",value:0.000,unit:"mg/L",result:"normal"|"over"|"error",use_count:N}`
+ * を送る。`result:"error"` (吹込不良) のときの value は 0.000 固定で測定値ではない。
+ */
+function readAlcohol(payload: unknown): SessionRow['alcohol'] {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as { value?: unknown, result?: unknown }
+  const value = typeof p.value === 'number' ? p.value : null
+  const result = typeof p.result === 'string' ? p.result : null
+  if (value === null && result === null) return null
+  return { value, result }
+}
+
+/** 体温の payload から ℃ を取り出す (形が違えば null)。 */
+function readTemperature(payload: unknown): number | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as { value?: unknown }
+  return typeof p.value === 'number' ? p.value : null
 }
 
 /** `YYYYMMDD` を `YYYY-MM-DD` にする (読めない形はそのまま返す)。 */
@@ -78,12 +103,23 @@ const sessions = computed<SessionRow[]>(() => {
     const key = item.session_id ? `s:${item.session_id}` : `i:${item.id}`
     let row = byKey.get(key)
     if (!row) {
-      row = { key, items: [], createdAt: item.created_at, deviceId: item.device_id, license: null }
+      row = {
+        key,
+        items: [],
+        createdAt: item.created_at,
+        deviceId: item.device_id,
+        license: null,
+        alcohol: null,
+        temperature: null,
+      }
       byKey.set(key, row)
       rows.push(row)
     }
     row.items.push(item)
+    // 同じ点呼で複数回測っていれば、一番新しいもの (= 先に来る行) を採る。
     if (item.kind === 'license' && !row.license) row.license = readLicense(item.payload)
+    if (item.kind === 'alcohol' && !row.alcohol) row.alcohol = readAlcohol(item.payload)
+    if (item.kind === 'temperature' && row.temperature === null) row.temperature = readTemperature(item.payload)
   }
   return rows
 })
@@ -168,6 +204,19 @@ function kindClass(k: string): string {
   if (k === 'fc1200_raw') return 'bg-gray-100 text-gray-600'
   if (k === 'license') return 'bg-green-100 text-green-800'
   return 'bg-blue-100 text-blue-800'
+}
+
+/** アルコール判定 (FC-1200 の result) の表示名。未知の値はそのまま出す。 */
+function alcoholResultLabel(result: string): string {
+  if (result === 'normal') return '正常'
+  if (result === 'over') return '超過'
+  if (result === 'error') return '測定エラー'
+  return result
+}
+
+/** アルコール判定の色。正常だけ緑、それ以外 (超過・吹込不良) は赤で目立たせる。 */
+function alcoholResultClass(result: string): string {
+  return result === 'normal' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
 }
 
 /** 免許証の nfc_id で引ける乗務員。引けなければ null (= alc に未登録)。 */
@@ -282,6 +331,8 @@ onMounted(() => {
               <th class="px-2 py-2 text-left text-gray-500">デバイスID</th>
               <th class="px-2 py-2 text-left text-gray-500">乗務員</th>
               <th class="px-2 py-2 text-left text-gray-500">免許 有効期限</th>
+              <th class="px-2 py-2 text-left text-gray-500">アルコール</th>
+              <th class="px-2 py-2 text-left text-gray-500">体温</th>
               <th class="px-2 py-2 text-left text-gray-500">種別</th>
               <th class="px-2 py-2 text-left text-gray-500">内容</th>
             </tr>
@@ -307,6 +358,24 @@ onMounted(() => {
                   </template>
                   <span v-else class="text-gray-400">—</span>
                 </td>
+                <td class="px-2 py-2 whitespace-nowrap">
+                  <template v-if="row.alcohol">
+                    <!-- 吹込不良 (result="error") の value は 0.000 固定なので測定値として出さない -->
+                    <span v-if="row.alcohol.value != null && row.alcohol.result !== 'error'" class="text-gray-700">
+                      {{ row.alcohol.value.toFixed(3) }} mg/L
+                    </span>
+                    <span
+                      v-if="row.alcohol.result"
+                      class="ml-1 px-2 py-0.5 rounded text-xs font-medium"
+                      :class="alcoholResultClass(row.alcohol.result)"
+                    >{{ alcoholResultLabel(row.alcohol.result) }}</span>
+                  </template>
+                  <span v-else class="text-gray-400">—</span>
+                </td>
+                <td class="px-2 py-2 whitespace-nowrap text-gray-700">
+                  <template v-if="row.temperature !== null">{{ row.temperature.toFixed(1) }} &#8451;</template>
+                  <span v-else class="text-gray-400">—</span>
+                </td>
                 <td class="px-2 py-2">
                   <span
                     v-for="item in row.items"
@@ -322,7 +391,7 @@ onMounted(() => {
                 </td>
               </tr>
               <tr v-if="expanded.has(row.key)" class="bg-gray-50">
-                <td colspan="6" class="px-2 py-2">
+                <td colspan="8" class="px-2 py-2">
                   <div v-for="item in row.items" :key="item.id" class="mb-2 last:mb-0">
                     <div class="text-xs text-gray-500">
                       {{ item.kind }} / seq {{ item.seq }} / 端末計時 {{ formatDateTime(item.recorded_at) }}
