@@ -4,6 +4,7 @@ import {
   getEmployees, listTimecardCards, createTimecardCard, deleteTimecardCard,
   listTimePunches, downloadTimePunchesCsv,
 } from '~/utils/api'
+import { jstTodayDate } from '~/utils/jst'
 
 type SubTab = 'cards' | 'punches'
 
@@ -100,7 +101,10 @@ const punchTotal = ref(0)
 const punchPage = ref(1)
 const punchPerPage = 50
 const isLoadingPunches = ref(false)
-const filterDate = ref(new Date().toISOString().slice(0, 10))
+// **既定は JST の今日。** `toISOString().slice(0, 10)` は UTC の日付なので、
+// JST 00:00〜09:00 のあいだ「昨日」を開いてしまう (範囲は `+09:00` で正しく
+// 作っているのに、その範囲を間違った日に当てることになる)
+const filterDate = ref(jstTodayDate())
 const filterEmployeeId = ref('')
 
 /** 打刻履歴の 1 行。打刻と点呼を同じ形に均して並べる。 */
