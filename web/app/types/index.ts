@@ -1155,8 +1155,11 @@ export interface HubMeasurementsResponse {
   has_more: boolean
 }
 
-/** 受理される測定種別 (backend の HUB_MEASUREMENT_KINDS と一致。allowlist 外は 400)。 */
-export const HUB_MEASUREMENT_KINDS = ['temperature', 'blood_pressure', 'alcohol', 'license', 'fc1200_raw'] as const
+/**
+ * 受理される測定種別 (backend の HUB_MEASUREMENT_KINDS と一致。allowlist 外は 400)。
+ * timecard は NFC タイムカード端末の打刻イベント (Refs ippoan/alc-app-s3#134)。
+ */
+export const HUB_MEASUREMENT_KINDS = ['temperature', 'blood_pressure', 'alcohol', 'license', 'fc1200_raw', 'timecard'] as const
 
 // ============================================================
 // Driver master sync (theearth 乗務員マスタ → alc employees、Refs ippoan/alc-app-s3#125)
