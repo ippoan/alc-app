@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ApiEmployee } from '~/types'
+import type { ApiEmployee, TimePunchWithDevice } from '~/types'
 import { punchTimecard, listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
 
@@ -8,7 +8,7 @@ const props = defineProps<{
 }>()
 
 const nfc = useNfcWebSocket()
-const { deviceId } = useAuth()
+const { accessToken } = useAuth()
 const { deviceModel } = useFingerprint()
 const KYOCERA_MODELS = ['KC-T305CN', 'KC-305CN', 'KYT35', 'A404KC', 'KC-T306']
 const isKyoceraTablet = computed(() => {
@@ -27,7 +27,25 @@ const processing = ref(false)
 const errorMsg = ref('')
 let errorTimer: ReturnType<typeof setTimeout> | null = null
 
-const recentPunches = ref<{ name: string; time: string; highlighted: boolean }[]>([])
+/** 本日の打刻 (新しい順)。**サーバから引き直したものだけ**を出す。 */
+const recentPunches = ref<{ key: string; name: string; time: string }[]>([])
+/** 直近に自分で打った行 (数秒だけ強調する)。 */
+const highlightedKey = ref<string | null>(null)
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+
+const { getDeviceJwt } = useDeviceToken()
+
+/**
+ * 打刻更新の購読 (Refs ippoan/alc-app-s3#134)。**管理画面と同じ composable。**
+ * 他の端末 (NFC タイムカード端末や別のキオスク) で打たれた打刻も、この画面の
+ * 「本日の打刻履歴」に出したいので購読する。トークンはキオスクの device JWT、
+ * 管理者がこの画面を開いている場合は browser JWT。**どちらも無ければ**
+ * (未ペアリング) WS は張らずポーリングに落ちる — 画面は壊さない。
+ */
+const watch$ = useTimecardWatch({
+  getToken: () => accessToken.value ?? getDeviceJwt(),
+  onChange: () => { void loadTodayPunches() },
+})
 
 const isLargeScreen = ref(false)
 function updateScreenSize() {
@@ -39,33 +57,50 @@ const displayedPunches = computed(() => {
   return recentPunches.value.slice(0, limit)
 })
 
+/**
+ * 表示名。**未解決のタップは行ごと落とさず、どのカードかを出す** — 落とすと
+ * 「かざしたのに履歴に出ない」になり、カードの登録漏れに気付けない。
+ */
+function displayName(p: TimePunchWithDevice): string {
+  return (p.employee_id && employeeMap.value[p.employee_id])
+    || p.employee_name
+    || (p.card_id ? `未登録カード ${p.card_id}` : '不明')
+}
+
+/**
+ * 本日の打刻を引き直す。
+ *
+ * **打刻の応答からは作らない。** 打刻はキオスクも端末も同じ ingest 経路に乗り、
+ * 社員の解決 (凍結) はサーバがやるので、画面に出す行はサーバから引いた 1 本に
+ * 揃える (Refs ippoan/alc-app-s3#134)。他の端末で打たれた打刻も同じ経路で出る。
+ *
+ * **「今日」は JST で切る。** サーバ側も JST 固定 (`list_today_punches` の
+ * Asia/Tokyo、CSV の +09:00) なので、ブラウザのローカル時刻で切ると
+ * JST 以外に設定された端末でサーバと食い違う。
+ */
+async function loadTodayPunches() {
+  try {
+    const res = await listTimePunches({ date_from: jstTodayStartIso(), per_page: 200 })
+    recentPunches.value = res.punches.map(p => ({
+      key: p.id,
+      name: displayName(p),
+      time: formatTime(p.punched_at),
+    }))
+  }
+  catch (e) { console.error('[TimePunchKiosk] Failed to load today punches:', e) }
+}
+
 onMounted(async () => {
   updateScreenSize()
   window.addEventListener('resize', updateScreenSize)
 
-  // Fetch employees + today's punches
   try {
-    // **「今日」は JST で切る。** サーバ側も JST 固定 (`list_today_punches` の
-    // Asia/Tokyo、CSV の +09:00) なので、ブラウザのローカル時刻で切ると
-    // JST 以外に設定された端末でサーバと食い違う (Refs ippoan/alc-app-s3#134)
-    const todayStart = jstTodayStartIso()
-    const [emps, res] = await Promise.all([
-      getEmployees(),
-      listTimePunches({ date_from: todayStart, per_page: 200 }),
-    ])
-    employees.value = emps
-    recentPunches.value = res.punches.map(p => ({
-      // **未登録カードのタップは employee_id が null で来る** (サーバが行ごと
-      // 落とさないため)。素で slice すると落ちるので、カードの値を出して
-      // 「誰の登録が漏れているか」が分かるようにする
-      name: (p.employee_id && employeeMap.value[p.employee_id])
-        || p.employee_name
-        || (p.card_id ? `未登録カード ${p.card_id}` : '不明'),
-      time: formatTime(p.punched_at),
-      highlighted: false,
-    }))
+    employees.value = await getEmployees()
   }
-  catch (e) { console.error('[TimePunchKiosk] Failed to load today punches:', e) }
+  catch (e) { console.error('[TimePunchKiosk] Failed to load employees:', e) }
+  // 購読が張れれば onopen で 1 回引き直すが、張れない場合もあるのでここでも引く
+  await loadTodayPunches()
+  void watch$.connect()
 
   nfc.connect()
   nfc.onRead(async (event) => {
@@ -74,19 +109,19 @@ onMounted(async () => {
     errorMsg.value = ''
 
     try {
-      const cardId = event.employee_id
-      const res = await punchTimecard(cardId, deviceId.value)
-      const entry = { name: res.employee_name, time: formatTime(res.punch.punched_at), highlighted: true }
-      recentPunches.value.unshift(entry)
-      setTimeout(() => { entry.highlighted = false }, 3000)
+      await punchTimecard(event.employee_id)
+      // **応答に打刻行は入らない** (端末の打刻と同じ ingest 経路)。引き直す
+      await loadTodayPunches()
+      highlightedKey.value = recentPunches.value[0]?.key ?? null
+      if (highlightTimer) clearTimeout(highlightTimer)
+      highlightTimer = setTimeout(() => { highlightedKey.value = null }, 3000)
     }
     catch (e: any) {
-      if (e?.message?.includes('404') || e?.status === 404) {
-        errorMsg.value = 'このカードは登録されていません'
-      }
-      else {
-        errorMsg.value = '打刻に失敗しました'
-      }
+      // 未登録カードでも打刻自体は記録される (履歴に「未登録カード …」で出る)
+      // ので、ここに来るのは通信・認証の失敗だけ
+      errorMsg.value = e?.message?.includes('401')
+        ? 'この端末は登録されていません (ペアリングが必要です)'
+        : '打刻に失敗しました'
       if (errorTimer) clearTimeout(errorTimer)
       errorTimer = setTimeout(() => { errorMsg.value = '' }, 5000)
     }
@@ -98,6 +133,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateScreenSize)
+  if (errorTimer) clearTimeout(errorTimer)
+  if (highlightTimer) clearTimeout(highlightTimer)
 })
 
 function formatTime(iso: string): string {
@@ -167,16 +204,16 @@ function formatTime(iso: string): string {
             <tbody>
               <tr
                 v-for="(p, i) in displayedPunches"
-                :key="i"
+                :key="p.key"
                 class="border-b border-gray-100 transition-colors duration-1000"
-                :class="p.highlighted
+                :class="p.key === highlightedKey
                   ? 'bg-green-100 text-green-800 font-medium'
                   : (i === 0 ? 'bg-blue-50 text-gray-800 font-medium' : 'text-gray-600')"
               >
                 <td class="py-2 px-4">{{ p.name }}</td>
                 <td
                   class="py-2 px-4 text-right tabular-nums transition-colors duration-1000"
-                  :class="p.highlighted ? 'text-green-700' : (i === 0 ? 'text-blue-600' : 'text-gray-400')"
+                  :class="p.key === highlightedKey ? 'text-green-700' : (i === 0 ? 'text-blue-600' : 'text-gray-400')"
                 >
                   {{ p.time }}
                 </td>

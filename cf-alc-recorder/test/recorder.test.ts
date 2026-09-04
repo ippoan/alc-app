@@ -76,6 +76,18 @@ async function connectWatcher(token: string) {
   return { res, ws: res.webSocket ?? null };
 }
 
+/**
+ * ブラウザ打刻の内部 API を叩く (alc-app の server route と同じ形)。
+ * 認証は `Authorization: <INTERNAL_SHARED_SECRET>` (生の値)。
+ */
+function punchViaHttp(tenantId: string, deviceId: string, body: unknown) {
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/devices/${deviceId}/timecard-punch`, {
+    method: "POST",
+    headers: { Authorization: SHARED_SECRET, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** 接続 + `connected` 受信までを行うヘルパー。 */
 async function connectAccepted(token: string) {
   const { res, ws } = await connect(token);
@@ -838,6 +850,121 @@ describe("/watch-timecard の振る舞い", () => {
     expect(((await device.messages.next()) as { type: string }).type).toBe("ack");
     await new Promise((r) => setTimeout(r, 300));
     expect(watcher.pending()).toBe(0);
+  });
+
+  it("★ ブラウザ打刻 (内部 API) でも同じ合図が出る", async () => {
+    // これが鳴らないと「端末で打つと更新されるが、ブラウザで打つと更新されない」
+    // という経路依存の挙動になる (Refs ippoan/alc-app-s3#134)
+    const { ws: watcherWs } = await connectWatcher("kiosk-token"); // tenant-1
+    expect(watcherWs).not.toBeNull();
+    openSockets.push(watcherWs!);
+    const watcher = messageQueue(watcherWs!);
+
+    const res = await punchViaHttp("tenant-1", "device-kiosk-1", { card_id: " CCCC " });
+    expect(res.status).toBe(202);
+    expect(await watcher.next()).toEqual({ type: "timecard_punch" });
+
+    // ingest には kind=timecard / device_id / card_id (trim 済み) が渡る。
+    // **kind はサーバが立てる** ので、body に kind を書いても効かない
+    const calls = await spyIngest();
+    expect(calls.length).toBe(1);
+    expect(calls[0].tenantId).toBe("tenant-1");
+    expect(calls[0].items.length).toBe(1);
+    expect(calls[0].items[0]).toMatchObject({
+      device_id: "device-kiosk-1",
+      kind: "timecard",
+      recorded_at_ms: null,
+      session_id: null,
+      payload: { card_id: "CCCC" },
+    });
+  });
+
+  it("★ ブラウザ打刻の kind はサーバが立てる (body の kind / payload は無視)", async () => {
+    // crash_log や点呼系の kind を注入できる口にしない
+    const res = await punchViaHttp("tenant-1", "device-kiosk-1", {
+      card_id: "DDDD",
+      kind: "crash_log",
+      payload: { reset_reason: "panic" },
+      seq: 1,
+      recorded_at_ms: 1752300000000,
+    });
+    expect(res.status).toBe(202);
+    const calls = await spyIngest();
+    expect(calls[0].items[0].kind).toBe("timecard");
+    expect(calls[0].items[0].payload).toEqual({ card_id: "DDDD" });
+    expect(calls[0].items[0].recorded_at_ms).toBeNull();
+  });
+
+  it("ブラウザ打刻の seq は同ミリ秒でも衝突しない", async () => {
+    // 端末と違って再送が無いので冪等キーではないが、
+    // UNIQUE (tenant_id, device_id, seq) に当たると打刻が落ちる
+    for (const cardId of ["E1", "E2", "E3"]) {
+      const res = await punchViaHttp("tenant-1", "device-kiosk-1", { card_id: cardId });
+      expect(res.status).toBe(202);
+    }
+    const calls = await spyIngest();
+    const seqs = calls.map((c) => c.items[0].seq as number);
+    expect(new Set(seqs).size).toBe(3);
+    expect(seqs[1]).toBeGreaterThan(seqs[0]);
+    expect(seqs[2]).toBeGreaterThan(seqs[1]);
+  });
+
+  it("card_id が無い / 空 / 長すぎるブラウザ打刻は 400 で、合図も出ない", async () => {
+    const { ws: watcherWs } = await connectWatcher("kiosk-token");
+    expect(watcherWs).not.toBeNull();
+    openSockets.push(watcherWs!);
+    const watcher = messageQueue(watcherWs!);
+
+    const bodies = [{}, { card_id: "   " }, { card_id: 42 }, { card_id: "x".repeat(257) }];
+    for (const body of bodies) {
+      const res = await punchViaHttp("tenant-1", "device-kiosk-1", body);
+      expect(res.status).toBe(400);
+      expect((await res.json()) as { error: string }).toEqual({ error: "invalid_card_id" });
+    }
+    // JSON でない body / 配列 body も弾く
+    for (const raw of ["not-json", "[]"]) {
+      const res = await SELF.fetch(
+        `${BASE}/tenants/tenant-1/devices/device-kiosk-1/timecard-punch`,
+        {
+          method: "POST",
+          headers: { Authorization: SHARED_SECRET, "Content-Type": "application/json" },
+          body: raw,
+        },
+      );
+      expect(res.status).toBe(400);
+    }
+
+    expect(await spyIngest()).toEqual([]);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
+  });
+
+  it("★ ブラウザ打刻は上流失敗を 502 で返し、合図を出さない", async () => {
+    // 合図は「backend が受理した後」だけ。受理されていないのに鳴らすと、
+    // 引き直した画面には何も増えていない (= 嘘の更新通知になる)
+    const { ws: watcherWs } = await connectWatcher("kiosk-token");
+    expect(watcherWs).not.toBeNull();
+    openSockets.push(watcherWs!);
+    const watcher = messageQueue(watcherWs!);
+
+    // mock の auth-worker は card_id="boom" の打刻に 500 を返す
+    const res = await punchViaHttp("tenant-1", "device-kiosk-1", { card_id: "boom" });
+    expect(res.status).toBe(502);
+    expect((await res.json()) as { error: string }).toEqual({ error: "upstream_500" });
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
+  });
+
+  it("ブラウザ打刻の内部 API は shared secret 必須 (欠落 / 不一致は 401)", async () => {
+    for (const headers of [{}, { Authorization: "wrong-secret" }] as Record<string, string>[]) {
+      const res = await SELF.fetch(
+        `${BASE}/tenants/tenant-1/devices/device-kiosk-1/timecard-punch`,
+        { method: "POST", headers, body: JSON.stringify({ card_id: "GGGG" }) },
+      );
+      expect(res.status).toBe(401);
+    }
+    expect(await spyIngest()).toEqual([]);
   });
 
   it("★ watcher は「接続中デバイス」一覧に現れない", async () => {

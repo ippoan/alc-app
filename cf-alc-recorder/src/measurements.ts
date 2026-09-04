@@ -100,6 +100,62 @@ export function parseMeasurementItem(msg: MeasurementInput): ParseMeasurementRes
 }
 
 /**
+ * 打刻の kind。**行の中身 (区分 / card_id / 社員解決の凍結 / JST 境界) は
+ * rust-alc-api 側が持つ** ので、Worker はこの文字列以上のことを知らない。
+ *
+ * 定義をここに置くのは、**打刻を作る経路が 2 つある**ため
+ * (端末の WS measurement と、ブラウザ打刻の `buildTimecardPunch`)。
+ * 片方だけ別の文字列にすると購読の合図が静かに鳴らなくなる。
+ */
+export const TIMECARD_KIND = "timecard";
+
+/** card_id の長さ上限 (NFC の生値。これを超えるものは端末側の異常)。 */
+const MAX_CARD_ID_LEN = 256;
+
+/** ブラウザ打刻 1 件の入力 (alc-app の server route 由来、field は untrusted)。 */
+export interface TimecardPunchInput {
+  card_id?: unknown;
+}
+
+export type BuildTimecardPunchResult =
+  | { ok: true; item: ParsedMeasurement }
+  | { ok: false; error: "invalid_card_id" };
+
+/**
+ * ブラウザ打刻 1 件を measurement に組み立てる (Refs ippoan/alc-app-s3#134)。
+ *
+ * **`kind` はサーバが立てる。クライアントには指定させない** — この経路は
+ * 「打刻を作る」ためだけのものなので、kind を渡せるようにすると
+ * `crash_log` や点呼/アルコール系まで注入できる口になる。
+ *
+ * **`recorded_at_ms` も受け取らない (常に null)。** ブラウザの時計は信用できず、
+ * rust 側は `COALESCE(recorded_at, created_at)` で受信時刻に倒すため。
+ * 従来のブラウザ打刻 (`create_punch` の `recorded_at = now()`) と同じ扱いになる。
+ *
+ * `payload` を `{ card_id }` だけにしてあるのも従来と同じ形 — 社員の解決
+ * (`employee_id` の凍結) は ingest 側 (`freeze_employee_id`) が 1 か所で行う。
+ */
+export function buildTimecardPunch(
+  input: TimecardPunchInput,
+  seq: number,
+): BuildTimecardPunchResult {
+  const raw = typeof input.card_id === "string" ? input.card_id.trim() : "";
+  if (!raw || raw.length > MAX_CARD_ID_LEN) {
+    return { ok: false, error: "invalid_card_id" };
+  }
+  return {
+    ok: true,
+    item: {
+      seq,
+      kind: TIMECARD_KIND,
+      recorded_at_ms: null,
+      session_id: null,
+      payload: { card_id: raw },
+    },
+  };
+}
+
+/**
  * crash_log (CoreS3 の異常リセット復帰レポート: reset reason + panic 前ログ、
  * Refs ippoan/alc-app-s3#43) はバックエンド (rust-alc-api hub_measurements) へ
  * 転送せず、受口の DO/Worker が R2 (`CRASH_LOGS`) へ直接保存して完結させる。

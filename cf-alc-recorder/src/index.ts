@@ -13,13 +13,17 @@
  *   - POST /measurements                                … Wi-Fi 客の上りバッチ (#109)。
  *       認証は /ws と同じ device JWT introspect。body は measurement の配列
  *       (WS measurement frame と同形)。下りが無いためステートレス (DO 不要、Worker 直)。
+ *   - POST /tenants/:tenantId/devices/:deviceId/timecard-punch … ブラウザ打刻の受口
+ *       (alc-app の server route から RECORDER binding 経由。kind はサーバが
+ *        `timecard` を立て、DO で ingest 転送 + 購読者への合図を行う)
  *   - POST /tenants/:tenantId/devices/:deviceId/command … 接続中デバイスへの下り push
  *   - GET  /tenants/:tenantId/devices                   … 接続中デバイス一覧 (debug)
  *   - GET  /tenants/:tenantId/events                    … 接続中デバイス一覧の SSE push
  *     (auth-worker /device/setup/events が透過。接続/切断のたびに `devices` event を配信)
  *   - GET  /tenants/:tenantId/commands/:id/result       … command_result の取得
- *     (下り 3 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の内部 API。
- *      auth-worker /auth/introspect と同じ server-to-server shared secret 認証)
+ *     (`/tenants/...` の 5 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
+ *      内部 API。auth-worker /auth/introspect と同じ server-to-server shared secret
+ *      認証で、呼び手は alc-app の server route など Worker 間に限られる)
  *
  * cron (`*` / prod のみ、Refs #121): CoreS3 電源/バッテリー状態を 30 分おきに
  * 定期取得し R2 (`BATTERY_HISTORY`) へ保存する (battery-snapshot.ts)。
@@ -285,7 +289,28 @@ export default {
       return handleMeasurementsPost(request, env, url);
     }
 
-    // ── 下り: 内部 HTTP API (shared secret 認証) ────────────────────────────
+    // ── 内部 HTTP API (shared secret 認証) ──────────────────────────────────
+    // ブラウザ打刻 (Refs ippoan/alc-app-s3#134)。alc-app の server route が
+    // browser/kiosk JWT を introspect して tenant_id / device_id を決めた後に
+    // 呼ぶ。**body は `{ card_id }` だけ** — kind も seq も DO 側が立てる。
+    const punchMatch = url.pathname.match(
+      /^\/tenants\/([^/]+)\/devices\/([^/]+)\/timecard-punch$/,
+    );
+    if (punchMatch && request.method === "POST") {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      const fwd = new Request("https://recorder-hub.internal/timecard-punch", {
+        method: "POST",
+        headers: {
+          "X-Recorder-Tenant-Id": decodeURIComponent(punchMatch[1]),
+          "X-Recorder-Device-Id": decodeURIComponent(punchMatch[2]),
+          "Content-Type": "application/json",
+        },
+        body: request.body,
+      });
+      return hubStub(env, decodeURIComponent(punchMatch[1])).fetch(fwd);
+    }
+
     const commandMatch = url.pathname.match(/^\/tenants\/([^/]+)\/devices\/([^/]+)\/command$/);
     if (commandMatch && request.method === "POST") {
       const denied = await requireInternalAuth(request, env);

@@ -15,7 +15,7 @@
  * ★ tenant_id は auth-worker introspect の結果だけを使う — ブラウザからの
  * body / query は route で一切読まない (読むと任意テナントへ書ける、#434 の再現)。
  */
-import type { Forward } from './print-relay'
+import type { Forward, IntrospectClaims } from './print-relay'
 
 const RELAY_BASE = 'https://scraper-relay.internal'
 
@@ -24,13 +24,6 @@ const RELAY_BASE = 'https://scraper-relay.internal'
  * `admin` (auth-worker の user.role) だけ。`viewer` (閲覧者) は 403。
  */
 export const DRIVER_MASTER_SYNC_ROLES: ReadonlySet<string> = new Set(['admin'])
-
-/** auth-worker `/auth/introspect` 応答のうち、ここで見る field。 */
-export interface IntrospectClaims {
-  active?: boolean
-  tenant_id?: string
-  role?: string
-}
 
 export type DriverMasterAccess =
   | { ok: true; tenantId: string }

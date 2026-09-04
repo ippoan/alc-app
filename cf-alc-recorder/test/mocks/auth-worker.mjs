@@ -102,7 +102,12 @@ export default {
         tenantId: request.headers.get("X-Tenant-ID"),
         items,
       });
-      if (Array.isArray(items) && items.some((i) => i.kind === "boom")) {
+      // 上流失敗の再現用。kind は端末経路 (WS / POST バッチ) で、card_id は
+      // ブラウザ打刻経路 (kind がサーバ固定なので kind では作れない) で使う。
+      const boom =
+        Array.isArray(items) &&
+        items.some((i) => i.kind === "boom" || i.payload?.card_id === "boom");
+      if (boom) {
         return json({ error: "boom" }, 500);
       }
       return json({ inserted: Array.isArray(items) ? items.length : 0 });
