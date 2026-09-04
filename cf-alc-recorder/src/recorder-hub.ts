@@ -51,6 +51,15 @@ interface WsAttachment {
   deviceId?: string;
 }
 
+/**
+ * device 接続の attachment (`deviceId` が必ずある)。
+ *
+ * `WsAttachment.deviceId` は watcher のために optional なので、device 経路の
+ * ハンドラはこちらを受け取る。**`webSocketMessage` の guard を通った後だけ**
+ * 作れる — guard を消すと型でも落ちる。
+ */
+type DeviceAttachment = WsAttachment & { deviceId: string };
+
 /** 上りメッセージ (JSON parse 後、field は全て untrusted)。 */
 interface InboundMessage {
   type?: unknown;
@@ -249,12 +258,15 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
 
-    const attachment = ws.deserializeAttachment() as WsAttachment | null;
-    if (!attachment?.tenantId || !attachment?.deviceId) {
-      // 想定外 (accept 時に必ず載せている)。identity 不明のまま ingest しない。
+    const raw = ws.deserializeAttachment() as WsAttachment | null;
+    if (!raw?.tenantId || !raw.deviceId) {
+      // device 接続なら想定外 (accept 時に必ず載せている)。
+      // **購読 (watcher) 接続はここに落ちるのが正しい** — deviceId を持たず、
+      // 上りを一切受け付けないため (Refs ippoan/alc-app-s3#134)。
       ws.close(1011, "missing attachment");
       return;
     }
+    const attachment: DeviceAttachment = { tenantId: raw.tenantId, deviceId: raw.deviceId };
 
     switch (msg.type) {
       case "measurement":
@@ -285,7 +297,7 @@ export class RecorderHub extends DurableObject<Env> {
 
   private async handleMeasurement(
     ws: WebSocket,
-    attachment: WsAttachment,
+    attachment: DeviceAttachment,
     msg: InboundMessage,
   ): Promise<void> {
     // 検証 + 転送は POST /measurements (Wi-Fi 客の上り) と共有 (measurements.ts)。
@@ -356,7 +368,7 @@ export class RecorderHub extends DurableObject<Env> {
 
   private async handleCommandResult(
     ws: WebSocket,
-    attachment: WsAttachment,
+    attachment: DeviceAttachment,
     msg: InboundMessage,
   ): Promise<void> {
     const id = typeof msg.id === "string" ? msg.id : "";

@@ -35,6 +35,16 @@ function messageQueue(ws: WebSocket) {
   });
   ws.accept();
   return {
+    /**
+     * まだ取り出していない受信数。
+     *
+     * **「何も来ない」の確認に `next()` を使ってはいけない** — タイムアウトで
+     * reject しても waiter が配列に残り、**次に届いたメッセージがその死んだ
+     * waiter に吸われて消える**。`await sleep(...)` してからこれを見ること。
+     */
+    pending(): number {
+      return queue.length;
+    },
     next(timeoutMs = 3000): Promise<unknown> {
       const head = queue.shift();
       if (head !== undefined) return Promise.resolve(head);
@@ -767,7 +777,8 @@ describe("/watch-timecard の振る舞い", () => {
     // device には届く
     expect(((await deviceMessages.next()) as { type: string }).type).toBe("command");
     // watcher には届かない
-    await expect(watcher.next(300)).rejects.toThrow(/timeout/);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
   });
 
   it("★ 打刻の合図は同じテナントの watcher にだけ届く", async () => {
@@ -789,7 +800,8 @@ describe("/watch-timecard の振る舞い", () => {
       }),
     );
     expect(((await other.messages.next()) as { type: string }).type).toBe("ack");
-    await expect(watcher.next(300)).rejects.toThrow(/timeout/);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
 
     // 同じテナントの端末なら届く。**合図だけで行の中身は含まない**
     const same = await connectAccepted("hub-token-1"); // tenant-1
@@ -824,7 +836,8 @@ describe("/watch-timecard の振る舞い", () => {
       }),
     );
     expect(((await device.messages.next()) as { type: string }).type).toBe("ack");
-    await expect(watcher.next(300)).rejects.toThrow(/timeout/);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watcher.pending()).toBe(0);
   });
 
   it("★ watcher は「接続中デバイス」一覧に現れない", async () => {
