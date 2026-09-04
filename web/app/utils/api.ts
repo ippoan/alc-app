@@ -337,6 +337,15 @@ export async function updateEmployeeLicense(
 }
 
 /**
+ * 乗務員の免許証登録を解除 (交付年月日・有効期限・nfc_id を消す)。
+ * `updateEmployeeLicense` (PUT) は backend が COALESCE なので null では消せない。
+ * 消すのは専用の DELETE (Refs ippoan/rust-alc-api#611)。
+ */
+export async function clearEmployeeLicense(id: string): Promise<ApiEmployee> {
+  return request<ApiEmployee>(`/api/employees/${id}/license`, { method: 'DELETE' })
+}
+
+/**
  * 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
  * rust-alc-api ではなく alc-app 自身の server route `/api/driver-master/run` を
  * same-origin で叩く (proxy 経由にしない)。route が admin browser JWT を introspect

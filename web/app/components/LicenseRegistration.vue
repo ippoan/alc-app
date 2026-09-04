@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiEmployee, DriverMasterSyncResult, NfcLicenseReadEvent } from '~/types'
-import { getEmployees, runDriverMasterSync, updateEmployeeLicense, updateEmployeeNfcId } from '~/utils/api'
+import { clearEmployeeLicense, getEmployees, runDriverMasterSync, updateEmployeeLicense, updateEmployeeNfcId } from '~/utils/api'
 import {
   parseLicenseIssueDate,
   parseLicenseExpiryDate,
@@ -18,6 +18,8 @@ const editingId = ref<string | null>(null)
 const editIssueDate = ref('')
 const editExpiryDate = ref('')
 const isSaving = ref(false)
+// 解除中の従業員 (ボタン二度押し防止)
+const clearingId = ref<string | null>(null)
 
 // NFC 読み取り対象
 const nfcTargetId = ref<string | null>(null)
@@ -92,6 +94,24 @@ async function handleSave() {
     error.value = e instanceof Error ? e.message : '保存エラー'
   } finally {
     isSaving.value = false
+  }
+}
+
+/**
+ * 免許証の登録解除。交付年月日・有効期限に加えて **nfc_id も消える**。
+ * nfc_id を残すとハブ測定値の乗務員照合が効いたままになるため、まとめて消す。
+ */
+async function handleClear(emp: ApiEmployee) {
+  if (!confirm(`${emp.name} の免許証登録 (交付年月日・有効期限・NFC ID) を解除しますか？`)) return
+  clearingId.value = emp.id
+  error.value = null
+  try {
+    await clearEmployeeLicense(emp.id)
+    await fetchData()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '解除エラー'
+  } finally {
+    clearingId.value = null
   }
 }
 
@@ -370,6 +390,14 @@ onMounted(() => {
                       @click="startNfcRead(emp)"
                     >
                       NFC読取
+                    </button>
+                    <button
+                      v-if="emp.license_expiry_date || emp.license_issue_date || emp.nfc_id"
+                      class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs disabled:opacity-50"
+                      :disabled="clearingId === emp.id"
+                      @click="handleClear(emp)"
+                    >
+                      {{ clearingId === emp.id ? '解除中...' : '解除' }}
                     </button>
                   </div>
                 </td>
