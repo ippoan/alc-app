@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ApiEmployee } from '~/types'
 import { punchTimecard, listTimePunches, getEmployees } from '~/utils/api'
+import { jstTodayStartIso } from '~/utils/jst'
 
 const props = defineProps<{
   landscape?: boolean
@@ -44,15 +45,22 @@ onMounted(async () => {
 
   // Fetch employees + today's punches
   try {
-    const now = new Date()
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+    // **「今日」は JST で切る。** サーバ側も JST 固定 (`list_today_punches` の
+    // Asia/Tokyo、CSV の +09:00) なので、ブラウザのローカル時刻で切ると
+    // JST 以外に設定された端末でサーバと食い違う (Refs ippoan/alc-app-s3#134)
+    const todayStart = jstTodayStartIso()
     const [emps, res] = await Promise.all([
       getEmployees(),
       listTimePunches({ date_from: todayStart, per_page: 200 }),
     ])
     employees.value = emps
     recentPunches.value = res.punches.map(p => ({
-      name: employeeMap.value[p.employee_id] || p.employee_name || p.employee_id.slice(0, 8),
+      // **未登録カードのタップは employee_id が null で来る** (サーバが行ごと
+      // 落とさないため)。素で slice すると落ちるので、カードの値を出して
+      // 「誰の登録が漏れているか」が分かるようにする
+      name: (p.employee_id && employeeMap.value[p.employee_id])
+        || p.employee_name
+        || (p.card_id ? `未登録カード ${p.card_id}` : '不明'),
       time: formatTime(p.punched_at),
       highlighted: false,
     }))
