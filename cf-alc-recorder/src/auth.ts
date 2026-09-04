@@ -39,6 +39,15 @@ export const DEVICE_ROLE_PRINT = "device-print";
 export const DEVICE_ROLE_GATEWAY = "device-gateway";
 
 /**
+ * NFC タイムカード端末 role (ippoan/alc-app-s3#134)。
+ * 上りは `kind: "timecard"` の打刻イベント、下りは ota command の待受。
+ * **印刷ブリッジと同じ role にしない** — /device/setup は role で firmware を
+ * 分けるため、混ぜると打刻機へ印刷ブリッジを push できてしまう
+ * (role と kind を 1:1 に保つ既存の設計)。
+ */
+export const DEVICE_ROLE_TIMECARD = "device-timecard";
+
+/**
  * recorder への接続を許可する device role の allowlist。
  * kiosk / uploader 等の他 role は従来どおり 403 (blast radius 分離) —
  * 広げるのは「recorder の下り command で遠隔管理したいデバイス」だけ。
@@ -47,6 +56,7 @@ export const RECORDER_DEVICE_ROLES: ReadonlySet<string> = new Set([
   DEVICE_ROLE_HUB,
   DEVICE_ROLE_PRINT,
   DEVICE_ROLE_GATEWAY,
+  DEVICE_ROLE_TIMECARD,
 ]);
 
 /** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
