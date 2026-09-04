@@ -118,10 +118,10 @@ onMounted(async () => {
     }
     catch (e: any) {
       // 未登録カードでも打刻自体は記録される (履歴に「未登録カード …」で出る)
-      // ので、ここに来るのは通信・認証の失敗だけ
-      errorMsg.value = e?.message?.includes('401')
-        ? 'この端末は登録されていません (ペアリングが必要です)'
-        : '打刻に失敗しました'
+      // ので、ここに来るのは通信・認証の失敗だけ。
+      // **理由ごとに文言を変える** — 実機の前に立った人が次の一手を選べるように
+      // (「打刻に失敗しました」だけだと、ペアリング漏れも通信障害も同じ顔になる)
+      errorMsg.value = punchFailureMessage(e)
       if (errorTimer) clearTimeout(errorTimer)
       errorTimer = setTimeout(() => { errorMsg.value = '' }, 5000)
     }
@@ -136,6 +136,17 @@ onUnmounted(() => {
   if (errorTimer) clearTimeout(errorTimer)
   if (highlightTimer) clearTimeout(highlightTimer)
 })
+
+/**
+ * 失敗の文言。**status を握りつぶさない** — 未ペアリング (資格情報が無い) と
+ * 通信障害を同じ文言にすると、現地で「ペアリングすれば直る」と分からない。
+ */
+function punchFailureMessage(e: unknown): string {
+  const err = e as { punchFailure?: string, status?: number } | undefined
+  if (err?.punchFailure === 'unpaired') return 'この端末は登録されていません (ペアリングが必要です)'
+  if (err?.punchFailure === 'forbidden') return 'この端末では打刻できません (ペアリングの種別を確認してください)'
+  return err?.status ? `打刻に失敗しました (${err.status})` : '打刻に失敗しました'
+}
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
