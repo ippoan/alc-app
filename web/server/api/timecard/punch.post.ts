@@ -19,7 +19,7 @@
  * 純粋ロジック (認可判定・forward 構築) は server/utils/timecard-relay.ts。
  */
 import type { H3Event } from 'h3'
-import { buildIntrospectForward } from '../../utils/print-relay'
+import { buildIntrospectForward, isDevLoginToken } from '../../utils/print-relay'
 import { buildRecorderTimecardPunchForward, decideTimecardPunchAccess } from '../../utils/timecard-relay'
 
 function cfEnv(event: H3Event): Record<string, unknown> {
@@ -73,6 +73,15 @@ export default defineEventHandler(async (event) => {
   const access = decideTimecardPunchAccess(await introRes.json())
   if (!access.ok) {
     throw createError({ statusCode: access.status, statusMessage: access.message })
+  }
+
+  // dev-login (`token_kind: "dev"`) は本番に書かせない (Refs ippoan/alc-app#162)。
+  // **auth-worker の read-only enforcement (#433) は `/alc-proxy` の中にあり、
+  // 自前 introspect のこの route には効かない。** 「post-merge の検証セッションは
+  // 本番を変更しない」は検証を気軽に回すための土台なので、副作用のある route 側で
+  // 明示的に塞ぐ。判定するのは introspect が active を返した後 = 署名検証済み。
+  if (isDevLoginToken(token)) {
+    throw createError({ statusCode: 403, statusMessage: 'dev_token_write_forbidden' })
   }
 
   // 2. recorder へ渡す (kind / seq は recorder 側が立てる)。応答は素通し —

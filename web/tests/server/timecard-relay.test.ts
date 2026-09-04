@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { isDevLoginToken, tokenKindOf } from '../../server/utils/print-relay'
 import {
   BROWSER_DEVICE_ID,
   PUNCH_DEVICE_ROLES,
@@ -97,6 +98,41 @@ describe('buildRecorderTimecardPunchForward', () => {
   })
 })
 
+/** テスト用の JWT を組む (署名は使わないので固定文字列)。 */
+function jwt(payload: Record<string, unknown>): string {
+  const b64url = (o: unknown) =>
+    Buffer.from(JSON.stringify(o)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.sig`
+}
+
+describe('tokenKindOf / isDevLoginToken (検証セッションの書き込みを弾く、Refs ippoan/alc-app#162)', () => {
+  it('dev-login の JWT を見分ける', () => {
+    expect(tokenKindOf(jwt({ sub: 'u1', token_kind: 'dev' }))).toBe('dev')
+    expect(isDevLoginToken(jwt({ sub: 'u1', token_kind: 'dev' }))).toBe(true)
+  })
+
+  it('通常の browser JWT は dev ではない (token_kind が無い)', () => {
+    expect(tokenKindOf(jwt({ sub: 'u1', role: 'admin' }))).toBeNull()
+    expect(isDevLoginToken(jwt({ sub: 'u1', role: 'admin' }))).toBe(false)
+  })
+
+  it('非 ASCII の claim があっても payload を読める (UTF-8)', () => {
+    // atob をそのまま JSON.parse すると氏名などで壊れる
+    expect(tokenKindOf(jwt({ name: '本多 優鷹', token_kind: 'dev' }))).toBe('dev')
+  })
+
+  it('token_kind が文字列でなければ null', () => {
+    expect(tokenKindOf(jwt({ token_kind: 1 }))).toBeNull()
+  })
+
+  it('読めない token は null (dev 扱いにしない = introspect を通ったものしか来ない)', () => {
+    for (const bad of ['', 'not-a-jwt', 'a.b', 'a.@@@.c', `a.${Buffer.from('not json').toString('base64url')}.c`]) {
+      expect(tokenKindOf(bad)).toBeNull()
+      expect(isDevLoginToken(bad)).toBe(false)
+    }
+  })
+})
+
 describe('server/api/timecard/punch.post.ts (route 本体の不変条件)', () => {
   const src = readFileSync(resolve(__dirname, '../../server/api/timecard/punch.post.ts'), 'utf-8')
 
@@ -106,6 +142,17 @@ describe('server/api/timecard/punch.post.ts (route 本体の不変条件)', () =
     expect(src).toContain('deviceId: access.deviceId')
     expect(src).not.toMatch(/body\?\.(tenant_id|device_id)/)
     expect(src).not.toMatch(/getQuery|getRouterParam/)
+  })
+
+  it('★ dev-login の token では打刻を書かせない (検証セッションが本番を変えない)', () => {
+    // auth-worker の read-only enforcement (#433) は /alc-proxy の中にあり、
+    // 自前 introspect のこの route には効かない (Refs ippoan/alc-app#162)
+    expect(src).toContain('isDevLoginToken(token)')
+    expect(src).toContain('dev_token_write_forbidden')
+    // 弾くのは introspect (= 署名検証) を通った後であること
+    expect(src.indexOf('decideTimecardPunchAccess')).toBeLessThan(src.indexOf('isDevLoginToken(token)'))
+    // recorder へ転送する前であること
+    expect(src.indexOf('isDevLoginToken(token)')).toBeLessThan(src.indexOf('buildRecorderTimecardPunchForward({'))
   })
 
   it('RECORDER / AUTH_WORKER / INTERNAL_SHARED_SECRET の binding を使い、secret を応答に載せない', () => {
