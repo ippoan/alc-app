@@ -9,7 +9,8 @@ import { jstTodayDate } from '~/utils/jst'
 type SubTab = 'cards' | 'punches'
 
 /**
- * `?sub=punches` で打刻履歴を直接開けるようにする (初期値のみ)。
+ * **既定は打刻履歴。** カード登録は最初の 1 回しか使わないのに対し、打刻履歴は
+ * 毎日見るため (ユーザー要望)。`?sub=cards` で登録側を直接開ける。
  *
  * 内側のタブがローカル ref だと **URL では到達できず、ログイン済みブラウザで
  * クリックできる人しか確認できない**。管理タブを `?tab=` で開けるようにしたのと
@@ -17,7 +18,7 @@ type SubTab = 'cards' | 'punches'
  * は index.vue が持っており、URL の組み立てを 2 か所に散らしたくないため。
  */
 const route = useRoute()
-const subTab = ref<SubTab>(route.query.sub === 'punches' ? 'punches' : 'cards')
+const subTab = ref<SubTab>(route.query.sub === 'cards' ? 'cards' : 'punches')
 
 // --- カード登録 ---
 const employees = ref<ApiEmployee[]>([])
@@ -54,7 +55,7 @@ onMounted(() => {
     nfcCardId.value = event.employee_id
   })
   loadCards()
-  // `?sub=punches` で直接開いたときは watch が発火しない (値が変わらないため)
+  // 既定が打刻履歴なので、初回は watch が発火しない (値が変わらないため)
   if (subTab.value === 'punches') loadPunches()
 })
 
@@ -201,7 +202,7 @@ async function exportCsv() {
     <!-- サブタブ -->
     <div class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 w-fit">
       <button
-        v-for="t in ([{ key: 'cards' as const, label: 'カード登録' }, { key: 'punches' as const, label: '打刻履歴' }])"
+        v-for="t in ([{ key: 'punches' as const, label: '打刻履歴' }, { key: 'cards' as const, label: 'カード登録' }])"
         :key="t.key"
         class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
         :class="subTab === t.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-600 hover:text-gray-800'"
