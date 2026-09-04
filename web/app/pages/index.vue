@@ -84,6 +84,28 @@ watch(driverSubTab, (tab) => {
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
 
+/** `?tab=` の生値。vue-router は同名クエリが複数あると配列で返すので先頭だけ見る */
+const queryTab = computed(() => {
+  const t = route.query.tab
+  return (Array.isArray(t) ? t[0] : t) ?? undefined
+})
+
+/**
+ * システム管理者タブの URL 同期。
+ *
+ * **`?tab=` は `role` で意味が変わる** — `role=admin` なら管理タブ、
+ * 省略時 (= 運行者) なら運行者サブタブ。書き込みはどちらも「いま表示している
+ * ロールのぶんだけ」なので、role を切り替えたときは各 watcher が URL を
+ * 組み直して相手のぶんを落とす (= そのロールの既定タブに戻る)。
+ */
+function onAdminTabChange(tab: string) {
+  if (activeRole.value !== 'admin') return
+  const params = new URLSearchParams()
+  params.set('role', 'admin')
+  if (tab !== 'employees') params.set('tab', tab)
+  window.history.replaceState({}, '', `/?${params.toString()}`)
+}
+
 const roleLabels: Record<RoleTab, string> = {
   driver: '運行者',
   manager: '運行管理者',
@@ -456,7 +478,7 @@ function onRoleTabClick(role: RoleTab) {
 
     <!-- システム管理者タブ -->
     <RoleAuthGate v-if="activeRole === 'admin'" :key="adminAuthKey" required-role="admin" class="flex-1 min-h-0">
-      <AdminDashboard />
+      <AdminDashboard :initial-tab="queryTab" @update:tab="onAdminTabChange" />
     </RoleAuthGate>
 
     <!-- 汎用管理タブ (PCのみ, Google/LINE WORKS認証) -->

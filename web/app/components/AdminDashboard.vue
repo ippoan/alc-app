@@ -25,8 +25,40 @@ function disconnectRtc() {
   isRtcActive.value = false
 }
 
-type TabKey = 'employees' | 'license' | 'queue' | 'webhooks' | 'tenko_call' | 'camera' | 'site_camera' | 'timecard' | 'devices' | 'tenko' | 'hub_measurements'
-const activeTab = ref<TabKey>('employees')
+/**
+ * タブの定義。**テンプレートの描画と `?tab=` の検証で同じ配列を使う** —
+ * 2 か所に並べると、タブを足したときに URL から開けないものが混ざる。
+ */
+const TABS = [
+  { key: 'employees', label: '乗務員' },
+  { key: 'license', label: '免許証' },
+  { key: 'queue', label: '送信キュー' },
+  { key: 'webhooks', label: 'Webhook' },
+  { key: 'tenko_call', label: '中間点呼' },
+  { key: 'camera', label: 'リモートカメラ' },
+  { key: 'site_camera', label: '拠点カメラ' },
+  { key: 'timecard', label: 'タイムカード' },
+  { key: 'devices', label: 'デバイス管理' },
+  { key: 'tenko', label: '点呼' },
+  { key: 'hub_measurements', label: 'ハブ測定値' },
+] as const
+
+type TabKey = typeof TABS[number]['key']
+
+const props = defineProps<{
+  /** `?tab=` の値。未指定・不正値は 'employees' に倒す (ManagerDashboard と同じ形) */
+  initialTab?: string
+}>()
+
+/** タブが変わったことを親へ知らせる。URL への反映は index.vue が一括で持つ */
+const emit = defineEmits<{ 'update:tab': [TabKey] }>()
+
+function toTabKey(v: string | undefined): TabKey {
+  return TABS.some(t => t.key === v) ? (v as TabKey) : 'employees'
+}
+
+const activeTab = ref<TabKey>(toTabKey(props.initialTab))
+watch(activeTab, tab => emit('update:tab', tab))
 const cameraActive = computed(() => activeTab.value === 'camera')
 </script>
 
@@ -35,23 +67,11 @@ const cameraActive = computed(() => activeTab.value === 'camera')
     <div class="px-4 pt-4 flex items-center gap-3">
       <div class="flex flex-wrap gap-1 bg-gray-200 rounded-lg p-1 w-fit">
         <button
-          v-for="tab in [
-            { key: 'employees', label: '乗務員' },
-            { key: 'license', label: '免許証' },
-            { key: 'queue', label: '送信キュー' },
-            { key: 'webhooks', label: 'Webhook' },
-            { key: 'tenko_call', label: '中間点呼' },
-            { key: 'camera', label: 'リモートカメラ' },
-            { key: 'site_camera', label: '拠点カメラ' },
-            { key: 'timecard', label: 'タイムカード' },
-            { key: 'devices', label: 'デバイス管理' },
-            { key: 'tenko', label: '点呼' },
-            { key: 'hub_measurements', label: 'ハブ測定値' },
-          ]"
+          v-for="tab in TABS"
           :key="tab.key"
           class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
           :class="activeTab === tab.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-600 hover:text-gray-800'"
-          @click="activeTab = tab.key as TabKey"
+          @click="activeTab = tab.key"
         >
           {{ tab.label }}
         </button>
