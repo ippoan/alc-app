@@ -104,6 +104,47 @@ export interface IntrospectClaims {
 }
 
 /**
+ * JWT の payload から `token_kind` を読む (**署名は検証しない**)。
+ *
+ * dev-login (ippoan/auth-worker#423) が発行する JWT は `token_kind: "dev"` を持ち、
+ * 本番の `logi_auth_token` と同じ鍵で署名されている。auth-worker の
+ * read-only enforcement (#433) は **`/alc-proxy` の中**にあるので、
+ * **自前で introspect する server route には効かない** (Refs ippoan/alc-app#162)。
+ *
+ * **署名を検証しなくてよい理由**: この値を見るのは `/auth/introspect` が
+ * `active: true` を返した**後**だけ。auth-worker が同じ token の署名・exp・ACL を
+ * 検証済みなので、その payload の claim は本物である。JWT_SECRET は要らない
+ * (consumer に鍵を配らない #290 の方針は保たれる)。
+ *
+ * **introspect の応答に `token_kind` が無いのでここで読んでいる。** auth-worker が
+ * 応答に足してくれたら、そちらへ寄せてこの関数は消すこと (判定材料は 1 か所が良い)。
+ *
+ * 読めない token (segment 不足 / base64 不正 / JSON 不正) は null を返す。
+ * **その場合 dev 扱いにはしない** — introspect を通った token しかここに来ないため。
+ */
+export function tokenKindOf(token: string): string | null {
+  const seg = token.split('.')[1]
+  if (!seg) return null
+  try {
+    const b64 = seg.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+    const bin = atob(padded)
+    // claim に非 ASCII (氏名など) が入りうるので TextDecoder で UTF-8 として読む
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0))
+    const payload = JSON.parse(new TextDecoder().decode(bytes)) as { token_kind?: unknown }
+    return typeof payload.token_kind === 'string' ? payload.token_kind : null
+  }
+  catch {
+    return null
+  }
+}
+
+/** dev-login (`token_kind: "dev"`) の token か。副作用のある route はこれで弾く。 */
+export function isDevLoginToken(token: string): boolean {
+  return tokenKindOf(token) === 'dev'
+}
+
+/**
  * auth-worker `/auth/introspect` への forward request を組む。operator の
  * browser JWT を検証して tenant_id / role を得るのに使う (recorder の auth.ts と
  * 同じ shared secret 認証)。
