@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { StagingFooter, VersionBadge } from '@ippoan/auth-client'
+import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
 
 const { init, isLoading } = useAuth()
 const { isAndroidApp } = useFingerprint()
@@ -10,21 +11,42 @@ const stagingApiKey = config.public.stagingApiKey as string
 const appVersion = config.public.appVersion as string
 
 onMounted(async () => {
-  // --- リロード検知ログ ---
+  // --- リロード検知ログ (Refs #197) ---
+  // reason は plugins/reload-grace.client.ts が chunk 読み込み失敗の自動復旧 reload の直前に書く。
+  // 無ければ利用者の F5 か Chrome のメモリセーバー (タブ破棄 → 復帰は document.wasDiscarded)
   const now = Date.now()
   const navEntry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
   const navType = navEntry?.type ?? 'unknown'
   const lastLoad = Number(sessionStorage.getItem('_lastLoad') || '0')
   const gap = lastLoad ? ((now - lastLoad) / 1000).toFixed(1) : null
   sessionStorage.setItem('_lastLoad', String(now))
+  const reason = sessionStorage.getItem(RELOAD_REASON_KEY) ?? 'unknown (user/memory-saver?)'
+  sessionStorage.removeItem(RELOAD_REASON_KEY)
+  const discarded = (document as Document & { wasDiscarded?: boolean }).wasDiscarded === true
   const ts = new Date().toLocaleTimeString('ja-JP')
+  const detail = `navType=${navType}, discarded=${discarded}, reason=${reason}`
   if (gap && Number(gap) < 10) {
-    console.warn(`[RELOAD-DETECT] ${ts} SUSPICIOUS RELOAD — last load was ${gap}s ago, navType=${navType}`)
+    console.warn(`[RELOAD-DETECT] ${ts} SUSPICIOUS RELOAD — last load was ${gap}s ago, ${detail}`)
   } else {
-    console.log(`[RELOAD-DETECT] ${ts} page loaded (gap=${gap ?? 'first'}s, navType=${navType})`)
+    console.log(`[RELOAD-DETECT] ${ts} page loaded (gap=${gap ?? 'first'}s, ${detail})`)
   }
+  const stamp = () => new Date().toLocaleTimeString('ja-JP')
   document.addEventListener('visibilitychange', () => {
-    console.log(`[RELOAD-DETECT] visibility=${document.visibilityState} at ${new Date().toLocaleTimeString('ja-JP')}`)
+    console.log(`[RELOAD-DETECT] visibility=${document.visibilityState} at ${stamp()}`)
+  })
+  // Page Lifecycle: freeze/resume はメモリセーバーの前段、pagehide/beforeunload は reload・閉じる
+  document.addEventListener('freeze', () => console.log(`[RELOAD-DETECT] freeze at ${stamp()}`))
+  document.addEventListener('resume', () => console.log(`[RELOAD-DETECT] resume at ${stamp()}`))
+  // 利用者の F5 / タブ閉じでも、握っている警告デバイス / CoreS3 へ grace を送っておく (best-effort。
+  // 書き込みが reload に間に合わないこともあるが、間に合えば 45 秒は鳴らない。Refs ippoan/alc-app-s3#192)
+  const alarm = useAlarmDevice()
+  window.addEventListener('pagehide', (e) => {
+    console.log(`[RELOAD-DETECT] pagehide persisted=${e.persisted} at ${stamp()}`)
+    alarm.notifyIntentionalReload()
+  })
+  window.addEventListener('beforeunload', () => {
+    console.log(`[RELOAD-DETECT] beforeunload at ${stamp()}`)
+    alarm.notifyIntentionalReload()
   })
 
   await init()

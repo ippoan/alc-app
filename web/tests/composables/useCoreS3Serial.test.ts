@@ -119,8 +119,12 @@ describe('useCoreS3Serial', () => {
     expect(await connect()).toBe(true)
   }
 
+  let logSpy: ReturnType<typeof vi.spyOn>
+
   beforeEach(async () => {
     vi.clearAllMocks()
+    // arbiter の診断ログ ([SERIAL]) はテスト出力に流さない
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     // 見送ったポートの再訪判定が Date.now() を見るので Date も止める
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
     delete (navigator as any).serial
@@ -130,6 +134,7 @@ describe('useCoreS3Serial', () => {
     await core?.disconnect()
     delete (navigator as any).serial
     vi.useRealTimers()
+    logSpy.mockRestore()
   })
 
   // ---------- isSupported ----------
@@ -299,6 +304,31 @@ describe('useCoreS3Serial', () => {
 
     expect(json).toEqual([])
     expect(events).toEqual([])
+  })
+
+  // ---------- 意図した reload (alc-app-s3#192) ----------
+
+  describe('sendGrace', () => {
+    it('接続中なら HB OK grace=45 を 1 行書く (周期の HB OK はそのまま)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      core.sendGrace()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', 'HB OK grace=45\n'])
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('未接続なら何も書かない (落ちない)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+
+      core.sendGrace()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(core.isConnected.value).toBe(false)
+    })
   })
 
   // ---------- write ----------

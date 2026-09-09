@@ -154,8 +154,13 @@ describe('useSerialArbiter', () => {
     arbiter = mod.useSerialArbiter()
   }
 
+  let logSpy: ReturnType<typeof vi.spyOn>
+
   beforeEach(() => {
     vi.clearAllMocks()
+    // 診断ログ ([SERIAL]) はテスト出力に流さない。中身を見るテストは logSpy を読む
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    localStorage.removeItem('alc_debug_serial')
     // 見送り印の再訪判定が Date.now() を見るので Date も止める
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
     delete (navigator as any).serial
@@ -166,7 +171,17 @@ describe('useSerialArbiter', () => {
     await arbiter?.unregister('core')
     delete (navigator as any).serial
     vi.useRealTimers()
+    localStorage.removeItem('alc_debug_serial')
+    logSpy.mockRestore()
   })
+
+  /** `[SERIAL] …` のログだけ (prefix と末尾の経過 ms を落とした本文) */
+  function serialLogs(): string[] {
+    return logSpy.mock.calls
+      .map(args => String(args[0]))
+      .filter(line => line.startsWith('[SERIAL] '))
+      .map(line => line.replace('[SERIAL] ', '').replace(/ \(\+\d+ms\)$/, ''))
+  }
 
   // ---------- WebSerial 非対応 ----------
 
@@ -730,6 +745,143 @@ describe('useSerialArbiter', () => {
 
       const ngWriter = ng.port.writable.getWriter()
       expect(await mod.writeLine(ngWriter, 'HB OK')).toBe(false)
+    })
+  })
+})
+
+// ---------- 診断ログ (#197) ----------
+
+describe('useSerialArbiter 診断ログ', () => {
+  let mod: typeof import('~/composables/useSerialArbiter')
+  let arbiter: ReturnType<typeof mod.useSerialArbiter>
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  function serialLogs(): string[] {
+    return logSpy.mock.calls
+      .map(args => String(args[0]))
+      .filter(line => line.startsWith('[SERIAL] '))
+      .map(line => line.replace('[SERIAL] ', '').replace(/ \(\+\d+ms\)$/, ''))
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    localStorage.removeItem('alc_debug_serial')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
+    delete (navigator as any).serial
+  })
+
+  /** isSupported は useSerialArbiter() の呼び出し時に決まるので installSerialMock の後で呼ぶ */
+  async function load() {
+    vi.resetModules()
+    mod = await import('~/composables/useSerialArbiter')
+    arbiter = mod.useSerialArbiter()
+  }
+
+  afterEach(async () => {
+    await arbiter?.unregister('alarm')
+    delete (navigator as any).serial
+    vi.useRealTimers()
+    localStorage.removeItem('alc_debug_serial')
+    logSpy.mockRestore()
+  })
+
+  it('msSinceLoad は page load からの経過 ms (整数)', async () => {
+    await load()
+    expect(Number.isInteger(mod.msSinceLoad())).toBe(true)
+  })
+
+  it('scan の開始・閉じた理由・60 秒再訪は常時出す (候補ごとの行は出さない)', async () => {
+    const other = createMockPort()
+    other.emit('CORE LAN=up\n')
+    installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
+    await load()
+    const { claimant } = createClaimant('ALARM', 'CORE')
+    arbiter.register('alarm', claimant)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(serialLogs()).toEqual([
+      'scan start: candidates=1 pending=alarm',
+      'close probed port: passed over',
+    ])
+
+    // 60 秒後の再訪
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(serialLogs()).toContain('revisiting a passed-over port (cooldown elapsed)')
+  })
+
+  it('release / unregister は誰のポートをなぜ閉じたかを出す', async () => {
+    const dev = createMockPort()
+    dev.emit('ALARM state=idle\n')
+    installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+    await load()
+    const { claimant } = createClaimant('ALARM', 'CORE')
+    arbiter.register('alarm', claimant)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await arbiter.release('alarm')
+    expect(serialLogs()).toContain('close port of alarm: release(alarm)')
+
+    // 掴み直したところで unregister (mock の reader は cancel 後に再利用できないので別ポート)
+    const dev2 = createMockPort()
+    dev2.emit('ALARM state=idle\n')
+    installSerialMock({ getPorts: vi.fn(async () => [dev2.port]) })
+    await vi.advanceTimersByTimeAsync(10000)
+    await arbiter.unregister('alarm')
+    expect(serialLogs()).toContain('close port of alarm: unregister(alarm)')
+  })
+
+  describe('localStorage.alc_debug_serial=1 のときだけ候補ごとの行を出す', () => {
+    beforeEach(() => {
+      localStorage.setItem('alc_debug_serial', '1')
+    })
+
+    it('claim', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+    await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(serialLogs()).toContain('claimed by alarm (probe lines=1)')
+    })
+
+    it('見送り (全員 reject)', async () => {
+      const other = createMockPort()
+      other.emit('CORE LAN=up\n')
+      installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
+    await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(serialLogs()).toContain('passed over (nobody claimed 1 lines) -> revisit in 60s')
+    })
+
+    it('無応答', async () => {
+      const silent = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [silent.port]) })
+    await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(8000)
+
+      expect(serialLogs()).toContain('no response within probe window -> retry next scan')
+    })
+
+    it('open 失敗 / ストリームが取れない', async () => {
+      const busy = createMockPort({ openError: new DOMException('busy', 'InvalidStateError') })
+      const broken = createMockPort({ readable: false })
+      installSerialMock({ getPorts: vi.fn(async () => [busy.port, broken.port]) })
+    await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(serialLogs()).toContain('open failed (in use by another explorer?) -> next candidate')
+      expect(serialLogs()).toContain('no readable/writable stream -> close')
     })
   })
 })
