@@ -117,16 +117,6 @@ function installSerialMock(serialMock: {
   })
 }
 
-function removeSerialMock() {
-  if ('serial' in navigator) {
-    Object.defineProperty(navigator, 'serial', {
-      value: undefined,
-      configurable: true,
-      writable: true,
-    })
-  }
-}
-
 // --- Tests ---
 
 describe('useBleGateway', () => {
@@ -163,16 +153,6 @@ describe('useBleGateway', () => {
     expect(gw.gatewayVersion.value).toBeNull()
     expect(gw.transport.value).toBeNull()
     expect(gw.hasMedicalData.value).toBe(false)
-  })
-
-  it('isWebSerialSupported: navigator.serial なし → false', () => {
-    expect(gw.isWebSerialSupported()).toBe(false)
-  })
-
-  it('isWebSerialSupported: navigator.serial あり → true', () => {
-    installSerialMock({})
-    expect(gw.isWebSerialSupported()).toBe(true)
-    removeSerialMock()
   })
 
   // =============================================

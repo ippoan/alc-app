@@ -25,6 +25,8 @@
  * VID 0x303A / PID 0x1001 で同一。`STATUS` への応答の先頭 2 トークンで見分ける。
  */
 
+import { isWebSerialSupported } from '~/utils/webserial'
+
 /** デバイスが報告する鳴動状態 */
 export interface AlarmDeviceState {
   state: 'idle' | 'alarming' | 'muted'
@@ -84,7 +86,7 @@ export function useAlarmDevice() {
   // 送る中身の素。購読の開始/停止はダッシュボード側の責務 (ここでは読むだけ)
   const rooms = useActiveRooms()
 
-  const isSupported = typeof navigator !== 'undefined' && 'serial' in navigator
+  const isSupported = isWebSerialSupported()
 
   // --- 行の解釈 ---
 

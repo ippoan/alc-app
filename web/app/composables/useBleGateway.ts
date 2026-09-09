@@ -3,6 +3,7 @@ import type {
   TemperatureReading,
   BloodPressureReading,
 } from '~/types'
+import { isWebSerialSupported } from '~/utils/webserial'
 
 const SERIAL_OPTIONS: SerialOptions = {
   baudRate: 115200,
@@ -66,10 +67,6 @@ let heartbeatCheckTimer: ReturnType<typeof setInterval> | null = null
 const HEARTBEAT_TIMEOUT = 30000
 
 export function useBleGateway() {
-
-  function isWebSerialSupported(): boolean {
-    return typeof navigator !== 'undefined' && 'serial' in navigator
-  }
 
   // --- WebSocket transport (Android BLE Bridge) ---
 
@@ -521,7 +518,6 @@ export function useBleGateway() {
     gatewayVersion: readonly(gatewayVersion),
     transport: readonly(transport),
     hasMedicalData,
-    isWebSerialSupported,
     connect,
     autoConnect,
     startAutoConnect,

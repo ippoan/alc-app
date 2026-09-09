@@ -2,6 +2,7 @@ import type { Fc1200State, Fc1200Event, MeasurementResult, SensorLifetime, Memor
 import { isClient } from '~/utils/env'
 import type { Fc1200WasmSession } from 'fc1200-wasm'
 import { initFc1200Wasm, createFc1200Session } from '~/utils/fc1200'
+import { isWebSerialSupported } from '~/utils/webserial'
 
 const SERIAL_OPTIONS: SerialOptions = {
   baudRate: 9600,
@@ -57,10 +58,6 @@ export function useFc1200Serial() {
   let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
   let wsReconnectAttempts = 0
   let wsIntentionalClose = false
-
-  function isWebSerialSupported(): boolean {
-    return typeof navigator !== 'undefined' && 'serial' in navigator
-  }
 
   /** WebSerial または WebSocket (Android ブリッジ) で接続可能か */
   function isSupported(): boolean {
@@ -569,7 +566,6 @@ export function useFc1200Serial() {
     memoryRecords: readonly(memoryRecords),
     dateUpdateSuccess: readonly(dateUpdateSuccess),
     transport: readonly(transport),
-    isWebSerialSupported,
     isSupported,
     autoConnect,
     connect,

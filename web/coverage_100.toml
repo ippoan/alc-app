@@ -149,3 +149,7 @@ branches = true
 [[files]]
 path = "app/utils/video-store.ts"
 branches = true
+
+[[files]]
+path = "app/utils/webserial.ts"
+branches = true
