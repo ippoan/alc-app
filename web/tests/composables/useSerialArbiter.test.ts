@@ -6,7 +6,7 @@ import type { SerialClaimant } from '~/composables/useSerialArbiter'
 interface MockPortHandle {
   port: any
   writes: string[]
-  /** setSignals / close の呼び出し順 (ESP32-S3 のリセット回避の検証に使う) */
+  /** setSignals (引数つき) / close の呼び出し順 (ESP32-S3 のリセット回避の検証に使う) */
   calls: string[]
   /** デバイスからの受信行を流す (未読なら queue に積まれる) */
   emit: (text: string) => void
@@ -21,6 +21,8 @@ function createMockPort(options?: {
   writeError?: boolean
   /** setSignals 非対応のポート (古い Chrome / 一部ドライバ) を模す */
   signalsError?: boolean
+  /** 1 回目の setSignals (RTS) だけ失敗するポートを模す */
+  firstSignalsError?: boolean
 }): MockPortHandle {
   const queue: Array<{ value?: Uint8Array; done: boolean }> = []
   let pending: ((chunk: { value?: Uint8Array; done: boolean }) => void) | null = null
@@ -65,13 +67,17 @@ function createMockPort(options?: {
   }
 
   const calls: string[] = []
+  let signalsCalls = 0
   const port = {
     open: vi.fn(async () => {
       if (options?.openError) throw options.openError
     }),
-    setSignals: vi.fn(async (_signals: { dataTerminalReady?: boolean; requestToSend?: boolean }) => {
-      calls.push('setSignals')
+    setSignals: vi.fn(async (signals: { dataTerminalReady?: boolean; requestToSend?: boolean }) => {
+      signalsCalls += 1
+      // 引数まで記録する — RTS → DTR の順序が S3 のリセット回避の本体なので
+      calls.push(`setSignals(${JSON.stringify(signals)})`)
       if (options?.signalsError) throw new Error('setSignals unsupported')
+      if (options?.firstSignalsError && signalsCalls === 1) throw new Error('setSignals failed')
     }),
     close: vi.fn(async () => {
       calls.push('close')
@@ -263,7 +269,7 @@ describe('useSerialArbiter', () => {
       expect(other.port.open).toHaveBeenCalledTimes(1)
     })
 
-    it('見送った候補も DTR/RTS を落としてから閉じる (再訪のたびに再起動させない)', async () => {
+    it('見送った候補も RTS → DTR の順で落としてから閉じる (再訪のたびに再起動させない)', async () => {
       const other = createMockPort()
       other.emit('CORE LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
@@ -274,7 +280,7 @@ describe('useSerialArbiter', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       // BLE 相乗り中の CoreS3 が 10 秒ごとのプローブで毎回リセットされないこと
-      expect(other.calls).toEqual(['setSignals', 'close'])
+      expect(other.calls).toEqual(['setSignals({"requestToSend":false})', 'setSignals({"dataTerminalReady":false})', 'close'])
     })
 
     it('60 秒経ったら見送ったポートを再訪する (永久除外にしない)', async () => {
@@ -432,7 +438,7 @@ describe('useSerialArbiter', () => {
       expect(dev.port.open).toHaveBeenCalledTimes(2)
     })
 
-    it('close の前に DTR/RTS を落とす (ESP32-S3 を再起動させない)', async () => {
+    it('close の前に RTS → DTR の順で落とす (ESP32-S3 を再起動させない)', async () => {
       const dev = createMockPort()
       dev.emit('ALARM state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
@@ -444,12 +450,11 @@ describe('useSerialArbiter', () => {
 
       await arbiter.release('alarm')
 
-      // DTR=0 かつ RTS=1 が S3 の chip reset の条件。両方落としてから閉じる
-      expect(dev.port.setSignals).toHaveBeenCalledWith({
-        dataTerminalReady: false,
-        requestToSend: false,
-      })
-      expect(dev.calls).toEqual(['setSignals', 'close'])
+      // DTR=0 かつ RTS=1 が S3 の chip reset の条件。RTS を先に落として
+      // その瞬間を作らない (同時指定では OS が DTR → RTS の順に落としてしまう)
+      expect(dev.port.setSignals).toHaveBeenNthCalledWith(1, { requestToSend: false })
+      expect(dev.port.setSignals).toHaveBeenNthCalledWith(2, { dataTerminalReady: false })
+      expect(dev.calls).toEqual(['setSignals({"requestToSend":false})', 'setSignals({"dataTerminalReady":false})', 'close'])
     })
 
     it('setSignals が失敗しても close は呼ぶ (非対応のポート)', async () => {
@@ -464,7 +469,26 @@ describe('useSerialArbiter', () => {
 
       await arbiter.release('alarm')
 
-      expect(dev.port.setSignals).toHaveBeenCalledTimes(1)
+      // 2 回とも throw しても close は呼ぶ
+      expect(dev.port.setSignals).toHaveBeenCalledTimes(2)
+      expect(dev.port.close).toHaveBeenCalledTimes(1)
+      expect(seen.closed).toBe(1)
+    })
+
+    it('RTS の setSignals が失敗しても DTR と close は続ける', async () => {
+      const dev = createMockPort({ firstSignalsError: true })
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await arbiter.release('alarm')
+
+      // 1 つ目を個別に try/catch していないと DTR も close も飛ぶ
+      expect(dev.calls).toEqual(['setSignals({"requestToSend":false})', 'setSignals({"dataTerminalReady":false})', 'close'])
       expect(dev.port.close).toHaveBeenCalledTimes(1)
       expect(seen.closed).toBe(1)
     })
@@ -570,7 +594,7 @@ describe('useSerialArbiter', () => {
       expect(seen.opened).toBe(0)
     })
 
-    it('readable / writable が取れないポートも DTR/RTS を落としてから閉じる', async () => {
+    it('readable / writable が取れないポートも RTS → DTR の順で落としてから閉じる', async () => {
       const noRead = createMockPort({ readable: false })
       const noWrite = createMockPort({ writable: false })
       installSerialMock({ getPorts: vi.fn(async () => [noRead.port, noWrite.port]) })
@@ -580,8 +604,8 @@ describe('useSerialArbiter', () => {
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(noRead.calls).toEqual(['setSignals', 'close'])
-      expect(noWrite.calls).toEqual(['setSignals', 'close'])
+      expect(noRead.calls).toEqual(['setSignals({"requestToSend":false})', 'setSignals({"dataTerminalReady":false})', 'close'])
+      expect(noWrite.calls).toEqual(['setSignals({"requestToSend":false})', 'setSignals({"dataTerminalReady":false})', 'close'])
     })
 
     it('書き込めないポートでも、先に名乗り出があればそちらが勝つ', async () => {

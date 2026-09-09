@@ -142,11 +142,21 @@ export async function writeLine(
 
 /**
  * ポートを閉じる。ESP32-S3 の USB-Serial-JTAG は「DTR=0 かつ RTS=1」で chip reset が
- * かかる (自動書き込み回路の模倣) ため、close の直前に DTR と RTS を両方落とす。
+ * かかる (自動書き込み回路の模倣) ため、close の直前に DTR と RTS を落とす。
  * S3 にはこれを無効化するレジスタが無く、firmware 側では直せない。
+ *
+ * **順序が本体** — RTS を先に落とさないと「DTR=0 かつ RTS=1」の瞬間ができて reset する。
+ * 1 回の `setSignals` に両方渡しても駄目で、OS/Chrome は DTR → RTS の順に個別に落とす
+ * (Windows は `EscapeCommFunction(CLRDTR)` → `CLRRTS`) ため、DTR が落ちた時点で RTS が
+ * まだ 1 のまま reset 条件を踏む。だから 2 回に分け、RTS → DTR の順で落とす
+ * (Refs ippoan/alc-app#199)。
+ *
+ * 各 `setSignals` は個別に try/catch する。setSignals 非対応のポート (古い Chrome /
+ * 一部ドライバ) で 1 つ目が throw しても、2 つ目と close は続ける。
  */
 async function closePortQuietly(port: SerialPort): Promise<void> {
-  try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }) } catch { /* 非対応でも close は続ける */ }
+  try { await port.setSignals({ requestToSend: false }) } catch { /* 非対応でも次と close は続ける */ }
+  try { await port.setSignals({ dataTerminalReady: false }) } catch { /* 非対応でも close は続ける */ }
   await port.close()
 }
 
