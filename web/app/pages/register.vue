@@ -2,6 +2,7 @@
 import type { ApiEmployee } from '~/types'
 import { initApi, getEmployees, getEmployeeByNfcId, uploadFacePhoto, updateEmployeeFace } from '~/utils/api'
 import { getFaceDescriptor } from '~/utils/face-db'
+import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 import { FACE_MODEL_VERSION } from '~/composables/useFaceDetection'
 
 const config = useRuntimeConfig()
@@ -39,7 +40,7 @@ async function onNfcRead(nfcId: string) {
     const emp = await getEmployeeByNfcId(nfcId)
     selectedEmployee.value = emp
   } catch {
-    lookupError.value = `このNFCカードに紐付いた乗務員が見つかりません`
+    lookupError.value = employeeNotFoundByNfc(nfcId)
   }
 }
 
