@@ -1,16 +1,25 @@
 /**
  * 据置警告デバイス (Atom VoiceS3R / USB CDC) との接続と heartbeat 送信。
  *
- * ブラウザは「鳴れ」と命令しない。3 秒ごとにキオスクの正常/異常を 1 行送るだけで、
- * デバイスは heartbeat が途切れたら自分の判断で鳴る。タブを閉じた・クラッシュした・
+ * つなぐ先は**運行管理者の PC**。見張る対象は「運行管理者ダッシュボードが開いていて、
+ * 乗務員からの着信を受けられる状態か」であって、乗務員側キオスクの生死ではない。
+ *
+ * ブラウザは「鳴れ」と命令しない。3 秒ごとに状態を 1 行送るだけで、デバイスは
+ * heartbeat が途切れたら自分の判断で鳴る。管理者がタブを閉じた・別タブへ移った・
  * PC がフリーズした、のいずれも「無音」という同じ形で拾えるようにするため。
+ * ダッシュボード側は unmount で disconnect() するだけでよい。
  *
  * プロトコル (firmware と同文。行指向 \n / ASCII / 115200 8N1):
  *   host → dev  `HB OK` / `HB NG <reason>`  … 3 秒ごと。デバイスは返信しない
  *   host → dev  `STATUS`                    … 機種判定のためのプローブ
  *   dev  → host `STATUS alarm state=<idle|alarming|muted> cause=<none|silence|ng:<reason>|call> hb_age_ms=<n|-> VER=<ver>`
  *   dev  → host `EVT ALARM state=<...> cause=<...>` … 状態遷移のたび + 5 秒ごと無条件
- * 末尾トークン ` call=1`/` call=0` は任意。今回は付けない (= call=0)。
+ * 末尾トークン ` call=1` / ` call=0` は任意 (無ければ 0)。
+ *
+ * 送る中身は useActiveRooms から組み立てる:
+ *   room 一覧の購読 (WebSocket) が切れている → `HB NG signaling` (着信を受けられない)
+ *   それ以外                                → `HB OK`
+ *   room が立っていて管理者がまだどれにも入っていない → 末尾に ` call=1` (着信中)
  *
  * 機種識別を USB 記述子では行えない: CoreS3 の BLE ゲートウェイも VoiceS3R も
  * VID 0x303A / PID 0x1001 で同一。`STATUS` への応答の先頭 2 トークンで見分ける。
@@ -20,23 +29,6 @@
 export interface AlarmDeviceState {
   state: 'idle' | 'alarming' | 'muted'
   cause: string
-}
-
-/** キオスク側の健全性。警告デバイスへ送る heartbeat の中身になる */
-export interface KioskHealth {
-  /**
-   * FC-1200 が「同一ページ内の WebSerial」で繋がっているか。
-   * null = このページは FC-1200 を使っていない (→ OK 扱い)。
-   *
-   * `useGwStatus.fc1200Bridge` (GW 常駐アプリへの probe) とは対象が違う。
-   * あちらは別プロセスのブリッジの生死、こちらは同一ページ内の WebSerial 接続状態。
-   */
-  fc1200: boolean | null
-}
-
-/** 測定を担う component だけが書き込む。composable 内で書くと last-writer-wins で誤 NG が出る */
-export function useKioskHealth() {
-  return useState<KioskHealth>('kiosk-health', () => ({ fc1200: null }))
 }
 
 const ALARM_DEVICE_VID = 0x303A
@@ -49,20 +41,28 @@ const SERIAL_OPTIONS: SerialOptions = {
   flowControl: 'none' as FlowControlType,
 }
 
-/** mount 直後は BLE ゲートウェイに先にポートを選ばせる */
+/** mount 直後は BLE ゲートウェイに先にポートを選ばせる (同居しない PC では 0 を渡す) */
 const INITIAL_SCAN_DELAY = 5000
 /** 見つからなければこの間隔で探し直す */
 const RESCAN_INTERVAL = 10000
 const HEARTBEAT_INTERVAL = 3000
 const PROBE_SEND_INTERVAL = 1000
-const PROBE_MAX_SENDS = 3
-/** これだけ待って何も来なければ「無応答」— 除外はしない */
-const PROBE_TIMEOUT = 3000
+const PROBE_MAX_SENDS = 8
+/**
+ * これだけ待って何も来なければ「無応答」— 除外はしない。
+ *
+ * 3 秒では実機で「接続にならない」が出た。ポートを open した瞬間にデバイスが
+ * リセットされると、その窓に応答が間に合わないため。8 秒あれば 5 秒ごとに無条件で
+ * 出る `EVT ALARM` バナーも拾える。管理者 PC には BLE ゲートウェイの composable が
+ * 無いので、ポートを 8 秒握っても useBleGateway の autoConnect リトライ
+ * (500ms × 3) とは競合しない。
+ */
+const PROBE_TIMEOUT = 8000
 
 /** 機種判定の結果。null = 無応答 */
 type Verdict = 'alarm' | 'other' | null
 
-// シングルトン: キオスク画面と設定画面で共有
+// シングルトン: 管理者 PC につながる警告デバイスは 1 台なので状態も 1 つ
 const isConnected = ref(false)
 const deviceState = ref<AlarmDeviceState | null>(null)
 
@@ -81,7 +81,8 @@ const excludedPorts = new Set<SerialPort>()
 export function useAlarmDevice() {
   // ポートの列挙と許可は既存のマネージャに任せる (navigator.serial を自前で叩かない)
   const { ports, refreshPorts, requestNewPort } = useSerialDeviceManager()
-  const health = useKioskHealth()
+  // 送る中身の素。購読の開始/停止はダッシュボード側の責務 (ここでは読むだけ)
+  const rooms = useActiveRooms()
 
   const isSupported = typeof navigator !== 'undefined' && 'serial' in navigator
 
@@ -303,8 +304,16 @@ export function useAlarmDevice() {
     }
   }
 
+  /** 今の状態を 1 行に畳む。`HB OK` / `HB NG signaling` に着信中だけ ` call=1` を足す */
+  function heartbeatLine(): string {
+    const status = rooms.isWatching.value ? 'HB OK' : 'HB NG signaling'
+    // room はあるが管理者がまだどれにも入っていない = 呼び出しに応答していない
+    const calling = rooms.activeRooms.value.length > 0 && rooms.joinedRoomId.value === null
+    return calling ? `${status} call=1` : status
+  }
+
   async function sendHeartbeat(w: WritableStreamDefaultWriter<Uint8Array>): Promise<void> {
-    const ok = await writeLine(w, health.value.fc1200 === false ? 'HB NG fc1200' : 'HB OK')
+    const ok = await writeLine(w, heartbeatLine())
     if (!ok) await handleLost()
   }
 
@@ -329,16 +338,22 @@ export function useAlarmDevice() {
 
   // --- 公開 API ---
 
-  /** mount から 5 秒待って探索を始める。以後 10 秒ごとに再スキャン */
-  function connect(): void {
+  /**
+   * 探索を始める。`delay` ミリ秒待って最初のスキャン、以後 10 秒ごとに再スキャン。
+   * BLE ゲートウェイと同居しない管理者 PC では 0 を渡してすぐ探してよい。
+   */
+  function connect(delay = INITIAL_SCAN_DELAY): void {
     if (!isSupported) return
-    scheduleScan(INITIAL_SCAN_DELAY)
+    scheduleScan(delay)
   }
 
-  /** WebSerial の初回許可 (ユーザー操作が要る) → 許可されたら探索を始める */
+  /**
+   * WebSerial の初回許可 (ユーザー操作が要る) → 許可されたら探索を始める。
+   * ボタンを押した直後に待たせると「接続にならない」と見えるので 0 で始める。
+   */
   async function requestPort(): Promise<void> {
     const granted = await requestNewPort()
-    if (granted) connect()
+    if (granted) connect(0)
   }
 
   async function disconnect(): Promise<void> {

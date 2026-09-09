@@ -107,11 +107,18 @@ describe('useAlarmDevice', () => {
   let mod: typeof import('~/composables/useAlarmDevice')
   let alarm: ReturnType<typeof mod.useAlarmDevice>
 
+  /** heartbeat の中身の素 (useActiveRooms の state)。既定は「購読中・着信なし」 */
+  function setRooms(opts: { watching?: boolean; rooms?: string[]; joined?: string | null } = {}) {
+    useState<boolean>('active-rooms-watching').value = opts.watching ?? true
+    useState<string[]>('active-rooms').value = opts.rooms ?? []
+    useState<string | null>('active-rooms-joined').value = opts.joined ?? null
+  }
+
   async function load() {
     vi.resetModules()
     mod = await import('~/composables/useAlarmDevice')
     // useState は Nuxt app に残るためテスト間で明示リセット
-    mod.useKioskHealth().value.fc1200 = null
+    setRooms()
     alarm = mod.useAlarmDevice()
   }
 
@@ -125,23 +132,6 @@ describe('useAlarmDevice', () => {
     await alarm?.disconnect()
     delete (navigator as any).serial
     vi.useRealTimers()
-  })
-
-  // ---------- useKioskHealth ----------
-
-  describe('useKioskHealth', () => {
-    it('初期値は null (このページは FC-1200 を使っていない = OK 扱い)', async () => {
-      installSerialMock({})
-      await load()
-      expect(mod.useKioskHealth().value.fc1200).toBeNull()
-    })
-
-    it('同じキーの state を共有する', async () => {
-      installSerialMock({})
-      await load()
-      mod.useKioskHealth().value.fc1200 = true
-      expect(mod.useKioskHealth().value.fc1200).toBe(true)
-    })
   })
 
   // ---------- isSupported ----------
@@ -159,7 +149,7 @@ describe('useAlarmDevice', () => {
   // ---------- 探索 ----------
 
   describe('探索', () => {
-    it('mount から 5 秒待ってから探索する (BLE GW に先に選ばせる)', async () => {
+    it('引数なしなら 5 秒待ってから探索する (BLE GW に先に選ばせる)', async () => {
       const dev = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
@@ -170,6 +160,18 @@ describe('useAlarmDevice', () => {
 
       await vi.advanceTimersByTimeAsync(1)
       expect(dev.port.open).toHaveBeenCalledTimes(1)
+    })
+
+    it('connect(0) なら待たずに探索する (BLE GW と同居しない管理者 PC)', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.port.open).toHaveBeenCalledTimes(1)
+      expect(alarm.isConnected.value).toBe(true)
     })
 
     it('EVT ALARM 行 → 採用して接続', async () => {
@@ -306,30 +308,47 @@ describe('useAlarmDevice', () => {
   // ---------- STATUS プローブ ----------
 
   describe('STATUS プローブ', () => {
-    it('1 秒ごとに最大 3 回送り、3 秒無応答なら閉じるが除外はしない', async () => {
+    it('1 秒ごとに最大 8 回送り、8 秒無応答なら閉じるが除外はしない', async () => {
       const silent = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [silent.port]) })
       await load()
-      alarm.connect()
+      alarm.connect(0)
 
-      await vi.advanceTimersByTimeAsync(5000)
+      await vi.advanceTimersByTimeAsync(0)
       expect(silent.writes).toEqual(['STATUS\n'])
 
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(silent.writes).toHaveLength(2)
+      // 1 秒ごとに 8 回目まで送って打ち止め
+      await vi.advanceTimersByTimeAsync(7000)
+      expect(silent.writes).toHaveLength(8)
 
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(silent.writes).toHaveLength(3)
+      // 7999ms 時点ではまだ諦めない
+      await vi.advanceTimersByTimeAsync(999)
+      expect(silent.port.close).not.toHaveBeenCalled()
 
-      // 3 秒経過 → 諦めて close
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(silent.writes).toHaveLength(3)
+      // 8 秒経過 → 諦めて close。送信は 8 回で止まったまま
+      await vi.advanceTimersByTimeAsync(1)
+      expect(silent.writes).toHaveLength(8)
       expect(silent.port.close).toHaveBeenCalledTimes(1)
       expect(alarm.isConnected.value).toBe(false)
 
       // 除外していない → 再スキャンで開き直す
       await vi.advanceTimersByTimeAsync(10000)
       expect(silent.port.open).toHaveBeenCalledTimes(2)
+    })
+
+    it('7999ms までは未確定 — 遅れて来た 5 秒ごとのバナーでも採用する', async () => {
+      const late = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [late.port]) })
+      await load()
+      alarm.connect(0)
+
+      await vi.advanceTimersByTimeAsync(7999)
+      expect(alarm.isConnected.value).toBe(false)
+      expect(late.port.close).not.toHaveBeenCalled()
+
+      late.emit('EVT ALARM state=idle cause=none\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(true)
     })
 
     it('STATUS の write に失敗したら閉じるが除外はしない', async () => {
@@ -405,7 +424,7 @@ describe('useAlarmDevice', () => {
     })
 
     it('探索中に再入しない', async () => {
-      // 無応答ポート 3 本 = 1 回の探索に 9 秒かかる
+      // 無応答ポート 3 本 = 1 回の探索に 24 秒かかる
       const a = createMockPort()
       const b = createMockPort()
       const c = createMockPort()
@@ -448,7 +467,7 @@ describe('useAlarmDevice', () => {
       return dev
     }
 
-    it('接続直後と 3 秒ごとに HB OK を送る', async () => {
+    it('接続直後と 3 秒ごとに HB OK を送る (購読中・着信なし)', async () => {
       const dev = await connectDevice()
       expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
 
@@ -459,17 +478,52 @@ describe('useAlarmDevice', () => {
       expect(dev.writes).toHaveLength(4)
     })
 
-    it('fc1200 が false のとき HB NG fc1200 を送る', async () => {
+    it('room 購読が切れているとき HB NG signaling を送る', async () => {
       const dev = await connectDevice()
-      mod.useKioskHealth().value.fc1200 = false
+      setRooms({ watching: false })
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes.at(-1)).toBe('HB NG fc1200\n')
+      expect(dev.writes.at(-1)).toBe('HB NG signaling\n')
 
-      // 復帰したら OK に戻る
-      mod.useKioskHealth().value.fc1200 = true
+      // 張り直せたら OK に戻る
+      setRooms({ watching: true })
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('room が立っていて管理者が未参加なら call=1 を付ける', async () => {
+      const dev = await connectDevice()
+      setRooms({ rooms: ['room-a'] })
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
+    })
+
+    it('管理者がどれかの room に入ったら call は付けない', async () => {
+      const dev = await connectDevice()
+      setRooms({ rooms: ['room-a'], joined: 'room-a' })
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('room が空になったら call は付けない', async () => {
+      const dev = await connectDevice()
+      setRooms({ rooms: ['room-a'] })
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
+
+      setRooms({ rooms: [] })
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('購読が切れていても着信中なら call=1 は付く', async () => {
+      const dev = await connectDevice()
+      setRooms({ watching: false, rooms: ['room-a'] })
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB NG signaling call=1\n')
     })
 
     it('write に失敗したら後始末して再スキャンへ', async () => {
@@ -518,7 +572,7 @@ describe('useAlarmDevice', () => {
   // ---------- requestPort ----------
 
   describe('requestPort', () => {
-    it('許可されたら探索を始める', async () => {
+    it('許可されたら待たずに探索を始める (ボタン直後の 5 秒待ちは未接続に見える)', async () => {
       const dev = createMockPort()
       dev.emit('EVT ALARM state=idle cause=none\n')
       const getPorts = vi.fn(async () => [dev.port])
@@ -526,7 +580,7 @@ describe('useAlarmDevice', () => {
       await load()
 
       await alarm.requestPort()
-      await vi.advanceTimersByTimeAsync(5000)
+      await vi.advanceTimersByTimeAsync(0)
       expect(alarm.isConnected.value).toBe(true)
     })
 

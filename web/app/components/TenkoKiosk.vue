@@ -105,36 +105,6 @@ const {
   latestBloodPressure: bleBloodPressure,
 } = useBleGateway()
 
-// 据置警告デバイス (Atom VoiceS3R / USB) — 3 秒ごとの heartbeat が途切れると
-// デバイス自身の判断で鳴る。ここでは接続と状態表示だけを担う (#135)
-const alarm = useAlarmDevice()
-onMounted(() => {
-  alarm.connect()
-})
-
-const alarmCauseLabels: Record<string, string> = {
-  silence: '無音',
-  'ng:fc1200': 'FC-1200 未接続',
-  call: '呼び出し',
-}
-function alarmCauseText(cause: string): string {
-  return alarmCauseLabels[cause] ?? cause
-}
-const alarmStatusText = computed(() => {
-  if (!alarm.isConnected.value) return '警告デバイス: 未接続'
-  const s = alarm.deviceState.value
-  if (s?.state === 'alarming') return `警告デバイス: 鳴動中 (${alarmCauseText(s.cause)})`
-  if (s?.state === 'muted') return `警告デバイス: 停止済み (人が止めた・${alarmCauseText(s.cause)})`
-  return '警告デバイス: 接続'
-})
-const alarmStatusClass = computed(() => {
-  if (!alarm.isConnected.value) return 'text-gray-400'
-  const state = alarm.deviceState.value?.state
-  if (state === 'alarming') return 'text-red-600 font-medium'
-  if (state === 'muted') return 'text-amber-600'
-  return 'text-gray-500'
-})
-
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
 watch(isDemoMode, (v) => {
@@ -325,16 +295,6 @@ onUnmounted(() => {
         >
           デモモード — 実機不要で点呼フローを体験できます
         </div>
-      </ClientOnly>
-
-      <!-- 警告デバイス (USB) の状態 -->
-      <ClientOnly>
-        <p
-          v-if="alarm.isSupported"
-          :class="['w-full text-xs mb-2 text-center', alarmStatusClass, landscape ? '' : 'max-w-md']"
-        >
-          {{ alarmStatusText }}
-        </p>
       </ClientOnly>
 
       <!-- デモ用点呼予定作成 (NFCステップのみ表示) -->
