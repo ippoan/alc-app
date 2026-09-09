@@ -5,6 +5,9 @@ import type { DeviceFlowType } from '~/types'
 const config = useRuntimeConfig()
 const route = useRoute()
 const { activateFromRegistration, accessToken, deviceTenantId, refreshAccessToken } = useAuth()
+// 警告デバイス (Atom VoiceS3R) をつなぐのは運行管理者の PC 1 台だけなので、既定は off (#135)
+const { setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
+const connectAlarmDevice = ref(false)
 
 // API 初期化 (device-claim は index.vue を経由しない場合がある)
 initApi(
@@ -53,6 +56,7 @@ async function submit() {
     if (res.flow_type === 'url' && res.device_id && res.tenant_id) {
       // URLフロー: 即アクティベート (kiosk device credential も含めて保存、Refs rust-alc-api#480)
       activateFromRegistration(res)
+      setAlarmDeviceEnabled(connectAlarmDevice.value)
       status.value = 'activated'
     } else if (res.flow_type === 'qr_permanent') {
       // QR永久: 承認待ち
@@ -76,6 +80,7 @@ function startPolling() {
       if (res.status === 'approved' && res.tenant_id && res.device_id) {
         stopPolling()
         activateFromRegistration(res)
+        setAlarmDeviceEnabled(connectAlarmDevice.value)
         status.value = 'activated'
       } else if (res.status === 'rejected') {
         stopPolling()
@@ -170,6 +175,10 @@ onUnmounted(() => stopPolling())
             class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
           />
         </div>
+        <label class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+          <input v-model="connectAlarmDevice" type="checkbox" class="mt-0.5" data-testid="alarm-device-checkbox" />
+          <span>この端末に警告デバイス (Atom VoiceS3R) をつなぐ (運行管理者 PC のみ)</span>
+        </label>
         <p v-if="errorMessage" class="text-red-600 text-xs">{{ errorMessage }}</p>
         <button
           class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"

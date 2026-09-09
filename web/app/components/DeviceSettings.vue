@@ -16,6 +16,8 @@ const {
   reAuthenticateDevice,
 } = useAuth()
 const { clearKioskCredential, hasKioskCredential } = useDeviceToken()
+// 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
+const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 
 // 常時起動 ON/OFF (端末自身での切替)。call_enabled / call_schedule は現在値を
 // 保持したまま always_on だけ差し替える (updateDeviceCallSettings は全項目送信の
@@ -522,6 +524,21 @@ async function syncFc1200Date() {
             {{ alwaysOnToggling ? '更新中...' : `常時起動${deviceSettings.always_on ? 'ON' : 'OFF'}` }}
           </button>
         </div>
+
+        <!-- 警告デバイス (運行管理者 PC のみ)。未設定なら「運行管理者」タブで問いかけが出る -->
+        <label class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+          <input
+            type="checkbox"
+            class="mt-0.5"
+            data-testid="alarm-device-checkbox"
+            :checked="alarmDeviceEnabled === true"
+            @change="setAlarmDeviceEnabled(($event.target as HTMLInputElement).checked)"
+          />
+          <span>
+            この端末に警告デバイス (Atom VoiceS3R) をつなぐ (運行管理者 PC のみ)
+            <span v-if="alarmDeviceEnabled === null" class="block text-gray-400">未設定 — 「運行管理者」タブで問いかけが出ます</span>
+          </span>
+        </label>
 
         <button
           class="px-3 py-1.5 text-xs border rounded-lg transition-colors disabled:opacity-50"

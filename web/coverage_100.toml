@@ -11,6 +11,10 @@ path = "app/composables/useAlarmDevice.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useAlarmDeviceSetting.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useAndroidLandscape.ts"
 branches = true
 
