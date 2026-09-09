@@ -1169,6 +1169,55 @@ describe('useBleGateway', () => {
       })
     })
 
+    describe('警告デバイスを掴んでしまった場合 (#135)', () => {
+      it.each([
+        ['EVT ALARM state=alarming cause=silence\n'],
+        ['STATUS alarm state=idle cause=none hb_age_ms=1200 VER=0.1.0\n'],
+      ])('%s → 手放して除外し、再接続でも掴まない', async (line) => {
+        const encoder = new TextEncoder()
+        const { port } = createMockPort({
+          readValues: [{ value: encoder.encode(line), done: false }],
+        })
+        installSerialMock({
+          requestPort: vi.fn(async () => port),
+          getPorts: vi.fn(async () => [port]),
+        })
+
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        await gw.connect()
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.isConnected.value).toBe(false)
+        expect(port.close).toHaveBeenCalled()
+
+        // 再接続が走っても除外済みなので開き直さない
+        await vi.advanceTimersByTimeAsync(2000)
+        expect(port.open).toHaveBeenCalledTimes(1)
+        warnSpy.mockRestore()
+      })
+
+      it('除外済みポートしか無ければ候補ゼロ (単独ポートのフォールバックも効かない)', async () => {
+        const encoder = new TextEncoder()
+        const { port } = createMockPort({
+          getInfoResult: { usbVendorId: 0x303A, usbProductId: 0x1001 },
+          readValues: [{ value: encoder.encode('EVT ALARM state=idle cause=none\n'), done: false }],
+        })
+        installSerialMock({
+          requestPort: vi.fn(async () => port),
+          getPorts: vi.fn(async () => [port]),
+        })
+
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        await gw.connect()
+        await vi.advanceTimersByTimeAsync(0)
+
+        const result = await gw.autoConnect()
+        expect(result).toBe(false)
+        expect(port.open).toHaveBeenCalledTimes(1)
+        warnSpy.mockRestore()
+      })
+    })
+
     describe('writable なし serial', () => {
       it('writer なし → cleanup で writer スキップ', async () => {
         const { port } = createMockPort({

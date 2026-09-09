@@ -28,6 +28,10 @@ const BLE_WS_MAX_RECONNECT = 10
 // serial 探索がこの回数連続で失敗したら WS ブリッジも試す (#123)
 const SERIAL_WS_FALLBACK_AFTER = 2
 
+// 警告デバイス (Atom VoiceS3R) を掴んでしまったポート。VID/PID が CoreS3 と同一
+// (0x303A:0x1001) で USB 記述子では見分けられないため、応答行で判別して以後外す (#135)
+const excludedPorts = new Set<SerialPort>()
+
 // シングルトン: 全コンポーネントで共有
 const isConnected = ref(false)
 const error = ref<string | null>(null)
@@ -214,13 +218,15 @@ export function useBleGateway() {
         }))
 
         // VID+PID マッチを優先、なければ許可済みポートの先頭を使う
-        const candidate = ports.find((p) => {
+        // (警告デバイスと確定したポートは候補から外す)
+        const selectable = ports.filter(p => !excludedPorts.has(p))
+        const candidate = selectable.find((p) => {
           const info = p.getInfo()
           if (info.usbVendorId === undefined) return false
           return BLE_GW_DEVICES.some(d =>
             d.vid === info.usbVendorId && (d.pid === undefined || d.pid === info.usbProductId),
           )
-        }) ?? (ports.length === 1 ? ports[0] : null)
+        }) ?? (selectable.length === 1 ? selectable[0] : null)
         if (!candidate) return false
 
         port = candidate
@@ -290,6 +296,21 @@ export function useBleGateway() {
   }
 
   function processLine(line: string): void {
+    // 掴んでいたのは警告デバイスだった (バナーが 5 秒ごとに来るので 5 秒以内に気づく) →
+    // 手放して以後スキャンから外し、本来の BLE GW を探し直す (#135)
+    if (line.startsWith('STATUS alarm') || line.startsWith('EVT ALARM')) {
+      console.warn('[BLE-GW] Alarm device detected on this port, releasing:', line)
+      // read loop の finally が二重に reconnect しないよう先に落とす
+      const grabbed = port
+      isConnected.value = false
+      void cleanup().then(() => {
+        // read loop が回っている間 port は必ず非 null
+        excludedPorts.add(grabbed as SerialPort)
+        scheduleReconnect()
+      })
+      return
+    }
+
     try {
       const msg = JSON.parse(line) as BleGatewayMessage
       console.log('[BLE-GW RX]', msg)
