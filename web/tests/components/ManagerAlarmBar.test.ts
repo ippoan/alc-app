@@ -75,28 +75,36 @@ describe('ManagerAlarmBar', () => {
     expect(calls).toEqual([])
   })
 
-  it('未接続のあいだは灰の丸と「未接続」', async () => {
+  it('未接続のあいだは灰のアイコンと「未接続」、ボタンは「接続」', async () => {
     const wrapper = await mountSuspended(ManagerAlarmBar)
-    expect(wrapper.text()).toContain('警告デバイス: 未接続')
-    expect(wrapper.find('.bg-gray-300').exists()).toBe(true)
+    expect(wrapper.text()).toContain('警告デバイス')
+    expect(wrapper.text()).toContain('未接続')
+    expect(wrapper.find('.bg-gray-100').exists()).toBe(true)
+    expect(wrapper.find('button').text()).toBe('接続')
     wrapper.unmount()
   })
 
-  it('接続後は緑、鳴動中は赤 + 理由、停止済みは黄 + 理由', async () => {
+  it('接続後は緑、鳴動中は赤 + 理由 + 赤枠、停止済みは黄 + 理由', async () => {
     alarmState.isConnected.value = true
     const wrapper = await mountSuspended(ManagerAlarmBar)
-    expect(wrapper.text()).toContain('警告デバイス: 接続')
-    expect(wrapper.find('.bg-green-500').exists()).toBe(true)
+    expect(wrapper.text()).toContain('接続')
+    expect(wrapper.find('.bg-green-100').exists()).toBe(true)
+    // 接続済みならボタンは繋ぎ直し
+    expect(wrapper.find('button').text()).toBe('接続し直す')
 
     alarmState.deviceState.value = { state: 'alarming', cause: 'silence' }
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('鳴動中 (無音)')
-    expect(wrapper.find('.bg-red-500').exists()).toBe(true)
+    expect(wrapper.find('.bg-red-100').exists()).toBe(true)
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
+    // 鳴動中はカードごと赤く縁取る
+    expect(wrapper.find('[data-testid="manager-alarm-bar"]').classes()).toContain('border-red-300')
 
     alarmState.deviceState.value = { state: 'muted', cause: 'call' }
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('停止済み (人が止めた・呼び出し)')
-    expect(wrapper.find('.bg-amber-400').exists()).toBe(true)
+    expect(wrapper.find('.bg-amber-100').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="manager-alarm-bar"]').classes()).toContain('border-amber-200')
 
     // firmware が知らない cause を返しても、そのまま表示する
     alarmState.deviceState.value = { state: 'alarming', cause: 'ng:unknown' }
@@ -111,10 +119,11 @@ describe('ManagerAlarmBar', () => {
     expect(wrapper.text()).toContain('着信あり')
     expect(wrapper.text()).not.toContain('2')
 
-    // どれかに入れば着信ではない
+    // どれかに入れば着信ではなく、平常の見張り文言に戻る
     roomsState.joinedRoomId.value = 'room-a'
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).not.toContain('着信あり')
+    expect(wrapper.text()).toContain('運行管理者のブラウザを見張っています')
     wrapper.unmount()
   })
 
@@ -127,7 +136,7 @@ describe('ManagerAlarmBar', () => {
     wrapper.unmount()
   })
 
-  it('「警告デバイスを接続」でポート許可を求める', async () => {
+  it('接続ボタンでポート許可を求める', async () => {
     const wrapper = await mountSuspended(ManagerAlarmBar)
     await wrapper.find('button').trigger('click')
     expect(alarmMock.requestPort).toHaveBeenCalledTimes(1)
