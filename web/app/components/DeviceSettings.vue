@@ -261,19 +261,6 @@ const fc1200TestResult = ref<string | null>(null)
 const fc1200Measuring = ref(false)
 
 // BLE GW diagnostics
-// 据置警告デバイス (Atom VoiceS3R) — WebSerial の初回許可はユーザー操作が要る (#135)
-const alarm = useAlarmDevice()
-async function registerAlarmDevice() {
-  await alarm.requestPort()
-}
-const alarmStatusText = computed(() => {
-  if (!alarm.isConnected.value) return '未接続'
-  const s = alarm.deviceState.value
-  if (s?.state === 'alarming') return `鳴動中 (${s.cause})`
-  if (s?.state === 'muted') return `停止済み (人が止めた・${s.cause})`
-  return '接続'
-})
-
 const bleGwTesting = ref(false)
 const bleGwTestResult = ref<string | null>(null)
 
@@ -838,28 +825,6 @@ async function syncFc1200Date() {
           <p v-if="bleGwTestResult" class="text-xs mt-2" :class="bleGwTestResult.includes('失敗') || bleGwTestResult.includes('エラー') ? 'text-red-600' : 'text-green-600'">
             {{ bleGwTestResult }}
           </p>
-        </div>
-      </div>
-
-      <!-- 警告デバイス セクション -->
-      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-        <div class="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
-          <div>
-            <h3 class="text-sm font-medium text-gray-800">警告デバイス (Atom VoiceS3R)</h3>
-            <p class="text-xs text-gray-500">キオスクの heartbeat 監視用 / 115200 baud</p>
-          </div>
-          <button
-            v-if="alarm.isSupported"
-            class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs hover:bg-blue-700 transition-colors"
-            @click="registerAlarmDevice"
-          >
-            警告デバイスを接続
-          </button>
-        </div>
-
-        <div class="p-4 flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full" :class="alarm.isConnected.value ? 'bg-green-500' : 'bg-gray-300'" />
-          <p class="text-xs text-gray-600">{{ alarmStatusText }}</p>
         </div>
       </div>
 

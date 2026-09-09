@@ -39,18 +39,6 @@ watch(state, (s) => {
   emit('stateChange', s)
 })
 
-// キオスク健全性 → 警告デバイスの heartbeat (#135)。
-// useFc1200Serial は DeviceSettings / maintenance も別インスタンスで持つため、
-// composable 内で書くと last-writer-wins で誤 NG が出る。測定を担う当 component だけが報告する
-const kioskHealth = useKioskHealth()
-watch(isConnected, (connected) => {
-  kioskHealth.value.fc1200 = connected
-}, { immediate: true })
-onUnmounted(() => {
-  // このページは FC-1200 を使わなくなった → OK 扱いに戻す
-  kioskHealth.value.fc1200 = null
-})
-
 // マウント時に自動接続を試行
 onMounted(async () => {
   if (!isSupported() || isConnected.value) return
