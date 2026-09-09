@@ -757,6 +757,145 @@ describe('useAuth', () => {
       vi.advanceTimersByTime(10 * 60 * 1000)
       // No error, nothing happens
     })
+
+    // --- 端末登録済みブラウザ (deviceId あり) はページを離れない (#189) ---
+
+    /** document.cookie を getter/setter で差し替え、書き込みを記録する。
+     *  Max-Age=0 の書き込みは実ブラウザ同様に cookie を消す。 */
+    function mockCookieJar(initial = '') {
+      const writes: string[] = []
+      let value = initial
+      Object.defineProperty(document, 'cookie', {
+        get: () => value,
+        set: (v: string) => {
+          writes.push(v)
+          value = /Max-Age=0/.test(v) ? '' : v
+        },
+        configurable: true,
+      })
+      return writes
+    }
+
+    /** window.location を差し替え、href への代入を記録する */
+    function mockLocationWithSpy(hostname = 'alc.example.com') {
+      const hrefSetter = vi.fn()
+      const originalLocation = window.location
+      Object.defineProperty(window, 'location', {
+        value: {
+          ...originalLocation,
+          origin: `https://${hostname}`,
+          hostname,
+          href: '',
+          set href(val: string) { hrefSetter(val) },
+        },
+        writable: true,
+        configurable: true,
+      })
+      restoreLocation = () => Object.defineProperty(window, 'location', {
+        value: originalLocation, writable: true, configurable: true,
+      })
+      return hrefSetter
+    }
+
+    it('stays on the page and expires the cookie when the device is registered', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      const writes = mockCookieJar(`logi_auth_token=${fakeJwt}`)
+      const hrefSetter = mockLocationWithSpy()
+      mockFetch.mockResolvedValue({ ok: true })
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'device-1')
+      auth.consumeAuthCookie()
+
+      expect(auth.isDeviceRegistered.value).toBe(true)
+      expect(auth.isAuthenticated.value).toBe(true)
+
+      vi.advanceTimersByTime(5 * 60 * 1000)
+
+      await vi.waitFor(() => {
+        expect(auth.isAuthenticated.value).toBe(false)
+      })
+      expect(auth.user.value).toBeNull()
+      // ページ遷移しない (WebSerial を閉じない)
+      expect(hrefSetter).not.toHaveBeenCalled()
+      // auth-worker /logout を cookie 付きで叩く
+      const [url, init] = mockFetch.mock.calls[0]
+      expect(url).toContain('/logout')
+      expect(init).toMatchObject({ credentials: 'include', mode: 'no-cors', keepalive: true })
+      // client 側でも Domain 付き / 無しの 2 通りを Max-Age=0 で上書き
+      const expiries = writes.filter(w => w.includes('logi_auth_token=;') && w.includes('Max-Age=0'))
+      expect(expiries).toHaveLength(2)
+      expect(expiries.some(w => !w.includes('Domain='))).toBe(true)
+      expect(expiries.some(w => w.includes('Domain=.example.com'))).toBe(true)
+      // 端末登録は継続
+      expect(auth.deviceId.value).toBe('device-1')
+      expect(auth.isDeviceActivated.value).toBe(true)
+    })
+
+    it('does not restore the session on a later refresh (cookie is gone)', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      mockCookieJar(`logi_auth_token=${fakeJwt}`)
+      mockLocationWithSpy()
+      // /logout が失敗しても client 側の cookie 上書きで失効する
+      mockFetch.mockRejectedValue(new Error('offline'))
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'device-1')
+      auth.consumeAuthCookie()
+
+      vi.advanceTimersByTime(5 * 60 * 1000)
+      await vi.waitFor(() => {
+        expect(auth.isAuthenticated.value).toBe(false)
+      })
+
+      // 401 → refresh → retry (api.ts) が来ても復活しない
+      await expect(auth.refreshAccessToken()).rejects.toThrow()
+      expect(auth.isAuthenticated.value).toBe(false)
+    })
+
+    it('writes only the Domain-less cookie on a single-label hostname', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      const writes = mockCookieJar(`logi_auth_token=${fakeJwt}`)
+      mockLocationWithSpy('localhost')
+      mockFetch.mockResolvedValue({ ok: true })
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.activateDevice('tenant-1', 'device-1')
+      auth.consumeAuthCookie()
+
+      vi.advanceTimersByTime(5 * 60 * 1000)
+      await vi.waitFor(() => {
+        expect(auth.isAuthenticated.value).toBe(false)
+      })
+
+      const expiries = writes.filter(w => w.includes('logi_auth_token=;') && w.includes('Max-Age=0'))
+      expect(expiries).toHaveLength(1)
+      expect(expiries[0]).not.toContain('Domain=')
+    })
+
+    it('still redirects to /logout when no device is registered', async () => {
+      const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
+      setDocCookie(`logi_auth_token=${fakeJwt}`)
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+      auth.consumeAuthCookie()
+
+      const hrefSetter = mockLocationWithSpy()
+      expect(auth.isDeviceRegistered.value).toBe(false)
+
+      vi.advanceTimersByTime(5 * 60 * 1000)
+
+      await vi.waitFor(() => {
+        expect(auth.isAuthenticated.value).toBe(false)
+      })
+      expect(hrefSetter).toHaveBeenCalledTimes(1)
+      expect(hrefSetter.mock.calls[0][0]).toContain('/logout?redirect_uri=')
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
   })
 
   describe('loginWithGoogleRedirect', () => {
