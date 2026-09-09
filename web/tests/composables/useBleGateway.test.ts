@@ -56,50 +56,77 @@ class MockWebSocket {
 
 vi.stubGlobal('WebSocket', MockWebSocket)
 
-// --- Mock SerialPort ---
+// --- Mock SerialPort (useCoreS3Serial.test.ts と同型) ---
 
-function createMockPort(options?: {
-  readable?: boolean
-  writable?: boolean
-  readValues?: Array<{ value: Uint8Array | null; done: boolean }>
-  getInfoResult?: { usbVendorId?: number; usbProductId?: number }
-}) {
-  const readValues = options?.readValues ?? []
-  let readIdx = 0
+interface MockPortHandle {
+  port: any
+  writes: string[]
+  /** デバイスからの受信行を流す (未読なら queue に積まれる) */
+  emit: (text: string) => void
+  /** 抜線・クラッシュ (read が done で終わる) */
+  end: () => void
+  setWriteError: (v: boolean) => void
+}
 
-  const mockReader = {
-    read: vi.fn(async () => {
-      if (readIdx < readValues.length) {
-        return readValues[readIdx++]!
-      }
-      return { value: null, done: true }
+function createMockPort(options?: { vid?: number }): MockPortHandle {
+  const queue: Array<{ value?: Uint8Array; done: boolean }> = []
+  let pending: ((chunk: { value?: Uint8Array; done: boolean }) => void) | null = null
+  let cancelled = false
+  let writeError = false
+
+  const reader = {
+    read: vi.fn(() => {
+      const next = queue.shift()
+      if (next) return Promise.resolve(next)
+      if (cancelled) return Promise.resolve({ value: undefined, done: true })
+      return new Promise<{ value?: Uint8Array; done: boolean }>((resolve) => {
+        pending = resolve
+      })
     }),
-    cancel: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {
+      cancelled = true
+      if (pending) {
+        pending({ value: undefined, done: true })
+        pending = null
+      }
+    }),
     releaseLock: vi.fn(),
   }
 
-  const mockWriter = {
-    write: vi.fn(async () => {}),
+  function push(chunk: { value?: Uint8Array; done: boolean }) {
+    if (pending) {
+      pending(chunk)
+      pending = null
+    }
+    else {
+      queue.push(chunk)
+    }
+  }
+
+  const writes: string[] = []
+  const writer = {
+    write: vi.fn(async (data: Uint8Array) => {
+      if (writeError) throw new Error('write failed')
+      writes.push(new TextDecoder().decode(data))
+    }),
     releaseLock: vi.fn(),
   }
 
-  const mockReadable = options?.readable !== false
-    ? { getReader: vi.fn(() => mockReader) }
-    : null
-  const mockWritable = options?.writable !== false
-    ? { getWriter: vi.fn(() => mockWriter) }
-    : null
+  const port = {
+    open: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    // 掴み直しでも同じ reader を使い回す (前回の cancel を持ち越さない)
+    readable: { getReader: vi.fn(() => { cancelled = false; return reader }) },
+    writable: { getWriter: vi.fn(() => writer) },
+    getInfo: vi.fn(() => ({ usbVendorId: options?.vid ?? 0x303A, usbProductId: 0x1001 })),
+  }
 
   return {
-    port: {
-      open: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-      readable: mockReadable,
-      writable: mockWritable,
-      getInfo: vi.fn(() => options?.getInfoResult ?? { usbVendorId: 0x1A86 }),
-    },
-    reader: mockReader,
-    writer: mockWriter,
+    port,
+    writes,
+    emit: (text: string) => push({ value: new TextEncoder().encode(text), done: false }),
+    end: () => push({ value: undefined, done: true }),
+    setWriteError: (v: boolean) => { writeError = v },
   }
 }
 
@@ -123,16 +150,42 @@ describe('useBleGateway', () => {
   let useBleGateway: typeof import('~/composables/useBleGateway').useBleGateway
   let gw: ReturnType<typeof useBleGateway>
 
-  beforeEach(async () => {
-    vi.clearAllMocks()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
-    MockWebSocket.instances = []
-    delete (navigator as any).serial
-
+  /**
+   * composable を作り直す。serial の対応判定は setup 直下で 1 度だけ評価されるので、
+   * serial のテストは installSerialMock のあとに呼ぶこと (SSR で navigator を
+   * top-level で触らないための形。#182)
+   */
+  async function load() {
     vi.resetModules()
     const mod = await import('~/composables/useBleGateway')
     useBleGateway = mod.useBleGateway
     gw = useBleGateway()
+  }
+
+  /** JSON 行を先着させて arbiter に claim させる (実機の BLE ゲートウェイと同じ形) */
+  async function connectSerial(dev: MockPortHandle, ready = true) {
+    installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+    await load()
+    if (ready) dev.emit('{"type":"ready","version":"1.0.0"}\n')
+    else dev.emit('{"type":"reset"}\n')
+    expect(await autoConnect()).toBe(true)
+  }
+
+  /** autoConnect は arbiter の setTimeout(0) 越しに走るのでタイマーを進めながら待つ */
+  async function autoConnect(): Promise<boolean> {
+    const p = gw.autoConnect()
+    await vi.advanceTimersByTimeAsync(0)
+    return await p
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    // 見送ったポートの再訪判定が Date.now() を見るので Date も止める
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
+    MockWebSocket.instances = []
+    delete (navigator as any).serial
+
+    await load()
   })
 
   afterEach(async () => {
@@ -456,24 +509,26 @@ describe('useBleGateway', () => {
     })
 
     it('serial 接続成功 → 即 true (WS フォールバックなし)', async () => {
-      const { port } = createMockPort({
-        readValues: [{ value: null, done: true }],
-      })
-      installSerialMock({ getPorts: vi.fn(async () => [port]) })
-      const result = await gw.startAutoConnect(2, 10)
-      expect(result).toBe(true)
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      const promise = gw.startAutoConnect(2, 10)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(await promise).toBe(true)
       expect(gw.transport.value).toBe('serial')
       expect(MockWebSocket.instances).toHaveLength(0)
     })
 
     it('serial ポート 0 件が続く → 2 回目以降 WS ブリッジへフォールバック (#123)', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
       const promise = gw.startAutoConnect(3, 10)
-      // 1 回目の失敗ではまだ WS を試さない
-      await vi.advanceTimersByTimeAsync(0)
+      // 1 回目の失敗 (claim の待ち 3 秒) ではまだ WS を試さない
+      await vi.advanceTimersByTimeAsync(3000)
       expect(MockWebSocket.instances).toHaveLength(0)
       // interval → 2 回目の serial 失敗 → WS フォールバック開始
-      await vi.advanceTimersByTimeAsync(10)
+      await vi.advanceTimersByTimeAsync(10 + 3000)
       expect(MockWebSocket.instances).toHaveLength(1)
       expect(MockWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:9877')
       MockWebSocket.instances[0]!.simulateOpen()
@@ -484,8 +539,9 @@ describe('useBleGateway', () => {
 
     it('serial 0 件 + WS ブリッジも不在 → WS を後始末して false (#123)', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
       const promise = gw.startAutoConnect(2, 10)
-      await vi.advanceTimersByTimeAsync(10)  // 1 回目失敗 + interval → 2 回目失敗 → WS フォールバック
+      await vi.advanceTimersByTimeAsync(3000 + 10 + 3000) // 1 回目失敗 + interval → 2 回目失敗 → WS フォールバック
       await vi.advanceTimersByTimeAsync(500) // WS 未接続 → disconnect
       expect(await promise).toBe(false)
       expect(gw.isConnected.value).toBe(false)
@@ -494,726 +550,292 @@ describe('useBleGateway', () => {
     })
   })
 
+
   // =============================================
   // Serial transport
+  //
+  // ポートの探索・open・機種判定は useSerialArbiter → useCoreS3Serial に移った (#182)。
+  // ここで見るのは「BLE ゲートウェイとして外から見える挙動」が不変であること。
   // =============================================
 
   describe('Serial transport', () => {
-    describe('connect (serial)', () => {
-      it('正常接続 → isConnected=true, transport=serial', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
+    describe('connect (serial / 手動ポートピッカー)', () => {
+      it('許可 → arbiter が open する (自前で open しないので二重 open にならない)', async () => {
+        const dev = createMockPort()
+        const requestPort = vi.fn(async () => dev.port)
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]), requestPort })
+        await load()
+        dev.emit('{"type":"ready","version":"1.0.0"}\n')
 
-        await gw.connect()
+        const p = gw.connect()
+        await vi.advanceTimersByTimeAsync(0)
+        await p
+
+        expect(requestPort).toHaveBeenCalledTimes(1)
+        // 許可のあと開くのは arbiter の 1 回だけ
+        expect(dev.port.open).toHaveBeenCalledTimes(1)
         expect(gw.isConnected.value).toBe(true)
         expect(gw.transport.value).toBe('serial')
-      })
-
-      it('readable なし → エラー + cleanup', async () => {
-        const { port } = createMockPort({ readable: false })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        expect(gw.error.value).toBe('シリアルポートの読み取りストリームが取得できません')
-      })
-
-      it('writable なし → writer=null でも接続成功', async () => {
-        const { port } = createMockPort({
-          writable: false,
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        expect(gw.isConnected.value).toBe(true)
-      })
-
-      it('NotFoundError (キャンセル) → エラーなし', async () => {
-        installSerialMock({
-          requestPort: vi.fn(async () => {
-            const e = new DOMException('cancel', 'NotFoundError')
-            throw e
-          }),
-        })
-
-        await gw.connect()
         expect(gw.error.value).toBeNull()
       })
 
-      it('一般エラー → error 設定', async () => {
+      it('ポートピッカーをキャンセル → 未接続 / エラーなし', async () => {
+        const getPorts = vi.fn(async () => [])
         installSerialMock({
-          requestPort: vi.fn(async () => { throw new Error('port error') }),
+          getPorts,
+          requestPort: vi.fn(async () => { throw new DOMException('cancel', 'NotFoundError') }),
         })
+        await load()
 
         await gw.connect()
-        expect(gw.error.value).toBe('port error')
-      })
-
-      it('非 Error → 汎用メッセージ', async () => {
-        installSerialMock({
-          requestPort: vi.fn(async () => { throw 'unknown' }),
-        })
-
-        await gw.connect()
-        expect(gw.error.value).toBe('BLE ゲートウェイへの接続に失敗しました')
-      })
-    })
-
-    describe('startReadLoop (serial)', () => {
-      it('JSON 行の処理', async () => {
-        const encoder = new TextEncoder()
-        const jsonLine = JSON.stringify({ type: 'temperature', value: 36.5, unit: 'celsius' }) + '\n'
-        const { port } = createMockPort({
-          readValues: [
-            { value: encoder.encode(jsonLine), done: false },
-            { value: null, done: true },
-          ],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        // Wait for readLoop to process
-        await vi.advanceTimersByTimeAsync(0)
-        expect(gw.latestTemperature.value).not.toBeNull()
-        expect(gw.latestTemperature.value!.value).toBe(36.5)
-      })
-
-      it.skip('複数行まとめて受信', async () => {
-        const encoder = new TextEncoder()
-        const lines = JSON.stringify({ type: 'temperature', value: 36.5, unit: 'celsius' }) + '\n'
-          + JSON.stringify({ type: 'connected', device: 'thermometer' }) + '\n'
-        const { port, reader: mockReader } = createMockPort()
-        mockReader.read
-          .mockResolvedValueOnce({ value: encoder.encode(lines), done: false })
-          .mockImplementation(async () => new Promise(() => {})) // block to prevent cleanup
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        expect(gw.latestTemperature.value!.value).toBe(36.5)
-        expect(gw.thermometerConnected.value).toBe(true)
-      })
-
-      it('不正 JSON 行 → console.warn', async () => {
-        const encoder = new TextEncoder()
-        const { port } = createMockPort({
-          readValues: [
-            { value: encoder.encode('not json\n'), done: false },
-            { value: null, done: true },
-          ],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        expect(warnSpy).toHaveBeenCalled()
-        warnSpy.mockRestore()
-      })
-
-      it('空行はスキップ', async () => {
-        const encoder = new TextEncoder()
-        const { port } = createMockPort({
-          readValues: [
-            { value: encoder.encode('\n\n'), done: false },
-            { value: null, done: true },
-          ],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        // Should not crash
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-      })
-
-      it('value=null (continue) → スキップ', async () => {
-        const { port } = createMockPort({
-          readValues: [
-            { value: null as any, done: false },
-            { value: null, done: true },
-          ],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        // no crash
-      })
-
-      it('read エラー (readLoopActive=true) → error 設定', async () => {
-        const { port, reader: mockReader } = createMockPort()
-        mockReader.read.mockRejectedValueOnce(new Error('read error'))
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        expect(gw.error.value).toBe('BLE ゲートウェイからの受信中にエラーが発生しました')
-      })
-
-      it('readLoop 終了時 isConnected → cleanup + scheduleReconnect', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-          getPorts: vi.fn(async () => []),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        // readLoop ended with done=true, isConnected was true
-        // cleanup sets isConnected=false, scheduleReconnect sets timer
-        // After cleanup, isConnected becomes false
         expect(gw.isConnected.value).toBe(false)
-      })
-    })
-
-    describe('ready message → heartbeat check (serial)', () => {
-      it('serial + ready → startHeartbeatCheck', async () => {
-        const encoder = new TextEncoder()
-        const readyLine = JSON.stringify({ type: 'ready', device: 'gw', version: '2.0' }) + '\n'
-        let readCount = 0
-        const { port, reader: mockReader } = createMockPort()
-        mockReader.read
-          .mockResolvedValueOnce({ value: encoder.encode(readyLine), done: false })
-          .mockImplementation(async () => {
-            readCount++
-            // Keep blocking to prevent readLoop from ending
-            if (readCount > 100) return { value: null, done: true }
-            return new Promise(() => {}) // never resolves (blocks)
-          })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        expect(gw.gatewayVersion.value).toBe('2.0')
-
-        // heartbeat timeout (30s), check interval is 10s
-        // Advance 31s without heartbeat → should trigger timeout
-        vi.advanceTimersByTime(31000)
-        // Heartbeat timeout triggers cleanup + scheduleReconnect
-        await vi.advanceTimersByTimeAsync(0)
-      })
-    })
-
-    describe('sendCommand (serial)', () => {
-      it('serial writer に書き込み', async () => {
-        const encoder = new TextEncoder()
-        const readyLine = JSON.stringify({ type: 'ready', device: 'gw', version: '1.0' }) + '\n'
-        let readCount = 0
-        const { port, writer: mockWriter, reader: mockReader } = createMockPort()
-        mockReader.read
-          .mockResolvedValueOnce({ value: encoder.encode(readyLine), done: false })
-          .mockImplementation(async () => {
-            readCount++
-            if (readCount > 100) return { value: null, done: true }
-            return new Promise(() => {})
-          })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        await gw.sendCommand({ cmd: 'scan' })
-        expect(mockWriter.write).toHaveBeenCalled()
-      })
-
-      it('serial writer.write 失敗 → console.warn', async () => {
-        const encoder = new TextEncoder()
-        let readCount = 0
-        const { port, writer: mockWriter, reader: mockReader } = createMockPort()
-        mockReader.read.mockImplementation(async () => {
-          readCount++
-          if (readCount > 100) return { value: null, done: true }
-          return new Promise(() => {})
-        })
-        mockWriter.write.mockRejectedValueOnce(new Error('write fail'))
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        await gw.sendCommand({ cmd: 'test' })
-        expect(warnSpy).toHaveBeenCalled()
-        warnSpy.mockRestore()
-      })
-
-      it('writer なし → 何もしない', async () => {
-        // transport is not websocket, writer is null → just returns
-        await gw.sendCommand({ cmd: 'test' })
-      })
-    })
-
-    describe('resetGateway (serial)', () => {
-      it('serial → sendCommand({ cmd: "reset" })', async () => {
-        let readCount = 0
-        const { port, writer: mockWriter, reader: mockReader } = createMockPort()
-        mockReader.read.mockImplementation(async () => {
-          readCount++
-          if (readCount > 100) return { value: null, done: true }
-          return new Promise(() => {})
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        await gw.resetGateway()
-        expect(mockWriter.write).toHaveBeenCalled()
+        expect(gw.error.value).toBeNull()
+        expect(getPorts).not.toHaveBeenCalled()
       })
     })
 
     describe('autoConnect (serial)', () => {
-      it('VID マッチ → 接続成功', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
+      it('JSON 行が先着 → 接続 (STATUS の応答を待たない)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
 
-        const result = await gw.autoConnect()
-        expect(result).toBe(true)
+        expect(gw.transport.value).toBe('serial')
+        expect(gw.gatewayVersion.value).toBe('1.0.0')
+        // 自前の列挙をしないので open は arbiter の 1 回だけ
+        expect(dev.port.open).toHaveBeenCalledTimes(1)
+      })
+
+      it('ポートが 1 つも無い → 3 秒待って false', async () => {
+        installSerialMock({ getPorts: vi.fn(async () => []) })
+        await load()
+
+        const p = gw.autoConnect()
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(await p).toBe(false)
+        expect(gw.isConnected.value).toBe(false)
+      })
+
+      it('既に接続済み → 探索せず true', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        expect(await gw.autoConnect()).toBe(true)
+      })
+
+      it('警告デバイス (VoiceS3R) のポートは掴まない (#135)', async () => {
+        const alarm = createMockPort()
+        alarm.emit('EVT ALARM state=alarming cause=silence\n')
+        installSerialMock({ getPorts: vi.fn(async () => [alarm.port]) })
+        await load()
+
+        const p = gw.autoConnect()
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(await p).toBe(false)
+        expect(gw.isConnected.value).toBe(false)
+        // reject が確定した時点で手放している
+        expect(alarm.port.close).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    describe('processMessage (serial)', () => {
+      it('ready → gatewayVersion + heartbeat 監視開始 (serial のみ)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        expect(gw.gatewayVersion.value).toBe('1.0.0')
+
+        // 30 秒 heartbeat が来なければ掴み直しへ (点検は 10 秒ごとなので 40 秒目に気づく)
+        await vi.advanceTimersByTimeAsync(40000)
+        expect(gw.isConnected.value).toBe(false)
+        expect(gw.transport.value).toBeNull()
+        expect(dev.port.close).toHaveBeenCalledTimes(1)
+      })
+
+      it('heartbeat が来ている間は掴み直さない', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        for (let i = 0; i < 4; i++) {
+          await vi.advanceTimersByTimeAsync(10000)
+          dev.emit('{"type":"heartbeat","thermo":true,"bp":false}\n')
+          await vi.advanceTimersByTimeAsync(0)
+        }
+
+        expect(gw.isConnected.value).toBe(true)
+        expect(gw.thermometerConnected.value).toBe(true)
+        expect(gw.bloodPressureConnected.value).toBe(false)
+      })
+
+      it('ready 以外で始まる serial 接続では heartbeat 監視を始めない', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev, false)
+
+        await vi.advanceTimersByTimeAsync(60000)
+        expect(gw.isConnected.value).toBe(true)
+      })
+
+      it('serial でも WebSocket と同じ分岐を通る (温度・血圧・機器・エラー)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('{"type":"connected","device":"thermometer"}\n')
+        dev.emit('{"type":"connected","device":"blood_pressure"}\n')
+        dev.emit('{"type":"temperature","value":36.7}\n')
+        dev.emit('{"type":"blood_pressure","systolic":120,"diastolic":80,"pulse":66}\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.thermometerConnected.value).toBe(true)
+        expect(gw.bloodPressureConnected.value).toBe(true)
+        expect(gw.latestTemperature.value?.value).toBe(36.7)
+        expect(gw.latestBloodPressure.value?.pulse).toBe(66)
+        expect(gw.hasMedicalData.value).toBe(true)
+
+        dev.emit('{"type":"disconnected","device":"thermometer"}\n')
+        dev.emit('{"type":"disconnected","device":"blood_pressure"}\n')
+        dev.emit('{"type":"error","message":"BLE スキャンに失敗しました"}\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.thermometerConnected.value).toBe(false)
+        expect(gw.bloodPressureConnected.value).toBe(false)
+        expect(gw.error.value).toBe('BLE スキャンに失敗しました')
+      })
+    })
+
+    describe('sendCommand / resetGateway (serial)', () => {
+      it('JSON 1 行として書く', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        await gw.sendCommand({ cmd: 'scan' })
+        expect(dev.writes).toContain('{"cmd":"scan"}\n')
+      })
+
+      it('resetGateway → { cmd: "reset" } を送る (ポートは手放さない)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        await gw.resetGateway()
+        expect(dev.writes).toContain('{"cmd":"reset"}\n')
+        expect(gw.isConnected.value).toBe(true)
         expect(gw.transport.value).toBe('serial')
       })
 
-      it('VID+PID マッチ (FTDI)', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-          getInfoResult: { usbVendorId: 0x0403, usbProductId: 0x6001 },
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
+      it('書けなくなったら warn してポートを返す', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const dev = createMockPort()
+        await connectSerial(dev)
+        dev.setWriteError(true)
 
-        const result = await gw.autoConnect()
-        expect(result).toBe(true)
-      })
-
-      it('VID 不一致 + ポート1つ → フォールバック', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-          getInfoResult: { usbVendorId: 0x9999 },
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const result = await gw.autoConnect()
-        // ports.length === 1 → falls back to ports[0]
-        expect(result).toBe(true)
-      })
-
-      it('VID undefined → find スキップ、ポート1つ → フォールバック', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-          getInfoResult: {},
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(true)
-      })
-
-      it('ポート0 → false', async () => {
-        installSerialMock({
-          getPorts: vi.fn(async () => []),
-        })
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(false)
-      })
-
-      it('ポート2つ + VID 不一致 → null candidate → false', async () => {
-        const { port: p1 } = createMockPort({ getInfoResult: { usbVendorId: 0x9999 } })
-        const { port: p2 } = createMockPort({ getInfoResult: { usbVendorId: 0x8888 } })
-        installSerialMock({
-          getPorts: vi.fn(async () => [p1, p2]),
-        })
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(false)
-      })
-
-      it('readable なし → false', async () => {
-        const { port } = createMockPort({
-          readable: false,
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(false)
-      })
-
-      it('InvalidStateError → リトライ → 2回目で成功', async () => {
-        let attempt = 0
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        const originalOpen = port.open
-        port.open = vi.fn(async () => {
-          attempt++
-          if (attempt === 1) {
-            throw new DOMException('busy', 'InvalidStateError')
-          }
-          return originalOpen()
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const promise = gw.autoConnect()
-        // 1st attempt: InvalidStateError → RETRY_DELAY (500ms) wait
-        await vi.advanceTimersByTimeAsync(500)
-        const result = await promise
-        expect(result).toBe(true)
-        expect(attempt).toBe(2)
-      })
-
-      it('InvalidStateError 全リトライ消費 → cleanup + false', async () => {
-        const { port } = createMockPort({
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        port.open = vi.fn(async () => {
-          throw new DOMException('busy', 'InvalidStateError')
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const promise = gw.autoConnect()
-        // 3 attempts: each InvalidStateError → continue (1st, 2nd get RETRY_DELAY wait)
-        await vi.advanceTimersByTimeAsync(500) // 1st retry delay
-        await vi.advanceTimersByTimeAsync(500) // 2nd retry delay
-        // 3rd attempt: InvalidStateError → continue → loop ends → cleanup + return false
-        const result = await promise
-        expect(result).toBe(false)
-      })
-
-      it('一般エラー → cleanup + false', async () => {
-        const { port } = createMockPort({
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        port.open = vi.fn(async () => { throw new Error('open fail') })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(false)
-      })
-    })
-
-    describe('scheduleReconnect (serial)', () => {
-      it('MAX 超過 → エラー + リセット', async () => {
-        // Need to trigger scheduleReconnect via readLoop ending
-        // Connect serial, readLoop ends immediately → cleanup + scheduleReconnect
-        installSerialMock({
-          getPorts: vi.fn(async () => []),
-        })
-
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-          getPorts: vi.fn(async () => []),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        // readLoop ended → cleanup → scheduleReconnect called
-        // Each reconnect attempt calls autoConnect which fails (getPorts returns [])
-        // then calls scheduleReconnect recursively
-        for (let i = 0; i < 10; i++) {
-          vi.advanceTimersByTime(30000) // max delay
-          await vi.advanceTimersByTimeAsync(0)
-        }
-        // After 10 attempts, should hit max
-        expect(gw.error.value).toBe('BLE ゲートウェイへの再接続に失敗しました')
-      })
-
-      it('reconnect 成功 → reconnectAttempt リセット', async () => {
-        // First connect serial, readLoop ends → cleanup → scheduleReconnect
-        const { port: port1 } = createMockPort({
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port1),
-          getPorts: vi.fn(async () => []),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        // readLoop ended, scheduleReconnect called
-
-        // Now install a port that autoConnect can find
-        const { port: port2, reader: mockReader2 } = createMockPort({
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        mockReader2.read.mockImplementation(async () => new Promise(() => {})) // block
-        installSerialMock({
-          getPorts: vi.fn(async () => [port2]),
-        })
-
-        // Advance timer to trigger reconnect (RECONNECT_BASE_DELAY=2000)
-        await vi.advanceTimersByTimeAsync(2000)
-        await vi.advanceTimersByTimeAsync(0)
-        // autoConnect succeeds → reconnectAttempt = 0
-        expect(gw.isConnected.value).toBe(true)
-      })
-    })
-
-    describe('heartbeat timeout', () => {
-      it('heartbeat タイムアウト → cleanup + scheduleReconnect', async () => {
-        const encoder = new TextEncoder()
-        const readyLine = JSON.stringify({ type: 'ready', device: 'gw', version: '1.0' }) + '\n'
-        let readCount = 0
-        const { port, reader: mockReader } = createMockPort()
-        mockReader.read
-          .mockResolvedValueOnce({ value: encoder.encode(readyLine), done: false })
-          .mockImplementation(async () => {
-            readCount++
-            if (readCount > 100) return { value: null, done: true }
-            return new Promise(() => {})
-          })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-          getPorts: vi.fn(async () => []),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-        expect(gw.isConnected.value).toBe(true)
-
-        // Mock Date.now to simulate time passing beyond HEARTBEAT_TIMEOUT (30s)
-        const originalNow = Date.now
-        let fakeNow = originalNow()
-        vi.spyOn(Date, 'now').mockImplementation(() => fakeNow)
-
-        // Advance past heartbeat timeout
-        fakeNow += 31000
-        // Trigger the heartbeat check interval (10s)
-        vi.advanceTimersByTime(10000)
-        await vi.advanceTimersByTimeAsync(0)
-
-        // Heartbeat timeout triggers cleanup → isConnected = false
+        await gw.sendCommand({ cmd: 'scan' })
+        expect(warn).toHaveBeenCalledWith('[BLE-GW] sendCommand failed:', { cmd: 'scan' })
         expect(gw.isConnected.value).toBe(false)
+        warn.mockRestore()
+      })
 
-        vi.spyOn(Date, 'now').mockRestore()
+      it('未接続なら何も書かない', async () => {
+        installSerialMock({ getPorts: vi.fn(async () => []) })
+        await load()
+
+        await gw.sendCommand({ cmd: 'scan' })
+        expect(gw.isConnected.value).toBe(false)
       })
     })
 
-    describe('cleanup (serial)', () => {
-      it('writer/reader/port の cleanup', async () => {
-        let readCount = 0
-        const { port, writer: mockWriter, reader: mockReader } = createMockPort()
-        mockReader.read.mockImplementation(async () => {
-          readCount++
-          if (readCount > 100) return { value: null, done: true }
-          return new Promise(() => {})
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
+    describe('ポートを失ったとき', () => {
+      it('抜線 → serial の state を畳み、arbiter が掴み直す', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+        dev.emit('{"type":"heartbeat","thermo":true,"bp":true}\n')
         await vi.advanceTimersByTimeAsync(0)
-        expect(gw.isConnected.value).toBe(true)
+        expect(gw.thermometerConnected.value).toBe(true)
+
+        dev.end()
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.isConnected.value).toBe(false)
+        expect(gw.transport.value).toBeNull()
+        expect(gw.thermometerConnected.value).toBe(false)
+        expect(gw.bloodPressureConnected.value).toBe(false)
+
+        // 登録は残っている → 10 秒後の再スキャンで開き直す
+        await vi.advanceTimersByTimeAsync(10000)
+        expect(dev.port.open).toHaveBeenCalledTimes(2)
+      })
+
+      it('disconnect → 登録ごと降りるので探索しない', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
 
         await gw.disconnect()
         expect(gw.isConnected.value).toBe(false)
         expect(gw.transport.value).toBeNull()
-        expect(mockWriter.releaseLock).toHaveBeenCalled()
-        expect(mockReader.cancel).toHaveBeenCalled()
-        expect(mockReader.releaseLock).toHaveBeenCalled()
-        expect(port.close).toHaveBeenCalled()
-      })
 
-      it('releaseLock / cancel / close がエラーでもクラッシュしない', async () => {
-        const { port, writer: mockWriter, reader: mockReader } = createMockPort({
-          readValues: [{ value: null, done: true }],
-        })
-        mockWriter.releaseLock.mockImplementation(() => { throw new Error('lock err') })
-        mockReader.cancel.mockRejectedValue(new Error('cancel err'))
-        mockReader.releaseLock.mockImplementation(() => { throw new Error('lock err') })
-        port.close = vi.fn(async () => { throw new Error('close err') })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        // Should not throw
-        await gw.disconnect()
-        expect(gw.isConnected.value).toBe(false)
+        await vi.advanceTimersByTimeAsync(30000)
+        expect(dev.port.open).toHaveBeenCalledTimes(1)
       })
     })
 
-    describe('readLoop finally: isConnected=false → no reconnect', () => {
-      it('readLoop 終了時に isConnected=false なら reconnect しない', async () => {
-        let resolveRead: (v: any) => void
-        const { port, reader: mockReader } = createMockPort({
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        // First read blocks, then returns done: true
-        mockReader.read
-          .mockImplementationOnce(() => new Promise((resolve) => {
-            resolveRead = resolve
-          }))
+    describe('scheduleReconnect (serial)', () => {
+      it('heartbeat タイムアウトのあと掴み直せれば元に戻る', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
 
-        installSerialMock({ requestPort: vi.fn(async () => port) })
-        await gw.connect()
+        // heartbeat 断 → 掴み直しへ
+        await vi.advanceTimersByTimeAsync(40000)
+        expect(gw.isConnected.value).toBe(false)
+
+        // arbiter の再スキャン + backoff 越しに復帰する
+        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        await vi.advanceTimersByTimeAsync(20000)
         expect(gw.isConnected.value).toBe(true)
         expect(gw.transport.value).toBe('serial')
+      })
 
-        // Manually set isConnected to false (simulating external cleanup)
-        // Then resolve the read to end the loop
-        // We can't directly set isConnected since it's readonly
-        // Instead, call cleanup which sets isConnected=false
-        await gw.disconnect()
-        // Now resolve the blocked read (readLoop catches the cancelled error)
-        resolveRead!({ value: null, done: true })
-        await vi.advanceTimersByTimeAsync(0)
+      it('掴み直せないまま上限に達したらエラーを出して諦める', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+        installSerialMock({ getPorts: vi.fn(async () => []) })
 
-        // No reconnect should happen since isConnected was false
+        await vi.advanceTimersByTimeAsync(40000)
+        // 2s, 4s, 8s ... と 10 回分の backoff (各回 claim の待ち 3 秒つき)
+        await vi.advanceTimersByTimeAsync(300000)
+
+        expect(gw.error.value).toBe('BLE ゲートウェイへの再接続に失敗しました')
         expect(gw.isConnected.value).toBe(false)
       })
     })
 
-    describe('autoConnect writable=false', () => {
-      it('writable なし → writer=null でも接続成功', async () => {
-        const { port } = createMockPort({
-          writable: false,
-          readValues: [{ value: null, done: true }],
-          getInfoResult: { usbVendorId: 0x1A86 },
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(true)
-        expect(gw.isConnected.value).toBe(true)
-      })
-    })
-
-    describe('startAutoConnect 成功ケース', () => {
-      it('1回目で接続成功 → true', async () => {
-        const { port } = createMockPort({
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const result = await gw.startAutoConnect(3, 100)
-        expect(result).toBe(true)
-      })
-    })
-
-    describe('警告デバイスを掴んでしまった場合 (#135)', () => {
-      it.each([
-        ['EVT ALARM state=alarming cause=silence\n'],
-        ['STATUS alarm state=idle cause=none hb_age_ms=1200 VER=0.1.0\n'],
-      ])('%s → 手放して除外し、再接続でも掴まない', async (line) => {
-        const encoder = new TextEncoder()
-        const { port } = createMockPort({
-          readValues: [{ value: encoder.encode(line), done: false }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-          getPorts: vi.fn(async () => [port]),
-        })
-
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        expect(gw.isConnected.value).toBe(false)
-        expect(port.close).toHaveBeenCalled()
-
-        // 再接続が走っても除外済みなので開き直さない
-        await vi.advanceTimersByTimeAsync(2000)
-        expect(port.open).toHaveBeenCalledTimes(1)
-        warnSpy.mockRestore()
+    describe('公開 API', () => {
+      it('返すキーは #182 の前後で変わらない (呼び出し元は触らない)', () => {
+        expect(Object.keys(gw).sort()).toEqual([
+          'autoConnect',
+          'bloodPressureConnected',
+          'clearReadings',
+          'connect',
+          'disconnect',
+          'error',
+          'gatewayVersion',
+          'hasMedicalData',
+          'isConnected',
+          'latestBloodPressure',
+          'latestTemperature',
+          'resetGateway',
+          'sendCommand',
+          'startAutoConnect',
+          'thermometerConnected',
+          'transport',
+        ])
       })
 
-      it('除外済みポートしか無ければ候補ゼロ (単独ポートのフォールバックも効かない)', async () => {
-        const encoder = new TextEncoder()
-        const { port } = createMockPort({
-          getInfoResult: { usbVendorId: 0x303A, usbProductId: 0x1001 },
-          readValues: [{ value: encoder.encode('EVT ALARM state=idle cause=none\n'), done: false }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-          getPorts: vi.fn(async () => [port]),
-        })
+      it('navigator.serial は直接列挙しない (探索は arbiter 経由の 1 回)', async () => {
+        const dev = createMockPort()
+        const getPorts = vi.fn(async () => [dev.port])
+        installSerialMock({ getPorts })
+        await load()
+        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        await autoConnect()
 
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        const result = await gw.autoConnect()
-        expect(result).toBe(false)
-        expect(port.open).toHaveBeenCalledTimes(1)
-        warnSpy.mockRestore()
-      })
-    })
-
-    describe('writable なし serial', () => {
-      it('writer なし → cleanup で writer スキップ', async () => {
-        const { port } = createMockPort({
-          writable: false,
-          readValues: [{ value: null, done: true }],
-        })
-        installSerialMock({
-          requestPort: vi.fn(async () => port),
-        })
-
-        await gw.connect()
-        await vi.advanceTimersByTimeAsync(0)
-
-        // disconnect when writer is null
-        await gw.disconnect()
-        expect(gw.isConnected.value).toBe(false)
+        expect(getPorts).toHaveBeenCalledTimes(1)
       })
     })
   })
