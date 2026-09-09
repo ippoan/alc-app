@@ -204,7 +204,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 // 同タブ再クリックで再認証させるためのキー
 const managerAuthKey = ref(0)
 const adminAuthKey = ref(0)
-function reloadPage() { window.location.reload() }
+// reload の直前に警告デバイス / CoreS3 へ grace を送り、再接続までの沈黙で鳴らさない (Refs ippoan/alc-app-s3#192)
+const alarmDevice = useAlarmDevice()
+function reloadPage() {
+  alarmDevice.notifyIntentionalReload()
+  window.location.reload()
+}
 function onRoleTabClick(role: RoleTab) {
   if (activeRole.value === role) {
     if (role === 'manager') managerAuthKey.value++

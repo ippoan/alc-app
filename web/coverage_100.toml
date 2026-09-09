@@ -122,6 +122,12 @@ branches = true
 path = "app/composables/useCoreS3Serial.ts"
 branches = true
 
+# --- plugins ---
+
+[[files]]
+path = "app/plugins/reload-grace.client.ts"
+branches = true
+
 # --- middleware ---
 
 [[files]]
@@ -168,4 +174,8 @@ branches = true
 
 [[files]]
 path = "app/utils/webserial.ts"
+branches = true
+
+[[files]]
+path = "app/utils/reload-reason.ts"
 branches = true

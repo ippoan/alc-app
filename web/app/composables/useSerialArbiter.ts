@@ -20,6 +20,10 @@
  *
  * ポートの列挙と許可は useSerialDeviceManager に任せる (navigator.serial を自前で
  * 叩かない)。
+ *
+ * 診断ログ (`[SERIAL]`、Refs ippoan/alc-app#197): scan の開始 / セッションを閉じた理由 /
+ * 60 秒再訪は常時。候補ごとの claim・見送り・open 失敗は本番のノイズになるので
+ * `localStorage.alc_debug_serial=1` の端末だけ。
  */
 
 import { isWebSerialSupported } from '~/utils/webserial'
@@ -62,6 +66,22 @@ const PROBE_MAX_SENDS = 8
 const PROBE_TIMEOUT = 8000
 /** 誰も名乗り出なかったポートを再訪するまでの間隔 (永久除外はしない) */
 const PASS_OVER_COOLDOWN = 60000
+/** これが '1' の端末だけ候補ごとの `[SERIAL]` ログを出す */
+const DEBUG_KEY = 'alc_debug_serial'
+
+/** page load からの経過 ms (診断ログ用。再接続に何秒かかったかを読むため) */
+export function msSinceLoad(): number {
+  return Math.round(performance.now())
+}
+
+function log(message: string): void {
+  console.log(`[SERIAL] ${message} (+${msSinceLoad()}ms)`)
+}
+
+/** 候補ごとの行。`localStorage.alc_debug_serial=1` のときだけ出す */
+function debug(message: string): void {
+  if (localStorage.getItem(DEBUG_KEY) === '1') log(message)
+}
 
 /**
  * ポートを使う側。プロトコルの解釈はすべてこちら側の知識。
@@ -183,12 +203,13 @@ export function useSerialArbiter() {
 
   // --- ストリーム ---
 
-  async function closeSession(s: PortSession): Promise<void> {
+  async function closeSession(s: PortSession, reason: string): Promise<void> {
     // 受信ループの finally が二重に release を呼ばないよう、先に持ち主を落とす
     const owner = s.owner
     s.owner = null
     s.active = false
     sessions.delete(s)
+    log(`close ${owner ? `port of ${owner.name}` : 'probed port'}: ${reason}`)
     try { s.writer.releaseLock() } catch {}
     try { await s.reader.cancel() } catch {}
     try { s.reader.releaseLock() } catch {}
@@ -300,10 +321,12 @@ export function useSerialArbiter() {
     }
     catch {
       // InvalidStateError = 他の探索者が使用中 → 印を残さず次の候補へ
+      debug('open failed (in use by another explorer?) -> next candidate')
       return
     }
 
     if (!candidate.readable || !candidate.writable) {
+      debug('no readable/writable stream -> close')
       try { await closePortQuietly(candidate) } catch {}
       return
     }
@@ -322,6 +345,7 @@ export function useSerialArbiter() {
     const owner = await probe(s)
 
     if (owner) {
+      debug(`claimed by ${owner.name} (probe lines=${s.lines.length})`)
       s.owner = owner
       held.set(owner.name, s)
       owner.claimant.onOpen(s.port, s.reader, s.writer, s.lines)
@@ -331,8 +355,14 @@ export function useSerialArbiter() {
     // 応答はあったが誰も名乗り出なかった → 60 秒おいて再訪する (永久除外にはしない)。
     // 無応答 (行が 1 つも来なかった) は印を残さない: open のリセットで返事が遅れた
     // だけかもしれないため
-    if (s.lines.length > 0) passedOver.set(candidate, Date.now())
-    await closeSession(s)
+    if (s.lines.length > 0) {
+      passedOver.set(candidate, Date.now())
+      debug(`passed over (nobody claimed ${s.lines.length} lines) -> revisit in ${PASS_OVER_COOLDOWN / 1000}s`)
+      await closeSession(s, 'passed over')
+      return
+    }
+    debug('no response within probe window -> retry next scan')
+    await closeSession(s, 'no response')
   }
 
   // --- 探索 ---
@@ -342,6 +372,7 @@ export function useSerialArbiter() {
     if (passedAt === undefined) return true
     if (Date.now() - passedAt < PASS_OVER_COOLDOWN) return false
     passedOver.delete(port)
+    log('revisiting a passed-over port (cooldown elapsed)')
     return true
   }
 
@@ -350,6 +381,8 @@ export function useSerialArbiter() {
     scanning = true
     try {
       await refreshPorts()
+      const candidates = ports.value.filter(entry => entry.info.usbVendorId === ARBITRATED_VID).length
+      log(`scan start: candidates=${candidates} pending=${pending().map(([name]) => name).join(',')}`)
       for (const entry of ports.value) {
         if (entry.info.usbVendorId !== ARBITRATED_VID) continue
         // ports は ref 越しなのでプロキシが刺さる。他の探索者
@@ -388,7 +421,7 @@ export function useSerialArbiter() {
     const s = held.get(name)
     if (s) {
       held.delete(name)
-      await closeSession(s)
+      await closeSession(s, `unregister(${name})`)
     }
     if (claimants.size === 0 && scanTimer) {
       clearTimeout(scanTimer)
@@ -401,7 +434,7 @@ export function useSerialArbiter() {
     const s = held.get(name)
     if (!s) return
     held.delete(name)
-    await closeSession(s)
+    await closeSession(s, `release(${name})`)
     scheduleScan(RESCAN_INTERVAL)
   }
 

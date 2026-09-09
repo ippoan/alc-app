@@ -26,10 +26,13 @@
  * PC がフリーズした、のいずれも「無音」という同じ形で拾える (Refs ippoan/alc-app-s3#187)。
  * 送る中身は `HB OK` 固定: CoreS3 が見るのは「ブラウザの沈黙」だけで、着信の通知や
  * signaling の生死は警告デバイス (useAlarmDevice) の役割のまま。
+ * 意図した reload の直前だけ `HB OK grace=45` を 1 行送り、その 1 回の沈黙の猶予を
+ * 広げてもらう (sendGrace、呼び口は useAlarmDevice.notifyIntentionalReload。
+ * Refs ippoan/alc-app-s3#192)。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
-import { HEARTBEAT_INTERVAL } from '~/composables/useAlarmDevice'
+import { HEARTBEAT_INTERVAL, RELOAD_GRACE_SEC } from '~/composables/useAlarmDevice'
 import { writeLine } from '~/composables/useSerialArbiter'
 
 /** arbiter に登録する名前 */
@@ -125,6 +128,14 @@ export function useCoreS3Serial() {
       clearInterval(heartbeatTimer)
       heartbeatTimer = null
     }
+  }
+
+  /**
+   * 意図した reload の直前に `HB OK grace=45` を 1 行送る。未接続なら何もしない。
+   * await しない (reload を止めない)。旧 firmware は ERR で捨てるだけ (害なし)
+   */
+  function sendGrace(): void {
+    void write(`HB OK grace=${RELOAD_GRACE_SEC}`)
   }
 
   // --- claim を待つ ---
@@ -243,6 +254,7 @@ export function useCoreS3Serial() {
     onOpen,
     onClose,
     write,
+    sendGrace,
     connect,
     requestPort,
     release,

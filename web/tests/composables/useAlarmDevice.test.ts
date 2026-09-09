@@ -127,8 +127,14 @@ describe('useAlarmDevice', () => {
     alarm = mod.useAlarmDevice()
   }
 
+  let logSpy: ReturnType<typeof vi.spyOn>
+
   beforeEach(async () => {
     vi.clearAllMocks()
+    // 診断ログ ([ALARM-DEV] / [SERIAL]) はテスト出力に流さない。中身を見るテストは logSpy を読む
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    // 再接続の印は reload をまたぐ想定 (sessionStorage) なのでテスト間で持ち越さない
+    sessionStorage.clear()
     // 見送ったポートの再訪判定が Date.now() を見るので Date も止める
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
     delete (navigator as any).serial
@@ -138,7 +144,16 @@ describe('useAlarmDevice', () => {
     await alarm?.disconnect()
     delete (navigator as any).serial
     vi.useRealTimers()
+    logSpy.mockRestore()
   })
+
+  /** `[ALARM-DEV] …` のログだけ (prefix と末尾の経過 ms を落とした本文) */
+  function alarmLogs(): string[] {
+    return logSpy.mock.calls
+      .map(args => String(args[0]))
+      .filter(line => line.startsWith('[ALARM-DEV] '))
+      .map(line => line.replace('[ALARM-DEV] ', '').replace(/ \(\+\d+ms\)$/, ''))
+  }
 
   // ---------- isSupported ----------
 
@@ -420,6 +435,7 @@ describe('useAlarmDevice', () => {
         'disconnect',
         'isConnected',
         'isSupported',
+        'notifyIntentionalReload',
         'requestPort',
       ])
     })
@@ -530,17 +546,65 @@ describe('useAlarmDevice', () => {
       expect(dev.writes).toHaveLength(4)
     })
 
-    it('room 購読が切れているとき HB NG signaling を送る', async () => {
+    it('room 購読が切れても 15 秒までは HB OK、超えたら HB NG signaling、復旧で即 HB OK (#198)', async () => {
       const dev = await connectDevice()
+      const before = dev.writes.length
       setRooms({ watching: false })
 
-      await vi.advanceTimersByTimeAsync(3000)
+      // WS の 3 秒再接続の窓では鳴らさない — 14 秒までの heartbeat は全部 OK
+      await vi.advanceTimersByTimeAsync(14000)
+      expect(dev.writes.slice(before)).toEqual(['HB OK\n', 'HB OK\n', 'HB OK\n', 'HB OK\n'])
+
+      // 15 秒を超えた最初の heartbeat から NG
+      await vi.advanceTimersByTimeAsync(2000)
       expect(dev.writes.at(-1)).toBe('HB NG signaling\n')
 
-      // 張り直せたら OK に戻る
+      // 張り直せたら次の heartbeat で即 OK に戻る
       setRooms({ watching: true })
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('購読が切れた瞬間から数える (heartbeat の周期に丸めない)', async () => {
+      const dev = await connectDevice()
+      // 直前の heartbeat (5000ms) の 1 秒後に切れる → 15 秒後 = 21000ms。heartbeat は 20000 / 23000
+      await vi.advanceTimersByTimeAsync(1000)
+      setRooms({ watching: false })
+
+      await vi.advanceTimersByTimeAsync(14000) // 20000ms: 切れてから 14 秒
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+      await vi.advanceTimersByTimeAsync(3000) // 23000ms: 切れてから 17 秒
+      expect(dev.writes.at(-1)).toBe('HB NG signaling\n')
+    })
+
+    it('購読が開く前に接続しても、connect() から 15 秒までは HB OK', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      setRooms({ watching: false })
+      alarm.connect() // 0ms: ここから数え始める
+      await vi.advanceTimersByTimeAsync(5000) // claim + 1 本目
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+
+      await vi.advanceTimersByTimeAsync(9000) // 14000ms
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+      await vi.advanceTimersByTimeAsync(3000) // 17000ms
+      expect(dev.writes.at(-1)).toBe('HB NG signaling\n')
+    })
+
+    it('heartbeat の中身は変化したときだけログに出す', async () => {
+      const dev = await connectDevice()
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(dev.writes.filter(w => w === 'HB OK\n')).toHaveLength(3)
+      expect(alarmLogs().filter(l => l.startsWith('heartbeat'))).toEqual(['heartbeat (start) -> HB OK'])
+
+      setRooms({ rooms: ['room-a'] })
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(alarmLogs().filter(l => l.startsWith('heartbeat'))).toEqual([
+        'heartbeat (start) -> HB OK',
+        'heartbeat HB OK -> HB OK call=1',
+      ])
     })
 
     it('room が立っていて管理者が未参加なら call=1 を付ける', async () => {
@@ -570,19 +634,25 @@ describe('useAlarmDevice', () => {
       expect(dev.writes.at(-1)).toBe('HB OK\n')
     })
 
-    it('購読が切れていても着信中なら call=1 は付く', async () => {
+    it('購読が切れていても着信中なら call=1 は付く (猶予中も、NG になっても)', async () => {
       const dev = await connectDevice()
       setRooms({ watching: false, rooms: ['room-a'] })
 
       await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
+
+      await vi.advanceTimersByTimeAsync(15000)
       expect(dev.writes.at(-1)).toBe('HB NG signaling call=1\n')
     })
 
-    it('write に失敗したら後始末して再スキャンへ', async () => {
+    it('write に失敗したら console.warn して後始末し、再スキャンへ', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const dev = await connectDevice()
       dev.setWriteError(true)
 
       await vi.advanceTimersByTimeAsync(3000)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('[ALARM-DEV] heartbeat write failed'))
+      warn.mockRestore()
       expect(alarm.isConnected.value).toBe(false)
       expect(alarm.deviceState.value).toBeNull()
       expect(dev.port.close).toHaveBeenCalledTimes(1)
@@ -618,6 +688,122 @@ describe('useAlarmDevice', () => {
       await load()
       await alarm.disconnect()
       expect(alarm.isConnected.value).toBe(false)
+    })
+  })
+
+  // ---------- 意図した reload (alc-app-s3#192) ----------
+
+  describe('notifyIntentionalReload', () => {
+    async function connectDevice() {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      return dev
+    }
+
+    it('接続中なら今の heartbeat に grace=45 を足した 1 行を送る', async () => {
+      const dev = await connectDevice()
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+
+      alarm.notifyIntentionalReload()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('HB OK grace=45\n')
+      expect(alarmLogs()).toContain('sent grace=45')
+
+      // 周期の heartbeat はそのまま続く (grace は 1 回きり)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('着信中なら call=1 も残す (順不同で firmware が読む)', async () => {
+      const dev = await connectDevice()
+      setRooms({ rooms: ['room-a'] })
+
+      alarm.notifyIntentionalReload()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1 grace=45\n')
+    })
+
+    it('未接続なら何も送らない (落ちない)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      alarm.notifyIntentionalReload()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarmLogs()).not.toContain('sent grace=45')
+    })
+
+    it('書き込みに失敗してもポートは返さない (reload の直前なので後始末は要らない)', async () => {
+      const dev = await connectDevice()
+      dev.setWriteError(true)
+
+      alarm.notifyIntentionalReload()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(true)
+      expect(dev.port.close).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('reload 後の即再接続', () => {
+    it('握っていた印 (sessionStorage) があれば connect() は 5 秒待たずに探索し、印を消す', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(true)
+      expect(sessionStorage.getItem('alarm_dev_connected')).toBe('1')
+
+      // reload: module の状態は消えるが sessionStorage は残る
+      const reloaded = createMockPort()
+      reloaded.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [reloaded.port]) })
+      vi.resetModules()
+      mod = await import('~/composables/useAlarmDevice')
+      alarm = mod.useAlarmDevice()
+
+      alarm.connect()
+      expect(sessionStorage.getItem('alarm_dev_connected')).toBeNull()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reloaded.port.open).toHaveBeenCalledTimes(1)
+      expect(alarmLogs()).toContain('connect(delay=0, resumed after reload)')
+    })
+
+    it('disconnect() の明示切断で印を消す → 次の connect() は 5 秒待つ', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      await alarm.disconnect()
+      expect(sessionStorage.getItem('alarm_dev_connected')).toBeNull()
+
+      alarm.connect()
+      await vi.advanceTimersByTimeAsync(4999)
+      expect(dev.port.open).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(dev.port.open).toHaveBeenCalledTimes(2)
+    })
+
+    it('抜線 (onClose) では印を消さない — 挿し直しの前に reload しても即スキャンする', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.push({ value: undefined, done: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(false)
+      expect(sessionStorage.getItem('alarm_dev_connected')).toBe('1')
     })
   })
 
