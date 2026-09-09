@@ -27,7 +27,8 @@ import { isWebSerialSupported } from '~/utils/webserial'
 /**
  * BLE ゲートウェイの既知 VID:PID (CH340, CP210x, Espressif, FTDI FT232R)。
  *
- * useBleGateway (候補の優先) と useFc1200Serial (候補からの除外) が同じ表を見る。
+ * 0x303A 以外の機種を見分けるための表。useFc1200Serial が候補からの除外に使う
+ * (0x303A の調停はこのファイルの ARBITRATED_VID 側で行う)。
  */
 export const BLE_GW_DEVICES = [
   { vid: 0x1A86 },            // CH340/CH552

@@ -114,6 +114,10 @@ branches = true
 path = "app/composables/useSerialArbiter.ts"
 branches = true
 
+[[files]]
+path = "app/composables/useCoreS3Serial.ts"
+branches = true
+
 # --- middleware ---
 
 [[files]]

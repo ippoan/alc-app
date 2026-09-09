@@ -3,16 +3,6 @@ import type {
   TemperatureReading,
   BloodPressureReading,
 } from '~/types'
-import { isWebSerialSupported } from '~/utils/webserial'
-import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
-
-const SERIAL_OPTIONS: SerialOptions = {
-  baudRate: 115200,
-  dataBits: 8,
-  parity: 'none' as ParityType,
-  stopBits: 1,
-  flowControl: 'none' as FlowControlType,
-}
 
 // Android BLE Bridge WebSocket
 const BLE_WS_URL = 'ws://127.0.0.1:9877'
@@ -21,10 +11,6 @@ const BLE_WS_MAX_RECONNECT = 10
 
 // serial 探索がこの回数連続で失敗したら WS ブリッジも試す (#123)
 const SERIAL_WS_FALLBACK_AFTER = 2
-
-// 警告デバイス (Atom VoiceS3R) を掴んでしまったポート。VID/PID が CoreS3 と同一
-// (0x303A:0x1001) で USB 記述子では見分けられないため、応答行で判別して以後外す (#135)
-const excludedPorts = new Set<SerialPort>()
 
 // シングルトン: 全コンポーネントで共有
 const isConnected = ref(false)
@@ -36,11 +22,8 @@ const latestBloodPressure = ref<BloodPressureReading | null>(null)
 const gatewayVersion = ref<string | null>(null)
 const transport = ref<'serial' | 'websocket' | null>(null)
 
-let port: SerialPort | null = null
-let writer: WritableStreamDefaultWriter<Uint8Array> | null = null
-let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
-let readLoopActive = false
-let lineBuffer = ''
+/** useCoreS3Serial の受け口を繋いだか (useBleGateway は複数の component から呼ばれる) */
+let wired = false
 
 // WebSocket state
 let ws: WebSocket | null = null
@@ -60,6 +43,9 @@ let heartbeatCheckTimer: ReturnType<typeof setInterval> | null = null
 const HEARTBEAT_TIMEOUT = 30000
 
 export function useBleGateway() {
+  // serial 側のポートは自前で探さない。探索・open・機種判定は useSerialArbiter に
+  // 集約され、その利用側 useCoreS3Serial から JSON を受け取る (Refs #182)
+  const coreS3 = useCoreS3Serial()
 
   // --- WebSocket transport (Android BLE Bridge) ---
 
@@ -86,6 +72,9 @@ export function useBleGateway() {
       transport.value = 'websocket'
       error.value = null
       wsReconnectAttempts = 0
+      // WS に決まったので serial の探索は降りる (後から CoreS3 を挿されて
+      // transport が横取りされないように)
+      void coreS3.disconnect()
     }
 
     ws.onmessage = (event: MessageEvent) => {
@@ -147,168 +136,58 @@ export function useBleGateway() {
     console.log('[BLE-GW WS TX]', cmd)
   }
 
-  // --- WebSerial transport (PC / ATOM Lite USB) ---
+  // --- WebSerial transport (CoreS3 / ATOM Lite USB) ---
+
+  /** CoreS3 の受け口を 1 度だけ繋ぐ */
+  function wire(): void {
+    if (wired) return
+    wired = true
+
+    coreS3.onOpen(() => {
+      isConnected.value = true
+      transport.value = 'serial'
+    })
+
+    coreS3.onJson((msg) => {
+      console.log('[BLE-GW RX]', msg)
+      processMessage(msg as BleGatewayMessage)
+    })
+
+    // 抜線・クラッシュでポートを失った → serial の state を畳む
+    // (掴み直しは arbiter が 10 秒ごとの再スキャンで行う)
+    coreS3.onClose(() => { void cleanup() })
+  }
 
   /** ブラウザのポートピッカーで手動接続 */
   async function connect(): Promise<void> {
     error.value = null
 
-    if (!isWebSerialSupported()) {
+    if (!coreS3.isSupported) {
       // WebSerial 非対応 → WebSocket フォールバック
       connectWebSocket()
       return
     }
 
-    try {
-      port = await navigator.serial.requestPort()
-      await port.open(SERIAL_OPTIONS)
-
-      if (port.readable) {
-        reader = port.readable.getReader()
-        if (port.writable) writer = port.writable.getWriter()
-        isConnected.value = true
-        transport.value = 'serial'
-        startReadLoop()
-      }
-      else {
-        throw new Error('シリアルポートの読み取りストリームが取得できません')
-      }
-    }
-    catch (e) {
-      // ユーザーがポートピッカーをキャンセル
-      if (e instanceof DOMException && e.name === 'NotFoundError') {
-        return
-      }
-      error.value = e instanceof Error ? e.message : 'BLE ゲートウェイへの接続に失敗しました'
-      await cleanup()
-    }
+    wire()
+    // 許可 (ユーザー操作) のあとは arbiter に任せる。ここで open すると
+    // 調停役と二重に掴んで InvalidStateError になる (#182)
+    await coreS3.requestPort()
   }
 
-  /** 許可済みポートに自動接続（リトライ付き） */
+  /** 許可済みポートに自動接続 (arbiter の claim を待つ) */
   async function autoConnect(): Promise<boolean> {
     if (isConnected.value) return true
 
     // WebSerial 非対応 → WebSocket で接続
-    if (!isWebSerialSupported()) {
+    if (!coreS3.isSupported) {
       connectWebSocket()
       // WebSocket の接続完了を少し待つ
       await new Promise(r => setTimeout(r, 500))
       return isConnected.value
     }
 
-    const MAX_RETRIES = 3
-    const RETRY_DELAY = 500
-
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        const ports = await navigator.serial.getPorts()
-        console.log('[BLE-GW] getPorts:', ports.map(p => {
-          const info = p.getInfo()
-          return { vid: info.usbVendorId?.toString(16), pid: info.usbProductId?.toString(16) }
-        }))
-
-        // VID+PID マッチを優先、なければ許可済みポートの先頭を使う
-        // (警告デバイスと確定したポートは候補から外す)
-        const selectable = ports.filter(p => !excludedPorts.has(p))
-        const candidate = selectable.find((p) => {
-          const info = p.getInfo()
-          if (info.usbVendorId === undefined) return false
-          return BLE_GW_DEVICES.some(d =>
-            d.vid === info.usbVendorId && (d.pid === undefined || d.pid === info.usbProductId),
-          )
-        }) ?? (selectable.length === 1 ? selectable[0] : null)
-        if (!candidate) return false
-
-        port = candidate
-        await port.open(SERIAL_OPTIONS)
-
-        if (port.readable) {
-          reader = port.readable.getReader()
-          if (port.writable) writer = port.writable.getWriter()
-          isConnected.value = true
-          transport.value = 'serial'
-          startReadLoop()
-          return true
-        }
-        return false
-      }
-      catch (e) {
-        console.warn('[BLE-GW] autoConnect attempt', attempt + 1, 'failed:', e)
-        // InvalidStateError = ポートがまだ開いている (前回の close 完了待ち) → リトライ
-        if (e instanceof DOMException && e.name === 'InvalidStateError') {
-          if (attempt < MAX_RETRIES - 1) await new Promise(r => setTimeout(r, RETRY_DELAY))
-          continue
-        }
-        await cleanup()
-        return false
-      }
-    }
-    await cleanup()
-    return false
-  }
-
-  async function startReadLoop(): Promise<void> {
-    readLoopActive = true
-    const decoder = new TextDecoder()
-
-    try {
-      while (readLoopActive) {
-        const { value, done } = await reader!.read()
-        if (done) break
-        if (!value) continue
-
-        lineBuffer += decoder.decode(value, { stream: true })
-
-        // 改行区切りで JSON を処理
-        let newlineIdx: number
-        while ((newlineIdx = lineBuffer.indexOf('\n')) !== -1) {
-          const line = lineBuffer.substring(0, newlineIdx).trim()
-          lineBuffer = lineBuffer.substring(newlineIdx + 1)
-          if (line) {
-            processLine(line)
-          }
-        }
-      }
-    }
-    catch {
-      // readLoopActive は finally で false にするため、ここでは常に true
-      error.value = 'BLE ゲートウェイからの受信中にエラーが発生しました'
-    }
-    finally {
-      readLoopActive = false
-      // If we were connected and the loop ended unexpectedly, attempt reconnect
-      if (isConnected.value) {
-        console.warn('[BLE-GW] Read loop ended, attempting reconnect...')
-        await cleanup()
-        scheduleReconnect()
-      }
-    }
-  }
-
-  function processLine(line: string): void {
-    // 掴んでいたのは警告デバイスだった (バナーが 5 秒ごとに来るので 5 秒以内に気づく) →
-    // 手放して以後スキャンから外し、本来の BLE GW を探し直す (#135)
-    if (line.startsWith('STATUS alarm') || line.startsWith('EVT ALARM')) {
-      console.warn('[BLE-GW] Alarm device detected on this port, releasing:', line)
-      // read loop の finally が二重に reconnect しないよう先に落とす
-      const grabbed = port
-      isConnected.value = false
-      void cleanup().then(() => {
-        // read loop が回っている間 port は必ず非 null
-        excludedPorts.add(grabbed as SerialPort)
-        scheduleReconnect()
-      })
-      return
-    }
-
-    try {
-      const msg = JSON.parse(line) as BleGatewayMessage
-      console.log('[BLE-GW RX]', msg)
-      processMessage(msg)
-    }
-    catch {
-      console.warn('[BLE-GW] Invalid JSON:', line)
-    }
+    wire()
+    return await coreS3.connect(0)
   }
 
   // --- 共通: メッセージ処理 (Serial / WebSocket 共用) ---
@@ -371,15 +250,9 @@ export function useBleGateway() {
       sendWsCommand(cmd)
       return
     }
-    if (!writer) return
-    const encoder = new TextEncoder()
-    try {
-      await writer.write(encoder.encode(JSON.stringify(cmd) + '\n'))
-      console.log('[BLE-GW TX]', cmd)
-    }
-    catch (e) {
-      console.warn('[BLE-GW] sendCommand failed:', e)
-    }
+    const ok = await coreS3.write(JSON.stringify(cmd))
+    if (ok) console.log('[BLE-GW TX]', cmd)
+    else console.warn('[BLE-GW] sendCommand failed:', cmd)
   }
 
   /** BLE 接続をリセットして再スキャン開始 */
@@ -456,7 +329,7 @@ export function useBleGateway() {
       if (success) return true
       // WebSerial があるのにポートが見つからない (GW の WebView で Serial 無効化フラグが
       // 効いていない等) → alc-gw / Android の WS ブリッジを試す
-      if (isWebSerialSupported() && i + 1 >= SERIAL_WS_FALLBACK_AFTER) {
+      if (coreS3.isSupported && i + 1 >= SERIAL_WS_FALLBACK_AFTER) {
         if (await tryWsFallback()) return true
       }
       if (i < maxAttempts - 1) {
@@ -468,29 +341,17 @@ export function useBleGateway() {
 
   async function disconnect(): Promise<void> {
     disconnectWebSocket()
+    // 明示的な切断なので探索ごと降りる
+    await coreS3.disconnect()
     await cleanup()
   }
 
   async function cleanup(): Promise<void> {
-    readLoopActive = false
     stopHeartbeatCheck()
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 
-    if (writer) {
-      try { writer.releaseLock() } catch {}
-      writer = null
-    }
-
-    if (reader) {
-      try { await reader.cancel() } catch {}
-      try { reader.releaseLock() } catch {}
-      reader = null
-    }
-
-    if (port) {
-      try { await port.close() } catch {}
-      port = null
-    }
+    // 預かっているポートは arbiter に返す (登録は残るので掴み直しに行く)
+    await coreS3.release()
 
     if (transport.value === 'serial') {
       isConnected.value = false
@@ -498,7 +359,6 @@ export function useBleGateway() {
       thermometerConnected.value = false
       bloodPressureConnected.value = false
     }
-    lineBuffer = ''
   }
 
   return {
