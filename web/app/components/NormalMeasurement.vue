@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import type { FaceAuthResult, MeasurementResult } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadFacePhoto, uploadBlowVideo } from '~/utils/api'
+import type { MeasurementResult } from '~/types'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
-import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
@@ -15,11 +14,9 @@ const props = defineProps<{
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 
-const step = ref<'nfc' | 'face_auth' | 'medical' | 'measuring' | 'result'>('nfc')
+const step = ref<'nfc' | 'medical' | 'measuring' | 'result'>('nfc')
 const employeeId = ref('')
-const authResult = ref<FaceAuthResult | null>(null)
 const measurementResult = ref<MeasurementResult | null>(null)
-const faceSnapshot = ref<Blob | null>(null)
 
 const saveError = ref<string | null>(null)
 const isSaving = ref(false)
@@ -42,8 +39,6 @@ const useManualInput = ref(false)
 
 // 測定レコード早期作成
 const activeMeasurementId = ref<string | null>(null)
-const facePhotoUploaded = ref(false)
-const faceVerified = ref<boolean | null>(null)
 
 // 録画 (measuring ステップ用)
 const {
@@ -83,13 +78,11 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
   }
   try {
     const emp = await getEmployeeByNfcId(nfcId)
-    const err = checkFaceApproval(emp)
-    if (err) { approvalError.value = err; return }
     employeeId.value = emp.id
     employeeName.value = emp.name
     await tryStartMeasurement(emp.id)
     await faceSync()
-    step.value = 'face_auth'
+    step.value = 'medical'
   } catch {
     const msg = employeeNotFoundByNfc(nfcId)
     console.error(msg)
@@ -106,13 +99,11 @@ async function onManualSubmit() {
   approvalError.value = null
   try {
     const emp = await getEmployeeByCode(input)
-    const err = checkFaceApproval(emp)
-    if (err) { approvalError.value = err; return }
     employeeId.value = emp.id
     employeeName.value = emp.name
     await tryStartMeasurement(emp.id)
     await faceSync()
-    step.value = 'face_auth'
+    step.value = 'medical'
   } catch {
     manualError.value = employeeNotFoundByCode(input)
   }
@@ -134,81 +125,7 @@ watch(isDemoMode, (v) => {
 const manualMedicalData = ref<import('~/types').SubmitMedicalData | null>(null)
 const medicalInputSource = ref<'ble' | 'manual' | null>(null)
 
-// 顔認証結果
-function onFaceAuthResult(result: FaceAuthResult) {
-  authResult.value = result
-  if (result.verified) {
-    faceVerified.value = true
-    if (result.snapshot) {
-      faceSnapshot.value = result.snapshot
-    }
-    // 顔認証成功 → この端末と社員を紐付け（次回から指紋認証可能に）
-    if (employeeId.value) authorizeEmployee(employeeId.value)
-    step.value = 'medical'
-
-    // 顔写真 + face_verified を started レコードに記録（best-effort）
-    console.log('[Measurement] onFaceAuth: activeMeasurementId:', activeMeasurementId.value, 'hasSnapshot:', !!result.snapshot)
-    if (activeMeasurementId.value) {
-      if (result.snapshot) {
-        uploadFacePhoto(result.snapshot)
-          .then(url => {
-            console.log('[Measurement] face photo uploaded:', url)
-            facePhotoUploaded.value = true
-            return updateMeasurement(activeMeasurementId.value!, { face_photo_url: url, face_verified: true })
-          })
-          .then(() => console.log('[Measurement] face photo + face_verified saved to record'))
-          .catch(e => console.error('[Measurement] face photo upload/save failed:', e))
-      } else {
-        updateMeasurement(activeMeasurementId.value, { face_verified: true })
-          .catch(e => console.error('[Measurement] face_verified update failed:', e))
-      }
-    }
-  }
-}
-
-// 顔認証スキップ
-function onFaceAuthSkip() {
-  faceVerified.value = false
-  step.value = 'medical'
-
-  // face_verified = false を started レコードに記録（best-effort）
-  if (activeMeasurementId.value) {
-    updateMeasurement(activeMeasurementId.value, { face_verified: false })
-      .catch(e => console.error('[Measurement] face_verified skip update failed:', e))
-  }
-}
-
-// 指紋認証 (Android Bridge)
-const {
-  isFingerprintAvailable,
-  isEmployeeAuthorized,
-  authorizeEmployee,
-  requestFingerprint: triggerFingerprint,
-} = useFingerprint()
-
-const canUseFingerprint = computed(() =>
-  isFingerprintAvailable.value && employeeId.value && isEmployeeAuthorized(employeeId.value),
-)
-
-function requestFingerprint() {
-  triggerFingerprint()
-}
-
 onMounted(() => {
-  const handler = (e: Event) => {
-    const detail = (e as CustomEvent).detail
-    if (detail?.success) {
-      faceVerified.value = true
-      step.value = 'medical'
-      if (activeMeasurementId.value) {
-        updateMeasurement(activeMeasurementId.value, { face_verified: true })
-          .catch(e => console.error('[Measurement] fingerprint face_verified update failed:', e))
-      }
-    }
-  }
-  window.addEventListener('fingerprint-result', handler)
-  onUnmounted(() => window.removeEventListener('fingerprint-result', handler))
-
   // 録画: 7日超のローカル録画を削除 + 未アップロード分をリトライ
   cleanupOldVideos(7).catch(() => {})
   getPendingVideos().then(pending => {
@@ -350,23 +267,19 @@ async function onMeasurementResult(result: MeasurementResult) {
     console.log('[Measurement] activeMeasurementId:', activeMeasurementId.value, 'isOnline:', isOnline.value)
     if (activeMeasurementId.value && isOnline.value) {
       // started レコードを completed に更新
-      let facePhotoUrl: string | undefined
-      if (faceSnapshot.value && !facePhotoUploaded.value) {
-        facePhotoUrl = await uploadFacePhoto(faceSnapshot.value)
-      }
       const updateData = {
         status: 'completed',
         alcohol_value: result.alcoholValue,
         result_type: result.resultType,
         device_use_count: result.deviceUseCount,
-        face_photo_url: facePhotoUrl || result.facePhotoUrl,
+        face_photo_url: result.facePhotoUrl,
         measured_at: result.measuredAt.toISOString(),
         temperature: result.temperature,
         systolic: result.systolic,
         diastolic: result.diastolic,
         pulse: result.pulse,
         medical_measured_at: result.medicalMeasuredAt?.toISOString(),
-        face_verified: faceVerified.value,
+        face_verified: null,
         medical_manual_input: medicalInputSource.value === 'manual' ? true : undefined,
       }
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(updateData))
@@ -396,14 +309,14 @@ async function onMeasurementResult(result: MeasurementResult) {
     } else {
       // オフラインまたは activeMeasurementId なし → 従来のフロー
       console.log('[Measurement] fallback to offlineSave')
-      saveStatus.value = await offlineSave(result, faceSnapshot.value || undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
+      saveStatus.value = await offlineSave(result, undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
       if (recordedVideoBlob.value) videoUploadStatus.value = 'pending'
     }
   } catch (e) {
     // 更新失敗時はオフラインキューにフォールバック
     console.error('[Measurement] updateMeasurement failed:', e)
     try {
-      saveStatus.value = await offlineSave(result, faceSnapshot.value || undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
+      saveStatus.value = await offlineSave(result, undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
       if (recordedVideoBlob.value) videoUploadStatus.value = 'pending'
     } catch (e2) {
       saveError.value = e2 instanceof Error ? e2.message : '保存エラー'
@@ -422,17 +335,13 @@ function reset() {
   manualIdInput.value = ''
   manualError.value = null
   useManualInput.value = false
-  authResult.value = null
   measurementResult.value = null
-  faceSnapshot.value = null
   saveError.value = null
   saveStatus.value = null
   isSaving.value = false
   licenseExpiryDate.value = null
   licenseExpiryStatus.value = null
   activeMeasurementId.value = null
-  facePhotoUploaded.value = false
-  faceVerified.value = null
   manualMedicalData.value = null
   medicalInputSource.value = null
   recordedVideoBlob.value = null
@@ -441,8 +350,8 @@ function reset() {
   stopMeasuringCamera()
 }
 
-const steps = ['NFC', '顔認証', '体温・血圧', '測定', '結果'] as const
-const stepKeys = ['nfc', 'face_auth', 'medical', 'measuring', 'result'] as const
+const steps = ['NFC', '体温・血圧', '測定', '結果'] as const
+const stepKeys = ['nfc', 'medical', 'measuring', 'result'] as const
 const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
 </script>
 
@@ -608,46 +517,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         </div>
       </div>
 
-      <!-- Step 2: 顔認証 (フルスクリーンオーバーレイ) -->
-      <Teleport to="body">
-        <div v-if="step === 'face_auth'" class="fixed inset-0 z-50 bg-black flex flex-col">
-          <!-- ヘッダー -->
-          <div class="flex items-center justify-between px-4 py-2 bg-black/80 text-white">
-            <div>
-              <h2 class="text-base font-semibold">顔認証</h2>
-              <p class="text-xs text-gray-300">{{ employeeName }}</p>
-            </div>
-            <button
-              v-if="!isDemoMode"
-              class="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
-              @click="onFaceAuthSkip"
-            >
-              スキップ
-            </button>
-          </div>
-          <!-- カメラ (残り全体を使用) -->
-          <div class="flex-1 min-h-0">
-            <FaceAuth
-              :employee-id="employeeId"
-              mode="verify"
-              :demo-mode="isDemoMode"
-              @result="onFaceAuthResult"
-            />
-          </div>
-          <!-- フッター: 指紋認証 -->
-          <div v-if="canUseFingerprint" class="px-4 py-3 bg-black/80">
-            <button
-              class="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
-              @click="requestFingerprint"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11c0-1.1.9-2 2-2s2 .9 2 2v3c0 1.66-1.34 3-3 3"/><path d="M8 15V11c0-2.21 1.79-4 4-4s4 1.79 4 4"/><path d="M2 11c0-5.52 4.48-10 10-10s10 4.48 10 10v3c0 3.31-2.69 6-6 6"/><path d="M12 11v4c0 .55-.45 1-1 1"/><path d="M6 11c0-3.31 2.69-6 6-6s6 2.69 6 6v2"/></svg>
-              指紋認証で本人確認
-            </button>
-          </div>
-        </div>
-      </Teleport>
-
-      <!-- Step 3: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
+      <!-- Step 2: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
       <div v-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-2">体温・血圧</h2>
@@ -684,7 +554,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         </div>
       </div>
 
-      <!-- Step 4: FC-1200 測定 -->
+      <!-- Step 3: FC-1200 測定 -->
       <div v-if="step === 'measuring'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">アルコール測定</h2>
@@ -717,11 +587,10 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         </div>
       </div>
 
-      <!-- Step 5: 結果表示 -->
+      <!-- Step 4: 結果表示 -->
       <div v-if="step === 'result' && measurementResult" class="flex flex-col gap-4">
         <ResultCard
           :result="measurementResult"
-          :face-photo-blob="faceSnapshot"
           :employee-name="employeeName"
           @reset="reset"
         />
