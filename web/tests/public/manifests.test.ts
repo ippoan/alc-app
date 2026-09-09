@@ -53,6 +53,12 @@ describe('public/manifest-*.webmanifest', () => {
     }
   })
 
+  it('launch_handler focus-existing — OS からの起動は既存ウィンドウにフォーカスし 2 つ目を開かない (Refs #204)', () => {
+    for (const m of [driver, manager]) {
+      expect(m.launch_handler).toEqual({ client_mode: 'focus-existing' })
+    }
+  })
+
   it('theme_color が useRoleManifest の定数と一致する', () => {
     expect(driver.theme_color).toBe(DRIVER_MANIFEST.themeColor)
     expect(manager.theme_color).toBe(MANAGER_MANIFEST.themeColor)

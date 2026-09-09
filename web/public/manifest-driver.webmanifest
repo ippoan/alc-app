@@ -6,6 +6,7 @@
   "short_name": "点呼",
   "lang": "ja",
   "display": "standalone",
+  "launch_handler": { "client_mode": "focus-existing" },
   "background_color": "#ffffff",
   "theme_color": "#1e40af",
   "icons": [

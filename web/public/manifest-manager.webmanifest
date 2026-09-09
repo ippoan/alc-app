@@ -6,6 +6,7 @@
   "short_name": "運行管理",
   "lang": "ja",
   "display": "standalone",
+  "launch_handler": { "client_mode": "focus-existing" },
   "background_color": "#ffffff",
   "theme_color": "#b45309",
   "icons": [
