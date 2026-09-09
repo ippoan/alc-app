@@ -465,6 +465,9 @@ function onRoleTabClick(role: RoleTab) {
     </div>
 
     <!-- 運行管理者タブ -->
+    <!-- 警告デバイスの heartbeat と着信購読は認証ゲートの外 (タブに入った時点) で動かす。
+         RoleAuthGate の :key 再マウントや着信通知モードの分岐に巻き込まれない位置に 1 つだけ置く -->
+    <ManagerAlarmBar v-if="activeRole === 'manager'" />
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
       v-if="activeRole === 'manager' && incomingCallMode"
