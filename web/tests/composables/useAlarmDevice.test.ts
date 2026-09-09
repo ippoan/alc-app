@@ -572,7 +572,7 @@ describe('useAlarmDevice', () => {
   // ---------- requestPort ----------
 
   describe('requestPort', () => {
-    it('許可されたら探索を始める', async () => {
+    it('許可されたら待たずに探索を始める (ボタン直後の 5 秒待ちは未接続に見える)', async () => {
       const dev = createMockPort()
       dev.emit('EVT ALARM state=idle cause=none\n')
       const getPorts = vi.fn(async () => [dev.port])
@@ -580,7 +580,7 @@ describe('useAlarmDevice', () => {
       await load()
 
       await alarm.requestPort()
-      await vi.advanceTimersByTimeAsync(5000)
+      await vi.advanceTimersByTimeAsync(0)
       expect(alarm.isConnected.value).toBe(true)
     })
 

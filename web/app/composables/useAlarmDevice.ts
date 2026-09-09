@@ -347,10 +347,13 @@ export function useAlarmDevice() {
     scheduleScan(delay)
   }
 
-  /** WebSerial の初回許可 (ユーザー操作が要る) → 許可されたら探索を始める */
+  /**
+   * WebSerial の初回許可 (ユーザー操作が要る) → 許可されたら探索を始める。
+   * ボタンを押した直後に待たせると「接続にならない」と見えるので 0 で始める。
+   */
   async function requestPort(): Promise<void> {
     const granted = await requestNewPort()
-    if (granted) connect()
+    if (granted) connect(0)
   }
 
   async function disconnect(): Promise<void> {
