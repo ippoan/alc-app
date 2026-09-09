@@ -680,6 +680,79 @@ describe('useAuth', () => {
       const url = hrefSetter.mock.calls[0]?.[0] as string
       expect(url).toContain('/logout')
     })
+
+    // #193: 共用の運行者端末 (deviceId あり) では Google のブラウザセッションも切る
+    const GOOGLE_LOGOUT_URL = 'https://accounts.google.com/Logout'
+
+    it('opens the Google logout tab before redirecting when the device is registered', async () => {
+      const openSpy = vi.fn(() => ({} as Window))
+      vi.stubGlobal('open', openSpy)
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateDevice, logout } = useAuth()
+
+      activateDevice('tenant-abc', 'dev-1')
+      mockLocation()
+      logout()
+
+      // 別タブで Google の Logout を開く (戻りは期待しない)
+      expect(openSpy).toHaveBeenCalledWith(GOOGLE_LOGOUT_URL, '_blank', 'noopener,noreferrer')
+      // その後に auth-worker /logout へ遷移する (順序も担保。await を挟まないこと)
+      const url = hrefSetter.mock.calls[0]?.[0] as string
+      expect(url).toContain('/logout')
+      expect(url).toContain(`redirect_uri=${encodeURIComponent('https://example.com/login')}`)
+      expect(openSpy.mock.invocationCallOrder[0]!)
+        .toBeLessThan(hrefSetter.mock.invocationCallOrder[0]!)
+    })
+
+    it('does not touch the Google session on a browser without device registration', async () => {
+      const openSpy = vi.fn(() => ({} as Window))
+      vi.stubGlobal('open', openSpy)
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateDevice, logout } = useAuth()
+
+      // deviceId 無し = 管理者 PC。Google の SSO は維持する
+      activateDevice('tenant-abc')
+      mockLocation()
+      logout()
+
+      expect(openSpy).not.toHaveBeenCalled()
+      expect(hrefSetter.mock.calls[0]?.[0] as string).toContain('/logout')
+    })
+
+    it('warns and still redirects when the Google logout tab is blocked', async () => {
+      const openSpy = vi.fn(() => null)
+      vi.stubGlobal('open', openSpy)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateDevice, logout } = useAuth()
+
+      activateDevice('tenant-abc', 'dev-1')
+      mockLocation()
+      logout()
+
+      expect(openSpy).toHaveBeenCalled()
+      expect(warnSpy).toHaveBeenCalled()
+      expect(hrefSetter.mock.calls[0]?.[0] as string).toContain('/logout')
+    })
+
+    it('warns and still redirects when window.open throws', async () => {
+      const openSpy = vi.fn(() => { throw new Error('not implemented') })
+      vi.stubGlobal('open', openSpy)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const { useAuth } = await import('~/composables/useAuth')
+      const { activateDevice, logout } = useAuth()
+
+      activateDevice('tenant-abc', 'dev-1')
+      mockLocation()
+      logout()
+
+      expect(warnSpy).toHaveBeenCalled()
+      expect(hrefSetter.mock.calls[0]?.[0] as string).toContain('/logout')
+    })
   })
 
   describe('inactivity auto-logout', () => {
