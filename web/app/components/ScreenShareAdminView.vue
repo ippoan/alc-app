@@ -3,7 +3,7 @@ const config = useRuntimeConfig()
 
 const webRtc = useWebRtc('admin')
 
-const allRooms = ref<string[]>([])
+const { activeRooms, start: startWatchingRooms, stop: stopWatchingRooms, reload: reloadActiveRooms } = useActiveRooms()
 const selectedRoomId = ref<string | null>(null)
 const isViewActive = ref(false)
 const isLoading = ref(false)
@@ -26,24 +26,17 @@ function toggleFullscreen() {
 }
 
 // screen- プレフィックスのみフィルタリング
-const screenRooms = computed(() => allRooms.value.filter(r => r.startsWith('screen-')))
+const screenRooms = computed(() => activeRooms.value.filter(r => r.startsWith('screen-')))
 
-const signalingHttpUrl = (config.public.signalingUrl as string).replace(/^wss/, 'https').replace(/^ws:/, 'http:')
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
 
 async function loadActiveRooms() {
   isLoading.value = true
   loadError.value = null
-  try {
-    const res = await fetch(`${signalingHttpUrl}/active-rooms`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json() as { rooms: string[] }
-    allRooms.value = data.rooms
-  } catch {
+  if (!await reloadActiveRooms()) {
     loadError.value = '画面共有一覧の取得に失敗しました'
-  } finally {
-    isLoading.value = false
   }
+  isLoading.value = false
 }
 
 async function startViewing(roomId: string) {
@@ -99,40 +92,12 @@ function toggleMute() {
   }
 }
 
-// WebSocket でリアルタイム更新
-let watchWs: WebSocket | null = null
-let watchPingTimer: ReturnType<typeof setInterval> | null = null
-
-function connectWatchSocket() {
-  const wsUrl = `${signalingWsUrl}/watch-rooms`
-  watchWs = new WebSocket(wsUrl)
-
-  watchWs.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.type === 'rooms_updated') {
-        allRooms.value = data.rooms
-        // 視聴中のルームが消えたら停止
-        if (isViewActive.value && selectedRoomId.value && !data.rooms.includes(selectedRoomId.value)) {
-          stopViewing()
-        }
-      }
-    } catch { /* ignore */ }
+// 視聴中のルームが一覧から消えたら停止
+watch(activeRooms, (rooms) => {
+  if (isViewActive.value && selectedRoomId.value && !rooms.includes(selectedRoomId.value)) {
+    stopViewing()
   }
-
-  watchWs.onopen = () => {
-    watchPingTimer = setInterval(() => watchWs?.send('ping'), 30000)
-  }
-
-  watchWs.onclose = () => {
-    if (watchPingTimer) { clearInterval(watchPingTimer); watchPingTimer = null }
-    setTimeout(connectWatchSocket, 3000)
-  }
-
-  watchWs.onerror = () => {
-    watchWs?.close()
-  }
-}
+})
 
 watch(() => webRtc.remoteStream.value, (stream) => {
   if (videoRef.value) videoRef.value.srcObject = stream
@@ -140,16 +105,14 @@ watch(() => webRtc.remoteStream.value, (stream) => {
 
 onMounted(() => {
   loadActiveRooms()
-  connectWatchSocket()
+  startWatchingRooms()
   document.addEventListener('fullscreenchange', () => {
     isFullscreen.value = !!document.fullscreenElement
   })
 })
 
 onUnmounted(() => {
-  watchWs?.close()
-  watchWs = null
-  if (watchPingTimer) clearInterval(watchPingTimer)
+  stopWatchingRooms()
   webRtc.disconnect()
   adminMicStream?.getTracks().forEach(t => t.stop())
   adminMicStream = null

@@ -15,8 +15,14 @@ const adminCamera = useCamera()
 let adminAudioStream: MediaStream | null = null  // マイク音声 (WebRTC用)
 const adminCombinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVideoCall用)
 
-// シグナリングサーバーからアクティブなルーム(device接続中)一覧を取得
-const activeRooms = ref<string[]>([])
+// シグナリングサーバーからアクティブなルーム(device接続中)一覧を購読 (アプリ全体で 1 本)
+const {
+  activeRooms,
+  start: startWatchingRooms,
+  stop: stopWatchingRooms,
+  setJoined,
+  reload: reloadActiveRooms,
+} = useActiveRooms()
 const selectedRoomId = ref<string | null>(null)
 const isCallActive = ref(false)
 const isLoading = ref(false)
@@ -134,8 +140,6 @@ function selfDeclLabel(key: string) {
   return map[key] || key
 }
 
-// HTTP用: wss://→https:// または ws://→http://
-const signalingHttpUrl = (config.public.signalingUrl as string).replace(/^wss/, 'https').replace(/^ws:/, 'http:')
 // WebSocket用: https://→wss:// または http://→ws://
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
 
@@ -197,16 +201,10 @@ function cancelFaceAuth() {
 async function loadActiveRooms() {
   isLoading.value = true
   loadError.value = null
-  try {
-    const res = await fetch(`${signalingHttpUrl}/active-rooms`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json() as { rooms: string[] }
-    activeRooms.value = data.rooms
-  } catch {
+  if (!await reloadActiveRooms()) {
     loadError.value = '接続中デバイスの取得に失敗しました'
-  } finally {
-    isLoading.value = false
   }
+  isLoading.value = false
 }
 
 async function startCall(roomId: string) {
@@ -216,6 +214,7 @@ async function startCall(roomId: string) {
     adminAudioStream?.getTracks().forEach(t => t.stop())
     adminAudioStream = null
     isCallActive.value = false
+    setJoined(null)
   }
 
   selectedRoomId.value = roomId
@@ -241,6 +240,7 @@ async function startCall(roomId: string) {
       await webRtc.startStreaming(streamToSend)
     }
     isCallActive.value = true
+    setJoined(roomId)
     startSessionPolling(roomId)
   }
   catch {
@@ -257,38 +257,7 @@ function endCall() {
   adminCombinedStream.value = null
   isCallActive.value = false
   selectedRoomId.value = null
-}
-
-// WebSocket で room 一覧をリアルタイム受信
-let watchWs: WebSocket | null = null
-let watchPingTimer: ReturnType<typeof setInterval> | null = null
-
-function connectWatchSocket() {
-  const wsUrl = `${signalingWsUrl}/watch-rooms`
-  watchWs = new WebSocket(wsUrl)
-
-  watchWs.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.type === 'rooms_updated') {
-        activeRooms.value = data.rooms
-      }
-    } catch { /* ignore */ }
-  }
-
-  watchWs.onopen = () => {
-    watchPingTimer = setInterval(() => watchWs?.send('ping'), 30000)
-  }
-
-  watchWs.onclose = () => {
-    if (watchPingTimer) { clearInterval(watchPingTimer); watchPingTimer = null }
-    // 切断時は3秒後に再接続
-    setTimeout(connectWatchSocket, 3000)
-  }
-
-  watchWs.onerror = () => {
-    watchWs?.close()
-  }
+  setJoined(null)
 }
 
 const { deviceId, deviceSettingsToken } = useAuth()
@@ -305,7 +274,7 @@ onMounted(async () => {
   }
 
   loadActiveRooms()
-  connectWatchSocket()
+  startWatchingRooms()
 })
 
 // initialRoomId 指定時、ルームが現れたら自動で requestCall
@@ -319,9 +288,7 @@ watch(activeRooms, (rooms) => {
 
 onUnmounted(() => {
   stopSessionPolling()
-  watchWs?.close()
-  watchWs = null
-  if (watchPingTimer) clearInterval(watchPingTimer)
+  stopWatchingRooms()
   webRtc.disconnect()
   adminCamera.stop()
   adminAudioStream?.getTracks().forEach(t => t.stop())
