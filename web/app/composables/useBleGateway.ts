@@ -4,6 +4,7 @@ import type {
   BloodPressureReading,
 } from '~/types'
 import { isWebSerialSupported } from '~/utils/webserial'
+import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
 
 const SERIAL_OPTIONS: SerialOptions = {
   baudRate: 115200,
@@ -12,14 +13,6 @@ const SERIAL_OPTIONS: SerialOptions = {
   stopBits: 1,
   flowControl: 'none' as FlowControlType,
 }
-
-// BLE Gateway の既知 VID:PID (CH340, CP210x, Espressif, FTDI FT232R)
-const BLE_GW_DEVICES = [
-  { vid: 0x1A86 },            // CH340/CH552
-  { vid: 0x10C4 },            // CP210x
-  { vid: 0x303A },            // Espressif native USB
-  { vid: 0x0403, pid: 0x6001 }, // FTDI FT232R (ATOM Lite)
-]
 
 // Android BLE Bridge WebSocket
 const BLE_WS_URL = 'ws://127.0.0.1:9877'
