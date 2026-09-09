@@ -7,14 +7,19 @@ import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 // --- API のモック (NFC → 乗務員照合だけを動かす) ---
 
 const getEmployeeByNfcIdMock = vi.fn()
+const checkFaceApprovalMock = vi.fn(() => null)
 
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: (nfcId: string) => getEmployeeByNfcIdMock(nfcId),
   getEmployeeByCode: vi.fn(),
   startMeasurement: vi.fn(async () => ({ id: 'measurement-1' })),
   updateMeasurement: vi.fn(async () => ({})),
-  uploadFacePhoto: vi.fn(async () => 'https://example.com/face.jpg'),
   uploadBlowVideo: vi.fn(async () => 'https://example.com/blow.webm'),
+}))
+
+// 通常点呼は顔承認 gate を通さない (呼ばれないことを assert するためにモックする)
+vi.mock('~/utils/face-approval', () => ({
+  checkFaceApproval: (emp: unknown) => checkFaceApprovalMock(emp),
 }))
 
 vi.mock('~/utils/video-store', () => ({
@@ -67,13 +72,6 @@ mockNuxtImport('useBleGateway', () => () => ({
   latestBloodPressure: readonly(ref(null)),
 }))
 
-mockNuxtImport('useFingerprint', () => () => ({
-  isFingerprintAvailable: ref(false),
-  isEmployeeAuthorized: () => false,
-  authorizeEmployee: vi.fn(),
-  requestFingerprint: vi.fn(),
-}))
-
 // NfcStatus は表示と emit('read') だけなので、read を直接投げられるスタブに差し替える
 const NfcStatusStub = defineComponent({
   name: 'NfcStatus',
@@ -85,7 +83,7 @@ const APPROVED_EMPLOYEE = { id: 'emp-1', name: '山田太郎', face_approval_sta
 
 async function mountNfcStep() {
   const wrapper = await mountSuspended(NormalMeasurement, {
-    global: { stubs: { NfcStatus: NfcStatusStub, ClientOnly: false, Teleport: true } },
+    global: { stubs: { NfcStatus: NfcStatusStub, BleStatus: true, ClientOnly: false, Teleport: true } },
   })
   return wrapper
 }
@@ -111,7 +109,7 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     const alert = wrapper.find('.bg-red-50')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toBe(employeeNotFoundByNfc('2601012901010'))
-    // 進まない (顔認証の見出しは出ない)
+    // 進まない
     expect(wrapper.text()).toContain('乗務員ID')
     wrapper.unmount()
   })
@@ -127,6 +125,39 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     // NFC ステップを抜けている
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
     expect(faceSyncMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('乗務員が引ければ顔認証を経ずに体温・血圧ステップへ進む', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+
+    await touch(wrapper, '2601012901010')
+
+    // 現在ステップのパンくず (青) が「体温・血圧」
+    const active = wrapper.findAll('div.rounded-full').filter(d => d.classes('bg-blue-600'))
+    expect(active).toHaveLength(1)
+    expect(active[0]!.text()).toBe('体温・血圧')
+    expect(wrapper.text()).toContain('体温・血圧')
+    wrapper.unmount()
+  })
+
+  it('通常点呼では顔データの承認 gate を通さない', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue({ ...APPROVED_EMPLOYEE, face_approval_status: 'pending' })
+    const wrapper = await mountNfcStep()
+
+    await touch(wrapper, '2601012901010')
+
+    expect(checkFaceApprovalMock).not.toHaveBeenCalled()
+    expect(wrapper.find('.bg-red-50').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('パンくずに「顔認証」が無い', async () => {
+    const wrapper = await mountNfcStep()
+
+    const labels = wrapper.findAll('div.rounded-full').map(d => d.text())
+    expect(labels).toEqual(['NFC', '体温・血圧', '測定', '結果'])
     wrapper.unmount()
   })
 
