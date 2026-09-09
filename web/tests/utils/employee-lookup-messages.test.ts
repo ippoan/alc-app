@@ -3,6 +3,7 @@ import {
   employeeNotFoundByNfc,
   employeeNotFoundByCode,
   noPendingSchedule,
+  deviceUnregisteredMessage,
 } from '~/utils/employee-lookup-messages'
 
 describe('employee-lookup-messages', () => {
@@ -22,5 +23,10 @@ describe('employee-lookup-messages', () => {
     const msg = noPendingSchedule()
     expect(msg).toContain('未消費の点呼予定がありません')
     expect(msg).toContain('点呼予定を作成')
+  })
+
+  it('deviceUnregisteredMessage は未登録であることとペアリングが要ることを言う', () => {
+    expect(deviceUnregisteredMessage).toContain('登録されていません')
+    expect(deviceUnregisteredMessage).toContain('ペアリング')
   })
 })

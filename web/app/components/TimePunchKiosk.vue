@@ -2,6 +2,7 @@
 import type { ApiEmployee, TimePunchWithDevice } from '~/types'
 import { punchTimecard, listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
+import { deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 
 const props = defineProps<{
   landscape?: boolean
@@ -143,7 +144,7 @@ onUnmounted(() => {
  */
 function punchFailureMessage(e: unknown): string {
   const err = e as { punchFailure?: string, status?: number } | undefined
-  if (err?.punchFailure === 'unpaired') return 'この端末は登録されていません (ペアリングが必要です)'
+  if (err?.punchFailure === 'unpaired') return deviceUnregisteredMessage
   if (err?.punchFailure === 'forbidden') return 'この端末では打刻できません (ペアリングの種別を確認してください)'
   return err?.status ? `打刻に失敗しました (${err.status})` : '打刻に失敗しました'
 }
