@@ -14,3 +14,9 @@ export function employeeNotFoundByCode(code: string): string {
 export function noPendingSchedule(): string {
   return '未消費の点呼予定がありません。点呼予定を作成してから読み取り直してください'
 }
+
+/**
+ * 端末がペアリングされていない (device JWT が無い) とき。
+ * 打刻の失敗表示 (TimePunchKiosk) と運行者タブの入口バナーで同じ文言を使う (Refs #206)
+ */
+export const deviceUnregisteredMessage = 'この端末は登録されていません (ペアリングが必要です)'
