@@ -50,17 +50,12 @@ export default defineNuxtConfig({
 
   pwa: {
     registerType: 'autoUpdate',
-    manifest: {
-      name: 'アルコールチェッカー',
-      short_name: 'ALC',
-      theme_color: '#1e40af',
-      background_color: '#ffffff',
-      display: 'standalone',
-      icons: [
-        { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-      ],
-    },
+    // manifest は module に生成させず `public/manifest-{driver,manager}.webmanifest` を
+    // 静的に置き、トップ画面が `?role=` に応じて `<link rel="manifest">` を出し分ける
+    // (Refs #179)。`false` にすると module は manifest の生成も link の自動注入もしないので、
+    // manifest link が 2 本になって Chrome が先頭だけ使う事故を避けられる。
+    // Service Worker (下の workbox) は 1 つのまま。
+    manifest: false,
     workbox: {
       navigateFallback: null,
       // ランタイムキャッシュ戦略

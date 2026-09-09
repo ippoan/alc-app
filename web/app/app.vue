@@ -30,10 +30,23 @@ onMounted(async () => {
   await init()
 })
 
+// --- PWA manifest の出し分け (Refs #179) ---
+// 運行管理者だけ `id` / `start_url` の違う manifest を指し、Chrome に「点呼キオスク」とは
+// 別のアプリとしてインストールさせる。トップ画面ではなくここで出すのは、認証の初期化中は
+// 下のテンプレートがスピナーだけを描き NuxtPage が動かないため — SSR の HTML に link が
+// 乗らないと Chrome が初回ロード時点で manifest を読めない。
+// `start_url` の `?role=manager` はトップ画面の activeRole が読むので、インストールした
+// アプリから起動したときもロールが保たれる。
+const route = useRoute()
+const manifestRole = computed(() => manifestRoleFromQuery(route.query))
+const { manifestHref, themeColor } = useRoleManifest(manifestRole)
+
 useHead({
   htmlAttrs: {
     class: computed(() => isAndroidApp.value ? 'android-app' : ''),
   },
+  link: [{ rel: 'manifest', href: manifestHref }],
+  meta: [{ name: 'theme-color', content: themeColor }],
 })
 </script>
 
