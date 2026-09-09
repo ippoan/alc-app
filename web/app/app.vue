@@ -63,6 +63,11 @@ const route = useRoute()
 const manifestRole = computed(() => manifestRoleFromQuery(route.query))
 const { manifestHref, themeColor } = useRoleManifest(manifestRole)
 
+// --- 二重起動の検知 (Refs #204) ---
+// 同じ role の PWA / タブが既に開いていれば案内を出して本体を描かない。
+// OS からの PWA 起動は manifest の launch_handler (focus-existing) が既存ウィンドウへ寄せる。
+const { duplicate, closeWindow } = useSingleInstance(manifestRole)
+
 useHead({
   htmlAttrs: {
     class: computed(() => isAndroidApp.value ? 'android-app' : ''),
@@ -75,7 +80,20 @@ useHead({
 <template>
   <div class="min-h-screen flex flex-col bg-gray-50">
     <NuxtRouteAnnouncer />
-    <div v-if="isLoading" class="flex-1 flex items-center justify-center">
+    <div v-if="duplicate" class="flex-1 flex items-center justify-center p-6">
+      <div class="w-full max-w-md bg-white rounded-xl shadow p-8 text-center">
+        <p class="text-xl font-bold text-gray-900">このアプリは既に開いています。</p>
+        <p class="mt-2 text-gray-600">開いている方を使ってください。</p>
+        <button
+          type="button"
+          class="mt-6 px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+          @click="closeWindow"
+        >
+          このウィンドウを閉じる
+        </button>
+      </div>
+    </div>
+    <div v-else-if="isLoading" class="flex-1 flex items-center justify-center">
       <div class="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
     <NuxtPage v-else />
