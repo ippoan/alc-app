@@ -41,6 +41,10 @@ export function useAuth() {
 
   const isAuthenticated = computed(() => !!accessToken.value)
   const isDeviceActivated = computed(() => !!deviceTenantId.value)
+  // 端末登録済みブラウザ (共用の運行者端末) の印。deviceTenantId は consumeAuthCookie が
+  // 全ログインユーザーに付けるため端末の判定には使えない。deviceId は実登録経路
+  // (activateDevice の第 2 引数) でしか入らない (Refs #189)。
+  const isDeviceRegistered = computed(() => !!deviceId.value)
 
   /** アプリ起動時に呼ぶ: cookie からログイン復元 + device 復元 + staging bypass */
   async function init() {
@@ -163,6 +167,12 @@ export function useAuth() {
     }
     inactivityTimerId = setTimeout(() => {
       console.log('[Auth] 5分間無操作のため自動ログアウト')
+      // 端末登録済みブラウザではページを離れない。フルページ遷移すると WebSerial が
+      // 閉じて警告デバイスへの heartbeat が切れ、沈黙として鳴ってしまう (Refs #189)。
+      if (isDeviceRegistered.value) {
+        void logoutInPlace()
+        return
+      }
       logout()
     }, INACTIVITY_TIMEOUT_MS)
   }
@@ -190,15 +200,57 @@ export function useAuth() {
     }
   }
 
-  /** ログアウト (端末の tenant_id は保持) */
-  function logout() {
-    // 無操作タイマー停止 + ローカル state クリア
+  /** client 側のログイン状態だけを消す (無操作タイマー停止 + state + refresh token)。
+   *  cookie とサーバ側セッションは触らない。logout / logoutInPlace の共通部分。 */
+  function clearClientSession() {
     stopInactivityWatch()
     accessToken.value = null
     user.value = null
-
     if (isClient) {
       localStorage.removeItem(REFRESH_TOKEN_KEY)
+    }
+  }
+
+  /**
+   * ページを離れずにログアウトする (端末登録済みブラウザの無操作 auto-logout、#189)。
+   * client 状態を消すだけでは logi_auth_token cookie が残り、次の 401 → refresh
+   * (refreshAccessToken → consumeAuthCookie) でセッションが復活してしまうため、
+   * cookie の失効まで行う。auth-worker /logout に Domain 付き / 無しの両 variant を
+   * 消させ (Domain/Path を client で推測しない)、併せて client 側でも上書きする。
+   * deviceId / deviceTenantId は保持する (端末登録は継続)。
+   */
+  async function logoutInPlace() {
+    const authWorker = (config.public.authWorkerUrl as string).replace(/\/$/, '')
+    try {
+      // no-cors のためレスポンスは読めない。Set-Cookie は反映される。
+      await fetch(`${authWorker}/logout`, {
+        credentials: 'include',
+        mode: 'no-cors',
+        keepalive: true,
+      })
+    }
+    catch { /* オフライン等。下の client 側上書きで cookie は落とす */ }
+    clearAuthCookieClientSide()
+    clearClientSession()
+  }
+
+  /** logi_auth_token を client 側でも失効させる。配布時の Domain (親ドメイン) 付きと
+   *  Domain 無しの 2 通りを書く (どちらで配布されたかは client から分からない)。 */
+  function clearAuthCookieClientSide() {
+    const base = 'logi_auth_token=; Max-Age=0; Path=/; Secure; SameSite=Lax'
+    document.cookie = base
+    const parentDomain = window.location.hostname.split('.').slice(1).join('.')
+    if (parentDomain) {
+      document.cookie = `${base}; Domain=.${parentDomain}`
+    }
+  }
+
+  /** ログアウト (端末の tenant_id は保持) */
+  function logout() {
+    // 無操作タイマー停止 + ローカル state クリア
+    clearClientSession()
+
+    if (isClient) {
       // #434: logi_auth_token cookie (Domain=.ippoan.org) のクリアと Google セッション
       // 破棄は auth-worker /logout に委譲する (rust は dumb backend で logout endpoint を
       // 持たない)。/logout 後は ?redirect_uri のログイン画面へ戻る。
@@ -378,6 +430,7 @@ export function useAuth() {
     deviceId: readonly(deviceId),
     deviceSettingsToken: readonly(deviceSettingsToken),
     isDeviceActivated,
+    isDeviceRegistered,
     init,
     loginWithGoogleRedirect,
     consumeAuthCookie,
