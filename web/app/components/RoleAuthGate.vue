@@ -11,6 +11,7 @@
 import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, getEmployeeById, updateDeviceLastLogin } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
+import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 const props = defineProps<{
   requiredRole: 'manager' | 'admin'
@@ -87,7 +88,7 @@ async function onNfcRead(nfcId: string) {
     await faceSync()
     step.value = 'face_auth'
   } catch {
-    errorMessage.value = `乗務員が見つかりません (NFC ID: ${nfcId})`
+    errorMessage.value = employeeNotFoundByNfc(nfcId)
   } finally {
     isSubmitting.value = false
   }
@@ -114,7 +115,7 @@ async function onManualSubmit() {
     await faceSync()
     step.value = 'face_auth'
   } catch {
-    manualError.value = `社員番号「${input}」の乗務員が見つかりません`
+    manualError.value = employeeNotFoundByCode(input)
   } finally {
     isSubmitting.value = false
   }

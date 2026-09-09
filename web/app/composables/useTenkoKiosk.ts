@@ -11,6 +11,7 @@ import {
   cancelTenkoSession, uploadFacePhoto,
   getCarryingItems, submitCarryingItemChecks,
 } from '~/utils/api'
+import { noPendingSchedule } from '~/utils/employee-lookup-messages'
 
 /** UI ステップ (バックエンド status とは別) */
 export type TenkoStep =
@@ -96,7 +97,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
       const schedules = await getPendingSchedules(empId)
       pendingSchedules.value = schedules
       if (schedules.length === 0) {
-        error.value = '未消費の点呼予定がありません'
+        error.value = noPendingSchedule()
         return
       }
       step.value = 'schedule_select'

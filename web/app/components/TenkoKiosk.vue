@@ -2,6 +2,7 @@
 import type { FaceAuthResult, MeasurementResult, SubmitMedicalData } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
+import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -123,7 +124,7 @@ async function onNfcRead(nfcId: string) {
     if (approvalErr) { error.value = approvalErr; return }
     await identifyEmployee(emp.id, emp.name)
   } catch {
-    error.value = `乗務員が見つかりません (NFC ID: ${nfcId})`
+    error.value = employeeNotFoundByNfc(nfcId)
   }
 }
 
@@ -137,7 +138,7 @@ async function onManualSubmit() {
     if (approvalErr) { error.value = approvalErr; return }
     await identifyEmployee(emp.id, emp.name)
   } catch {
-    manualError.value = `社員番号「${input}」の乗務員が見つかりません`
+    manualError.value = employeeNotFoundByCode(input)
   }
 }
 

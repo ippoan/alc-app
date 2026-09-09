@@ -139,6 +139,10 @@ path = "app/utils/face-approval.ts"
 branches = true
 
 [[files]]
+path = "app/utils/employee-lookup-messages.ts"
+branches = true
+
+[[files]]
 path = "app/utils/face-db.ts"
 branches = true
 

@@ -17,6 +17,7 @@ vi.mock('~/utils/api', () => ({
 }))
 
 import { useTenkoKiosk } from '~/composables/useTenkoKiosk'
+import { noPendingSchedule } from '~/utils/employee-lookup-messages'
 import {
   getPendingSchedules,
   startTenkoSession,
@@ -231,7 +232,7 @@ describe('useTenkoKiosk', () => {
       vi.mocked(getPendingSchedules).mockResolvedValue([])
       const k = useTenkoKiosk()
       await k.identifyEmployee('emp-1', '田中')
-      expect(k.error.value).toBe('未消費の点呼予定がありません')
+      expect(k.error.value).toBe(noPendingSchedule())
       expect(k.step.value).toBe('nfc')
     })
 
