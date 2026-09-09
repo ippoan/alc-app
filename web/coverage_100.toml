@@ -71,6 +71,10 @@ path = "app/composables/useNfcWebSocket.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useNfcReader.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useOfflineSync.ts"
 branches = true
 
