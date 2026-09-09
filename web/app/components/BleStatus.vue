@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { isWebSerialSupported } from '~/utils/webserial'
+
 const emit = defineEmits<{
   skip: []
   next: []
@@ -13,7 +15,6 @@ const {
   latestBloodPressure,
   hasMedicalData,
   transport,
-  isWebSerialSupported,
   connect,
   startAutoConnect,
   clearReadings,

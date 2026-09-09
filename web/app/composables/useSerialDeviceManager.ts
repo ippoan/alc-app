@@ -1,3 +1,5 @@
+import { isWebSerialSupported } from '~/utils/webserial'
+
 export interface PortEntry {
   port: SerialPort
   info: SerialPortInfo
@@ -5,7 +7,7 @@ export interface PortEntry {
 
 export function useSerialDeviceManager() {
   const ports = ref<PortEntry[]>([])
-  const isSupported = typeof navigator !== 'undefined' && 'serial' in navigator
+  const isSupported = isWebSerialSupported()
 
   async function refreshPorts() {
     if (!isSupported) return

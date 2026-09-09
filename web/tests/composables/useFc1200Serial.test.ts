@@ -205,18 +205,6 @@ describe('useFc1200Serial', () => {
     expect(fc.transport.value).toBeNull()
   })
 
-  // ---------- isWebSerialSupported ----------
-
-  it('isWebSerialSupported returns false when no navigator.serial', () => {
-    expect(fc.isWebSerialSupported()).toBe(false)
-  })
-
-  it('isWebSerialSupported returns true when navigator.serial exists', () => {
-    installSerialMock({})
-    expect(fc.isWebSerialSupported()).toBe(true)
-    removeSerialMock()
-  })
-
   // ---------- isSupported ----------
 
   it('isSupported returns true when WebSerial is available', () => {
