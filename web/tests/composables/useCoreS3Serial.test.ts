@@ -155,8 +155,8 @@ describe('useCoreS3Serial', () => {
 
       expect(await connect()).toBe(true)
       expect(core.isConnected.value).toBe(true)
-      // プローブの 8 秒窓を待っていない
-      expect(dev.writes).toEqual(['STATUS\n'])
+      // プローブの 8 秒窓を待っていない (`HB OK` は claim 直後の 1 本目)
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
     })
 
     it('STATUS に BOARD=cores3 が含まれれば claim する', async () => {
@@ -309,7 +309,7 @@ describe('useCoreS3Serial', () => {
       await connectWithJson(dev)
 
       await expect(core.write('{"cmd":"reset"}')).resolves.toBe(true)
-      expect(dev.writes).toEqual(['STATUS\n', '{"cmd":"reset"}\n'])
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', '{"cmd":"reset"}\n'])
     })
 
     it('未接続なら false (書きに行かない)', async () => {
@@ -327,6 +327,49 @@ describe('useCoreS3Serial', () => {
       await expect(core.write('{"cmd":"reset"}')).resolves.toBe(false)
       expect(core.isConnected.value).toBe(false)
       expect(dev.port.close).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ---------- heartbeat ----------
+
+  /**
+   * CoreS3 は heartbeat が途切れたら自分の判断で鳴る。送るのは `HB OK` 固定で、
+   * 着信や signaling の生死は警告デバイス側の役割 (Refs ippoan/alc-app-s3#187)。
+   */
+  describe('heartbeat', () => {
+    it('接続直後に 1 本、以後 3 秒ごとに HB OK を送る', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      // claim 直後の 1 本目 (firmware の初回武装を早める)
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', 'HB OK\n'])
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.filter(line => line === 'HB OK\n')).toHaveLength(3)
+    })
+
+    it('ポートを返したら止まり、掴み直しても二重に走らない', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      await core.release()
+      const afterRelease = dev.writes.length
+      // 再スキャン (10 秒) の手前まで進めても沈黙している
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(dev.writes.slice(afterRelease)).toEqual([])
+
+      // 登録は残っているので 10 秒後の再スキャンで掴み直す
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(core.isConnected.value).toBe(true)
+
+      const afterReclaim = dev.writes.length
+      await vi.advanceTimersByTimeAsync(3000)
+      // 走っている heartbeat は 1 本だけ (前回のタイマーが残っていれば 2 本届く)
+      expect(dev.writes.slice(afterReclaim)).toEqual(['HB OK\n'])
     })
   })
 
@@ -438,6 +481,6 @@ describe('useCoreS3Serial', () => {
 
     // 探索 1 回。プローブは arbiter が撃つ
     expect(getPorts).toHaveBeenCalledTimes(1)
-    expect(dev.writes).toEqual(['STATUS\n'])
+    expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
   })
 })

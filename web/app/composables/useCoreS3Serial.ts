@@ -7,6 +7,7 @@
  *
  * プロトコル (行指向 \n / ASCII / 115200 8N1):
  *   host → dev  `STATUS`                     … 機種判定のためのプローブ (arbiter が撃つ)
+ *   host → dev  `HB OK`                      … 3 秒ごと。CoreS3 は返信しない
  *   dev  → host `{"type":"ready",...}`       … BLE ゲートウェイの JSON メッセージ
  *   dev  → host `STATUS BOARD=cores3 ...`    … プローブへの応答 (名乗り)
  *   dev  → host `EVT <NAME> <args...>`       … NFC など状態遷移の通知
@@ -19,9 +20,16 @@
  *
  * ready まで無言のファームウェアが「無応答」で閉じられ続けないよう、JSON 行が
  * 先着したら `STATUS` の応答を待たずに claim する。
+ *
+ * 接続しているあいだは 3 秒ごとに `HB OK` を送る。CoreS3 は heartbeat が途切れたら
+ * 自分の判断で鳴るので、ブラウザは「鳴れ」と命令しない — タブを閉じた・別タブへ移った・
+ * PC がフリーズした、のいずれも「無音」という同じ形で拾える (Refs ippoan/alc-app-s3#187)。
+ * 送る中身は `HB OK` 固定: CoreS3 が見るのは「ブラウザの沈黙」だけで、着信の通知や
+ * signaling の生死は警告デバイス (useAlarmDevice) の役割のまま。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
+import { HEARTBEAT_INTERVAL } from '~/composables/useAlarmDevice'
 import { writeLine } from '~/composables/useSerialArbiter'
 
 /** arbiter に登録する名前 */
@@ -50,6 +58,9 @@ const waiters = new Set<() => void>()
 
 /** 預かっているポートの writer (未接続なら null) */
 let held: WritableStreamDefaultWriter<Uint8Array> | null = null
+
+/** 走っている heartbeat のタイマー (未接続なら null) */
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
 /**
  * 行の接頭辞から素性を決める。
@@ -100,6 +111,22 @@ export function useCoreS3Serial() {
     // 'status' (名乗りそのもの) / 'alarm' / 'unknown' は捨てる
   }
 
+  // --- heartbeat ---
+
+  /** 接続直後に 1 回送ってから 3 秒ごと。firmware の初回武装を早めるため即時に 1 本目 */
+  function startHeartbeat(): void {
+    stopHeartbeat()
+    void write('HB OK')
+    heartbeatTimer = setInterval(() => { void write('HB OK') }, HEARTBEAT_INTERVAL)
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+  }
+
   // --- claim を待つ ---
 
   /** 呼ぶ前に connect() が接続済みを弾いているので、ここは必ず未接続から始まる */
@@ -136,11 +163,13 @@ export function useCoreS3Serial() {
       for (const cb of [...openHandlers]) cb()
       for (const line of lines) handleLine(line)
       for (const notify of [...waiters]) notify()
+      startHeartbeat()
     },
 
     onLine: handleLine,
 
     onClose() {
+      stopHeartbeat()
       held = null
       isConnected.value = false
       for (const cb of [...closeHandlers]) cb()
