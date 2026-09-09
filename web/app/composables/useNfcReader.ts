@@ -102,6 +102,8 @@ export function useNfcReader() {
       // 26 桁の契約を満たせない行は捨てる (utils/license.ts の桁が合わなくなる)
       if (issue.length !== DATE_LEN || expiry.length !== DATE_LEN) return
 
+      console.log('[NFC] License read (CoreS3):', { issue, expiry })
+
       const cardId = CARD_ID_PAD + issue + expiry
       // useNfcWebSocket と同じ順 — 先に期限を配り、続けて読み取りを配る
       emitLicenseRead({

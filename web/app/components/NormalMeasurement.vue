@@ -91,7 +91,9 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
     await faceSync()
     step.value = 'face_auth'
   } catch {
-    console.error(employeeNotFoundByNfc(nfcId))
+    const msg = employeeNotFoundByNfc(nfcId)
+    console.error(msg)
+    approvalError.value = msg
   }
 }
 
