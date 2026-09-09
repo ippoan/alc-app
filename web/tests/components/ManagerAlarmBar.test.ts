@@ -68,9 +68,46 @@ describe('ManagerAlarmBar', () => {
     settingState.enabled.value = true
   })
 
-  it('mount で購読 → heartbeat の順に始め、unmount で heartbeat → 購読の順に止める', async () => {
+  it('mount で購読 → heartbeat の順に始め、unmount では止めない (ロールタブ切替で鳴らさない)', async () => {
+    // まだ購読していない状態から mount する
+    roomsState.isWatching.value = false
     const wrapper = await mountSuspended(ManagerAlarmBar)
     expect(calls).toEqual(['start', 'connect(0)'])
+
+    // 運行管理者タブを離れても singleton は動いたまま — disconnect / stop は入らない (#205)
+    wrapper.unmount()
+    expect(calls).toEqual(['start', 'connect(0)'])
+  })
+
+  it('ロールタブを往復して再 mount しても購読も探索も二重に始めず、設定 off では切れる', async () => {
+    roomsState.isWatching.value = false
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    expect(calls).toEqual(['start', 'connect(0)'])
+    wrapper.unmount()
+
+    // singleton は動き続けている (購読中・デバイス接続済み) ので、戻ってきても呼び直さない
+    roomsState.isWatching.value = true
+    alarmState.isConnected.value = true
+    const again = await mountSuspended(ManagerAlarmBar)
+    expect(calls).toEqual(['start', 'connect(0)'])
+
+    // 呼び直していない再 mount 側でも、設定 off なら切れる
+    settingState.enabled.value = false
+    await again.vm.$nextTick()
+    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+
+    again.unmount()
+    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+  })
+
+  it('デバイス設定を off にしたときだけ切る (切った後の unmount では二重に切らない)', async () => {
+    roomsState.isWatching.value = false
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    expect(calls).toEqual(['start', 'connect(0)'])
+
+    settingState.enabled.value = false
+    await wrapper.vm.$nextTick()
+    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
 
     wrapper.unmount()
     expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
@@ -101,6 +138,7 @@ describe('ManagerAlarmBar', () => {
 
   it('未設定 (既存の端末) なら問いかけカードだけを出し、[つなぐ] で保存してから探索を始める', async () => {
     settingState.enabled.value = null
+    roomsState.isWatching.value = false
     const wrapper = await mountSuspended(ManagerAlarmBar)
 
     expect(wrapper.find('[data-testid="manager-alarm-ask"]').exists()).toBe(true)
@@ -116,9 +154,9 @@ describe('ManagerAlarmBar', () => {
     expect(wrapper.find('[data-testid="manager-alarm-bar"]').exists()).toBe(true)
     expect(calls).toEqual(['start', 'connect(0)'])
 
-    // 始めた後の unmount は通常どおり止める
+    // 始めた後にロールタブを離れても止めない
     wrapper.unmount()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+    expect(calls).toEqual(['start', 'connect(0)'])
   })
 
   it('未設定で [つながない] を選ぶと保存して非表示になり、unmount でも何も止めない', async () => {
