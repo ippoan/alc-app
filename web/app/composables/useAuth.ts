@@ -47,10 +47,6 @@ export function useAuth() {
 
   const isAuthenticated = computed(() => !!accessToken.value)
   const isDeviceActivated = computed(() => !!deviceTenantId.value)
-  // 端末登録済みブラウザ (共用の運行者端末) の印。deviceTenantId は consumeAuthCookie が
-  // 全ログインユーザーに付けるため端末の判定には使えない。deviceId は実登録経路
-  // (activateDevice の第 2 引数) でしか入らない (Refs #189)。
-  const isDeviceRegistered = computed(() => !!deviceId.value)
 
   /** アプリ起動時に呼ぶ: cookie からログイン復元 + device 復元 + staging bypass */
   async function init() {
@@ -173,13 +169,11 @@ export function useAuth() {
     }
     inactivityTimerId = setTimeout(() => {
       console.log('[Auth] 5分間無操作のため自動ログアウト')
-      // 端末登録済みブラウザではページを離れない。フルページ遷移すると WebSerial が
+      // どのブラウザでもページを離れない (#195)。フルページ遷移すると WebSerial が
       // 閉じて警告デバイスへの heartbeat が切れ、沈黙として鳴ってしまう (Refs #189)。
-      if (isDeviceRegistered.value) {
-        void logoutInPlace()
-        return
-      }
-      logout()
+      // 運行者端末が端末登録を通しているとは限らない (共用 PC は Google ログインのみ)
+      // ため、端末登録の有無で分けない。
+      void logoutInPlace()
     }, INACTIVITY_TIMEOUT_MS)
   }
 
@@ -218,7 +212,7 @@ export function useAuth() {
   }
 
   /**
-   * ページを離れずにログアウトする (端末登録済みブラウザの無操作 auto-logout、#189)。
+   * ページを離れずにログアウトする (無操作 auto-logout、#189, #195)。
    * client 状態を消すだけでは logi_auth_token cookie が残り、次の 401 → refresh
    * (refreshAccessToken → consumeAuthCookie) でセッションが復活してしまうため、
    * cookie の失効まで行う。auth-worker /logout に Domain 付き / 無しの両 variant を
@@ -257,20 +251,19 @@ export function useAuth() {
     clearClientSession()
 
     if (isClient) {
-      // 共用の運行者端末 (端末登録済みブラウザ) では Google のブラウザセッションも切る
-      // (#193)。切らないと「アカウントを選択」に管理者が残り、1 クリックで戻れてしまう。
+      // どのブラウザでも Google のブラウザセッションを切る (#193, #195)。切らないと
+      // 「アカウントを選択」に直前のユーザーが残り、1 クリックで戻れてしまう。共用の
+      // 運行者端末が端末登録を通しているとは限らない (共用 PC は Google ログインのみ)
+      // ため、端末登録の有無で分けない。管理者 PC でもサインアウトされる (許容)。
       // ★ await を挟まずクリックと同じ tick で呼ぶこと。ユーザー操作の中でしか
       //   window.open は popup blocker を通らない (呼び出し側も同期呼び出しのまま)。
-      //   端末登録の無いブラウザ (管理者 PC) は従来どおり = Google の SSO を維持する。
-      if (isDeviceRegistered.value) {
-        let opened: Window | null = null
-        try {
-          opened = window.open(GOOGLE_LOGOUT_URL, '_blank', 'noopener,noreferrer')
-        }
-        catch { /* WebView 等で window.open 自体が使えない場合。下の warn に落とす */ }
-        if (!opened) {
-          console.warn('[Auth] Google のログアウトタブを開けませんでした')
-        }
+      let opened: Window | null = null
+      try {
+        opened = window.open(GOOGLE_LOGOUT_URL, '_blank', 'noopener,noreferrer')
+      }
+      catch { /* WebView 等で window.open 自体が使えない場合。下の warn に落とす */ }
+      if (!opened) {
+        console.warn('[Auth] Google のログアウトタブを開けませんでした')
       }
 
       // #434: logi_auth_token cookie (Domain=.ippoan.org) のクリアと Google セッション
@@ -452,7 +445,6 @@ export function useAuth() {
     deviceId: readonly(deviceId),
     deviceSettingsToken: readonly(deviceSettingsToken),
     isDeviceActivated,
-    isDeviceRegistered,
     init,
     loginWithGoogleRedirect,
     consumeAuthCookie,

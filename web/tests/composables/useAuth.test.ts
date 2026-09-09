@@ -45,6 +45,9 @@ vi.mock('~/utils/env', () => envMock)
 describe('useAuth', () => {
   beforeEach(async () => {
     vi.stubGlobal('fetch', mockFetch)
+    // logout() は端末登録の有無に関わらず window.open を呼ぶ (#195)。jsdom の未実装
+    // window.open を踏まないよう既定で無害な spy にしておく (個別テストは再 stub する)
+    vi.stubGlobal('open', vi.fn(() => ({} as Window)))
     vi.useFakeTimers()
     localStorage.clear()
     sessionStorage.clear()
@@ -681,17 +684,20 @@ describe('useAuth', () => {
       expect(url).toContain('/logout')
     })
 
-    // #193: 共用の運行者端末 (deviceId あり) では Google のブラウザセッションも切る
+    // #193, #195: どのブラウザでも Google のブラウザセッションを切る。運行者端末が
+    // 端末登録 (deviceId) を通しているとは限らないため、端末登録の有無で分けない
     const GOOGLE_LOGOUT_URL = 'https://accounts.google.com/Logout'
 
-    it('opens the Google logout tab before redirecting when the device is registered', async () => {
+    it('opens the Google logout tab before redirecting, registered or not', async () => {
       const openSpy = vi.fn(() => ({} as Window))
       vi.stubGlobal('open', openSpy)
 
       const { useAuth } = await import('~/composables/useAuth')
-      const { activateDevice, logout } = useAuth()
+      const { activateDevice, deviceId, logout } = useAuth()
 
-      activateDevice('tenant-abc', 'dev-1')
+      // (1) 端末登録の無いブラウザ (共用 PC は Google ログインのみ = deviceId 無し)
+      activateDevice('tenant-abc')
+      expect(deviceId.value).toBeNull()
       mockLocation()
       logout()
 
@@ -703,22 +709,16 @@ describe('useAuth', () => {
       expect(url).toContain(`redirect_uri=${encodeURIComponent('https://example.com/login')}`)
       expect(openSpy.mock.invocationCallOrder[0]!)
         .toBeLessThan(hrefSetter.mock.invocationCallOrder[0]!)
-    })
 
-    it('does not touch the Google session on a browser without device registration', async () => {
-      const openSpy = vi.fn(() => ({} as Window))
-      vi.stubGlobal('open', openSpy)
-
-      const { useAuth } = await import('~/composables/useAuth')
-      const { activateDevice, logout } = useAuth()
-
-      // deviceId 無し = 管理者 PC。Google の SSO は維持する
-      activateDevice('tenant-abc')
-      mockLocation()
+      // (2) 端末登録済みブラウザでも同じ挙動
+      activateDevice('tenant-abc', 'dev-1')
+      expect(deviceId.value).toBe('dev-1')
       logout()
 
-      expect(openSpy).not.toHaveBeenCalled()
-      expect(hrefSetter.mock.calls[0]?.[0] as string).toContain('/logout')
+      expect(openSpy).toHaveBeenCalledTimes(2)
+      expect(openSpy.mock.calls[1]).toEqual([GOOGLE_LOGOUT_URL, '_blank', 'noopener,noreferrer'])
+      expect(hrefSetter).toHaveBeenCalledTimes(2)
+      expect(hrefSetter.mock.calls[1]?.[0] as string).toContain('/logout')
     })
 
     it('warns and still redirects when the Google logout tab is blocked', async () => {
@@ -729,7 +729,7 @@ describe('useAuth', () => {
       const { useAuth } = await import('~/composables/useAuth')
       const { activateDevice, logout } = useAuth()
 
-      activateDevice('tenant-abc', 'dev-1')
+      activateDevice('tenant-abc')
       mockLocation()
       logout()
 
@@ -746,7 +746,7 @@ describe('useAuth', () => {
       const { useAuth } = await import('~/composables/useAuth')
       const { activateDevice, logout } = useAuth()
 
-      activateDevice('tenant-abc', 'dev-1')
+      activateDevice('tenant-abc')
       mockLocation()
       logout()
 
@@ -763,7 +763,14 @@ describe('useAuth', () => {
     function mockLocation() {
       const originalLocation = window.location
       Object.defineProperty(window, 'location', {
-        value: { ...originalLocation, origin: 'https://example.com', href: '', set href(_v: string) {} },
+        value: {
+          ...originalLocation,
+          origin: 'https://example.com',
+          // clearAuthCookieClientSide が Domain 決定に読む (spread では乗らない)
+          hostname: 'alc.example.com',
+          href: '',
+          set href(_v: string) {},
+        },
         writable: true,
         configurable: true,
       })
@@ -831,7 +838,7 @@ describe('useAuth', () => {
       // No error, nothing happens
     })
 
-    // --- 端末登録済みブラウザ (deviceId あり) はページを離れない (#189) ---
+    // --- 無操作 auto-logout はどのブラウザでもページを離れない (#189, #195) ---
 
     /** document.cookie を getter/setter で差し替え、書き込みを記録する。
      *  Max-Age=0 の書き込みは実ブラウザ同様に cookie を消す。 */
@@ -870,7 +877,7 @@ describe('useAuth', () => {
       return hrefSetter
     }
 
-    it('stays on the page and expires the cookie when the device is registered', async () => {
+    it('stays on the page and expires the cookie after inactivity', async () => {
       const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
       const writes = mockCookieJar(`logi_auth_token=${fakeJwt}`)
       const hrefSetter = mockLocationWithSpy()
@@ -881,7 +888,6 @@ describe('useAuth', () => {
       auth.activateDevice('tenant-1', 'device-1')
       auth.consumeAuthCookie()
 
-      expect(auth.isDeviceRegistered.value).toBe(true)
       expect(auth.isAuthenticated.value).toBe(true)
 
       vi.advanceTimersByTime(5 * 60 * 1000)
@@ -949,25 +955,30 @@ describe('useAuth', () => {
       expect(expiries[0]).not.toContain('Domain=')
     })
 
-    it('still redirects to /logout when no device is registered', async () => {
+    it('behaves the same when no device is registered', async () => {
       const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
-      setDocCookie(`logi_auth_token=${fakeJwt}`)
+      const writes = mockCookieJar(`logi_auth_token=${fakeJwt}`)
+      const hrefSetter = mockLocationWithSpy()
+      mockFetch.mockResolvedValue({ ok: true })
 
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
       auth.consumeAuthCookie()
 
-      const hrefSetter = mockLocationWithSpy()
-      expect(auth.isDeviceRegistered.value).toBe(false)
+      // 共用 PC は Google ログインのみ = deviceId 無し。それでも上の登録済みと同じ (#195)
+      expect(auth.deviceId.value).toBeNull()
 
       vi.advanceTimersByTime(5 * 60 * 1000)
 
       await vi.waitFor(() => {
         expect(auth.isAuthenticated.value).toBe(false)
       })
-      expect(hrefSetter).toHaveBeenCalledTimes(1)
-      expect(hrefSetter.mock.calls[0][0]).toContain('/logout?redirect_uri=')
-      expect(mockFetch).not.toHaveBeenCalled()
+      // ページ遷移しない
+      expect(hrefSetter).not.toHaveBeenCalled()
+      // auth-worker /logout を cookie 付きで叩き、client 側でも cookie を失効させる
+      expect(mockFetch.mock.calls[0][0]).toContain('/logout')
+      expect(writes.filter(w => w.includes('logi_auth_token=;') && w.includes('Max-Age=0')))
+        .toHaveLength(2)
     })
   })
 
