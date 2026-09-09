@@ -16,6 +16,12 @@ const DEVICE_TENANT_KEY = 'alc_device_tenant_id'
 const DEVICE_ID_KEY = 'alc_device_id'
 const DEVICE_SETTINGS_TOKEN_KEY = 'alc_device_settings_token'
 
+/** 共用の運行者端末から Google のブラウザセッションを切るために開く URL (#193)。
+ *  実測 (2026-09-09): `?continue=` で自ホストへ戻す経路は Google 所有ホスト以外 400、
+ *  ログイン時の `prompt=login` は Google が守らない。このURLを開くだけならその場で
+ *  サインアウトが成立するので、別タブで開いて戻りは期待しない。 */
+const GOOGLE_LOGOUT_URL = 'https://accounts.google.com/Logout'
+
 // シングルトン state (composable の外で定義して複数コンポーネント間で共有)
 const user = ref<AuthUser | null>(null)
 const accessToken = ref<string | null>(null)
@@ -99,7 +105,7 @@ export function useAuth() {
     }
   }
 
-  /** Google OAuth ログイン (Authorization Code Flow + prompt=login) */
+  /** Google OAuth ログイン (Authorization Code Flow) */
   function loginWithGoogleRedirect(redirectAfterLogin?: string): void {
     if (!isClient) return
     const callbackUrl = `${window.location.origin}/auth/callback`
@@ -251,6 +257,22 @@ export function useAuth() {
     clearClientSession()
 
     if (isClient) {
+      // 共用の運行者端末 (端末登録済みブラウザ) では Google のブラウザセッションも切る
+      // (#193)。切らないと「アカウントを選択」に管理者が残り、1 クリックで戻れてしまう。
+      // ★ await を挟まずクリックと同じ tick で呼ぶこと。ユーザー操作の中でしか
+      //   window.open は popup blocker を通らない (呼び出し側も同期呼び出しのまま)。
+      //   端末登録の無いブラウザ (管理者 PC) は従来どおり = Google の SSO を維持する。
+      if (isDeviceRegistered.value) {
+        let opened: Window | null = null
+        try {
+          opened = window.open(GOOGLE_LOGOUT_URL, '_blank', 'noopener,noreferrer')
+        }
+        catch { /* WebView 等で window.open 自体が使えない場合。下の warn に落とす */ }
+        if (!opened) {
+          console.warn('[Auth] Google のログアウトタブを開けませんでした')
+        }
+      }
+
       // #434: logi_auth_token cookie (Domain=.ippoan.org) のクリアと Google セッション
       // 破棄は auth-worker /logout に委譲する (rust は dumb backend で logout endpoint を
       // 持たない)。/logout 後は ?redirect_uri のログイン画面へ戻る。
