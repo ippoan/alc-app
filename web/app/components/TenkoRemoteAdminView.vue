@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { FaceAuthResult, TenkoSession, DriverInfo } from '~/types'
 import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
+import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 const props = defineProps<{
   initialRoomId?: string | null
@@ -175,7 +176,7 @@ async function onModalIdSubmit() {
     setManagerId(emp.id)
     modalStep.value = 'face_auth'
   } catch {
-    modalIdError.value = `社員番号「${input}」の乗務員が見つかりません`
+    modalIdError.value = employeeNotFoundByCode(input)
   }
 }
 

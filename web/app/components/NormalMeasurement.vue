@@ -4,6 +4,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
 import { checkFaceApproval } from '~/utils/face-approval'
+import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
 
@@ -90,7 +91,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
     await faceSync()
     step.value = 'face_auth'
   } catch {
-    console.error(`乗務員が見つかりません (NFC ID: ${nfcId})`)
+    console.error(employeeNotFoundByNfc(nfcId))
   }
 }
 
@@ -111,7 +112,7 @@ async function onManualSubmit() {
     await faceSync()
     step.value = 'face_auth'
   } catch {
-    manualError.value = `社員番号「${input}」の乗務員が見つかりません`
+    manualError.value = employeeNotFoundByCode(input)
   }
 }
 
