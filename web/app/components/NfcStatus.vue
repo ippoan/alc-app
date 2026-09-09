@@ -1,13 +1,28 @@
 <script setup lang="ts">
 import type { NfcReadEvent, NfcLicenseReadEvent } from '~/types'
 import { parseLicenseExpiryDate, checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
+import { isWebSerialSupported } from '~/utils/webserial'
 
 const emit = defineEmits<{
   read: [employeeId: string, expiryDate?: Date]
 }>()
 
-const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRead } = useNfcWebSocket()
+const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRead } = useNfcReader()
 const { latestVersion, checkLatestVersion, isUpdateAvailable } = useNfcBridgeUpdate()
+
+// WebSerial の初回許可はユーザー操作が要る (CoreS3 直結のポート選択)
+const coreS3 = useCoreS3Serial()
+const canUseSerial = isWebSerialSupported()
+const isRequestingPort = ref(false)
+async function requestSerialPort() {
+  isRequestingPort.value = true
+  try {
+    await coreS3.requestPort()
+  }
+  finally {
+    isRequestingPort.value = false
+  }
+}
 
 const lastReadId = ref<string | null>(null)
 const readAnimation = ref(false)
@@ -17,6 +32,8 @@ const licenseExpiryStatus = ref<LicenseExpiryStatus | null>(null)
 const showUpdateBanner = computed(() => {
   if (isAndroidApp.value) return false
   if (!isConnected.value || !latestVersion.value) return false
+  // CoreS3 直結にブリッジは要らない (readers が 'CoreS3' なら直結)
+  if (readers.value?.[0] === 'CoreS3') return false
   // version 未送信（旧ブリッジ）→ 常にアップデート促す
   if (!bridgeVersion.value) return true
   return isUpdateAvailable(bridgeVersion.value)
@@ -59,7 +76,7 @@ onRead((event: NfcReadEvent) => {
 
 const statusText = computed(() => {
   if (error.value) return error.value
-  if (!isConnected.value) return 'NFC ブリッジ未接続'
+  if (!isConnected.value) return 'NFC リーダー未接続'
   if ((readers.value?.length ?? 0) === 0) return 'NFC リーダー未検出'
   return 'NFC 待機中'
 })
@@ -134,16 +151,33 @@ const showNfcGuide = ref(false)
       </div>
     </div>
 
-    <!-- NFC ブリッジ未接続時のダウンロードリンク -->
-    <p v-if="!isConnected && !isAndroidApp" class="text-sm text-center text-gray-500">
-      NFC ブリッジがインストールされていない場合は
-      <a
-        href="https://github.com/yhonda-ohishi-alc/rust-nfc-bridge/releases/latest"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="text-blue-600 underline hover:text-blue-800"
-      >こちらからダウンロード</a>
-    </p>
+    <!-- 未接続時の案内 -->
+    <template v-if="!isConnected && !isAndroidApp">
+      <!-- CoreS3 直結 (WebSerial): 常駐アプリは要らない -->
+      <div v-if="canUseSerial" class="flex flex-col items-center gap-2">
+        <p class="text-sm text-center text-gray-500">
+          CoreS3 が USB でつながっているか確認してください。<br>
+          初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。
+        </p>
+        <button
+          class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors disabled:bg-gray-300"
+          :disabled="isRequestingPort"
+          @click="requestSerialPort"
+        >
+          USB デバイスを選択
+        </button>
+      </div>
+      <!-- WebSerial が使えない環境は従来の NFC ブリッジ -->
+      <p v-else class="text-sm text-center text-gray-500">
+        NFC ブリッジがインストールされていない場合は
+        <a
+          href="https://github.com/yhonda-ohishi-alc/rust-nfc-bridge/releases/latest"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-blue-600 underline hover:text-blue-800"
+        >こちらからダウンロード</a>
+      </p>
+    </template>
 
     <!-- NFC ブリッジ更新通知 -->
     <p v-if="showUpdateBanner" class="text-sm text-center text-amber-600">

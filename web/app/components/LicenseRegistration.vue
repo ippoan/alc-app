@@ -24,7 +24,7 @@ const clearingId = ref<string | null>(null)
 // NFC 読み取り対象
 const nfcTargetId = ref<string | null>(null)
 const nfcCardId = ref<string | null>(null)
-const { isConnected, connect, onLicenseRead } = useNfcWebSocket()
+const { isConnected, connect, onLicenseRead } = useNfcReader()
 
 onLicenseRead((event: NfcLicenseReadEvent) => {
   if (!nfcTargetId.value || event.card_type !== 'driver_license') return
