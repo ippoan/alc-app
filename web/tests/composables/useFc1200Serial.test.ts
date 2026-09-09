@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { withSetup } from '../helpers/with-setup'
+import { isArbitratedPort } from '~/composables/useSerialArbiter'
 
 // --- Mock WASM ---
 
@@ -567,6 +568,57 @@ describe('useFc1200Serial', () => {
       const result = await fc.autoConnect()
       expect(result).toBe(false)
       warnSpy.mockRestore()
+    })
+
+    it('useSerialArbiter が握っているポートは候補にしない (#182)', async () => {
+      // arbiter に握らせるポート: 1 行返したあとは黙るので預けられたままになる
+      let pendingRead: ((c: { value?: Uint8Array; done: boolean }) => void) | null = null
+      let firstRead = true
+      const grabbedReader = {
+        read: vi.fn(() => {
+          if (firstRead) {
+            firstRead = false
+            return Promise.resolve({ value: new TextEncoder().encode('MINE\n'), done: false })
+          }
+          return new Promise<{ value?: Uint8Array; done: boolean }>((resolve) => {
+            pendingRead = resolve
+          })
+        }),
+        cancel: vi.fn(async () => { pendingRead?.({ value: undefined, done: true }) }),
+        releaseLock: vi.fn(),
+      }
+      const grabbed = {
+        open: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+        readable: { getReader: vi.fn(() => grabbedReader) },
+        writable: { getWriter: vi.fn(() => ({ write: vi.fn(async () => {}), releaseLock: vi.fn() })) },
+        // CoreS3 / VoiceS3R と同じ Espressif native USB
+        getInfo: vi.fn(() => ({ usbVendorId: 0x303A, usbProductId: 0x1001 })),
+      }
+      const { port } = createMockPort({
+        getInfoResult: { usbVendorId: 0x9999 },
+        readValues: [{ value: null, done: true }],
+      })
+      installSerialMock({ getPorts: vi.fn(async () => [grabbed, port]) })
+
+      const arbiter = useSerialArbiter()
+      arbiter.register('probe-test', {
+        claim: lines => lines.includes('MINE'),
+        reject: () => false,
+        onOpen: () => {},
+        onLine: () => {},
+        onClose: () => {},
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(isArbitratedPort(grabbed as unknown as SerialPort)).toBe(true)
+
+      const result = await fc.autoConnect()
+      expect(result).toBe(true)
+      // arbiter が開いた 1 回だけ — FC-1200 は掴みにいかない
+      expect(grabbed.open).toHaveBeenCalledTimes(1)
+      expect(port.open).toHaveBeenCalledTimes(1)
+
+      await arbiter.unregister('probe-test')
     })
   })
 

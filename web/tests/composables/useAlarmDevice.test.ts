@@ -103,6 +103,11 @@ function installSerialMock(serialMock: {
 
 // --- Tests ---
 
+/**
+ * ポートの探索・open・`STATUS` プローブは useSerialArbiter に移った (#182)。
+ * ここで見るのは「警告デバイスの利用側として外から見える挙動」が不変であること —
+ * 公開 API の形、heartbeat の周期と中身、deviceState、再スキャンの間隔。
+ */
 describe('useAlarmDevice', () => {
   let mod: typeof import('~/composables/useAlarmDevice')
   let alarm: ReturnType<typeof mod.useAlarmDevice>
@@ -124,7 +129,8 @@ describe('useAlarmDevice', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    // 見送ったポートの再訪判定が Date.now() を見るので Date も止める
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
     delete (navigator as any).serial
   })
 
@@ -366,14 +372,14 @@ describe('useAlarmDevice', () => {
     })
   })
 
-  // ---------- 別機種の確定と除外 ----------
+  // ---------- 別機種の見送り ----------
 
-  describe('別機種の確定', () => {
+  describe('別機種の見送り', () => {
     it.each([
       ['STATUS LAN=up VER=1.2.3\n', 'CoreS3 の STATUS'],
       ['PONG\n', 'PONG'],
       ['{"type":"ready","version":"1.0"}\n', 'JSON 行'],
-    ])('%s → 除外して二度と開かない', async (line) => {
+    ])('%s → 名乗り出ずに手放し、10 秒後の再スキャンでは開き直さない', async (line) => {
       const other = createMockPort()
       other.emit(line)
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
@@ -386,6 +392,52 @@ describe('useAlarmDevice', () => {
 
       await vi.advanceTimersByTimeAsync(10000)
       expect(other.port.open).toHaveBeenCalledTimes(1)
+    })
+
+    it('見送りは永久除外ではない — 60 秒経てば開き直す (CoreS3 の利用側を後で足せる)', async () => {
+      const other = createMockPort()
+      other.emit('STATUS LAN=up VER=1.2.3\n')
+      installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(other.port.open).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(60000)
+      expect(other.port.open).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ---------- 公開 API の形 ----------
+
+  describe('公開 API', () => {
+    it('返すキーは #182 の前後で変わらない (呼び出し元は触らない)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+      expect(Object.keys(alarm).sort()).toEqual([
+        'connect',
+        'deviceState',
+        'disconnect',
+        'isConnected',
+        'isSupported',
+        'requestPort',
+      ])
+    })
+
+    it('navigator.serial は直接触らない (列挙は arbiter 経由)', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      const getPorts = vi.fn(async () => [dev.port])
+      const requestPort = vi.fn(async () => dev.port)
+      installSerialMock({ getPorts, requestPort })
+      await load()
+
+      await alarm.requestPort()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(true)
+      // 許可 1 回 + 探索 1 回。プローブは arbiter が撃つ
+      expect(requestPort).toHaveBeenCalledTimes(1)
+      expect(getPorts).toHaveBeenCalledTimes(2)
     })
   })
 

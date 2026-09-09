@@ -3,6 +3,7 @@ import { isClient } from '~/utils/env'
 import type { Fc1200WasmSession } from 'fc1200-wasm'
 import { initFc1200Wasm, createFc1200Session } from '~/utils/fc1200'
 import { isWebSerialSupported } from '~/utils/webserial'
+import { BLE_GW_DEVICES, isArbitratedPort } from '~/composables/useSerialArbiter'
 
 const SERIAL_OPTIONS: SerialOptions = {
   baudRate: 9600,
@@ -11,14 +12,6 @@ const SERIAL_OPTIONS: SerialOptions = {
   stopBits: 1,
   flowControl: 'none' as FlowControlType,
 }
-
-// BLE Gateway の既知 VID:PID（除外用）
-const BLE_GW_DEVICES = [
-  { vid: 0x1A86 },            // CH340/CH552
-  { vid: 0x10C4 },            // CP210x
-  { vid: 0x303A },            // Espressif native USB
-  { vid: 0x0403, pid: 0x6001 }, // FTDI FT232R (ATOM Lite)
-]
 
 // Android FC-1200 Bridge WebSocket
 const FC1200_WS_URL = 'ws://127.0.0.1:9878'
@@ -161,7 +154,8 @@ export function useFc1200Serial() {
       const ports = await navigator.serial.getPorts()
       return ports.find((p) => {
         const info = p.getInfo()
-        return info.usbVendorId !== undefined && !isBleGwPort(info)
+        // useSerialArbiter が握っているポートには触らない (奪い合いを増やさない)
+        return info.usbVendorId !== undefined && !isArbitratedPort(p) && !isBleGwPort(info)
       }) ?? null
     }
     catch {
