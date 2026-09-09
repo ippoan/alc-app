@@ -10,15 +10,29 @@
 const alarm = useAlarmDevice()
 // Web Serial の無いブラウザでは購読も heartbeat も立てない
 const isSupported = alarm.isSupported
+// この端末で警告デバイスを使うか (端末登録 / デバイス設定で選ぶ)。false の端末では
+// バーもポート探索も出さない。null は未設定 (既存の端末) なので問いかけカードを出す
+const { enabled, setEnabled } = useAlarmDeviceSetting()
 const { isWatching, activeRooms, joinedRoomId, start, stop } = useActiveRooms()
 
-if (isSupported) {
-  onMounted(() => {
+if (isSupported && enabled.value !== false) {
+  let started = false
+  const startWatching = () => {
+    started = true
     start()
     // BLE ゲートウェイと同居しない PC なので、ポートの取り合いを待つ必要が無い
     alarm.connect(0)
+  }
+  onMounted(() => {
+    // 探索は「使う」と決まってから。未設定のあいだは問いかけカードだけを出す
+    if (enabled.value === true) startWatching()
+  })
+  // 問いかけカードで [つなぐ] を選んだ瞬間に探索を始める
+  watch(enabled, (v) => {
+    if (v === true && !started) startWatching()
   })
   onUnmounted(() => {
+    if (!started) return
     void alarm.disconnect()
     // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
     stop()
@@ -45,36 +59,45 @@ const alarmStatusText = computed(() => {
   return '接続'
 })
 
-type AlarmVisual = 'disconnected' | 'idle' | 'alarming' | 'muted'
+type AlarmVisual = 'disconnected' | 'idle' | 'alarming' | 'muted' | 'calling'
 
-/** 見た目 (アイコン円・状態ピル・カードの枠) を 1 つの状態語に畳む */
+/**
+ * 見た目 (アイコン円・状態ピル・カードの枠) を 1 つの状態語に畳む。
+ * 未接続は音が鳴らない状況なので最優先で赤、着信は amber で目立たせる
+ */
 const alarmVisual = computed<AlarmVisual>(() => {
   if (!alarm.isConnected.value) return 'disconnected'
   const s = alarm.deviceState.value?.state
   if (s === 'alarming') return 'alarming'
   if (s === 'muted') return 'muted'
+  if (isCalling.value) return 'calling'
   return 'idle'
 })
 
 // Tailwind の purge に残るよう、クラスは完全な文字列で持つ (`bg-${色}-100` のような連結は禁止)
 const iconClasses: Record<AlarmVisual, string> = {
-  disconnected: 'bg-gray-100 text-gray-400',
+  disconnected: 'bg-red-100 text-red-600',
   idle: 'bg-green-100 text-green-600',
   alarming: 'bg-red-100 text-red-600',
   muted: 'bg-amber-100 text-amber-600',
+  calling: 'bg-amber-100 text-amber-600',
 }
 const pillClasses: Record<AlarmVisual, string> = {
-  disconnected: 'bg-gray-100 text-gray-500',
+  disconnected: 'bg-red-50 text-red-700',
   idle: 'bg-green-50 text-green-700',
   alarming: 'bg-red-50 text-red-700',
   muted: 'bg-amber-50 text-amber-700',
+  calling: 'bg-amber-50 text-amber-700',
 }
 const cardClasses: Record<AlarmVisual, string> = {
-  disconnected: '',
+  disconnected: 'border border-red-300 bg-red-50',
   idle: '',
   alarming: 'border border-red-300 bg-red-50',
   muted: 'border border-amber-200',
+  calling: 'border border-amber-300 bg-amber-50',
 }
+const pulseVisuals: ReadonlySet<AlarmVisual> = new Set(['disconnected', 'alarming', 'calling'])
+const alarmPulse = computed(() => pulseVisuals.has(alarmVisual.value))
 
 const alarmIconClass = computed(() => iconClasses[alarmVisual.value])
 const alarmPillClass = computed(() => pillClasses[alarmVisual.value])
@@ -83,7 +106,34 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
 
 <template>
   <ClientOnly>
-    <div v-if="isSupported" class="w-full max-w-lg mx-auto px-4 mt-2">
+    <!-- 未設定 (既存の端末): バーの代わりに、この PC で使うかを問う -->
+    <div v-if="isSupported && enabled === null" class="w-full max-w-lg mx-auto px-4 mt-2">
+      <div
+        class="bg-white rounded-2xl shadow-sm border border-gray-200 px-4 py-3 flex items-center gap-3"
+        data-testid="manager-alarm-ask"
+      >
+        <p class="flex-1 min-w-0 text-xs text-gray-700">
+          この PC に警告デバイス (Atom VoiceS3R) をつなぎますか?
+          <span class="block text-gray-500">運行管理者の PC だけ「つなぐ」を選んでください。後からデバイス設定で変えられます</span>
+        </p>
+        <button
+          class="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          data-testid="manager-alarm-ask-yes"
+          @click="setEnabled(true)"
+        >
+          つなぐ
+        </button>
+        <button
+          class="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+          data-testid="manager-alarm-ask-no"
+          @click="setEnabled(false)"
+        >
+          つながない
+        </button>
+      </div>
+    </div>
+
+    <div v-else-if="isSupported && enabled === true" class="w-full max-w-lg mx-auto px-4 mt-2">
       <div
         class="bg-white rounded-2xl shadow-sm px-4 py-3 flex items-center gap-3"
         :class="alarmCardClass"
@@ -95,7 +145,7 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
         >
           <svg
             class="w-5 h-5"
-            :class="{ 'animate-pulse': alarmVisual === 'alarming' }"
+            :class="{ 'animate-pulse': alarmPulse }"
             fill="none"
             stroke="currentColor"
             stroke-width="2"
@@ -110,7 +160,10 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
             <span class="text-sm font-medium text-gray-800">警告デバイス</span>
             <span class="text-xs px-2 py-0.5 rounded-full" :class="alarmPillClass">{{ alarmStatusText }}</span>
           </div>
-          <p v-if="!isWatching" class="text-xs text-red-600">着信を受けられません (signaling 未接続)</p>
+          <p v-if="alarmVisual === 'disconnected'" class="text-xs text-red-700 font-medium">
+            <span class="font-bold">警告デバイスが接続されていません</span> — USB を確認して「接続」を押してください
+          </p>
+          <p v-else-if="!isWatching" class="text-xs text-red-600">着信を受けられません (signaling 未接続)</p>
           <p v-else-if="isCalling" class="text-xs text-amber-700 font-medium">着信あり — 遠隔点呼に入ると止まります</p>
           <p v-else class="text-xs text-gray-500">運行管理者のブラウザを見張っています (閉じると鳴ります)</p>
         </div>
