@@ -15,6 +15,10 @@ path = "app/composables/useAndroidLandscape.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useActiveRooms.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useAuth.ts"
 branches = true
 
