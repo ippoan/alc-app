@@ -42,7 +42,12 @@ const CLAIMANT_NAME = 'alarm-device'
 
 /** mount 直後は BLE ゲートウェイに先にポートを選ばせる (同居しない PC では 0 を渡す) */
 const INITIAL_SCAN_DELAY = 5000
-const HEARTBEAT_INTERVAL = 3000
+
+/**
+ * heartbeat の送信間隔。CoreS3 (useCoreS3Serial) も同じ間隔で `HB OK` を送るので
+ * ここを唯一の出どころにする — firmware 側の失効判定は両機とも同じ前提で組んである。
+ */
+export const HEARTBEAT_INTERVAL = 3000
 
 // シングルトン: 管理者 PC につながる警告デバイスは 1 台なので状態も 1 つ
 const isConnected = ref(false)
