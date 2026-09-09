@@ -140,6 +140,16 @@ export async function writeLine(
   }
 }
 
+/**
+ * ポートを閉じる。ESP32-S3 の USB-Serial-JTAG は「DTR=0 かつ RTS=1」で chip reset が
+ * かかる (自動書き込み回路の模倣) ため、close の直前に DTR と RTS を両方落とす。
+ * S3 にはこれを無効化するレジスタが無く、firmware 側では直せない。
+ */
+async function closePortQuietly(port: SerialPort): Promise<void> {
+  try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }) } catch { /* 非対応でも close は続ける */ }
+  await port.close()
+}
+
 export function useSerialArbiter() {
   const { ports, refreshPorts, requestNewPort } = useSerialDeviceManager()
 
@@ -172,7 +182,7 @@ export function useSerialArbiter() {
     try { s.writer.releaseLock() } catch {}
     try { await s.reader.cancel() } catch {}
     try { s.reader.releaseLock() } catch {}
-    try { await s.port.close() } catch {}
+    try { await closePortQuietly(s.port) } catch {}
     if (owner) owner.claimant.onClose()
   }
 
@@ -284,7 +294,7 @@ export function useSerialArbiter() {
     }
 
     if (!candidate.readable || !candidate.writable) {
-      try { await candidate.close() } catch {}
+      try { await closePortQuietly(candidate) } catch {}
       return
     }
 
