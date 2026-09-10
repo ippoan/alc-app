@@ -349,6 +349,16 @@ describe('useNfcReader', () => {
     expect(wsMock.connect).not.toHaveBeenCalled()
   })
 
+  it('core.isConnected が既に true の状態で新しく呼ぶと、connect() を呼ばなくても isConnected が即 true になる', async () => {
+    // タブを戻して component が再 mount されたときの再現 (Refs ippoan/alc-app#219)
+    coreState.isConnected.value = true
+    const reader = await load()
+
+    expect(reader.isConnected.value).toBe(true)
+    expect(reader.readers.value).toEqual(['CoreS3'])
+    expect(coreMock.connect).not.toHaveBeenCalled()
+  })
+
   it('直結したらブリッジを切り、readers は CoreS3 になる', async () => {
     const reader = await load()
     reader.connect()

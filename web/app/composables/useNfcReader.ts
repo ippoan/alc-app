@@ -162,7 +162,9 @@ export function useNfcReader() {
     else if (wantConnected) ws.connect()
   })
 
-  watch([core.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync)
+  // immediate: 既に接続済みの CoreS3 / ブリッジへ再 mount した時点で local ref に
+  // 反映する (タブを戻すたびに local isConnected が false から作り直されるため)。
+  watch([core.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
 
   function connect(): void {
     wantConnected = true
