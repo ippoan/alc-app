@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const { loginWithGoogleRedirect, isAuthenticated, isLoading } = useAuth()
+const { loginWithGoogleRedirect, isAuthenticated, isLoading, isDeviceActivated } = useAuth()
 const route = useRoute()
 
 // 認証済みならリダイレクト (redirect クエリがあればそちらへ、なければ admin タブ)
@@ -44,6 +44,13 @@ function handleLogin() {
           </svg>
           Google でログイン
         </button>
+
+        <p
+          v-if="isDeviceActivated"
+          class="mt-4 text-left text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"
+        >
+          共用端末です。Google の「アカウントを選択」に前の利用者の名前が残っているときは、その名前の右のメニューから「アカウントの削除」を選んで消してください。ログアウトだけでは一覧から消えません。
+        </p>
       </template>
 
       <NuxtLink to="/" class="block mt-6 text-sm text-blue-600 hover:underline">
