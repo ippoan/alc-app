@@ -42,6 +42,15 @@ let initialized = false
 let inactivityTimerId: ReturnType<typeof setTimeout> | null = null
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000 // 5分
 
+/**
+ * Google ログイン (`loginWithGoogleRedirect`) が auth-worker に渡す `redirect_uri` の
+ * 唯一の出どころ。警告デバイス認証 (#214) も同じ文字列を nonce 取得と device-login の
+ * 両方で使う必要があるため、ここから呼ぶ (文字列リテラル `/auth/callback` はここ 1 か所)。
+ */
+export function getAuthCallbackUrl(): string {
+  return `${window.location.origin}/auth/callback`
+}
+
 export function useAuth() {
   const config = useRuntimeConfig()
 
@@ -104,7 +113,7 @@ export function useAuth() {
   /** Google OAuth ログイン (Authorization Code Flow) */
   function loginWithGoogleRedirect(redirectAfterLogin?: string): void {
     if (!isClient) return
-    const callbackUrl = `${window.location.origin}/auth/callback`
+    const callbackUrl = getAuthCallbackUrl()
     if (redirectAfterLogin) {
       sessionStorage.setItem('oauth_redirect', redirectAfterLogin)
     }

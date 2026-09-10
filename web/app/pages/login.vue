@@ -1,5 +1,7 @@
 <script setup lang="ts">
 const { loginWithGoogleRedirect, isAuthenticated, isLoading, isDeviceActivated } = useAuth()
+const { isConnected: isAlarmDeviceConnected } = useAlarmDevice()
+const { lastError: deviceLoginError, busy: deviceLoginBusy, login: loginWithDevice } = useDeviceLogin()
 const route = useRoute()
 
 // 認証済みならリダイレクト (redirect クエリがあればそちらへ、なければ admin タブ)
@@ -16,6 +18,10 @@ watch(isAuthenticated, (val) => {
 function handleLogin() {
   const redirect = route.query.redirect as string | undefined
   loginWithGoogleRedirect(redirect)
+}
+
+function handleDeviceLogin() {
+  void loginWithDevice()
 }
 </script>
 
@@ -44,6 +50,18 @@ function handleLogin() {
           </svg>
           Google でログイン
         </button>
+
+        <button
+          v-if="isAlarmDeviceConnected"
+          class="w-full mt-3 flex items-center justify-center gap-2 px-6 py-3 border border-gray-300 rounded-xl bg-white hover:bg-gray-50 transition-colors font-medium text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          :disabled="deviceLoginBusy"
+          @click="handleDeviceLogin"
+        >
+          警告デバイスで認証
+        </button>
+        <p v-if="deviceLoginError" class="mt-2 text-xs text-red-600">
+          {{ deviceLoginError }}
+        </p>
 
         <p
           v-if="isDeviceActivated"
