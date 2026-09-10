@@ -27,6 +27,7 @@
  */
 
 import { isWebSerialSupported } from '~/utils/webserial'
+import { onPortConnected } from '~/composables/useSerialDeviceManager'
 
 /**
  * BLE ゲートウェイの既知 VID:PID (CH340, CP210x, Espressif, FTDI FT232R)。
@@ -54,6 +55,14 @@ const SERIAL_OPTIONS: SerialOptions = {
 
 /** 見つからなければこの間隔で探し直す */
 const RESCAN_INTERVAL = 10000
+/**
+ * `navigator.serial` の `connect` イベントを受けてから探索するまでの待ち時間。
+ *
+ * 挿した直後は CDC が準備中で `open` が失敗しうるので、10 秒周期より詰めつつも
+ * 即座ではなく 1 秒だけ待つ。失敗しても既存の 10 秒周期に戻るだけなので固定値で足りる
+ * (Refs ippoan/alc-app#221)。
+ */
+const CONNECT_SCAN_DELAY = 1000
 const PROBE_SEND_INTERVAL = 1000
 const PROBE_MAX_SENDS = 8
 /**
@@ -137,6 +146,10 @@ const sessions = new Set<PortSession>()
 const passedOver = new Map<SerialPort, number>()
 let scanning = false
 let scanTimer: ReturnType<typeof setTimeout> | null = null
+/** scan() 実行中に connect が来た → 終わったら CONNECT_SCAN_DELAY で次を予約する */
+let rescanRequested = false
+/** onPortConnected の購読は register() の初回だけ張る (module 単位で 1 本) */
+let connectSubscribed = false
 
 /**
  * `request()` が待っている応答 (session ごとに高々 1 件)。
@@ -210,6 +223,23 @@ export function useSerialArbiter() {
       scanTimer = null
       void scan()
     }, delay)
+  }
+
+  /**
+   * `navigator.serial` の `connect` を受けたときの処理 (Refs ippoan/alc-app#221)。
+   *
+   * 見送り印を消す (挿し直した機種が直前に見送られたポートと同じかもしれないため —
+   * `isRevisitable` の判定 `:397-404` と同じ引き方)。スキャン中に来たら取りこぼさず
+   * 次の周期を早める (`rescanRequested`)、スキャン中でなければ `CONNECT_SCAN_DELAY` で
+   * 即予約する。
+   */
+  function handlePortConnected(port: SerialPort): void {
+    passedOver.delete(toRaw(port))
+    if (scanning) {
+      rescanRequested = true
+      return
+    }
+    scheduleScan(CONNECT_SCAN_DELAY)
   }
 
   /** まだポートを預かっていない利用側 */
@@ -419,13 +449,17 @@ export function useSerialArbiter() {
         if (isArbitratedPort(candidate)) continue
         if (!isRevisitable(candidate)) continue
         await tryPort(candidate)
-        if (pending().length === 0) return
+        if (pending().length === 0) {
+          rescanRequested = false
+          return
+        }
       }
     }
     finally {
       scanning = false
     }
-    scheduleScan(RESCAN_INTERVAL)
+    scheduleScan(rescanRequested ? CONNECT_SCAN_DELAY : RESCAN_INTERVAL)
+    rescanRequested = false
   }
 
   // --- 公開 API ---
@@ -435,6 +469,10 @@ export function useSerialArbiter() {
    * 直前に見送られたばかりのポートがその利用側のものだったときに取りこぼす。
    */
   function register(name: string, claimant: SerialClaimant): void {
+    if (!connectSubscribed) {
+      connectSubscribed = true
+      onPortConnected(handlePortConnected)
+    }
     const isNew = !claimants.has(name)
     claimants.set(name, claimant)
     if (!isNew) return

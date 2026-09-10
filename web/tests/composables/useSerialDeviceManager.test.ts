@@ -94,4 +94,40 @@ describe('useSerialDeviceManager', () => {
     await forgetPort(mockPort as any)
     expect(mockForget).toHaveBeenCalledOnce()
   })
+
+  // ---------- connect イベント購読 (Refs ippoan/alc-app#221) ----------
+
+  describe('onPortConnected', () => {
+    it('2 回呼んでも addEventListener は 1 回だけ', async () => {
+      const addEventListener = vi.fn()
+      ;(navigator as any).serial = {
+        getPorts: vi.fn().mockResolvedValue([]),
+        requestPort: vi.fn(),
+        addEventListener,
+      }
+
+      const { onPortConnected } = await import('~/composables/useSerialDeviceManager')
+      onPortConnected(vi.fn())
+      onPortConnected(vi.fn())
+
+      expect(addEventListener).toHaveBeenCalledTimes(1)
+      expect(addEventListener).toHaveBeenCalledWith('connect', expect.any(Function))
+    })
+
+    it('addEventListener が無い mock でも落ちない', async () => {
+      ;(navigator as any).serial = {
+        getPorts: vi.fn().mockResolvedValue([]),
+        requestPort: vi.fn(),
+      }
+
+      const { onPortConnected } = await import('~/composables/useSerialDeviceManager')
+      expect(() => onPortConnected(vi.fn())).not.toThrow()
+    })
+
+    it('WebSerial 非対応でも落ちない (addEventListener を張らない)', async () => {
+      // beforeEach で navigator.serial は既に無い
+      const { onPortConnected } = await import('~/composables/useSerialDeviceManager')
+      expect(() => onPortConnected(vi.fn())).not.toThrow()
+    })
+  })
 })

@@ -100,14 +100,31 @@ function installSerialMock(serialMock: {
   requestPort?: ReturnType<typeof vi.fn>
   getPorts?: ReturnType<typeof vi.fn>
 }) {
+  // navigator.serial は本物同様 EventTarget にしておく — addEventListener /
+  // dispatchEvent が実際に効く形にすることで、Refs ippoan/alc-app#221 の
+  // connect 購読 (onPortConnected) をそのまま検証できる
   Object.defineProperty(navigator, 'serial', {
-    value: {
+    value: Object.assign(new EventTarget(), {
       requestPort: serialMock.requestPort ?? vi.fn(),
       getPorts: serialMock.getPorts ?? vi.fn(async () => []),
-    },
+    }),
     configurable: true,
     writable: true,
   })
+}
+
+/**
+ * `navigator.serial` へ `connect` イベントを流す (Refs ippoan/alc-app#221)。
+ *
+ * Web Serial の `connect` は SerialPort で発火して navigator.serial へ bubble
+ * するため、本物の `target` は挿されたポート自身になる。plain `EventTarget` に
+ * `dispatchEvent` させると target は dispatch した相手 (navigator.serial) に
+ * なってしまうので、`target` を挿し直したポートへ差し替えてから配る。
+ */
+function emitConnect(port: any): void {
+  const ev = new Event('connect')
+  Object.defineProperty(ev, 'target', { value: port, configurable: true })
+  ;(navigator as any).serial.dispatchEvent(ev)
 }
 
 /** 「自分の機種だ」と名乗り出る印を持つ利用側 */
@@ -361,6 +378,58 @@ describe('useSerialArbiter', () => {
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(getPorts).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ---------- connect イベント (Refs ippoan/alc-app#221) ----------
+
+  describe('connect イベント', () => {
+    it('connect で 1 秒後にスキャンが走り claim される', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      let portsAvailable: any[] = []
+      const getPorts = vi.fn(async () => portsAvailable)
+      installSerialMock({ getPorts })
+      await load()
+
+      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getPorts).toHaveBeenCalledTimes(1)
+      expect(seen.opened).toBe(0)
+
+      // ここで USB を挿す — getPorts で見えるようになる
+      portsAvailable = [dev.port]
+      emitConnect(dev.port)
+
+      // 1 秒経つ前はまだ探しにいかない
+      await vi.advanceTimersByTimeAsync(999)
+      expect(getPorts).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(getPorts).toHaveBeenCalledTimes(2)
+      expect(seen.opened).toBe(1)
+    })
+
+    it('見送り中 (60 秒 cooldown 中) のポートでも connect なら待たずに再訪する', async () => {
+      const other = createMockPort()
+      other.emit('CORE LAN=up\n')
+      installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      // 全員 reject → 見送り、本来なら 60 秒は再訪しない
+      expect(other.port.open).toHaveBeenCalledTimes(1)
+
+      // cooldown (60 秒) の途中で挿し直しの connect が来る
+      await vi.advanceTimersByTimeAsync(5000)
+      emitConnect(other.port)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      // 60 秒待たずに再訪している
+      expect(other.port.open).toHaveBeenCalledTimes(2)
     })
   })
 
@@ -715,6 +784,36 @@ describe('useSerialArbiter', () => {
       arbiter.start(0)
       await vi.advanceTimersByTimeAsync(30000)
       expect(getPorts).toHaveBeenCalledTimes(1)
+    })
+
+    it('スキャン中に来た connect は取りこぼさず次を 1 秒で予約し、その次の周期は 10 秒に戻る (Refs ippoan/alc-app#221)', async () => {
+      const silent = createMockPort()
+      let portsAvailable: any[] = [silent.port]
+      const getPorts = vi.fn(async () => portsAvailable)
+      installSerialMock({ getPorts })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+
+      // 無応答ポートを 8 秒握っている (= scanning 中) 最中に挿し直しの connect が来る
+      await vi.advanceTimersByTimeAsync(3000)
+      portsAvailable = []
+      emitConnect(silent.port)
+
+      // プローブが打ち切られるまで (8 秒) は再入しない
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(getPorts).toHaveBeenCalledTimes(1)
+
+      // 取りこぼさず、通常の 10 秒より早い 1 秒後に次のスキャンが走る
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(getPorts).toHaveBeenCalledTimes(2)
+
+      // その次の周期は通常の 10 秒に戻っている (1 秒では再スキャンしない)
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(getPorts).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(getPorts).toHaveBeenCalledTimes(3)
     })
   })
 
