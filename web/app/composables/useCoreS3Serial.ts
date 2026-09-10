@@ -40,7 +40,7 @@
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { HEARTBEAT_INTERVAL, RELOAD_GRACE_SEC } from '~/composables/useAlarmDevice'
 import { writeLine } from '~/composables/useSerialArbiter'
-import { readDiag } from '~/utils/serialDiagLog'
+import { appendDiag, readDiag } from '~/utils/serialDiagLog'
 
 /** arbiter に登録する名前 */
 const CLAIMANT_NAME = 'cores3'
@@ -60,6 +60,32 @@ const LOG_REPLY_MAX_LINES = 40
 const LOG_REPLY_MAX_BYTES = 1200
 /** `PWALOG` の行を送る間隔 (CoreS3 の受信を溢れさせない。40 行で約 0.4 秒) */
 const LOG_REPLY_INTERVAL = 10
+
+/**
+ * 置き場に `dev <行>` で残す CoreS3 の `EVT` の接頭辞。CoreS3 自身のログは電源断で消えるので、
+ * 落ちる直前の出来事を PC 側に残す (Refs ippoan/alc-app#225)。
+ * 許可リストにするのは、点呼のセッション ID・免許証・カード・資格情報・URL を載せる行 (`TENKO_SESSION` / `NFC_LICENSE` / `LICENSE_EXPIRED` / `TIMECARD` / `AUTH_TOKEN` / `WS_COMMAND` / `OTA_START` / `PRINT_START` / `WIFI_TEST` / `GW_AUTH_FAIL`) と周期的な行 (`BATT` / `HEAP` / `*_PROGRESS`) を入れないため。短い接頭辞 (`EVT WS_` / `EVT ETH`) にしない。
+ */
+const DIAG_EVENT_PREFIXES = [
+  'EVT BOOT',
+  'EVT CRASH',
+  'EVT USB_HOST=',
+  'EVT BUS5V',
+  'EVT ETH_PROBE_OK',
+  'EVT ETH_CONNECTED',
+  'EVT ETH_DISCONNECTED',
+  'EVT ETH NG',
+  'EVT WS_CONNECTED',
+  'EVT WS_DISCONNECTED',
+  'EVT WS_STALE_RESTART',
+  'EVT WS_DROPPED',
+  'EVT WS_REBOOT_CMD',
+  'EVT NFC_INIT_NG',
+  'EVT NFC_READY',
+  'EVT ALARM_RESTORED',
+  'EVT OTA OK',
+  'EVT OTA NG',
+]
 
 /** 行の素性。CoreS3 のものか、警告デバイスのものか、どちらとも言えないか */
 type LineKind = 'json' | 'status' | 'event' | 'alarm' | 'unknown'
@@ -86,10 +112,12 @@ let logReplyGeneration = 0
 /**
  * 行の接頭辞から素性を決める。
  *
- * 警告デバイスの行を先に見る: `EVT ALARM` は `EVT ` にも当てはまるため。
+ * 警告デバイスの行を先に見る: `EVT ALARM` は `EVT ` にも当てはまるため。空白まで見る —
+ * CoreS3 が起動時に出す `EVT ALARM_RESTORED` を警告デバイスの行と取り違えて CoreS3 を
+ * 見送らないため (Refs ippoan/alc-app#225)。
  */
 function classify(line: string): LineKind {
-  if (line.startsWith('STATUS alarm') || line.startsWith('EVT ALARM')) return 'alarm'
+  if (line.startsWith('STATUS alarm') || line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
   if (line.startsWith('{')) return 'json'
   if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'status'
   if (line.startsWith('EVT ')) return 'event'
@@ -162,6 +190,7 @@ export function useCoreS3Serial() {
     const kind = classify(line)
     if (kind === 'json') dispatchJson(line)
     else if (kind === 'event') {
+      if (DIAG_EVENT_PREFIXES.some(prefix => line.startsWith(prefix))) appendDiag(`dev ${line}`)
       dispatchEvent(line)
       const queryId = logQueryId(line)
       if (queryId !== null) void replyLog(queryId)

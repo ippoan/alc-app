@@ -191,6 +191,7 @@ describe('useCoreS3Serial', () => {
 
     it.each([
       ['EVT ALARM state=alarming cause=silence\n', 'EVT ALARM'],
+      ['EVT ALARM\n', 'EVT ALARM (引数なし)'],
       ['STATUS alarm state=idle cause=none hb_age_ms=1200 VER=0.1.0\n', 'STATUS alarm'],
     ])('警告デバイスの行 (%s) は reject して即手放す', async (line) => {
       const dev = createMockPort()
@@ -203,6 +204,26 @@ describe('useCoreS3Serial', () => {
       expect(core.isConnected.value).toBe(false)
       // 8 秒待たずに閉じている (reject が確定した時点で打ち切り)
       expect(dev.port.close).toHaveBeenCalledTimes(1)
+    })
+
+    it('CoreS3 の起動時の EVT ALARM_RESTORED では reject せず、続く JSON で claim する (Refs #225)', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM_RESTORED\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const events: string[] = []
+      core.onEvent(name => events.push(name))
+
+      const p = core.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      // 警告デバイスと取り違えて見送っていない
+      expect(dev.port.close).not.toHaveBeenCalled()
+
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe(true)
+      // プローブ中の EVT も CoreS3 のものとして配る
+      expect(events).toEqual(['ALARM_RESTORED'])
     })
   })
 
@@ -285,6 +306,74 @@ describe('useCoreS3Serial', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       expect(seen).toEqual([])
+    })
+  })
+
+  // ---------- CoreS3 の EVT を置き場に残す (Refs ippoan/alc-app#225) ----------
+
+  describe('診断ログの置き場に EVT を残す', () => {
+    const DIAG_KEY = 'alc_serial_diag'
+
+    /** 置き場の行 (先頭の `HH:MM:SS.mmm ` を落とした本文) */
+    async function diag(): Promise<string[]> {
+      const { readDiag } = await import('~/utils/serialDiagLog')
+      return readDiag().map(line => line.replace(/^\d\d:\d\d:\d\d\.\d{3} /, ''))
+    }
+
+    beforeEach(() => {
+      localStorage.removeItem(DIAG_KEY)
+    })
+
+    afterEach(() => {
+      localStorage.removeItem(DIAG_KEY)
+    })
+
+    it.each([
+      'EVT BOOT reset=poweron ver=0.3.1',
+      'EVT CRASH reason=panic',
+      'EVT USB_HOST=1',
+      'EVT BUS5V on',
+      'EVT ETH_PROBE_OK',
+      'EVT ETH_CONNECTED ip=192.0.2.10',
+      'EVT ETH_DISCONNECTED',
+      'EVT ETH NG code=3',
+      'EVT WS_CONNECTED',
+      'EVT WS_DISCONNECTED',
+      'EVT WS_STALE_RESTART',
+      'EVT WS_DROPPED code=1006',
+      'EVT WS_REBOOT_CMD',
+      'EVT NFC_INIT_NG',
+      'EVT NFC_READY',
+      'EVT ALARM_RESTORED',
+      'EVT OTA OK ver=0.3.2',
+      'EVT OTA NG reason=hash',
+    ])('許可リストの行 (%s) は `dev <行>` で残し、配送も続ける', async (line) => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const events: string[] = []
+      core.onEvent(name => events.push(name))
+
+      dev.emit(`${line}\n`)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(await diag()).toContain(`dev ${line}`)
+      expect(events).toHaveLength(1)
+    })
+
+    it.each([
+      'EVT TENKO_SESSION abc',
+      'EVT NFC_LICENSE issue=20230401 expiry=20280401',
+      'EVT BATT 87',
+      'EVT WS_COMMAND 1 {"action":"get_log"}',
+      'EVT ALARM idle none',
+    ])('許可リスト外の行 (%s) は残さない', async (line) => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      dev.emit(`${line}\n`)
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect((await diag()).filter(l => l.startsWith('dev '))).toEqual([])
     })
   })
 
