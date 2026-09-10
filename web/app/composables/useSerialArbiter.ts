@@ -147,7 +147,7 @@ let scanTimer: ReturnType<typeof setTimeout> | null = null
  */
 interface PendingRequest {
   matchPrefix: string
-  /** これで始まる行が来たら失敗として reject する (`ERR <送った行>`) */
+  /** これで始まる行が来たら失敗として reject する (`ERR <送った行の先頭トークン>`) */
   errPrefix: string
   resolve: (line: string) => void
   reject: (err: Error) => void
@@ -469,8 +469,12 @@ export function useSerialArbiter() {
    * 1 行送って、応答 1 つを待つ (CoreS3 の自動端末登録 #213 / 後続の VoiceS3R 認証で使用)。
    *
    * `line` を書き、その後に届く行のうち `matchPrefix` で始まる最初の行で resolve する。
-   * `ERR <line>` で始まる行が先に来たら、それを reject する (firmware がコマンドを
-   * 認識しつつ失敗を返したとき用)。`timeoutMs` 経過しても届かなければ reject する。
+   * `ERR <送った行の先頭トークン>` で始まる行が先に来たら、それを reject する (firmware が
+   * コマンドを認識しつつ失敗を返したとき用)。先頭トークンだけを見るのは、`AUTH TICKET`
+   * (`ERR AUTH TICKET: …`、送信行をまるごと echo) と `AUTH SIGN <nonce>`
+   * (`ERR AUTH: no key` / `ERR AUTH: bad nonce`、nonce を echo しない) の両方を拾うため
+   * (Refs ippoan/alc-app#214)。同時に待てる request は 1 本なので、他コマンドの ERR を
+   * 誤って拾うことは無い。`timeoutMs` 経過しても届かなければ reject する。
    *
    * **同時に 1 件しか待てない。** 1 件目が待っている間に 2 件目を呼ぶと、2 件目は
    * 書かずに即 reject する (1 件目の完了 or タイムアウトまで待ってから呼び直すこと)。
@@ -506,7 +510,7 @@ export function useSerialArbiter() {
         reject(e)
       }
 
-      pendingRequests.set(s, { matchPrefix, errPrefix: `ERR ${line}`, resolve: doResolve, reject: doReject })
+      pendingRequests.set(s, { matchPrefix, errPrefix: `ERR ${line.split(' ')[0]}`, resolve: doResolve, reject: doReject })
 
       void writeLine(s.writer, line).then((ok) => {
         if (!ok) doReject(new Error(`request(${name}): write failed`))

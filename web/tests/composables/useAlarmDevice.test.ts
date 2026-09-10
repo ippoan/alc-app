@@ -436,6 +436,7 @@ describe('useAlarmDevice', () => {
         'isConnected',
         'isSupported',
         'notifyIntentionalReload',
+        'request',
         'requestPort',
       ])
     })
@@ -833,6 +834,50 @@ describe('useAlarmDevice', () => {
       await alarm.requestPort()
       await vi.advanceTimersByTimeAsync(20000)
       expect(getPorts).not.toHaveBeenCalled()
+    })
+  })
+
+  // ---------- request (#214 警告デバイス認証) ----------
+
+  describe('request', () => {
+    async function connectDevice() {
+      const dev = createMockPort()
+      dev.emit('EVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect()
+      await vi.advanceTimersByTimeAsync(5000)
+      return dev
+    }
+
+    it('行を書いて matchPrefix の応答で resolve する (arbiter.request を CLAIMANT_NAME で呼ぶ)', async () => {
+      const dev = await connectDevice()
+
+      const p = alarm.request('AUTH SIGN abc123', 'AUTH SIG ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('AUTH SIGN abc123\n')
+
+      dev.emit('AUTH SIG pk-1 sig-1\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('AUTH SIG pk-1 sig-1')
+    })
+
+    it('未接続なら reject する (ポートを預かっていない、arbiter の reject がそのまま伝播する)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+
+      await expect(alarm.request('AUTH SIGN abc123', 'AUTH SIG ', 10_000)).rejects.toThrow()
+    })
+
+    it('タイムアウトで reject する', async () => {
+      const dev = await connectDevice()
+      void dev // 応答を送らない
+
+      const p = alarm.request('AUTH SIGN abc123', 'AUTH SIG ', 10_000)
+      // 先に catch ハンドラを付けてから進める (unhandledRejection を避ける)
+      const assertion = expect(p).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await assertion
     })
   })
 })

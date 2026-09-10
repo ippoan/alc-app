@@ -266,6 +266,15 @@ export function useAlarmDevice() {
     useCoreS3Serial().sendGrace()
   }
 
+  /**
+   * 1 行送って応答 1 つを待つ (#214 の警告デバイス認証で使用)。
+   * 実体は arbiter 側 (useSerialArbiter.request) — 警告デバイスが預かっているポートに送る
+   * (useCoreS3Serial.request と同型)。
+   */
+  function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+  }
+
   return {
     isSupported,
     isConnected: readonly(isConnected),
@@ -274,5 +283,6 @@ export function useAlarmDevice() {
     disconnect,
     requestPort,
     notifyIntentionalReload,
+    request,
   }
 }
