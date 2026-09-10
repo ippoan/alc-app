@@ -801,7 +801,7 @@ describe('useSerialArbiter', () => {
       await expect(p1).resolves.toBe('AUTH TICKET abc123 EXPIRES=300')
     })
 
-    it('`ERR <送った行>` で始まる応答は reject する', async () => {
+    it('`ERR <送った行の先頭トークン>` で始まる応答は reject する (送信行をまるごと echo するパターン)', async () => {
       const { dev } = await claimAsCore()
 
       const p = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
@@ -811,6 +811,20 @@ describe('useSerialArbiter', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       dev.emit('ERR AUTH TICKET: not ready\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('先頭トークンだけ一致する ERR も reject する (nonce を echo しない #214 の AUTH SIGN)', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGN abc123', 'AUTH SIG ', 10_000)
+      const assertion = expect(p).rejects.toThrow('ERR AUTH: no key')
+      await vi.advanceTimersByTimeAsync(0)
+
+      // firmware は送った "AUTH SIGN abc123" を echo せず、先頭トークン (AUTH) だけ一致する
+      dev.emit('ERR AUTH: no key\n')
       await vi.advanceTimersByTimeAsync(0)
 
       await assertion
