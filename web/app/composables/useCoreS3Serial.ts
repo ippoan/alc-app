@@ -246,6 +246,14 @@ export function useCoreS3Serial() {
     await arbiter.unregister(CLAIMANT_NAME)
   }
 
+  /**
+   * 1 行送って応答 1 つを待つ (#213 の自動端末登録、後続の VoiceS3R 認証でも使用予定)。
+   * 実体は arbiter 側 (useSerialArbiter.request) — CoreS3 が預かっているポートに送る。
+   */
+  function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+  }
+
   return {
     isSupported,
     isConnected: readonly(isConnected),
@@ -259,5 +267,6 @@ export function useCoreS3Serial() {
     requestPort,
     release,
     disconnect,
+    request,
   }
 }

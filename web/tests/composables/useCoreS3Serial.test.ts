@@ -499,6 +499,33 @@ describe('useCoreS3Serial', () => {
     })
   })
 
+  // ---------- request (#213 CoreS3 自動端末登録) ----------
+
+  describe('request', () => {
+    it('行を書いて matchPrefix の応答で resolve する (arbiter.request を CLAIMANT_NAME で呼ぶ)', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      dev.emit('{"type":"ready"}\n')
+      await connect()
+
+      const p = core.request('AUTH TICKET', 'AUTH TICKET ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('AUTH TICKET\n')
+
+      dev.emit('AUTH TICKET tkt-1 EXPIRES=300\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('AUTH TICKET tkt-1 EXPIRES=300')
+    })
+
+    it('未接続なら reject する (ポートを預かっていない)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+
+      await expect(core.request('AUTH TICKET', 'AUTH TICKET ', 10_000)).rejects.toThrow()
+    })
+  })
+
   // ---------- 公開 API の形 ----------
 
   it('navigator.serial は直接触らない (列挙は arbiter 経由)', async () => {

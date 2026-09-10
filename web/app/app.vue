@@ -4,6 +4,11 @@ import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
 
 const { init, isLoading } = useAuth()
 const { isAndroidApp } = useFingerprint()
+// CoreS3 が USB で繋がっていれば管理者ログイン無しで端末登録する (#213)。
+// タブ・ロールに関わらず常時アクティブにするため app.vue で 1 回だけ呼ぶ (listener は
+// module 内で 1 度しか登録されない — 詳細は useHubClaim.ts)。TimePunchKiosk はこことは
+// 別に自分でも呼び、失敗理由 (lastError) だけを読んでバナーに出す。
+useHubClaim()
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase as string
 const stagingTenantId = config.public.stagingTenantId as string

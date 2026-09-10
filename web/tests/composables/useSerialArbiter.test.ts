@@ -747,6 +747,94 @@ describe('useSerialArbiter', () => {
       expect(await mod.writeLine(ngWriter, 'HB OK')).toBe(false)
     })
   })
+
+  // ---------- request (#213 CoreS3 自動端末登録 / 後続の VoiceS3R 認証) ----------
+
+  describe('request', () => {
+    /** 'core' を claim させてから返す (writer への直アクセス用に seen も返す) */
+    async function claimAsCore() {
+      const dev = createMockPort()
+      dev.emit('CORE hello\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant('CORE', 'ZZZ')
+      arbiter.register('core', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(seen.opened).toBe(1)
+      return { dev, seen }
+    }
+
+    it('行を書いて matchPrefix で始まる応答で resolve する (onLine への配送は壊さない)', async () => {
+      const { dev, seen } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('AUTH TICKET\n')
+
+      dev.emit('AUTH TICKET abc123 EXPIRES=300\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await expect(p).resolves.toBe('AUTH TICKET abc123 EXPIRES=300')
+      // 既存の行配送 (onLine) は変えない — claimant にも同じ行が届く
+      expect(seen.lines).toContain('AUTH TICKET abc123 EXPIRES=300')
+    })
+
+    it('`ERR <送った行>` で始まる応答は reject する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
+      // reject より前に handler を付けておく (付ける前に settle すると
+      // vitest が "Unhandled Rejection" として拾ってしまうため)
+      const assertion = expect(p).rejects.toThrow('ERR AUTH TICKET: not ready')
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('ERR AUTH TICKET: not ready\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('無関係な行では resolve も reject もせず、timeoutMs で reject する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
+      const assertion = expect(p).rejects.toThrow(/timeout/)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('EVT SOMETHING else\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      await assertion
+    })
+
+    it('書き込みに失敗したら reject する', async () => {
+      const { seen } = await claimAsCore()
+      ;(seen.writer as unknown as { write: ReturnType<typeof vi.fn> }).write
+        = vi.fn().mockRejectedValueOnce(new Error('write failed'))
+
+      const p = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
+      await expect(p).rejects.toThrow('write failed')
+    })
+
+    it('その名前でポートを預かっていなければ書かずに即 reject する', async () => {
+      await load()
+      await expect(arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000))
+        .rejects.toThrow('ポートを預かっていません')
+    })
+
+    it('待っている間にポートを失ったら reject する (抜線・release)', async () => {
+      await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
+      const assertion = expect(p).rejects.toThrow(/port closed/)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await arbiter.release('core')
+
+      await assertion
+    })
+  })
 })
 
 // ---------- 診断ログ (#197) ----------

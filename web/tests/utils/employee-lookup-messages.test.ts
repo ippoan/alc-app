@@ -4,6 +4,7 @@ import {
   employeeNotFoundByCode,
   noPendingSchedule,
   deviceUnregisteredMessage,
+  autoClaimFailedMessage,
 } from '~/utils/employee-lookup-messages'
 
 describe('employee-lookup-messages', () => {
@@ -28,5 +29,11 @@ describe('employee-lookup-messages', () => {
   it('deviceUnregisteredMessage は未登録であることとペアリングが要ることを言う', () => {
     expect(deviceUnregisteredMessage).toContain('登録されていません')
     expect(deviceUnregisteredMessage).toContain('ペアリング')
+  })
+
+  it('autoClaimFailedMessage は CoreS3 経由であることと理由を含む', () => {
+    const msg = autoClaimFailedMessage('http 404')
+    expect(msg).toContain('CoreS3')
+    expect(msg).toContain('http 404')
   })
 })

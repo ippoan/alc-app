@@ -126,6 +126,10 @@ branches = true
 path = "app/composables/useCoreS3Serial.ts"
 branches = true
 
+[[files]]
+path = "app/composables/useHubClaim.ts"
+branches = true
+
 # --- plugins ---
 
 [[files]]
