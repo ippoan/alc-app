@@ -479,9 +479,13 @@ export function useSerialArbiter() {
    * (`useCoreS3Serial.write` の `HB` heartbeat 等、無関係な書き込みは通る)。
    */
   function request(name: string, line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
-    const s = held.get(name)
-    if (!s) return Promise.reject(new Error(`request(${name}): ポートを預かっていません`))
-    if (pendingRequests.has(s)) return Promise.reject(new Error(`request(${name}): 既に応答待ちです`))
+    const held_ = held.get(name)
+    if (!held_) return Promise.reject(new Error(`request(${name}): ポートを預かっていません`))
+    if (pendingRequests.has(held_)) return Promise.reject(new Error(`request(${name}): 既に応答待ちです`))
+    // ↑ の narrowing はネストした function 宣言 (下の doResolve/doReject) の中までは
+    // 効かない (TS が閉包越しに const の絞り込みを保持しない) ので、常に非 undefined な
+    // 別の const に積み直す
+    const s: PortSession = held_
 
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {

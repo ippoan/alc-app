@@ -33,8 +33,8 @@ const TICKET_MATCH_PREFIX = 'AUTH TICKET '
 
 /** `AUTH TICKET <ticket> EXPIRES=<秒>` を解く。マッチしなければ null */
 function parseTicketLine(line: string): { ticket: string } | null {
-  const m = line.match(/^AUTH TICKET (\S+) EXPIRES=\d+$/)
-  return m ? { ticket: m[1] } : null
+  const ticket = line.match(/^AUTH TICKET (\S+) EXPIRES=\d+$/)?.[1]
+  return ticket ? { ticket } : null
 }
 
 /** 直近の失敗理由 (画面表示用)。成功 / 未実行なら null */
