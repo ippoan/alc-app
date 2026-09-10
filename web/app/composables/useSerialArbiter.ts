@@ -22,11 +22,14 @@
  * 叩かない)。
  *
  * 診断ログ (`[SERIAL]`、Refs ippoan/alc-app#197): scan の開始 / セッションを閉じた理由 /
- * 60 秒再訪は常時。候補ごとの claim・見送り・open 失敗は本番のノイズになるので
- * `localStorage.alc_debug_serial=1` の端末だけ。
+ * 60 秒再訪 / connect イベント / close 失敗はコンソールに常時。候補ごとの claim・見送り・
+ * open 失敗は本番のノイズになるので、コンソールへは `localStorage.alc_debug_serial=1` の
+ * 端末だけ。どちらも診断ログの置き場 (utils/serialDiagLog) へは常に貯め、遠隔からは
+ * CoreS3 の `get_log` 経由で読む (Refs ippoan/alc-app#223)。
  */
 
 import { isWebSerialSupported } from '~/utils/webserial'
+import { appendDiag } from '~/utils/serialDiagLog'
 import { onPortConnected } from '~/composables/useSerialDeviceManager'
 
 /**
@@ -83,13 +86,28 @@ export function msSinceLoad(): number {
   return Math.round(performance.now())
 }
 
-function log(message: string): void {
+function print(message: string): void {
   console.log(`[SERIAL] ${message} (+${msSinceLoad()}ms)`)
 }
 
-/** 候補ごとの行。`localStorage.alc_debug_serial=1` のときだけ出す */
+/** 常時の行。コンソールと診断ログの置き場の両方へ */
+function log(message: string): void {
+  appendDiag(message)
+  print(message)
+}
+
+/**
+ * 候補ごとの行。置き場へは常に貯め、コンソールへは `localStorage.alc_debug_serial=1`
+ * のときだけ出す (Refs ippoan/alc-app#223)
+ */
 function debug(message: string): void {
-  if (localStorage.getItem(DEBUG_KEY) === '1') log(message)
+  appendDiag(message)
+  if (localStorage.getItem(DEBUG_KEY) === '1') print(message)
+}
+
+/** 例外の名前だけ (message は環境ごとの文言が入りうるので記録しない) */
+function errorName(e: unknown): string {
+  return e instanceof Error ? e.name : 'unknown'
 }
 
 /**
@@ -234,6 +252,7 @@ export function useSerialArbiter() {
    * 即予約する。
    */
   function handlePortConnected(port: SerialPort): void {
+    log('connect event')
     passedOver.delete(toRaw(port))
     if (scanning) {
       rescanRequested = true
@@ -263,7 +282,11 @@ export function useSerialArbiter() {
     try { s.writer.releaseLock() } catch {}
     try { await s.reader.cancel() } catch {}
     try { s.reader.releaseLock() } catch {}
-    try { await closePortQuietly(s.port) } catch {}
+    try { await closePortQuietly(s.port) }
+    catch (e) {
+      // 失敗するとポートが管理外に残りうる (掴み直さない症状の有力候補)。直す前にまず記録する
+      log(`close failed name=${errorName(e)}`)
+    }
     if (owner) owner.claimant.onClose()
   }
 
@@ -293,7 +316,7 @@ export function useSerialArbiter() {
       s.active = false
       s.buffer = ''
       // 預けたあとに終わった = 抜線・クラッシュ → 返させて掴み直しへ
-      if (s.owner) await release(s.owner.name)
+      if (s.owner) await release(s.owner.name, 'read_end')
     }
   }
 
@@ -376,9 +399,9 @@ export function useSerialArbiter() {
     try {
       await candidate.open(SERIAL_OPTIONS)
     }
-    catch {
+    catch (e) {
       // InvalidStateError = 他の探索者が使用中 → 印を残さず次の候補へ
-      debug('open failed (in use by another explorer?) -> next candidate')
+      debug(`open failed name=${errorName(e)}`)
       return
     }
 
@@ -494,12 +517,15 @@ export function useSerialArbiter() {
     }
   }
 
-  /** 預かったポートを返す (抜線・書き込み失敗など) → 掴み直しへ */
-  async function release(name: string): Promise<void> {
+  /**
+   * 預かったポートを返す (抜線・書き込み失敗など) → 掴み直しへ。
+   * `reason` (`read_end` / `write_failed` 等) は診断ログに残すだけ
+   */
+  async function release(name: string, reason?: string): Promise<void> {
     const s = held.get(name)
     if (!s) return
     held.delete(name)
-    await closeSession(s, `release(${name})`)
+    await closeSession(s, reason ? `release(${name}) reason=${reason}` : `release(${name})`)
     scheduleScan(RESCAN_INTERVAL)
   }
 

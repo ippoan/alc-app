@@ -195,3 +195,7 @@ branches = true
 [[files]]
 path = "app/utils/reload-reason.ts"
 branches = true
+
+[[files]]
+path = "app/utils/serialDiagLog.ts"
+branches = true

@@ -29,11 +29,18 @@
  * 意図した reload の直前だけ `HB OK grace=45` を 1 行送り、その 1 回の沈黙の猶予を
  * 広げてもらう (sendGrace、呼び口は useAlarmDevice.notifyIntentionalReload。
  * Refs ippoan/alc-app-s3#192)。
+ *
+ * CoreS3 が遠隔から `get_log` を受けると、`EVT WS_COMMAND <id> {"action":"get_log",…}` を
+ * 1 行流して PWA に問い合わせる。PWA はシリアル診断ログの置き場 (utils/serialDiagLog) の
+ * 新しい行を `PWALOG <id> <行>` で返し、`PWALOG END <id> <送った行数>` で閉じる。CoreS3 は
+ * それを `get_log` の応答の `pwa_log` に載せる (Refs ippoan/alc-app#223)。古い firmware は
+ * `PWALOG` を知らず `ERR` を 1 行返すだけ (害なし)。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { HEARTBEAT_INTERVAL, RELOAD_GRACE_SEC } from '~/composables/useAlarmDevice'
 import { writeLine } from '~/composables/useSerialArbiter'
+import { readDiag } from '~/utils/serialDiagLog'
 
 /** arbiter に登録する名前 */
 const CLAIMANT_NAME = 'cores3'
@@ -45,6 +52,14 @@ const CLAIMANT_NAME = 'cores3'
  * 受け取ったあとでも isConnected / onOpen で接続を知れる。
  */
 const CLAIM_TIMEOUT = 3000
+
+/** CoreS3 が下り command を中継する行の接頭辞 (`EVT WS_COMMAND <id> <payload>`) */
+const WS_COMMAND_PREFIX = 'EVT WS_COMMAND '
+/** `get_log` に返す上限。CoreS3 の応答 1 通に収めるため */
+const LOG_REPLY_MAX_LINES = 40
+const LOG_REPLY_MAX_BYTES = 1200
+/** `PWALOG` の行を送る間隔 (CoreS3 の受信を溢れさせない。40 行で約 0.4 秒) */
+const LOG_REPLY_INTERVAL = 10
 
 /** 行の素性。CoreS3 のものか、警告デバイスのものか、どちらとも言えないか */
 type LineKind = 'json' | 'status' | 'event' | 'alarm' | 'unknown'
@@ -65,6 +80,9 @@ let held: WritableStreamDefaultWriter<Uint8Array> | null = null
 /** 走っている heartbeat のタイマー (未接続なら null) */
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
+/** いちばん新しい `get_log` の返信の番号。上がったら古い返信は打ち切る */
+let logReplyGeneration = 0
+
 /**
  * 行の接頭辞から素性を決める。
  *
@@ -76,6 +94,39 @@ function classify(line: string): LineKind {
   if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'status'
   if (line.startsWith('EVT ')) return 'event'
   return 'unknown'
+}
+
+/** `EVT WS_COMMAND <id> <payload>` の action が `get_log` なら `<id>`、それ以外は null */
+function logQueryId(line: string): string | null {
+  if (!line.startsWith(WS_COMMAND_PREFIX)) return null
+  const rest = line.slice(WS_COMMAND_PREFIX.length)
+  const sep = rest.indexOf(' ')
+  if (sep <= 0) return null
+  try {
+    const payload = JSON.parse(rest.slice(sep + 1)) as { action?: unknown } | null
+    return payload?.action === 'get_log' ? rest.slice(0, sep) : null
+  }
+  catch {
+    return null
+  }
+}
+
+/**
+ * 置き場の新しい行から、`LOG_REPLY_MAX_LINES` 行・`LOG_REPLY_MAX_BYTES` バイト (UTF-8) に
+ * 収まる分を選び、古い順に並べて返す
+ */
+function pickLogLines(lines: string[]): string[] {
+  const encoder = new TextEncoder()
+  const picked: string[] = []
+  let bytes = 0
+  for (const line of [...lines].reverse()) {
+    if (picked.length >= LOG_REPLY_MAX_LINES) break
+    const size = encoder.encode(line).length
+    if (bytes + size > LOG_REPLY_MAX_BYTES) break
+    bytes += size
+    picked.push(line)
+  }
+  return picked.reverse()
 }
 
 export function useCoreS3Serial() {
@@ -110,8 +161,34 @@ export function useCoreS3Serial() {
   function handleLine(line: string): void {
     const kind = classify(line)
     if (kind === 'json') dispatchJson(line)
-    else if (kind === 'event') dispatchEvent(line)
+    else if (kind === 'event') {
+      dispatchEvent(line)
+      const queryId = logQueryId(line)
+      if (queryId !== null) void replyLog(queryId)
+    }
     // 'status' (名乗りそのもの) / 'alarm' / 'unknown' は捨てる
+  }
+
+  // --- get_log への返信 ---
+
+  /**
+   * `PWALOG <id> <行>` を 10 ms 間隔で送り、`PWALOG END <id> <n>` で閉じる。
+   *
+   * 書き込みは `write()` ではなく arbiter の `writeLine` を直に使う — 診断の返信の失敗で
+   * ポートを返して (release して) 掴み直しを起こさないため。1 行でも失敗したら残りは
+   * 打ち切る。返信中に次の `get_log` が来た・ポートを失った・掴み直した、のいずれでも
+   * 古い返信はそこで止める。
+   */
+  async function replyLog(id: string): Promise<void> {
+    const generation = ++logReplyGeneration
+    const writer = held
+    const lines = pickLogLines(readDiag()).map(line => `PWALOG ${id} ${line}`)
+    lines.push(`PWALOG END ${id} ${lines.length}`)
+    for (const [i, line] of lines.entries()) {
+      if (i > 0) await new Promise(resolve => setTimeout(resolve, LOG_REPLY_INTERVAL))
+      if (generation !== logReplyGeneration || held !== writer || !writer) return
+      if (!await writeLine(writer, line)) return
+    }
   }
 
   // --- heartbeat ---
@@ -213,7 +290,7 @@ export function useCoreS3Serial() {
   async function write(line: string): Promise<boolean> {
     if (!held) return false
     const ok = await writeLine(held, line)
-    if (!ok) await arbiter.release(CLAIMANT_NAME)
+    if (!ok) await arbiter.release(CLAIMANT_NAME, 'write_failed')
     return ok
   }
 
