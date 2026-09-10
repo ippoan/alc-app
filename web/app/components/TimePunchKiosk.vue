@@ -9,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const nfc = useNfcWebSocket()
+const coreS3 = useCoreS3Serial()
 const { accessToken } = useAuth()
 const { deviceModel } = useFingerprint()
 const KYOCERA_MODELS = ['KC-T305CN', 'KC-305CN', 'KYT35', 'A404KC', 'KC-T306']
@@ -54,6 +55,13 @@ const watch$ = useTimecardWatch({
   getToken: () => accessToken.value ?? getDeviceJwt(),
   onChange: () => { void loadTodayPunches() },
 })
+
+/**
+ * NFC 待機表示の 3 状態 (Refs ippoan/alc-app#216)。
+ * CoreS3 が USB 直結されていれば最優先 (打刻は CoreS3 firmware 自身が行う)、
+ * 次に PC の NFC ブリッジ、どちらも無ければ未接続。
+ */
+const nfcState = computed(() => coreS3.isConnected.value ? 'core' : nfc.isConnected.value ? 'bridge' : 'none')
 
 const isLargeScreen = ref(false)
 function updateScreenSize() {
@@ -110,6 +118,8 @@ onMounted(async () => {
   await loadTodayPunches()
   void watch$.connect()
 
+  // CoreS3 直結の読み取りは購読しない — 打刻は CoreS3 firmware 自身が `kind=timecard` で
+  // 送る (alc-app-s3 hub-drivers/timecard.rs)。ここで useNfcReader() に切り替えると 1 タップが 2 行になる
   nfc.connect()
   nfc.onRead(async (event) => {
     if (processing.value) return
@@ -198,10 +208,12 @@ function formatTime(iso: string): string {
         <div class="mt-4 flex items-center justify-center gap-2 text-sm">
           <span
             class="w-2 h-2 rounded-full"
-            :class="nfc.isConnected.value ? 'bg-green-500' : 'bg-red-500'"
+            :class="nfcState !== 'none' ? 'bg-green-500' : 'bg-red-500'"
           />
           <span class="text-gray-500">
-            {{ nfc.isConnected.value ? 'NFC ブリッジ接続中' : 'NFC ブリッジ未接続' }}
+            {{ nfcState === 'core' ? 'NFC 端末接続中 (端末が打刻します)'
+              : nfcState === 'bridge' ? 'NFC ブリッジ接続中'
+                : 'NFC リーダー未接続' }}
           </span>
         </div>
         <!-- インラインエラー -->
