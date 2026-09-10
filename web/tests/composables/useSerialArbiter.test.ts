@@ -780,6 +780,27 @@ describe('useSerialArbiter', () => {
       expect(seen.lines).toContain('AUTH TICKET abc123 EXPIRES=300')
     })
 
+    it('応答待ち中に 2 件目を呼ぶと書かずに即 reject する (同時に 1 件しか待てない)', async () => {
+      const { dev } = await claimAsCore()
+
+      const p1 = arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.filter(w => w === 'AUTH TICKET\n')).toHaveLength(1)
+
+      await expect(arbiter.request('core', 'AUTH SIGN', 'AUTH SIGN ', 10_000))
+        .rejects.toThrow('既に応答待ちです')
+      // 2 件目は書かれていない (1 件目の応答待ちのみ)
+      expect(dev.writes).not.toContain('AUTH SIGN\n')
+
+      // 1 件目は生きたまま — 待っている間も他の writeLine (HB 等) は塞がない
+      expect(await mod.writeLine(dev.port.writable.getWriter(), 'HB OK')).toBe(true)
+      expect(dev.writes).toContain('HB OK\n')
+
+      dev.emit('AUTH TICKET abc123 EXPIRES=300\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p1).resolves.toBe('AUTH TICKET abc123 EXPIRES=300')
+    })
+
     it('`ERR <送った行>` で始まる応答は reject する', async () => {
       const { dev } = await claimAsCore()
 

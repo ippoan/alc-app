@@ -472,13 +472,16 @@ export function useSerialArbiter() {
    * `ERR <line>` で始まる行が先に来たら、それを reject する (firmware がコマンドを
    * 認識しつつ失敗を返したとき用)。`timeoutMs` 経過しても届かなければ reject する。
    *
-   * 同時に 1 件しか待てない (2 件目を呼ぶと 1 件目は sessionの入れ替えで上書きされ、
-   * 待ち続けたまま応答を受け取れなくなる) — 呼び出し側は await してから次を呼ぶこと。
-   * 既存の行配送 (`onLine` / `onEvent` 等) は変えない。
+   * **同時に 1 件しか待てない。** 1 件目が待っている間に 2 件目を呼ぶと、2 件目は
+   * 書かずに即 reject する (1 件目の完了 or タイムアウトまで待ってから呼び直すこと)。
+   * `matchPrefix`/`errPrefix` のどちらにも当てはまらない行は横取りせず、判定だけして
+   * そのまま `onLine` へ流す。**待っている間も `writeLine` 自体は塞がない**
+   * (`useCoreS3Serial.write` の `HB` heartbeat 等、無関係な書き込みは通る)。
    */
   function request(name: string, line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
     const s = held.get(name)
     if (!s) return Promise.reject(new Error(`request(${name}): ポートを預かっていません`))
+    if (pendingRequests.has(s)) return Promise.reject(new Error(`request(${name}): 既に応答待ちです`))
 
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
