@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { readDiag } from '~/utils/serialDiagLog'
+
 const {
   isConnected,
   state,
@@ -47,6 +49,27 @@ function formatSeconds(totalSeconds: number): string {
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   return `${hours}時間${minutes}分`
 }
+
+// シリアル診断ログ (CoreS3 が繋がらず get_log で読めないときの逃げ道、Refs ippoan/alc-app#223)
+const diagLines = ref<string[]>([])
+const diagCopyResult = ref<'ok' | 'ng' | null>(null)
+
+function reloadDiag() {
+  diagLines.value = readDiag()
+  diagCopyResult.value = null
+}
+
+async function copyDiag() {
+  try {
+    await navigator.clipboard.writeText(diagLines.value.join('\n'))
+    diagCopyResult.value = 'ok'
+  }
+  catch {
+    diagCopyResult.value = 'ng'
+  }
+}
+
+onMounted(reloadDiag)
 </script>
 
 <template>
@@ -232,6 +255,40 @@ function formatSeconds(totalSeconds: number): string {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- シリアル診断ログ -->
+    <div class="w-full max-w-lg mt-4">
+      <div class="bg-white rounded-2xl p-6 shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold text-gray-700">シリアル診断ログ</h2>
+          <div class="flex gap-2">
+            <button
+              class="px-3 py-1 bg-gray-100 text-gray-600 rounded-lg text-sm hover:bg-gray-200 transition-colors"
+              @click="reloadDiag"
+            >
+              再読み込み
+            </button>
+            <button
+              class="px-3 py-1 bg-gray-100 text-gray-600 rounded-lg text-sm hover:bg-gray-200 transition-colors"
+              :disabled="diagLines.length === 0"
+              @click="copyDiag"
+            >
+              コピー
+            </button>
+          </div>
+        </div>
+        <p class="text-sm text-gray-500 mb-2">
+          USB シリアルの接続・切断の記録 (最新 {{ diagLines.length }} 行)
+          <span v-if="diagCopyResult === 'ok'" class="text-green-600 ml-2">コピーしました</span>
+          <span v-else-if="diagCopyResult === 'ng'" class="text-red-600 ml-2">コピーできませんでした</span>
+        </p>
+        <pre
+          v-if="diagLines.length > 0"
+          class="max-h-64 overflow-y-auto bg-gray-50 rounded-lg p-3 text-xs font-mono text-gray-700 whitespace-pre-wrap break-all"
+        >{{ diagLines.join('\n') }}</pre>
+        <p v-else class="text-sm text-gray-400">記録はまだありません</p>
       </div>
     </div>
 

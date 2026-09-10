@@ -358,6 +358,178 @@ describe('useCoreS3Serial', () => {
       expect(core.isConnected.value).toBe(false)
       expect(dev.port.close).toHaveBeenCalledTimes(1)
     })
+
+    it('書き込み失敗で返したときは診断ログに reason=write_failed を残す', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      dev.setWriteError(true)
+
+      await core.write('{"cmd":"reset"}')
+
+      const { readDiag } = await import('~/utils/serialDiagLog')
+      expect(readDiag().some(line => line.endsWith('close port of cores3: release(cores3) reason=write_failed'))).toBe(true)
+    })
+  })
+
+  // ---------- get_log の問い合わせ (Refs ippoan/alc-app#223) ----------
+
+  /**
+   * CoreS3 は遠隔の `get_log` を `EVT WS_COMMAND <id> <payload>` で PWA に問い合わせる。
+   * PWA は置き場 (alc_serial_diag) の行を `PWALOG <id> <行>` で返し `PWALOG END <id> <n>` で閉じる。
+   */
+  describe('get_log', () => {
+    const DIAG_KEY = 'alc_serial_diag'
+
+    function setDiag(lines: string[]): void {
+      localStorage.setItem(DIAG_KEY, JSON.stringify(lines))
+    }
+
+    function getLog(id: string): string {
+      return `EVT WS_COMMAND ${id} {"action":"get_log","lines":40}\n`
+    }
+
+    function replies(dev: MockPortHandle): string[] {
+      return dev.writes.filter(line => line.startsWith('PWALOG '))
+    }
+
+    beforeEach(() => {
+      localStorage.removeItem(DIAG_KEY)
+    })
+
+    afterEach(() => {
+      localStorage.removeItem(DIAG_KEY)
+    })
+
+    it('PWALOG <id> <行> を古い順に 10 ms 間隔で送り、PWALOG END <id> <n> で閉じる', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const events: string[] = []
+      core.onEvent(name => events.push(name))
+      setDiag(['a', 'b', 'c'])
+
+      dev.emit(getLog('42'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(replies(dev)).toEqual(['PWALOG 42 a\n'])
+
+      await vi.advanceTimersByTimeAsync(10)
+      expect(replies(dev)).toEqual(['PWALOG 42 a\n', 'PWALOG 42 b\n'])
+
+      await vi.advanceTimersByTimeAsync(20)
+      expect(replies(dev)).toEqual(['PWALOG 42 a\n', 'PWALOG 42 b\n', 'PWALOG 42 c\n', 'PWALOG END 42 3\n'])
+      // 既存の EVT の配送は変えない
+      expect(events).toEqual(['WS_COMMAND'])
+    })
+
+    it('置き場が空なら PWALOG END <id> 0 だけ', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      localStorage.removeItem(DIAG_KEY)
+
+      dev.emit(getLog('7'))
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(replies(dev)).toEqual(['PWALOG END 7 0\n'])
+    })
+
+    it('最大 40 行 (新しい行を優先し、送る順は古い順)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      setDiag(Array.from({ length: 50 }, (_, i) => `l${i}`))
+
+      dev.emit(getLog('1'))
+      await vi.advanceTimersByTimeAsync(1000)
+
+      const sent = replies(dev)
+      expect(sent).toHaveLength(41)
+      expect(sent[0]).toBe('PWALOG 1 l10\n')
+      expect(sent[39]).toBe('PWALOG 1 l49\n')
+      expect(sent[40]).toBe('PWALOG END 1 40\n')
+    })
+
+    it('合計 1200 バイト (UTF-8) に収まる分だけ (新しい行を優先)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      // 1 行 = 3 + 3×49 = 150 バイト (52 文字)。8 行でちょうど 1200 バイト
+      setDiag(Array.from({ length: 10 }, (_, i) => `${String(i).padStart(3, '0')}${'あ'.repeat(49)}`))
+
+      dev.emit(getLog('9'))
+      await vi.advanceTimersByTimeAsync(1000)
+
+      const sent = replies(dev)
+      expect(sent).toHaveLength(9)
+      expect(sent[0]!.startsWith('PWALOG 9 002')).toBe(true)
+      expect(sent[7]!.startsWith('PWALOG 9 009')).toBe(true)
+      expect(sent[8]).toBe('PWALOG END 9 8\n')
+    })
+
+    it.each([
+      ['他の action', 'EVT WS_COMMAND 1 {"action":"measure"}\n'],
+      ['JSON でない payload', 'EVT WS_COMMAND 1 get_log\n'],
+      ['payload が null', 'EVT WS_COMMAND 1 null\n'],
+      ['payload が無い', 'EVT WS_COMMAND 1\n'],
+      ['id が空', 'EVT WS_COMMAND  {"action":"get_log"}\n'],
+      ['WS_COMMAND 以外の EVT', 'EVT OTHER 1 {"action":"get_log"}\n'],
+    ])('%s では何も送らない', async (_label, line) => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      setDiag(['a'])
+
+      dev.emit(line)
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+    })
+
+    it('送信に失敗したら残りを打ち切り、ポートは返さない (release しない)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      setDiag(['a', 'b', 'c'])
+      dev.port.writable.getWriter().write.mockRejectedValueOnce(new Error('write failed'))
+
+      dev.emit(getLog('5'))
+      await vi.advanceTimersByTimeAsync(100)
+
+      // 1 行目で失敗 → 残り (b, c, END) は送らない
+      expect(replies(dev)).toEqual([])
+      expect(core.isConnected.value).toBe(true)
+      expect(dev.port.close).not.toHaveBeenCalled()
+
+      // 接続は生きている (heartbeat が続く)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('返信の途中で別の id が来たら、古い返信を打ち切って新しい方に答える', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      setDiag(['a', 'b', 'c'])
+
+      dev.emit(getLog('1'))
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit(getLog('2'))
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(replies(dev)).toEqual([
+        'PWALOG 1 a\n',
+        'PWALOG 2 a\n',
+        'PWALOG 2 b\n',
+        'PWALOG 2 c\n',
+        'PWALOG END 2 3\n',
+      ])
+    })
+
+    it('返信の途中でポートを失ったら止める', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      setDiag(['a', 'b', 'c'])
+
+      dev.emit(getLog('3'))
+      await vi.advanceTimersByTimeAsync(0)
+      await core.release()
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(replies(dev)).toEqual(['PWALOG 3 a\n'])
+    })
   })
 
   // ---------- heartbeat ----------

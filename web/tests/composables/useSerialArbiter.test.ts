@@ -1102,8 +1102,117 @@ describe('useSerialArbiter 診断ログ', () => {
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(serialLogs()).toContain('open failed (in use by another explorer?) -> next candidate')
+      expect(serialLogs()).toContain('open failed name=InvalidStateError')
       expect(serialLogs()).toContain('no readable/writable stream -> close')
+    })
+  })
+
+  // ---------- 置き場 (alc_serial_diag、Refs ippoan/alc-app#223) ----------
+
+  describe('診断ログの置き場', () => {
+    beforeEach(() => {
+      localStorage.removeItem('alc_serial_diag')
+    })
+
+    afterEach(() => {
+      localStorage.removeItem('alc_serial_diag')
+    })
+
+    /** 置き場の行 (先頭の `HH:MM:SS.mmm ` を落とした本文) */
+    async function diag(): Promise<string[]> {
+      const { readDiag } = await import('~/utils/serialDiagLog')
+      return readDiag().map(line => line.replace(/^\d\d:\d\d:\d\d\.\d{3} /, ''))
+    }
+
+    it('alc_debug_serial が無くても debug の行は置き場に入る (コンソールには出ない)', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(await diag()).toEqual([
+        'scan start: candidates=1 pending=alarm',
+        'claimed by alarm (probe lines=1)',
+      ])
+      // コンソールへの debug 出力は今までどおりフラグ次第
+      expect(serialLogs()).not.toContain('claimed by alarm (probe lines=1)')
+    })
+
+    it.each([
+      [new DOMException('busy', 'InvalidStateError'), 'open failed name=InvalidStateError'],
+      ['not an error', 'open failed name=unknown'],
+    ])('open 失敗はエラー名だけ残す (%s)', async (openError, expected) => {
+      const busy = createMockPort({ openError: openError as Error })
+      installSerialMock({ getPorts: vi.fn(async () => [busy.port]) })
+      await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(await diag()).toContain(expected)
+    })
+
+    it('connect イベントを残す (コンソールにも出す)', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      emitConnect(createMockPort().port)
+
+      expect(await diag()).toContain('connect event')
+      expect(serialLogs()).toContain('connect event')
+    })
+
+    it('close の失敗はエラー名を残す (握りつぶさない)', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      dev.port.close.mockRejectedValueOnce(new DOMException('gone', 'NetworkError'))
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await arbiter.release('alarm')
+
+      expect(await diag()).toContain('close failed name=NetworkError')
+      // 後始末 (onClose) は続ける
+      expect(seen.closed).toBe(1)
+    })
+
+    it('受信ループが終わった (抜線) release は reason=read_end を残す', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.push({ value: undefined, done: true })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(await diag()).toContain('close port of alarm: release(alarm) reason=read_end')
+    })
+
+    it('release に渡した理由を残す (理由なしは今までの行のまま)', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await arbiter.release('alarm', 'write_failed')
+
+      expect(await diag()).toContain('close port of alarm: release(alarm) reason=write_failed')
+      expect(serialLogs()).toContain('close port of alarm: release(alarm) reason=write_failed')
     })
   })
 })
