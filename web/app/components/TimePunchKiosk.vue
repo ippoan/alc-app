@@ -37,6 +37,13 @@ let highlightTimer: ReturnType<typeof setTimeout> | null = null
 const { getDeviceJwt } = useDeviceToken()
 
 /**
+ * CoreS3 経由の自動端末登録 (#213) の失敗理由。成功 / 未実行なら null。
+ * 登録の実行自体は app.vue が常時アクティブにしている (ここでは呼ぶ理由が useHubClaim.ts
+ * の listener 二重登録ガードに書いてあるとおり、lastError を読むためだけに呼ぶ)。
+ */
+const { lastError: hubClaimError } = useHubClaim()
+
+/**
  * 打刻更新の購読 (Refs ippoan/alc-app-s3#134)。**管理画面と同じ composable。**
  * 他の端末 (NFC タイムカード端末や別のキオスク) で打たれた打刻も、この画面の
  * 「本日の打刻履歴」に出したいので購読する。トークンはキオスクの device JWT、
@@ -164,6 +171,14 @@ function formatTime(iso: string): string {
       <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-6']">
         <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">タイムカード</h1>
       </header>
+
+      <!-- CoreS3 経由の自動端末登録 (#213) の失敗バナー -->
+      <div
+        v-if="hubClaimError"
+        :class="['w-full mb-3 px-4 py-2 bg-red-50 text-red-600 text-sm font-medium rounded-lg text-center', landscape ? '' : 'max-w-md']"
+      >
+        {{ hubClaimError }}
+      </div>
 
       <!-- NFC 待機カード -->
       <div :class="['w-full bg-white rounded-2xl shadow-sm border p-6 text-center', landscape ? '' : 'max-w-md']">

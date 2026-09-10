@@ -138,6 +138,22 @@ const passedOver = new Map<SerialPort, number>()
 let scanning = false
 let scanTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * `request()` が待っている応答 (session ごとに高々 1 件)。
+ *
+ * CoreS3 の自動端末登録 (#213) や後続の VoiceS3R 認証など、「1 行送って応答 1 つを
+ * 待つ」型のやり取りに使う。既存の行配送 (`owner.claimant.onLine`) はそのまま動かし
+ * 続け、これはそれに割り込んで見るだけ (二重配送だが、対象外の行は利用側で無視される)。
+ */
+interface PendingRequest {
+  matchPrefix: string
+  /** これで始まる行が来たら失敗として reject する (`ERR <送った行>`) */
+  errPrefix: string
+  resolve: (line: string) => void
+  reject: (err: Error) => void
+}
+const pendingRequests = new Map<PortSession, PendingRequest>()
+
 /** いま arbiter が握っているポートか (他の探索者がこれを掴まないための口) */
 export function isArbitratedPort(port: SerialPort): boolean {
   for (const s of sessions) {
@@ -204,6 +220,10 @@ export function useSerialArbiter() {
   // --- ストリーム ---
 
   async function closeSession(s: PortSession, reason: string): Promise<void> {
+    // 待っている request() があれば、応答が来ないまま宙に浮かせず reject する
+    // (reject 自体が pendingRequests から自分を消すので、ここでの delete は不要)
+    const pendingRequest = pendingRequests.get(s)
+    if (pendingRequest) pendingRequest.reject(new Error(`request: port closed (${reason})`))
     // 受信ループの finally が二重に release を呼ばないよう、先に持ち主を落とす
     const owner = s.owner
     s.owner = null
@@ -286,6 +306,13 @@ export function useSerialArbiter() {
       void pump(s, (line) => {
         // 採用後は利用側へ生のまま流す
         if (s.owner) {
+          // request() が待っていれば先に判定する (行の配送そのものは変えない。
+          // resolve/reject 自体が pendingRequests から自分を消すので delete は不要)
+          const pendingRequest = pendingRequests.get(s)
+          if (pendingRequest) {
+            if (line.startsWith(pendingRequest.matchPrefix)) pendingRequest.resolve(line)
+            else if (line.startsWith(pendingRequest.errPrefix)) pendingRequest.reject(new Error(line))
+          }
           s.owner.claimant.onLine(line)
           return
         }
@@ -438,12 +465,62 @@ export function useSerialArbiter() {
     scheduleScan(RESCAN_INTERVAL)
   }
 
+  /**
+   * 1 行送って、応答 1 つを待つ (CoreS3 の自動端末登録 #213 / 後続の VoiceS3R 認証で使用)。
+   *
+   * `line` を書き、その後に届く行のうち `matchPrefix` で始まる最初の行で resolve する。
+   * `ERR <line>` で始まる行が先に来たら、それを reject する (firmware がコマンドを
+   * 認識しつつ失敗を返したとき用)。`timeoutMs` 経過しても届かなければ reject する。
+   *
+   * **同時に 1 件しか待てない。** 1 件目が待っている間に 2 件目を呼ぶと、2 件目は
+   * 書かずに即 reject する (1 件目の完了 or タイムアウトまで待ってから呼び直すこと)。
+   * `matchPrefix`/`errPrefix` のどちらにも当てはまらない行は横取りせず、判定だけして
+   * そのまま `onLine` へ流す。**待っている間も `writeLine` 自体は塞がない**
+   * (`useCoreS3Serial.write` の `HB` heartbeat 等、無関係な書き込みは通る)。
+   */
+  function request(name: string, line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    const held_ = held.get(name)
+    if (!held_) return Promise.reject(new Error(`request(${name}): ポートを預かっていません`))
+    if (pendingRequests.has(held_)) return Promise.reject(new Error(`request(${name}): 既に応答待ちです`))
+    // ↑ の narrowing はネストした function 宣言 (下の doResolve/doReject) の中までは
+    // 効かない (TS が閉包越しに const の絞り込みを保持しない) ので、常に非 undefined な
+    // 別の const に積み直す
+    const s: PortSession = held_
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        doReject(new Error(`request(${name}): timeout waiting for "${matchPrefix}"`))
+      }, timeoutMs)
+
+      // resolve/reject は必ずこの 2 つ経由で呼ぶ。Promise は 2 度目以降の settle が
+      // 無害な no-op になる (ネイティブの仕様) ので、「まだ待っているか」を呼び出し側で
+      // 確かめる防御コードを書かずに済む — 二重の delete/timer 解除も安全に重ねられる。
+      function doResolve(l: string): void {
+        clearTimeout(timer)
+        pendingRequests.delete(s)
+        resolve(l)
+      }
+      function doReject(e: Error): void {
+        clearTimeout(timer)
+        pendingRequests.delete(s)
+        reject(e)
+      }
+
+      pendingRequests.set(s, { matchPrefix, errPrefix: `ERR ${line}`, resolve: doResolve, reject: doReject })
+
+      void writeLine(s.writer, line).then((ok) => {
+        if (!ok) doReject(new Error(`request(${name}): write failed`))
+      })
+    })
+  }
+
   return {
     isSupported,
     isArbitratedPort,
     register,
     unregister,
     release,
+    request,
     /** `delay` ミリ秒後に探索を始める。以後は見つかるまで 10 秒ごと */
     start: scheduleScan,
     /** WebSerial の初回許可 (ユーザー操作が要る) */

@@ -20,3 +20,12 @@ export function noPendingSchedule(): string {
  * 打刻の失敗表示 (TimePunchKiosk) と運行者タブの入口バナーで同じ文言を使う (Refs #206)
  */
 export const deviceUnregisteredMessage = 'この端末は登録されていません (ペアリングが必要です)'
+
+/**
+ * CoreS3 経由の自動端末登録 (#213) が失敗したとき。理由 (AUTH TICKET の ERR / タイムアウト /
+ * auth-worker の HTTP エラー) を添えて、現地の人が次の一手 (管理者に連絡する等) を選べるように
+ * する。文言だけを出す — 端末登録は依然として管理者の Google ログイン (device-claim) で可能
+ */
+export function autoClaimFailedMessage(reason: string): string {
+  return `CoreS3 経由の端末登録に失敗しました: ${reason}`
+}
