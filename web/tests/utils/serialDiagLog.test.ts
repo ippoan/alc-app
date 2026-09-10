@@ -27,8 +27,65 @@ describe('serialDiagLog', () => {
       '09:05:07.042 scan start: candidates=1',
       '23:59:58.007 connect event',
     ])
-    // JSON の文字列配列として置く (他の読み手が同じキーを読めるように)
-    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(readDiag())
+  })
+
+  it('直前と同じ本文が続いたら 1 件にまとめ、回数と最後の時刻を付ける', () => {
+    appendDiag('scan start: candidates=0')
+    vi.setSystemTime(new Date(2026, 8, 10, 9, 5, 17, 100))
+    appendDiag('scan start: candidates=0')
+    vi.setSystemTime(new Date(2026, 8, 10, 9, 38, 27, 900))
+    appendDiag('scan start: candidates=0')
+
+    expect(readDiag()).toEqual(['09:05:07.042 scan start: candidates=0 (×3 最後 09:38:27)'])
+  })
+
+  it('間に別の行が入ったらまとめない', () => {
+    appendDiag('scan start: candidates=0')
+    appendDiag('dev EVT BOOT reset=poweron')
+    appendDiag('scan start: candidates=0')
+
+    expect(readDiag()).toEqual([
+      '09:05:07.042 scan start: candidates=0',
+      '09:05:07.042 dev EVT BOOT reset=poweron',
+      '09:05:07.042 scan start: candidates=0',
+    ])
+  })
+
+  it('まとめた件も 160 文字に収め、回数の表示は削らない', () => {
+    appendDiag('x'.repeat(300))
+    appendDiag('x'.repeat(300))
+
+    const [line] = readDiag()
+    expect(line).toHaveLength(160)
+    expect(line!.endsWith('xxx (×2 最後 09:05:07)')).toBe(true)
+  })
+
+  it('本文は 160 文字に切った後で比べる (切った先だけ違う行はまとめる)', () => {
+    appendDiag(`${'x'.repeat(200)}a`)
+    appendDiag(`${'x'.repeat(200)}b`)
+
+    expect(readDiag()).toHaveLength(1)
+    expect(readDiag()[0]!.endsWith('(×2 最後 09:05:07)')).toBe(true)
+  })
+
+  it('古い形 (整形済みの文字列の要素) も読め、その後ろに追記できる', () => {
+    localStorage.setItem(KEY, JSON.stringify(['08:00:00.000 scan start: candidates=0']))
+
+    expect(readDiag()).toEqual(['08:00:00.000 scan start: candidates=0'])
+
+    // 古い形の件にはまとめない (n = 1 として扱う)
+    appendDiag('scan start: candidates=0')
+    appendDiag('scan start: candidates=0')
+    expect(readDiag()).toEqual([
+      '08:00:00.000 scan start: candidates=0',
+      '09:05:07.042 scan start: candidates=0 (×2 最後 09:05:07)',
+    ])
+  })
+
+  it('文字列でも置き場の形でもない要素は捨てる', () => {
+    localStorage.setItem(KEY, JSON.stringify([null, 1, { t: 'x' }, '08:00:00.000 ok']))
+
+    expect(readDiag()).toEqual(['08:00:00.000 ok'])
   })
 
   it('\\r \\n は空白に置き換える', () => {
