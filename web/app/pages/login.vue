@@ -1,5 +1,6 @@
 <script setup lang="ts">
-const { loginWithGoogleRedirect, isAuthenticated, isLoading, isDeviceActivated } = useAuth()
+const { loginWithGoogleRedirect, isAuthenticated, isLoading } = useAuth()
+const { hasKioskAccess } = useKioskAccess()
 const { isConnected: isAlarmDeviceConnected } = useAlarmDevice()
 const { lastError: deviceLoginError, busy: deviceLoginBusy, login: loginWithDevice } = useDeviceLogin()
 const route = useRoute()
@@ -64,7 +65,7 @@ function handleDeviceLogin() {
         </p>
 
         <p
-          v-if="isDeviceActivated"
+          v-if="hasKioskAccess"
           class="mt-4 text-left text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"
         >
           共用端末です。Google の「アカウントを選択」に前の利用者の名前が残っているときは、その名前の右のメニューから「アカウントの削除」を選んで消してください。ログアウトだけでは一覧から消えません。

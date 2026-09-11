@@ -138,6 +138,10 @@ branches = true
 path = "app/composables/useHubClaim.ts"
 branches = true
 
+[[files]]
+path = "app/composables/useKioskAccess.ts"
+branches = true
+
 # --- plugins ---
 
 [[files]]

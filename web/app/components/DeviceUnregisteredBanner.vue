@@ -9,17 +9,17 @@
  */
 import { deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 
-const { isAuthenticated, isDeviceActivated } = useAuth()
+const { hasKioskAccess } = useKioskAccess()
 </script>
 
 <template>
   <div
-    v-if="!isAuthenticated && !isDeviceActivated"
+    v-if="!hasKioskAccess"
     data-testid="device-unregistered-banner"
     class="w-full max-w-lg mx-auto px-4 mt-2"
   >
     <div class="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
-      {{ deviceUnregisteredMessage }}。メニュー →「端末登録」で QR を読み取ってください。登録するまで免許証の照合と打刻一覧は動きません
+      {{ deviceUnregisteredMessage }}。メニュー →「端末登録」で QR を読み取ってください。登録するまで免許証の照合と打刻一覧は動きません。CoreS3 が USB でつながっていれば、下 (または NFC 画面) の「CoreS3 を USB で許可」を押すだけでも動きます
     </div>
   </div>
 </template>
