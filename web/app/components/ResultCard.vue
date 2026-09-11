@@ -97,10 +97,6 @@ const timeDisplay = computed(() => {
           <span class="font-mono font-bold text-lg">{{ alcoholDisplay }}</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-gray-500">使用回数</span>
-          <span class="font-mono">{{ result.deviceUseCount }} 回</span>
-        </div>
-        <div class="flex justify-between">
           <span class="text-sm text-gray-500">測定日時</span>
           <span class="text-sm">{{ timeDisplay }}</span>
         </div>
