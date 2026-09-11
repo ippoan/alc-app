@@ -33,6 +33,10 @@ initApi(
 // 顔データ同期 (singleton)
 useFaceSync()
 
+// 警告デバイスの見張り (着信購読 + heartbeat)。ロールタブに関わらず始める —
+// 運行者タブで使う運行管理者 PC でも繋がるように (Refs #231)。ManagerAlarmBar は表示だけ
+useAlarmWatch()
+
 // Android 横画面検出
 const { isAndroidLandscape } = useAndroidLandscape()
 
