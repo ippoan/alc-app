@@ -141,7 +141,7 @@ describe('pages/index — 警告デバイスの見張り', () => {
   })
 })
 
-describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点呼の隣に出すのは PC だけ (Refs ippoan/alc-app#238)', () => {
+describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点呼のカードの下に出すのは PC だけ (Refs ippoan/alc-app#238)', () => {
   let wrapper: VueWrapper | null = null
   const originalUserAgent = navigator.userAgent
 
@@ -151,11 +151,16 @@ describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点
     wrapper = null
   })
 
-  it('PC (Android/iPhone/iPad でない UA) では通常点呼の隣に本日の打刻履歴も出す', async () => {
+  it('PC (Android/iPhone/iPad でない UA) では通常点呼のカードの下に本日の打刻履歴を出す', async () => {
     Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', configurable: true })
     wrapper = await mountIndex('/?role=driver')
     expect(wrapper.findComponent(NormalMeasurement).exists()).toBe(true)
     expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(true)
+    // 横並びではなく縦積み (NormalMeasurement の後ろに TodayPunchHistory) であることを
+    // DOM の出現順で確かめる (Refs ippoan/alc-app#238、ユーザー報告による横並びからの変更)
+    const html = wrapper.html()
+    expect(html.indexOf('normal-measurement-stub')).toBeGreaterThan(-1)
+    expect(html.indexOf('today-punch-history-stub')).toBeGreaterThan(html.indexOf('normal-measurement-stub'))
   })
 
   it('Android では本日の打刻履歴を出さない (通常点呼のみ)', async () => {
