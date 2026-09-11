@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import type { DriverInfo } from '~/types'
 import { getDriverInfo } from '~/utils/api'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const props = defineProps<{
   employeeId: string
@@ -166,7 +167,7 @@ function minutesToHM(m: number | null) {
             <span>{{ formatDate(rec.recorded_at) }}</span>
             <span :class="rec.status === 'completed' ? 'text-green-600' : 'text-red-600'">{{ rec.status }}</span>
           </div>
-          <div>種別: {{ rec.tenko_type === 'pre_operation' ? '業務前' : '業務後' }}</div>
+          <div>種別: {{ tenkoTypeLabel(rec.tenko_type) }}</div>
           <div v-if="rec.alcohol_result">アルコール: {{ rec.alcohol_result }} ({{ rec.alcohol_value }}mg/L)</div>
           <div v-if="rec.safety_judgment">安全判定: {{ (rec.safety_judgment as any)?.status === 'pass' ? '合格' : '不合格' }}</div>
         </div>

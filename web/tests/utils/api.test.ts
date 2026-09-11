@@ -20,7 +20,7 @@ import {
   cancelTenkoSession, listTenkoSessions, getTenkoDashboard,
   interruptTenkoSession, resumeTenkoSession,
   // Tenko records
-  listTenkoRecords, getTenkoRecord, downloadTenkoRecordsCsv,
+  downloadTenkoRecordsCsv,
   // Webhooks
   createWebhook, listWebhooks, getWebhook, deleteWebhook, getWebhookDeliveries,
   // Health baselines
@@ -67,7 +67,7 @@ import {
 } from '../helpers/api-test-env'
 import {
   TEST_EMPLOYEE_ID, TEST_TENANT_ID,
-  SEED_MEASUREMENT_ID, SEED_SCHEDULE_ID, SEED_SESSION_ID, SEED_RECORD_ID,
+  SEED_MEASUREMENT_ID, SEED_SCHEDULE_ID, SEED_SESSION_ID,
   SEED_WEBHOOK_ID, SEED_FAILURE_ID, SEED_DEVICE_ID, SEED_TIMECARD_CARD_ID,
   SEED_CARRYING_ITEM_ID, SEED_COMM_ITEM_ID, SEED_GUIDANCE_ID,
   SEED_REG_CODE, SEED_NFC_ID, SEED_CARD_NFC,
@@ -591,7 +591,6 @@ describe('api', () => {
       ['getSchedule', () => getSchedule(SEED_SCHEDULE_ID), `/api/tenko/schedules/${SEED_SCHEDULE_ID}`],
       ['getPendingSchedules', () => getPendingSchedules(TEST_EMPLOYEE_ID), `/api/tenko/schedules/pending/${TEST_EMPLOYEE_ID}`],
       ['getTenkoSession', () => getTenkoSession(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}`],
-      ['getTenkoRecord', () => getTenkoRecord(SEED_RECORD_ID), `/api/tenko/records/${SEED_RECORD_ID}`],
       ['getTenkoDashboard', () => getTenkoDashboard(), '/api/tenko/dashboard'],
       ['listWebhooks', () => listWebhooks(), '/api/tenko/webhooks'],
       ['getWebhook', () => getWebhook(SEED_WEBHOOK_ID), `/api/tenko/webhooks/${SEED_WEBHOOK_ID}`],
@@ -647,7 +646,6 @@ describe('api', () => {
     it.each([
       ['listSchedules', () => listSchedules({}), '/api/tenko/schedules'],
       ['listTenkoSessions', () => listTenkoSessions({}), '/api/tenko/sessions'],
-      ['listTenkoRecords', () => listTenkoRecords({}), '/api/tenko/records'],
       ['listFailures', () => listFailures({}), '/api/tenko/equipment-failures'],
       ['listTimePunches', () => listTimePunches({}), '/api/timecard/punches'],
       ['listGuidanceRecords', () => listGuidanceRecords({}), '/api/guidance-records'],
@@ -1947,14 +1945,6 @@ restoreNativeApis()
       const id = recordId || DEL_GUIDANCE_ID
       stub204()
       await deleteGuidanceRecord(id)
-    })
-  })
-
-  describe('Tenko Records', () => {
-    it('should list tenko records', async () => {
-      stubOk({ records: [], total: 0 })
-      const result = await listTenkoRecords()
-      expect(result.records).toBeDefined()
     })
   })
 

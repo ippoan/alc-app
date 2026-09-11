@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TenkoSchedule } from '~/types'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 defineProps<{
   schedules: TenkoSchedule[]
@@ -20,9 +21,6 @@ function formatScheduledAt(iso: string): string {
   })
 }
 
-function tenkoTypeLabel(type: string): string {
-  return type === 'pre_operation' ? '業務前' : '業務後'
-}
 </script>
 
 <template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { TenkoType, TenkoSchedule } from '~/types'
 import { createSchedule, getEmployeeByCode } from '~/utils/api'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const employeeCode = ref('')
 const tenkoType = ref<TenkoType>('pre_operation')
@@ -56,7 +57,7 @@ function formatTime(iso: string) {
           : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'"
         @click="tenkoType = 'pre_operation'"
       >
-        業務前
+        {{ tenkoTypeLabel('pre_operation') }}
       </button>
       <button
         class="flex-1 py-1.5 rounded-lg text-sm font-medium border transition-colors"
@@ -65,7 +66,7 @@ function formatTime(iso: string) {
           : 'bg-white text-orange-500 border-orange-300 hover:bg-orange-50'"
         @click="tenkoType = 'post_operation'"
       >
-        業務後
+        {{ tenkoTypeLabel('post_operation') }}
       </button>
     </div>
 
@@ -115,7 +116,7 @@ function formatTime(iso: string) {
           class="px-1.5 py-0.5 rounded font-bold text-white"
           :class="s.tenko_type === 'pre_operation' ? 'bg-blue-500' : 'bg-orange-500'"
         >
-          {{ s.tenko_type === 'pre_operation' ? '業務前' : '業務後' }}
+          {{ tenkoTypeLabel(s.tenko_type) }}
         </span>
         <span>{{ s.employee_id }}</span>
         <span class="ml-auto text-gray-400">{{ formatTime(s.created_at) }}</span>
