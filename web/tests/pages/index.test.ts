@@ -58,11 +58,19 @@ mockNuxtImport('useAuth', () => () => ({
   activateFromRegistration: vi.fn(),
 }))
 
+// NormalMeasurement は below-card slot (本日の打刻履歴) を実際に描く必要があるため、
+// 自動 shallow stub (named slot を描かない) ではなく手書きの stub に差し替える。
+// TodayPunchHistory 側は自動 stub のまま — 「slot の中に出る」ことを DOM の入れ子で確かめる
+const NormalMeasurementStub = {
+  name: 'NormalMeasurement',
+  template: '<div class="normal-measurement-stub"><slot name="below-card" /></div>',
+}
+
 function mountIndex(route: string) {
   return mountSuspended(IndexPage, {
     route,
     shallow: true,
-    global: { stubs: { ManagerAlarmBar: false, ClientOnly: false } },
+    global: { stubs: { ManagerAlarmBar: false, ClientOnly: false, NormalMeasurement: NormalMeasurementStub } },
   })
 }
 
@@ -151,21 +159,19 @@ describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点
     wrapper = null
   })
 
-  it('PC (Android/iPhone/iPad でない UA) では通常点呼のカードの下に本日の打刻履歴を出す', async () => {
+  it('PC (Android/iPhone/iPad でない UA) では通常点呼の below-card slot に本日の打刻履歴を出す', async () => {
     Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', configurable: true })
     wrapper = await mountIndex('/?role=driver')
-    expect(wrapper.findComponent(NormalMeasurement).exists()).toBe(true)
+    const normalMeasurement = wrapper.find('.normal-measurement-stub')
+    expect(normalMeasurement.exists()).toBe(true)
     expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(true)
-    // 横並びではなく縦積み (NormalMeasurement の後ろに TodayPunchHistory) であることを
-    // DOM の出現順で確かめる (Refs ippoan/alc-app#238、ユーザー報告による横並びからの変更)
-    const html = wrapper.html()
-    expect(html.indexOf('normal-measurement-stub')).toBeGreaterThan(-1)
-    expect(html.indexOf('today-punch-history-stub')).toBeGreaterThan(html.indexOf('normal-measurement-stub'))
-    // ラッパーは flex にしない (普通のブロック) — NormalMeasurement.vue のルートが静的に
-    // flex-1 を持つため、flex 縦並びだと「残りの高さ」に押しつぶされる (裏取りで発覚)
-    const wrapperEl = wrapper.findComponent(NormalMeasurement).element.parentElement
-    expect(wrapperEl?.className).toBe('flex-1 min-h-0 overflow-y-auto')
-    expect(wrapperEl?.className).not.toContain('flex ')
+    // 「顔登録」「メンテナンス」を画面最下部に保つため below-card slot に入れる設計
+    // (Refs ippoan/alc-app#238) — 兄弟ではなく NormalMeasurement (stub) の**中**にあることを確かめる
+    expect(normalMeasurement.findComponent(TodayPunchHistory).exists()).toBe(true)
+    // #248 のラッパー div はもう無い — NormalMeasurement 自身の class に flex-1 min-h-0 が付く
+    // (他の driverSubTab 兄弟 (TenkoKiosk 等) と同じパターンに戻した)
+    expect(normalMeasurement.classes()).toContain('flex-1')
+    expect(normalMeasurement.classes()).toContain('min-h-0')
   })
 
   it('Android では本日の打刻履歴を出さない (通常点呼のみ)', async () => {
