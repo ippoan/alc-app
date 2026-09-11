@@ -3,6 +3,7 @@ import type {
   TemperatureReading,
   BloodPressureReading,
   AlcoholReading,
+  Fc1200State,
 } from '~/types'
 import { readAlcohol } from '~/utils/alcohol'
 
@@ -14,6 +15,16 @@ const BLE_WS_MAX_RECONNECT = 10
 // serial 探索がこの回数連続で失敗したら WS ブリッジも試す (#123)
 const SERIAL_WS_FALLBACK_AFTER = 2
 
+// firmware の `EVT FC1200 <name> <args...>` → PC 直結と同じ Fc1200State (Refs ippoan/alc-app-s3#135)。
+// BLOW_TIMEOUT は段階なし (firmware も計測待ちに戻すため案内文に戻す)
+const FC1200_EVT_STATE: Record<string, Fc1200State | null> = {
+  CONNECTED: 'connected',
+  WARMING: 'warming_up',
+  BLOW_WAITING: 'blow_waiting',
+  BLOW_TIMEOUT: null,
+  MEASURING: 'measuring',
+}
+
 // シングルトン: 全コンポーネントで共有
 const isConnected = ref(false)
 const error = ref<string | null>(null)
@@ -22,6 +33,8 @@ const bloodPressureConnected = ref(false)
 const latestTemperature = ref<TemperatureReading | null>(null)
 const latestBloodPressure = ref<BloodPressureReading | null>(null)
 const latestAlcohol = ref<AlcoholReading | null>(null)
+/** CoreS3 につないだ FC-1200 の進み (PC 直結と同じ語彙)。firmware の EVT FC1200 から */
+const alcoholStage = ref<Fc1200State | null>(null)
 const gatewayVersion = ref<string | null>(null)
 const transport = ref<'serial' | 'websocket' | null>(null)
 
@@ -156,6 +169,13 @@ export function useBleGateway() {
       processMessage(msg as BleGatewayMessage)
     })
 
+    // firmware が USB に流す FC-1200 の状態遷移 (`EVT FC1200 <name> <args...>`)。
+    // CoreS3 の画面と連動しないので、PC 直結と同じ語彙でここから進みを出す (Refs ippoan/alc-app-s3#135)
+    coreS3.onEvent((name, args) => {
+      if (name !== 'FC1200') return
+      alcoholStage.value = FC1200_EVT_STATE[args[0] ?? ''] ?? null
+    })
+
     // 抜線・クラッシュでポートを失った → serial の state を畳む
     // (掴み直しは arbiter が 10 秒ごとの再スキャンで行う)
     coreS3.onClose(() => { void cleanup() })
@@ -250,6 +270,7 @@ export function useBleGateway() {
             useCount: reading.useCount ?? 0,
             measuredAt: new Date(),
           }
+          alcoholStage.value = 'result_received'
         }
         break
       }
@@ -294,9 +315,14 @@ export function useBleGateway() {
   }
 
   /** アルコール測定値だけをクリア（AlcMeasurement の mount 時に呼ぶ。
-   * 体温・血圧など他の測定値は触らない — 同時に別ステップが進んでいることがある）。 */
+   * 体温・血圧など他の測定値は触らない — 同時に別ステップが進んでいることがある）。
+   * alcoholStage は測定完了 (result_received) のときだけ落とす — 次の運転者が
+   * 来た時点で FC-1200 が既に吹き込み待ちのことがあるので、無条件には消さない。 */
   function clearAlcoholReading(): void {
     latestAlcohol.value = null
+    if (alcoholStage.value === 'result_received') {
+      alcoholStage.value = null
+    }
   }
 
   const hasMedicalData = computed(() =>
@@ -396,6 +422,7 @@ export function useBleGateway() {
     latestTemperature: readonly(latestTemperature),
     latestBloodPressure: readonly(latestBloodPressure),
     latestAlcohol: readonly(latestAlcohol),
+    alcoholStage: readonly(alcoholStage),
     gatewayVersion: readonly(gatewayVersion),
     transport: readonly(transport),
     hasMedicalData,

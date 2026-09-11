@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import AlcMeasurement from '~/components/AlcMeasurement.vue'
-import type { AlcoholReading } from '~/types'
+import type { AlcoholReading, Fc1200State } from '~/types'
 
 // --- useFc1200Serial (PC 直結) のモック ---
 
@@ -37,13 +37,15 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   isStartupProbing: readonly(ref(false)),
 }))
 
-// --- useBleGateway のモック (latestAlcohol と clearAlcoholReading だけ使う) ---
+// --- useBleGateway のモック (latestAlcohol / alcoholStage / clearAlcoholReading だけ使う) ---
 
 const latestAlcohol = ref<AlcoholReading | null>(null)
+const alcoholStage = ref<Fc1200State | null>(null)
 const clearAlcoholReadingMock = vi.fn(() => { latestAlcohol.value = null })
 
 mockNuxtImport('useBleGateway', () => () => ({
   latestAlcohol: readonly(latestAlcohol),
+  alcoholStage: readonly(alcoholStage),
   clearAlcoholReading: clearAlcoholReadingMock,
 }))
 
@@ -64,6 +66,7 @@ describe('AlcMeasurement', () => {
     fc1200AutoConnect.mockResolvedValue(true)
     coreS3Connected.value = false
     latestAlcohol.value = null
+    alcoholStage.value = null
   })
 
   it('CoreS3 未接続なら PC 直結 (useFc1200Serial) に自動接続する', async () => {
@@ -86,6 +89,50 @@ describe('AlcMeasurement', () => {
     expect(wrapper.text()).toContain('CoreS3 につないだアルコールチェッカーで測定してください')
     expect(wrapper.text()).not.toContain('FC-1200 が見つかりません')
     wrapper.unmount()
+  })
+
+  // =============================================
+  // CoreS3 の進み (alcoholStage) を PC 直結と同じ語彙で出す (#238)
+  // =============================================
+
+  describe('CoreS3 側の進み表示', () => {
+    it('alcoholStage が blow_waiting → 「息を吹きかけてください」を含み、「進み具合」は含まない', async () => {
+      coreS3Connected.value = true
+      alcoholStage.value = 'blow_waiting'
+      const wrapper = await mountAlc()
+      expect(wrapper.text()).toContain('息を吹きかけてください')
+      expect(wrapper.text()).not.toContain('進み具合')
+      wrapper.unmount()
+    })
+
+    it('alcoholStage が warming_up → 「ウォームアップ中」', async () => {
+      coreS3Connected.value = true
+      alcoholStage.value = 'warming_up'
+      const wrapper = await mountAlc()
+      expect(wrapper.text()).toContain('ウォームアップ中')
+      wrapper.unmount()
+    })
+
+    it('alcoholStage が null → 案内文のみ (進み具合の表示は出ない)', async () => {
+      coreS3Connected.value = true
+      const wrapper = await mountAlc()
+      expect(wrapper.text()).toContain('CoreS3 につないだアルコールチェッカーで測定してください')
+      expect(wrapper.text()).not.toContain('進み具合')
+      expect(wrapper.text()).not.toContain('息を吹きかけてください')
+      wrapper.unmount()
+    })
+
+    it('alcoholStage が blow_waiting になると stateChange を emit する', async () => {
+      coreS3Connected.value = true
+      const wrapper = await mountAlc()
+
+      alcoholStage.value = 'blow_waiting'
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('stateChange')
+      expect(emitted).toContainEqual(['blow_waiting'])
+      wrapper.unmount()
+    })
   })
 
   it('mount 時に latestAlcohol をクリアする (前の運転者の結果を再 emit しない)', async () => {

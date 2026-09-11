@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MeasurementResult } from '~/types'
+import type { MeasurementResult, Fc1200State } from '~/types'
 
 const props = defineProps<{
   employeeId: string
@@ -56,6 +56,12 @@ watch(state, (s) => {
   emit('stateChange', s)
 })
 
+// CoreS3 側の進み (firmware の EVT FC1200) も同じく親に通知する — NormalMeasurement の
+// onAlcStateChange が CoreS3 経由でも吹き込み待ちで録画を始められるように (Refs ippoan/alc-app-s3#135)
+watch(() => ble.alcoholStage.value, (s) => {
+  if (s) emit('stateChange', s)
+})
+
 // マウント時に自動接続を試行 (CoreS3 接続中かどうかに関わらず PC 直結も試す)
 onMounted(async () => {
   resultEmitted.value = false
@@ -101,8 +107,8 @@ watch(error, (val) => {
   }
 })
 
-const stateConfig = computed<{ text: string; color: string; animate: boolean }>(() => {
-  switch (state.value) {
+function stateConfigFor(s: Fc1200State): { text: string; color: string; animate: boolean } {
+  switch (s) {
     case 'idle':
       return { text: 'FC-1200 未接続', color: 'text-gray-500', animate: false }
     case 'waiting_connection':
@@ -120,7 +126,12 @@ const stateConfig = computed<{ text: string; color: string; animate: boolean }>(
     default:
       return { text: '不明な状態', color: 'text-gray-500', animate: false }
   }
-})
+}
+
+const stateConfig = computed(() => stateConfigFor(state.value))
+
+// CoreS3 につないだ FC-1200 の進み。PC 直結と同じ表示を出すため同じ関数を使う
+const coreStateConfig = computed(() => ble.alcoholStage.value ? stateConfigFor(ble.alcoholStage.value) : null)
 
 function handleRetry() {
   resetSession()
@@ -195,14 +206,43 @@ function emitDemoResult() {
       </button>
     </div>
 
-    <!-- CoreS3 につないだ FC-1200: 吹き込み待ちなどの進捗は USB に流れないので、
-         一言だけ案内して CoreS3 の画面 (実機) に委ねる (Refs ippoan/alc-app-s3#135) -->
+    <!-- CoreS3 につないだ FC-1200: firmware が流す EVT FC1200 を PC 直結と同じ語彙で
+         出す (Refs ippoan/alc-app-s3#135) -->
     <div
       v-else-if="coreS3.isConnected.value"
-      class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-6 text-center w-full"
+      class="flex flex-col items-center gap-4 w-full"
     >
-      <p class="text-blue-800 font-medium">CoreS3 につないだアルコールチェッカーで測定してください</p>
-      <p class="text-blue-600 text-sm mt-2">(進み具合は CoreS3 の画面に出ます)</p>
+      <div class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-6 text-center w-full">
+        <p class="text-blue-800 font-medium">CoreS3 につないだアルコールチェッカーで測定してください</p>
+      </div>
+
+      <!-- 状態インジケーター (PC 直結と同じ表示) -->
+      <div v-if="coreStateConfig" class="flex items-center gap-3">
+        <span
+          v-if="coreStateConfig.animate"
+          class="w-3 h-3 rounded-full bg-blue-500 animate-pulse"
+        />
+        <span
+          v-else
+          class="w-3 h-3 rounded-full"
+          :class="{
+            'bg-green-500': ble.alcoholStage.value === 'result_received',
+            'bg-gray-400': ble.alcoholStage.value === 'idle' || ble.alcoholStage.value === 'connected',
+          }"
+        />
+        <span :class="['text-lg font-medium', coreStateConfig.color]">
+          {{ coreStateConfig.text }}
+        </span>
+      </div>
+
+      <!-- 吹きかけプロンプト -->
+      <div
+        v-if="ble.alcoholStage.value === 'blow_waiting'"
+        class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-8 text-center w-full"
+      >
+        <p class="text-blue-800 text-xl font-bold">息を吹きかけてください</p>
+        <p class="text-blue-600 text-sm mt-2">FC-1200 のセンサー部に向かって約5秒間</p>
+      </div>
     </div>
 
     <!-- 通常モード (FC-1200 PC 直結) -->
