@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly } from 'vue'
+import { flushPromises } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TimePunchKiosk from '~/components/TimePunchKiosk.vue'
-import { getEmployees, listTimePunches } from '~/utils/api'
-
-/** onMounted の await 群と watch の後段を流し切る */
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+import { punchTimecard, listTimePunches } from '~/utils/api'
 
 // --- API のモック (NFC 表示だけを見るので中身は空で足りる) ---
 
@@ -56,6 +54,7 @@ mockNuxtImport('useHubClaim', () => () => ({
 
 mockNuxtImport('useTimecardWatch', () => () => ({
   connect: vi.fn(async () => {}),
+  stop: vi.fn(),
 }))
 
 describe('TimePunchKiosk — NFC 接続表示の 3 状態 (Refs ippoan/alc-app#216)', () => {
@@ -134,37 +133,30 @@ describe('TimePunchKiosk — CoreS3 の USB 許可ボタン (Refs #234)', () => 
   })
 })
 
-describe('TimePunchKiosk — 端末 JWT が取れたら一覧を引き直す (Refs #238)', () => {
+describe('TimePunchKiosk — 打刻後に本日の打刻履歴 (TodayPunchHistory) を引き直す (Refs ippoan/alc-app#238)', () => {
   beforeEach(() => {
-    deviceJwtReady.value = false
-    vi.mocked(getEmployees).mockClear()
+    nfcConnected.value = false
+    coreS3Connected.value = false
+    coreS3Supported.value = true
+    nfcOnReadMock.mockClear()
+    vi.mocked(punchTimecard).mockClear()
     vi.mocked(listTimePunches).mockClear()
   })
 
-  it('hasDeviceJwt が true になったら employees と本日の打刻を引き直す', async () => {
+  it('NFC 読み取り成功で打刻し、履歴部品 (TodayPunchHistory) の一覧を引き直す', async () => {
     const wrapper = await mountSuspended(TimePunchKiosk)
-    await flush()
-    expect(getEmployees).toHaveBeenCalledTimes(1)
-    expect(listTimePunches).toHaveBeenCalledTimes(1)
-
-    deviceJwtReady.value = true
-    await flush()
-    expect(getEmployees).toHaveBeenCalledTimes(2)
-    expect(listTimePunches).toHaveBeenCalledTimes(2)
-    wrapper.unmount()
-  })
-
-  it('hasDeviceJwt が false に戻っても (抜線でキャッシュ破棄) 引き直さない', async () => {
-    deviceJwtReady.value = true
-    const wrapper = await mountSuspended(TimePunchKiosk)
-    await flush()
-    vi.mocked(getEmployees).mockClear()
+    // TodayPunchHistory の初回マウント時の引き直し (onMounted, 非同期) を待ってからリセットし、
+    // 打刻後の呼び出しだけを見る
+    await flushPromises()
     vi.mocked(listTimePunches).mockClear()
 
-    deviceJwtReady.value = false
-    await flush()
-    expect(getEmployees).not.toHaveBeenCalled()
-    expect(listTimePunches).not.toHaveBeenCalled()
+    const onRead = nfcOnReadMock.mock.calls[0]?.[0] as ((e: { employee_id: string }) => Promise<void>) | undefined
+    expect(onRead).toBeTruthy()
+    await onRead!({ employee_id: 'emp-1' })
+    await flushPromises()
+
+    expect(punchTimecard).toHaveBeenCalledWith('emp-1')
+    expect(listTimePunches).toHaveBeenCalled()
     wrapper.unmount()
   })
 })

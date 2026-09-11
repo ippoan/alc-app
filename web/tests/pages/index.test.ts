@@ -3,6 +3,8 @@ import { ref, readonly, nextTick } from 'vue'
 import type { VueWrapper } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import IndexPage from '~/pages/index.vue'
+import NormalMeasurement from '~/components/NormalMeasurement.vue'
+import TodayPunchHistory from '~/components/TodayPunchHistory.vue'
 
 // トップ画面のうち「警告デバイスの見張りをロールタブに関わらず始める」部分だけを見る (Refs #231)。
 // useAlarmWatch は本物、その下の singleton (デバイス / 着信購読 / 設定) だけをモックして
@@ -136,5 +138,36 @@ describe('pages/index — 警告デバイスの見張り', () => {
 
     wrapper = await mountIndex('/?role=manager')
     expect(calls).toEqual(['start', 'connect(0)'])
+  })
+})
+
+describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点呼の隣に出すのは PC だけ (Refs ippoan/alc-app#238)', () => {
+  let wrapper: VueWrapper | null = null
+  const originalUserAgent = navigator.userAgent
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'userAgent', { value: originalUserAgent, configurable: true })
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('PC (Android/iPhone/iPad でない UA) では通常点呼の隣に本日の打刻履歴も出す', async () => {
+    Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', configurable: true })
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.findComponent(NormalMeasurement).exists()).toBe(true)
+    expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(true)
+  })
+
+  it('Android では本日の打刻履歴を出さない (通常点呼のみ)', async () => {
+    Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 14)', configurable: true })
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.findComponent(NormalMeasurement).exists()).toBe(true)
+    expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(false)
+  })
+
+  it('通常点呼タブ以外 (点呼) では PC でも本日の打刻履歴を出さない', async () => {
+    Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', configurable: true })
+    wrapper = await mountIndex('/?role=driver&tab=tenko')
+    expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(false)
   })
 })
