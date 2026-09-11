@@ -173,4 +173,19 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     expect(wrapper.find('.bg-red-50').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('below-card slot の中身は「顔登録」「メンテナンス」のリンクより前 (画面上で上) に出る (Refs #238)', async () => {
+    const wrapper = await mountSuspended(NormalMeasurement, {
+      global: { stubs: { NfcStatus: NfcStatusStub, BleStatus: true, ClientOnly: false, Teleport: true } },
+      slots: { 'below-card': '<div data-testid="below-card-content">打刻履歴スロット</div>' },
+    })
+
+    const html = wrapper.html()
+    const slotIndex = html.indexOf('below-card-content')
+    const linkIndex = html.indexOf('顔登録')
+    expect(slotIndex).toBeGreaterThan(-1)
+    expect(linkIndex).toBeGreaterThan(-1)
+    expect(slotIndex).toBeLessThan(linkIndex)
+    wrapper.unmount()
+  })
 })

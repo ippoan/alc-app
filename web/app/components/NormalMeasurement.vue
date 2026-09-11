@@ -636,6 +636,10 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
       </div>
     </main>
 
+    <!-- 呼び出し元がカードの下に足したい内容 (例: 本日の打刻履歴)。空なら何も出ない。
+         直後のナビゲーションより上に出すことで、リンクの塊を画面最下部に保つ (Refs #238) -->
+    <slot name="below-card" />
+
     <!-- ナビゲーション (縦画面時のみ。横画面時は左列に配置) -->
     <footer v-if="!landscape" class="w-full max-w-md py-4">
       <div class="flex justify-center gap-4">
