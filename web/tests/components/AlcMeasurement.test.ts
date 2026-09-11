@@ -9,7 +9,7 @@ import type { AlcoholReading } from '~/types'
 const fc1200IsConnected = ref(false)
 const fc1200State = ref('idle')
 const fc1200Error = ref<string | null>(null)
-const fc1200Result = ref<{ alcoholValue: number, resultType: string, deviceUseCount: number } | null>(null)
+const fc1200Result = ref<{ alcoholValue: number, resultType: string, deviceUseCount: number, measuredAt: Date } | null>(null)
 const fc1200IsSupported = vi.fn(() => true)
 const fc1200AutoConnect = vi.fn(async () => true)
 const fc1200ScanDevices = vi.fn()
@@ -66,23 +66,25 @@ describe('AlcMeasurement', () => {
     latestAlcohol.value = null
   })
 
-  it('CoreS3 未接続なら従来どおり PC 直結 (useFc1200Serial) に自動接続する', async () => {
+  it('CoreS3 未接続なら PC 直結 (useFc1200Serial) に自動接続する', async () => {
     const wrapper = await mountAlc()
     expect(fc1200AutoConnect).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('CoreS3 接続中は useFc1200Serial の autoConnect を呼ばない (二重計測防止)', async () => {
+  it('CoreS3 接続中でも PC 直結 (useFc1200Serial) の autoConnect は呼ぶ (#238 — CoreS3 は NFC/認証だけの運用もある)', async () => {
     coreS3Connected.value = true
     const wrapper = await mountAlc()
-    expect(fc1200AutoConnect).not.toHaveBeenCalled()
+    expect(fc1200AutoConnect).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('CoreS3 接続中は案内メッセージを出す', async () => {
+  it('CoreS3 接続中は案内メッセージを出す (PC 直結の「見つかりません」等は出さない)', async () => {
     coreS3Connected.value = true
+    fc1200AutoConnect.mockResolvedValue(false)
     const wrapper = await mountAlc()
     expect(wrapper.text()).toContain('CoreS3 につないだアルコールチェッカーで測定してください')
+    expect(wrapper.text()).not.toContain('FC-1200 が見つかりません')
     wrapper.unmount()
   })
 
@@ -131,5 +133,94 @@ describe('AlcMeasurement', () => {
     const wrapper = await mountAlc()
     expect(wrapper.text()).toContain('FC-1200 接続非対応')
     wrapper.unmount()
+  })
+
+  // =============================================
+  // 先着 1 回だけ emit する (#238 — PC 直結 / CoreS3 のどちらが先でも同じ規則)
+  // =============================================
+
+  describe('PC 直結 / CoreS3 の先着レース', () => {
+    it('CoreS3 の値が先なら emit し、後から届いた PC 直結の結果は捨てる', async () => {
+      const wrapper = await mountAlc()
+
+      latestAlcohol.value = {
+        value: 0.1,
+        unit: 'mg/L',
+        result: 'normal',
+        useCount: 1,
+        measuredAt: new Date('2026-01-03T00:00:00Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      fc1200Result.value = {
+        alcoholValue: 0.9,
+        resultType: 'over',
+        deviceUseCount: 99,
+        measuredAt: new Date('2026-01-03T00:00:01Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('result')
+      expect(emitted).toHaveLength(1)
+      expect(emitted![0]![0]).toMatchObject({ alcoholValue: 0.1, resultType: 'normal' })
+      wrapper.unmount()
+    })
+
+    it('PC 直結の値が先なら emit し、後から届いた CoreS3 の結果は捨てる', async () => {
+      const wrapper = await mountAlc()
+
+      fc1200Result.value = {
+        alcoholValue: 0.05,
+        resultType: 'normal',
+        deviceUseCount: 7,
+        measuredAt: new Date('2026-01-03T00:00:00Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      latestAlcohol.value = {
+        value: 0.9,
+        unit: 'mg/L',
+        result: 'over',
+        useCount: 1,
+        measuredAt: new Date('2026-01-03T00:00:01Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('result')
+      expect(emitted).toHaveLength(1)
+      expect(emitted![0]![0]).toMatchObject({ alcoholValue: 0.05, resultType: 'normal' })
+      wrapper.unmount()
+    })
+
+    it('mount 後に CoreS3 が繋がっても同じ規則で動く (後着は捨てる)', async () => {
+      // mount 時点では CoreS3 未接続。PC 直結の autoConnect だけが走る
+      const wrapper = await mountAlc()
+
+      // 測定中に CoreS3 が挿された想定 (接続状態だけが変わっても emit 判定には影響しない)
+      coreS3Connected.value = true
+      await wrapper.vm.$nextTick()
+
+      fc1200Result.value = {
+        alcoholValue: 0.12,
+        resultType: 'normal',
+        deviceUseCount: 2,
+        measuredAt: new Date('2026-01-04T00:00:00Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      latestAlcohol.value = {
+        value: 0.5,
+        unit: 'mg/L',
+        result: 'over',
+        useCount: 3,
+        measuredAt: new Date('2026-01-04T00:00:01Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('result')
+      expect(emitted).toHaveLength(1)
+      expect(emitted![0]![0]).toMatchObject({ alcoholValue: 0.12, resultType: 'normal' })
+      wrapper.unmount()
+    })
   })
 })

@@ -24,14 +24,25 @@ const {
   resetSession,
 } = useFc1200Serial()
 
-// CoreS3 につないだ FC-1200 (Refs ippoan/alc-app-s3#135)。DB9 は物理的にどちらか 1 台
-// しか挿さらないので、CoreS3 接続中は PC 直結 (useFc1200Serial) の autoConnect を
-// 始めない — 両方掴もうとすると二重計測の入口になる。
+// CoreS3 につないだ FC-1200 (Refs ippoan/alc-app-s3#135)。CoreS3 を NFC・認証だけに
+// 使い FC-1200 は PC に直結している運用もあるため、CoreS3 の接続有無では判定しない
+// — PC 直結の autoConnect は常に行い、CoreS3 の latestAlcohol も同時に待つ。DB9 は
+// 物理的に PC か CoreS3 のどちらか 1 台にしかつながらないので、先に届いた結果を
+// 1 回だけ emit すれば二重計測にはならない (#238)。
 const coreS3 = useCoreS3Serial()
 const ble = useBleGateway()
 
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
+
+// 結果は先着 1 回だけ emit する (PC 直結 / CoreS3 のどちらが先でも同じ規則)。
+const resultEmitted = ref(false)
+
+function emitResult(result: MeasurementResult) {
+  if (resultEmitted.value) return
+  resultEmitted.value = true
+  emit('result', result)
+}
 
 // 接続後に測定を自動開始 (PC 直結のみ。CoreS3 側の吹込は CoreS3 の画面が案内する)
 watch(isConnected, (connected) => {
@@ -45,15 +56,12 @@ watch(state, (s) => {
   emit('stateChange', s)
 })
 
-// マウント時に自動接続を試行
+// マウント時に自動接続を試行 (CoreS3 接続中かどうかに関わらず PC 直結も試す)
 onMounted(async () => {
+  resultEmitted.value = false
   // 前の運転者の結果を引き継がない (latestAlcohol はシングルトンの composable 状態)
   ble.clearAlcoholReading()
 
-  if (coreS3.isConnected.value) {
-    // CoreS3 接続中は PC 直結 FC-1200 に autoConnect しない (二重計測防止)
-    return
-  }
   if (!isSupported() || isConnected.value) return
   autoConnecting.value = true
   const success = await autoConnect()
@@ -66,7 +74,7 @@ onMounted(async () => {
 // 結果を親に通知 (PC 直結の FC-1200)
 watch(result, (val) => {
   if (val) {
-    emit('result', {
+    emitResult({
       ...val,
       employeeId: props.employeeId,
     })
@@ -76,7 +84,7 @@ watch(result, (val) => {
 // 結果を親に通知 (CoreS3 につないだ FC-1200)
 watch(() => ble.latestAlcohol.value, (val) => {
   if (val) {
-    emit('result', {
+    emitResult({
       employeeId: props.employeeId,
       alcoholValue: val.value,
       resultType: val.result,
