@@ -369,20 +369,28 @@ export async function runDriverMasterSync(): Promise<DriverMasterSyncResult> {
   return bearerRequest<DriverMasterSyncResult>('/api/driver-master/run', jwt, { method: 'POST' })
 }
 
-/** 測定の顔写真を取得 (認証付きプロキシ経由) */
-export async function fetchFacePhoto(measurementId: string): Promise<string | null> {
+/** 認証付きプロキシ経由でバイナリを取得し、object URL にする (顔写真・録画動画で共用)。 */
+async function fetchObjectUrl(path: string): Promise<string | null> {
   if (!apiBase) return null
 
   try {
-    const res = await proxyRawFetch(`/api/measurements/${measurementId}/face-photo`, {
-      cache: 'no-store',
-    })
+    const res = await proxyRawFetch(path, { cache: 'no-store' })
     if (!res.ok) return null
     const blob = await res.blob()
     return URL.createObjectURL(blob)
   } catch {
     return null
   }
+}
+
+/** 測定の顔写真を取得 (認証付きプロキシ経由) */
+export async function fetchFacePhoto(measurementId: string): Promise<string | null> {
+  return fetchObjectUrl(`/api/measurements/${measurementId}/face-photo`)
+}
+
+/** 測定の録画動画を取得 (認証付きプロキシ経由) */
+export async function fetchMeasurementVideo(measurementId: string): Promise<string | null> {
+  return fetchObjectUrl(`/api/measurements/${measurementId}/video`)
 }
 
 /** 顔写真をアップロード */
