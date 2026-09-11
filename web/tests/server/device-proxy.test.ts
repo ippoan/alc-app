@@ -38,10 +38,9 @@ describe('buildAlcProxyForward (rust-alc-api#434 caller #5, device/admin JWT 経
 })
 
 describe('buildPairInternalForward (rust-alc-api#434 caller #5, claim provisioning)', () => {
-  it('/device/pair-internal に X-Internal-Shared-Secret + tenant_id + device_id を載せ、role 既定は device-uploader', () => {
+  it('/device/pair-internal に X-Internal-Shared-Secret + device_id を載せ (tenant_id は送らない)、role 既定は device-uploader', () => {
     const { url, init } = buildPairInternalForward({
       sharedSecret: SECRET,
-      tenantId: 'tenant-9',
       deviceId: 'dev-1',
       label: 'alc-tablet',
     })
@@ -50,7 +49,7 @@ describe('buildPairInternalForward (rust-alc-api#434 caller #5, claim provisioni
     expect(h['X-Internal-Shared-Secret']).toBe(SECRET)
     expect(init.method).toBe('POST')
     const body = JSON.parse(init.body as string) as Record<string, unknown>
-    expect(body.tenant_id).toBe('tenant-9')
+    expect(body).not.toHaveProperty('tenant_id')
     expect(body.device_id).toBe('dev-1')
     expect(body.label).toBe('alc-tablet')
     expect(body.role).toBe('device-uploader')
@@ -59,7 +58,6 @@ describe('buildPairInternalForward (rust-alc-api#434 caller #5, claim provisioni
   it('role を明示できる', () => {
     const { init } = buildPairInternalForward({
       sharedSecret: SECRET,
-      tenantId: 't',
       deviceId: 'd',
       label: 'l',
       role: 'device-kiosk',
@@ -69,11 +67,11 @@ describe('buildPairInternalForward (rust-alc-api#434 caller #5, claim provisioni
   })
 })
 
-describe('mintAndMergeCredential (ippoan/auth-worker#544 PR 2/3、tenant_id + device_id が揃った時だけ mint)', () => {
-  it('tenant_id と device_id が両方あれば mint し、device_id を body に載せて credential を merge する', async () => {
+describe('mintAndMergeCredential (ippoan/auth-worker#544、device_id がある時だけ mint)', () => {
+  it('device_id があれば mint し、device_id だけを body に載せて credential を merge する', async () => {
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(init.body as string) as Record<string, unknown>
-      expect(body.tenant_id).toBe('tenant-9')
+      expect(body).not.toHaveProperty('tenant_id')
       expect(body.device_id).toBe('dev-1')
       expect(body.label).toBe('dev-1')
       return new Response(JSON.stringify({ device_id: 'auth-dev-1', device_secret: 'sekrit' }), { status: 200 })
@@ -104,14 +102,13 @@ describe('mintAndMergeCredential (ippoan/auth-worker#544 PR 2/3、tenant_id + de
     expect(res).toEqual({ success: true, tenant_id: 'tenant-9', device_id: null })
   })
 
-  it('tenant_id が無い応答では mint しない (fetch を呼ばずそのまま返す、既存)', async () => {
+  it('device_id が undefined の応答でも mint しない (tenant_id の有無に依らない)', async () => {
     const fetchMock = vi.fn()
     const res = await mintAndMergeCredential(SECRET, { fetch: fetchMock as unknown as typeof fetch }, {
       success: true,
       tenant_id: null,
-      device_id: 'dev-1',
     })
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(res).toEqual({ success: true, tenant_id: null, device_id: 'dev-1' })
+    expect(res).toEqual({ success: true, tenant_id: null })
   })
 })
