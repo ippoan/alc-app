@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SubmitMedicalData } from '~/types'
+import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 
 const emit = defineEmits<{
   submit: [data: SubmitMedicalData]
@@ -7,8 +8,9 @@ const emit = defineEmits<{
 }>()
 
 const temperature = ref<number | null>(36.5)
-const systolic = ref<number | null>(120)
-const diastolic = ref<number | null>(80)
+// 血圧欄を隠している間は既定値を送らない (偽の 120/80 が送信され続けないように)
+const systolic = ref<number | null>(SHOW_BLOOD_PRESSURE ? 120 : null)
+const diastolic = ref<number | null>(SHOW_BLOOD_PRESSURE ? 80 : null)
 const pulse = ref<number | null>(70)
 
 function handleSubmit() {
@@ -64,7 +66,7 @@ function handleSkip() {
       </div>
 
       <!-- 収縮期血圧 -->
-      <div class="flex flex-col gap-1">
+      <div v-if="SHOW_BLOOD_PRESSURE" class="flex flex-col gap-1">
         <label class="text-xs font-medium text-gray-600">収縮期血圧 (mmHg)</label>
         <input
           v-model.number="systolic"
@@ -78,7 +80,7 @@ function handleSkip() {
       </div>
 
       <!-- 拡張期血圧 -->
-      <div class="flex flex-col gap-1">
+      <div v-if="SHOW_BLOOD_PRESSURE" class="flex flex-col gap-1">
         <label class="text-xs font-medium text-gray-600">拡張期血圧 (mmHg)</label>
         <input
           v-model.number="diastolic"

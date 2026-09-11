@@ -4,6 +4,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
 
@@ -349,7 +350,7 @@ function reset() {
   stopMeasuringCamera()
 }
 
-const steps = ['NFC', '体温・血圧', '測定', '結果'] as const
+const steps = ['NFC', SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温', '測定', '結果'] as const
 const stepKeys = ['nfc', 'medical', 'measuring', 'result'] as const
 const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
 </script>
@@ -510,7 +511,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
       <!-- Step 2: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
       <div v-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">体温・血圧</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}</h2>
           <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
@@ -586,7 +587,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         />
         <!-- 医療データ入力元バッジ -->
         <div
-          v-if="medicalInputSource && (measurementResult.temperature || measurementResult.systolic)"
+          v-if="medicalInputSource && (measurementResult.temperature || (SHOW_BLOOD_PRESSURE && measurementResult.systolic))"
           class="text-center text-xs"
         >
           <span

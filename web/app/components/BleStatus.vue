@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { isWebSerialSupported } from '~/utils/webserial'
+import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 
 const emit = defineEmits<{
   skip: []
@@ -51,9 +52,9 @@ onMounted(async () => {
     <!-- 未接続 (自動接続失敗) -->
     <div v-else-if="!isConnected" class="flex flex-col items-center gap-3">
       <p class="text-gray-500 text-sm text-center">
-        BLE ゲートウェイが見つかりません。<br>
+        CoreS3 が見つかりません。<br>
         <template v-if="isWebSerialSupported()">
-          ATOM Lite が USB 接続されていることを確認してください。
+          CoreS3 が USB でつながっているか確認してください。
         </template>
         <template v-else>
           Android BLE ブリッジが起動していることを確認してください。
@@ -64,7 +65,7 @@ onMounted(async () => {
           class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors"
           @click="connect"
         >
-          {{ isWebSerialSupported() ? '手動で接続' : '再接続' }}
+          {{ isWebSerialSupported() ? 'USB デバイスを選択' : '再接続' }}
         </button>
         <button
           class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition-colors"
@@ -86,7 +87,7 @@ onMounted(async () => {
             />
             体温計
           </span>
-          <span class="flex items-center gap-2">
+          <span v-if="SHOW_BLOOD_PRESSURE" class="flex items-center gap-2">
             <span
               class="w-2.5 h-2.5 rounded-full"
               :class="bloodPressureConnected ? 'bg-green-500' : 'bg-gray-300'"
@@ -96,7 +97,7 @@ onMounted(async () => {
         </div>
 
         <!-- 測定値カード -->
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid gap-3" :class="SHOW_BLOOD_PRESSURE ? 'grid-cols-2' : 'grid-cols-1'">
           <!-- 体温 -->
           <div
             class="rounded-xl p-4 text-center"
@@ -112,6 +113,7 @@ onMounted(async () => {
 
           <!-- 血圧 -->
           <div
+            v-if="SHOW_BLOOD_PRESSURE"
             class="rounded-xl p-4 text-center"
             :class="latestBloodPressure ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 border border-gray-200'"
           >
