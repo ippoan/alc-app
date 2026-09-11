@@ -704,6 +704,49 @@ describe('useCoreS3Serial', () => {
       expect(order).toEqual(['open', 'json'])
     })
 
+    it('onOpen: 接続済みで登録するとその場で 1 回だけ呼び、掴み直したらまた 1 回 (Refs #238)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const opened: number[] = []
+
+      core.onOpen(() => opened.push(1))
+      expect(opened).toEqual([1])
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(opened).toEqual([1])
+
+      await core.release()
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(core.isConnected.value).toBe(true)
+      expect(opened).toEqual([1, 1])
+    })
+
+    it('onOpen: 未接続で登録すると、接続したときに 1 回だけ呼ぶ', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const opened: number[] = []
+
+      core.onOpen(() => opened.push(1))
+      expect(opened).toEqual([])
+
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      await connect()
+      expect(opened).toEqual([1])
+    })
+
+    it('onOpen: 接続時の配布の中で登録した cb も 1 回だけ (登録時と接続時で 2 回にならない)', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const inner: number[] = []
+      core.onOpen(() => core.onOpen(() => inner.push(1)))
+
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      await connect()
+      expect(inner).toEqual([1])
+    })
+
     it('release でポートを返すと onClose が呼ばれ、登録は残るので掴み直す', async () => {
       const dev = createMockPort()
       await connectWithJson(dev)
@@ -728,6 +771,68 @@ describe('useCoreS3Serial', () => {
 
       await vi.advanceTimersByTimeAsync(30000)
       expect(dev.port.open).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ---------- startupProbe (Refs ippoan/alc-app#238) ----------
+
+  describe('startupProbe', () => {
+    it('何度呼んでも 1 本で、claim されたら true (isStartupProbing は false → true → false)', async () => {
+      const dev = createMockPort()
+      const getPorts = vi.fn(async () => [dev.port])
+      installSerialMock({ getPorts })
+      await load()
+      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      expect(core.isStartupProbing.value).toBe(false)
+
+      const first = core.startupProbe()
+      expect(core.isStartupProbing.value).toBe(true)
+      expect(core.startupProbe()).toBe(first)
+      // 別の呼び出し元 (別の useCoreS3Serial()) からも同じ 1 本
+      expect(mod.useCoreS3Serial().startupProbe()).toBe(first)
+
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(first).resolves.toBe(true)
+      expect(core.isStartupProbing.value).toBe(false)
+      expect(core.isConnected.value).toBe(true)
+      expect(getPorts).toHaveBeenCalledTimes(1)
+    })
+
+    it('claim されなければ 3 秒で false、以後は同じ 1 本を返して待たない', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+
+      const first = core.startupProbe()
+      let settled = false
+      void first.then(() => { settled = true })
+
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(settled).toBe(false)
+      expect(core.isStartupProbing.value).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(first).resolves.toBe(false)
+      expect(core.isStartupProbing.value).toBe(false)
+
+      expect(core.startupProbe()).toBe(first)
+      expect(core.isStartupProbing.value).toBe(false)
+    })
+
+    it('接続済みなら待たずに true', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      await expect(core.startupProbe()).resolves.toBe(true)
+      expect(core.isStartupProbing.value).toBe(false)
+    })
+
+    it('WebSerial 非対応なら探索せず即 false (isStartupProbing は立たない)', async () => {
+      await load()
+
+      const p = core.startupProbe()
+      expect(core.isStartupProbing.value).toBe(false)
+      await expect(p).resolves.toBe(false)
+      expect(core.isStartupProbing.value).toBe(false)
     })
   })
 

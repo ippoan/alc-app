@@ -148,7 +148,9 @@ export function useDeviceToken() {
 
   /**
    * CoreS3 が USB で繋がっていれば、その ed25519 鍵の署名で auth-worker
-   * (#552) から短命 JWT を取りに行く。未接続 / 抑止期間中 / いずれかの失敗
+   * (#552) から短命 JWT を取りに行く。未接続なら起動時の探索 (`startupProbe`、
+   * 起動から最大 3 秒で 1 回だけ) を待ち、それでも未接続なら null (以後は待たずに即 null)。
+   * 抑止期間中 / いずれかの失敗
    * (401 `{error:"invalid_alarm_token"}` / 429 / タイムアウト / 通信エラー、
    * いずれも HTTP status だけで判定する) なら null を返し、CORE_S3_BACKOFF_MS の
    * 間この経路を抑止する (再接続での解除はしない)。失敗理由は `lastError` に残し、
@@ -156,7 +158,11 @@ export function useDeviceToken() {
    */
   async function tryCoreS3Jwt(nowMs: number): Promise<string | null> {
     if (nowMs < coreS3BackoffUntilMs) return null
-    if (!coreS3.isConnected.value) return null
+    if (!coreS3.isConnected.value) {
+      // 結果の真偽ではなく接続を見直す — 探索で繋がった後に抜かれていれば署名は頼めない
+      await coreS3.startupProbe()
+      if (!coreS3.isConnected.value) return null
+    }
 
     lastError.value = null
     try {

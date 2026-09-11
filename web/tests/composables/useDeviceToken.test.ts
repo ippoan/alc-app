@@ -20,6 +20,9 @@ const coreS3Mock = vi.hoisted(() => ({
   isConnected: { value: false },
   request: vi.fn(),
   onClose: vi.fn(),
+  // 起動時の探索 (Refs #238)。既定は「繋がらなかった」
+  startupProbe: vi.fn(async () => false),
+  isStartupProbing: { value: false },
 }))
 mockNuxtImport('useCoreS3Serial', () => () => coreS3Mock)
 
@@ -45,6 +48,8 @@ beforeEach(() => {
   coreS3Mock.isConnected.value = false
   coreS3Mock.request.mockReset()
   coreS3Mock.onClose.mockReset()
+  coreS3Mock.startupProbe.mockReset()
+  coreS3Mock.startupProbe.mockImplementation(async () => false)
   authMock.deviceTenantId.value = null
   signAlarmDeviceNonceMock.mockReset()
 })
@@ -321,6 +326,7 @@ describe('useDeviceToken (#434 step 3c)', () => {
 
     it('CoreS3 未接続なら nonce を呼ばず、既存の credential 経路だけを試す', async () => {
       coreS3Mock.isConnected.value = false
+      coreS3Mock.startupProbe.mockImplementation(async () => false)
       const fetchMock = routeFetch({
         '/device/token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 'cred-jwt', expires_in: 3600 }) }),
       })
@@ -331,8 +337,91 @@ describe('useDeviceToken (#434 step 3c)', () => {
       storeKioskCredential(ID, SECRET)
 
       expect(await getDeviceJwt()).toBe('cred-jwt')
+      expect(coreS3Mock.startupProbe).toHaveBeenCalledTimes(1)
       expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
       expect(fetchMock.mock.calls.some(([u]) => (u as string).includes('alarm-nonce'))).toBe(false)
+    })
+
+    it('未接続でも起動時の探索で繋がれば (true)、CoreS3 の署名で JWT を取る (Refs #238)', async () => {
+      coreS3Mock.isConnected.value = false
+      coreS3Mock.startupProbe.mockImplementation(async () => {
+        coreS3Mock.isConnected.value = true
+        return true
+      })
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      vi.stubGlobal('fetch', routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+      }))
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(coreS3Mock.startupProbe).toHaveBeenCalledTimes(1)
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', coreS3Mock.request)
+    })
+
+    it('探索が false なら null (credential 無し)。抑止も lastError も立てない', async () => {
+      coreS3Mock.isConnected.value = false
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt, lastError } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(lastError.value).toBeNull()
+    })
+
+    it('探索が true でも、その後に抜かれて未接続なら署名を頼まず null', async () => {
+      coreS3Mock.isConnected.value = false
+      coreS3Mock.startupProbe.mockImplementation(async () => true)
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt, lastError } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
+      expect(lastError.value).toBeNull()
+    })
+
+    it('待つのは起動時の 1 本の 3 秒だけ — 2 回目以降は解決済みの 1 本を見て即 null', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        coreS3Mock.isConnected.value = false
+        // 実体と同じく「1 本を共有する」探索: 3 秒で false に解決する
+        let probe: Promise<boolean> | null = null
+        coreS3Mock.startupProbe.mockImplementation(() => {
+          probe ??= new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3000))
+          return probe
+        })
+        vi.stubGlobal('fetch', vi.fn())
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt } = useDeviceToken()
+
+        let firstDone = false
+        const first = getDeviceJwt().finally(() => { firstDone = true })
+        await vi.advanceTimersByTimeAsync(2999)
+        expect(firstDone).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+        await expect(first).resolves.toBeNull()
+
+        let secondDone = false
+        const second = getDeviceJwt().finally(() => { secondDone = true })
+        // タイマーを進めずに解決する (新たに 3 秒待たない)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(secondDone).toBe(true)
+        await expect(second).resolves.toBeNull()
+      }
+      finally {
+        vi.useRealTimers()
+      }
     })
 
     it('S3R が 401/429 で失敗すれば null に落ちて credential 経路を試す', async () => {

@@ -47,7 +47,7 @@ const recentPunches = ref<{ key: string; name: string; time: string }[]>([])
 const highlightedKey = ref<string | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | null = null
 
-const { getDeviceJwt } = useDeviceToken()
+const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
 
 /**
  * CoreS3 経由の自動端末登録 (#213) の失敗理由。成功 / 未実行なら null。
@@ -118,14 +118,29 @@ async function loadTodayPunches() {
   catch (e) { console.error('[TimePunchKiosk] Failed to load today punches:', e) }
 }
 
-onMounted(async () => {
-  updateScreenSize()
-  window.addEventListener('resize', updateScreenSize)
-
+async function loadEmployees() {
   try {
     employees.value = await getEmployees()
   }
   catch (e) { console.error('[TimePunchKiosk] Failed to load employees:', e) }
+}
+
+/**
+ * 端末 JWT が取れたら一覧を引き直す (Refs ippoan/alc-app#238)。起動時は CoreS3 を
+ * 最大 3 秒待つが、初回の open で CoreS3 がリセットされると claim がそれを超えることがあり、
+ * そのとき最初の一覧は JWT 無しで取りに行って空のまま残るため
+ */
+watch(hasDeviceJwt, (has) => {
+  if (!has) return
+  void loadEmployees()
+  void loadTodayPunches()
+})
+
+onMounted(async () => {
+  updateScreenSize()
+  window.addEventListener('resize', updateScreenSize)
+
+  await loadEmployees()
   // 購読が張れれば onopen で 1 回引き直すが、張れない場合もあるのでここでも引く
   await loadTodayPunches()
   void watch$.connect()
