@@ -3,6 +3,7 @@ import type { FaceAuthResult, MeasurementResult, SubmitMedicalData } from '~/typ
 import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -465,7 +466,7 @@ onUnmounted(() => {
       <!-- Step 5: 体温・血圧 (業務前のみ) -->
       <div v-else-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">体温・血圧</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}</h2>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
           <div v-if="!isDemoMode" class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
@@ -556,14 +557,14 @@ onUnmounted(() => {
           />
           <!-- 医療データ入力元バッジ (業務前のみ) -->
           <div
-            v-if="medicalInputSource && isPreOperation && (session.temperature || session.systolic)"
+            v-if="medicalInputSource && isPreOperation && (session.temperature || (SHOW_BLOOD_PRESSURE && session.systolic))"
             class="mt-3 text-center text-xs"
           >
             <span
               class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
               :class="medicalInputSource === 'manual' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'"
             >
-              体温・血圧: {{ medicalInputSource === 'manual' ? '手動入力' : 'BLE機器' }}
+              {{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'BLE機器' }}
             </span>
           </div>
         </div>

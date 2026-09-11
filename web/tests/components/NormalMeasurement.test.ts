@@ -128,17 +128,17 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     wrapper.unmount()
   })
 
-  it('乗務員が引ければ顔認証を経ずに体温・血圧ステップへ進む', async () => {
+  it('乗務員が引ければ顔認証を経ずに体温ステップへ進む (血圧は隠す、Refs #238)', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountNfcStep()
 
     await touch(wrapper, '2601012901010')
 
-    // 現在ステップのパンくず (青) が「体温・血圧」
+    // 現在ステップのパンくず (青) が「体温」(血圧は隠しているのでラベルからも落ちる)
     const active = wrapper.findAll('div.rounded-full').filter(d => d.classes('bg-blue-600'))
     expect(active).toHaveLength(1)
-    expect(active[0]!.text()).toBe('体温・血圧')
-    expect(wrapper.text()).toContain('体温・血圧')
+    expect(active[0]!.text()).toBe('体温')
+    expect(wrapper.text()).toContain('体温')
     wrapper.unmount()
   })
 
@@ -157,7 +157,7 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     const wrapper = await mountNfcStep()
 
     const labels = wrapper.findAll('div.rounded-full').map(d => d.text())
-    expect(labels).toEqual(['NFC', '体温・血圧', '測定', '結果'])
+    expect(labels).toEqual(['NFC', '体温', '測定', '結果'])
     wrapper.unmount()
   })
 
