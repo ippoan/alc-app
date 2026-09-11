@@ -204,6 +204,7 @@ describe('useBleGateway', () => {
     expect(gw.latestTemperature.value).toBeNull()
     expect(gw.latestBloodPressure.value).toBeNull()
     expect(gw.latestAlcohol.value).toBeNull()
+    expect(gw.alcoholStage.value).toBeNull()
     expect(gw.gatewayVersion.value).toBeNull()
     expect(gw.transport.value).toBeNull()
     expect(gw.hasMedicalData.value).toBe(false)
@@ -375,13 +376,14 @@ describe('useBleGateway', () => {
         expect(gw.error.value).toBe('BLE scan failed')
       })
 
-      it('alcohol → latestAlcohol', async () => {
+      it('alcohol → latestAlcohol、alcoholStage は result_received', async () => {
         const ws = await connectWs()
         ws.simulateMessage({ type: 'alcohol', value: 0.15, unit: 'mg/L', result: 'normal', use_count: 42 })
         expect(gw.latestAlcohol.value!.value).toBe(0.15)
         expect(gw.latestAlcohol.value!.unit).toBe('mg/L')
         expect(gw.latestAlcohol.value!.result).toBe('normal')
         expect(gw.latestAlcohol.value!.useCount).toBe(42)
+        expect(gw.alcoholStage.value).toBe('result_received')
       })
 
       it('alcohol (吹込不良、value=0固定)', async () => {
@@ -391,10 +393,11 @@ describe('useBleGateway', () => {
         expect(gw.latestAlcohol.value!.value).toBe(0)
       })
 
-      it('alcohol の形が壊れている (result 無し) → latestAlcohol は変化しない', async () => {
+      it('alcohol の形が壊れている (result 無し) → latestAlcohol・alcoholStage は変化しない', async () => {
         const ws = await connectWs()
         ws.simulateMessage({ type: 'alcohol' })
         expect(gw.latestAlcohol.value).toBeNull()
+        expect(gw.alcoholStage.value).toBeNull()
       })
 
       it('alcohol で value が欠けている (result はある) → 0 扱い', async () => {
@@ -509,16 +512,18 @@ describe('useBleGateway', () => {
     expect(gw.hasMedicalData.value).toBe(false)
   })
 
-  it('clearAlcoholReading → latestAlcohol だけクリア (他の測定値は触らない)', async () => {
+  it('clearAlcoholReading → latestAlcohol だけクリア (他の測定値は触らない)。alcoholStage も result_received を消す', async () => {
     await gw.connect()
     const ws = MockWebSocket.instances[0]!
     ws.simulateOpen()
     ws.simulateMessage({ type: 'temperature', value: 36.7, unit: 'celsius' })
     ws.simulateMessage({ type: 'alcohol', value: 0.1, unit: 'mg/L', result: 'normal', use_count: 1 })
+    expect(gw.alcoholStage.value).toBe('result_received')
 
     gw.clearAlcoholReading()
     expect(gw.latestAlcohol.value).toBeNull()
     expect(gw.latestTemperature.value!.value).toBe(36.7)
+    expect(gw.alcoholStage.value).toBeNull()
   })
 
   // =============================================
@@ -768,6 +773,106 @@ describe('useBleGateway', () => {
       })
     })
 
+    describe('EVT FC1200 → alcoholStage (#238)', () => {
+      it('BLOW_WAITING → blow_waiting', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200 BLOW_WAITING\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+      })
+
+      it('WARMING <sec> <days> → warming_up / MEASURING → measuring / CONNECTED <model> → connected', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200 WARMING 120 5\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('warming_up')
+
+        dev.emit('EVT FC1200 MEASURING\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('measuring')
+
+        dev.emit('EVT FC1200 CONNECTED FC-1200\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('connected')
+      })
+
+      it('BLOW_TIMEOUT → 段階なし (null) に戻る', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200 BLOW_WAITING\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+
+        dev.emit('EVT FC1200 BLOW_TIMEOUT\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBeNull()
+      })
+
+      it('未知の args[0] → null (対応表に無い値は握りつぶす)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200 BLOW_WAITING\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+
+        dev.emit('EVT FC1200 SOME_FUTURE_STATE\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBeNull()
+      })
+
+      it('args が無い EVT FC1200 → null', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBeNull()
+      })
+
+      it('FC1200 以外の EVT は無視する', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200 BLOW_WAITING\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+
+        dev.emit('EVT NFC_READY\n')
+        await vi.advanceTimersByTimeAsync(0)
+        // FC1200 以外の EVT では上書きされない
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+      })
+
+      it('alcohol の JSON → result_received (transport 共通の processMessage)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('{"type":"alcohol","value":0.1,"unit":"mg/L","result":"normal","use_count":1}\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.alcoholStage.value).toBe('result_received')
+      })
+
+      it('clearAlcoholReading は blow_waiting を消さない (次の運転者の mount 時に既に吹込中のことがある)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        dev.emit('EVT FC1200 BLOW_WAITING\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+
+        gw.clearAlcoholReading()
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+      })
+    })
+
     describe('sendCommand / resetGateway (serial)', () => {
       it('JSON 1 行として書く', async () => {
         const dev = createMockPort()
@@ -875,6 +980,7 @@ describe('useBleGateway', () => {
     describe('公開 API', () => {
       it('返すキーは #182 の前後で変わらない (呼び出し元は触らない)', () => {
         expect(Object.keys(gw).sort()).toEqual([
+          'alcoholStage',
           'autoConnect',
           'bloodPressureConnected',
           'clearAlcoholReading',
