@@ -17,12 +17,12 @@ const SECRET = 'sec-xyz'
 // useCoreS3Serial / useAuth は Nuxt auto-import なので mockNuxtImport、
 // signAlarmDeviceNonce は useDeviceToken.ts が明示 import するので vi.mock で差し替える。
 const coreS3Mock = vi.hoisted(() => ({
+  isSupported: true as boolean,
   isConnected: { value: false },
   request: vi.fn(),
   onClose: vi.fn(),
   // 起動時の探索 (Refs #238)。既定は「繋がらなかった」
   startupProbe: vi.fn(async () => false),
-  isStartupProbing: { value: false },
 }))
 mockNuxtImport('useCoreS3Serial', () => () => coreS3Mock)
 
@@ -45,6 +45,7 @@ beforeEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
   localStorage.clear()
+  coreS3Mock.isSupported = true
   coreS3Mock.isConnected.value = false
   coreS3Mock.request.mockReset()
   coreS3Mock.onClose.mockReset()
@@ -711,6 +712,133 @@ describe('useDeviceToken (#434 step 3c)', () => {
       useDeviceToken()
 
       expect(coreS3Mock.onClose).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('startupDeviceJwt / isStartupJwtPending (Refs #238)', () => {
+    /** 積まれた microtask (race の finally まで) を流し切る */
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+    /** 起動時の探索で CoreS3 が繋がる (startupProbe が接続を立てて true) */
+    function probeConnects(): void {
+      coreS3Mock.startupProbe.mockImplementation(async () => {
+        coreS3Mock.isConnected.value = true
+        return true
+      })
+    }
+
+    it('探索で繋がれば JWT が取れるまで true、取れたら false。2 回目は同じ 1 本、途中の getDeviceJwt は合流する', async () => {
+      probeConnects()
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      let nonceCalls = 0
+      vi.stubGlobal('fetch', vi.fn((url: string) => {
+        if (url.endsWith('/device/alarm-nonce')) {
+          nonceCalls += 1
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
+      }))
+
+      const useDeviceToken = await load()
+      const { startupDeviceJwt, getDeviceJwt, isStartupJwtPending, hasDeviceJwt } = useDeviceToken()
+      expect(isStartupJwtPending.value).toBe(false)
+
+      const first = startupDeviceJwt()
+      expect(isStartupJwtPending.value).toBe(true)
+      expect(startupDeviceJwt()).toBe(first)
+      // onOpen → attemptClaim の getDeviceJwt() を模す: 起動中の取得に合流する
+      const joined = getDeviceJwt()
+
+      await expect(first).resolves.toBe('s3r-jwt')
+      await expect(joined).resolves.toBe('s3r-jwt')
+      await flush()
+      expect(nonceCalls).toBe(1)
+      expect(hasDeviceJwt.value).toBe(true)
+      expect(isStartupJwtPending.value).toBe(false)
+    })
+
+    it('探索で繋がらなければ (CoreS3 無し) null で解決した時点で false、fetch しない', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { startupDeviceJwt, isStartupJwtPending } = useDeviceToken()
+
+      const p = startupDeviceJwt()
+      expect(isStartupJwtPending.value).toBe(true)
+      await expect(p).resolves.toBeNull()
+      await flush()
+      expect(isStartupJwtPending.value).toBe(false)
+      expect(coreS3Mock.startupProbe).toHaveBeenCalledTimes(1)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('起動から 3 秒で取得が終わっていなくても下り、その後に取れれば hasDeviceJwt=true', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        probeConnects()
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        let resolveToken: ((res: unknown) => void) | null = null
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+          if (url.endsWith('/device/alarm-nonce')) {
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+          }
+          return new Promise((resolve) => { resolveToken = resolve })
+        }))
+
+        const useDeviceToken = await load()
+        const { startupDeviceJwt, isStartupJwtPending, hasDeviceJwt } = useDeviceToken()
+
+        const p = startupDeviceJwt()
+        await vi.advanceTimersByTimeAsync(2999)
+        expect(isStartupJwtPending.value).toBe(true)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(isStartupJwtPending.value).toBe(false)
+        expect(hasDeviceJwt.value).toBe(false)
+
+        expect(resolveToken).not.toBeNull()
+        resolveToken!({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
+        await expect(p).resolves.toBe('s3r-jwt')
+        expect(hasDeviceJwt.value).toBe(true)
+      }
+      finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('WebSerial 非対応なら null、フラグは立たず、探索も fetch もしない', async () => {
+      coreS3Mock.isSupported = false
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { startupDeviceJwt, isStartupJwtPending } = useDeviceToken()
+
+      const p = startupDeviceJwt()
+      expect(isStartupJwtPending.value).toBe(false)
+      await expect(p).resolves.toBeNull()
+      expect(isStartupJwtPending.value).toBe(false)
+      expect(coreS3Mock.startupProbe).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('取得に失敗しても (alarm-token 401) 1 本が解決した時点で下り、lastError が残る', async () => {
+      probeConnects()
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      vi.stubGlobal('fetch', vi.fn((url: string) => {
+        if (url.endsWith('/device/alarm-nonce')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+        }
+        return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ error: 'invalid_alarm_token' }) })
+      }))
+
+      const useDeviceToken = await load()
+      const { startupDeviceJwt, isStartupJwtPending, lastError } = useDeviceToken()
+
+      await expect(startupDeviceJwt()).resolves.toBeNull()
+      await flush()
+      expect(isStartupJwtPending.value).toBe(false)
+      expect(lastError.value).toContain('alarm-token http 401')
     })
   })
 })

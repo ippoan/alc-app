@@ -111,11 +111,9 @@ let logReplyGeneration = 0
 
 /**
  * 起動時の探索 (startupProbe) の 1 本。起動から数えて 1 回だけ作り、以後は同じものを返す —
- * 端末 JWT の取得も「確認中」の表示も、この 1 本の 3 秒を共有する (Refs ippoan/alc-app#238)
+ * 端末 JWT の取得 (useDeviceToken) がこの 1 本を待つ (Refs ippoan/alc-app#238)
  */
 let startupProbePromise: Promise<boolean> | null = null
-/** startupProbePromise が未解決の間だけ true */
-const isStartupProbing = ref(false)
 
 /**
  * 行の接頭辞から素性を決める。
@@ -353,13 +351,9 @@ export function useCoreS3Serial() {
    * 起動時の探索。初回の呼び出しで connect(0) を始め、claim されたら true、
    * CLAIM_TIMEOUT (3 秒) で false に解決する。2 回目以降は同じ promise を返すので、
    * 待つのは起動から数えて 1 回だけ。WebSerial 非対応なら探索せず false
-   * (isStartupProbing も立てない)
    */
   function startupProbe(): Promise<boolean> {
-    if (!startupProbePromise) {
-      if (isSupported) isStartupProbing.value = true
-      startupProbePromise = connect(0).finally(() => { isStartupProbing.value = false })
-    }
+    if (!startupProbePromise) startupProbePromise = connect(0)
     return startupProbePromise
   }
 
@@ -399,7 +393,6 @@ export function useCoreS3Serial() {
     sendGrace,
     connect,
     startupProbe,
-    isStartupProbing: readonly(isStartupProbing),
     requestPort,
     release,
     disconnect,

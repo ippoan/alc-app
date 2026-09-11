@@ -7,7 +7,8 @@
  * あいだは `useDeviceToken` の署名先が CoreS3 に切り替わっており (#234-2)、
  * `getDeviceJwt()` を呼べば nonce 取得・署名・mint まで自力で完結する。ここは
  * 「繋がったら 1 回呼んでおく」だけの先取りに縮小した (isDeviceActivated には無関係に動く)。
- * 起動時の CoreS3 の探索 (`startupProbe`) もここで 1 回だけ始める (Refs ippoan/alc-app#238)。
+ * 起動時の 1 本 (`useDeviceToken().startupDeviceJwt`: CoreS3 の探索 → 最初の端末 JWT の取得、
+ * 上限 3 秒) もここで 1 回だけ始める (Refs ippoan/alc-app#238)。
  *
  * ファイル名と戻り値の形 `{ lastError, attemptClaim }` は据え置く
  * (`TimePunchKiosk.vue` が `useHubClaim().lastError` を参照するため)。
@@ -18,7 +19,7 @@
 let listenerInstalled = false
 
 export function useHubClaim() {
-  const { getDeviceJwt, lastError } = useDeviceToken()
+  const { getDeviceJwt, lastError, startupDeviceJwt } = useDeviceToken()
   const coreS3 = useCoreS3Serial()
 
   /** CoreS3 接続中に device JWT を先取りする (getDeviceJwt 自体が single-flight/cache を持つ) */
@@ -31,9 +32,10 @@ export function useHubClaim() {
   if (!listenerInstalled) {
     listenerInstalled = true
     coreS3.onOpen(() => { void attemptClaim() })
-    // 起動時に CoreS3 を 1 回探す (最大 3 秒。getDeviceJwt の待ちもこの 1 本を共有する)。
+    // 起動時の 1 本 (CoreS3 の探索 ≤3 秒 + 最初の端末 JWT の取得) をここで始める。
+    // onOpen の attemptClaim は起動中なら同じ in-flight に合流する (二重取得にならない)。
     // 繋がると 3 秒ごとの `HB OK` が全ページで始まるが、運行者端末では NFC の画面で既に同じことが起きている
-    void coreS3.startupProbe()
+    void startupDeviceJwt()
   }
 
   return {
