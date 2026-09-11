@@ -30,7 +30,6 @@ const licenseExpiryStatus = ref<LicenseExpiryStatus | null>(null)
 const { isOnline, pending, isSyncing, save: offlineSave, syncQueue } = useOfflineSync()
 
 // シングルトン再呼出で共有状態取得
-const { hasKioskAccess } = useKioskAccess()
 const { isSyncing: isFaceSyncing, sync: faceSync } = useFaceSync()
 
 // 手動入力フォールバック
@@ -362,15 +361,6 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
   ]">
     <!-- 左列 (横画面) / 上部 (縦画面): バナー + ステップ + フッターリンク -->
     <div :class="landscape ? 'w-2/5 flex flex-col shrink-0' : 'w-full flex flex-col items-center'">
-      <!-- 端末未アクティベート警告 -->
-      <ClientOnly>
-        <div
-          v-if="!hasKioskAccess"
-          :class="['w-full bg-red-50 border border-red-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-red-700', landscape ? '' : 'max-w-md']"
-        >
-          端末未登録 — <NuxtLink to="/login" class="underline font-medium">管理者ログイン</NuxtLink>で端末を登録してください
-        </div>
-      </ClientOnly>
       <!-- オフラインバナー -->
       <div
         v-if="!isOnline"

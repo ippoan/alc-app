@@ -9,6 +9,7 @@ const emit = defineEmits<{
 
 const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRead } = useNfcReader()
 const { latestVersion, checkLatestVersion, isUpdateAvailable } = useNfcBridgeUpdate()
+const { isCheckingKioskAccess } = useKioskAccess()
 
 // WebSerial の初回許可はユーザー操作が要る (CoreS3 直結のポート選択)
 const coreS3 = useCoreS3Serial()
@@ -75,6 +76,8 @@ onRead((event: NfcReadEvent) => {
 })
 
 const statusText = computed(() => {
+  // 起動時の CoreS3 探索中 (上限 3 秒) は「未検出」と確定させない (Refs #238)
+  if (isCheckingKioskAccess.value) return '確認中…'
   if (error.value) return error.value
   if (!isConnected.value) return 'NFC リーダー未接続'
   if ((readers.value?.length ?? 0) === 0) return 'NFC リーダー未検出'
@@ -154,7 +157,7 @@ const showNfcGuide = ref(false)
     <!-- 未接続時の案内 -->
     <!-- CoreS3 直結 (WebSerial): 常駐アプリは要らない。NFC ブリッジの接続状態とは切り離す —
          NFC ブリッジ (bridge/Android) が繋がっていても CoreS3 の USB 許可はまだかもしれない -->
-    <template v-if="canUseSerial && !coreS3.isConnected.value">
+    <template v-if="canUseSerial && !coreS3.isConnected.value && !isCheckingKioskAccess">
       <div class="flex flex-col items-center gap-2">
         <p class="text-sm text-center text-gray-500">
           CoreS3 が USB でつながっているか確認してください。<br>

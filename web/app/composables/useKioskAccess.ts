@@ -10,14 +10,23 @@
  *
  * `useAuth.ts` には置かない — `useDeviceToken` が `useAuth` の `deviceTenantId` を
  * 読むため、逆向きに `useAuth` から `useDeviceToken` を呼ぶと相互依存になる。
+ *
+ * `isCheckingKioskAccess` (Refs #238): 起動直後、CoreS3 の探索 (`useCoreS3Serial`
+ * `isStartupProbing`、上限 3 秒) が終わるまでは「まだ無い」と「このまま無い」を
+ * 区別できない。探索中は「未登録」の案内を出さず確認中として扱う。
  */
 export function useKioskAccess() {
   const { isAuthenticated, isDeviceActivated } = useAuth()
   const { hasDeviceJwt } = useDeviceToken()
+  const { isStartupProbing } = useCoreS3Serial()
 
   const hasKioskAccess = computed(() =>
     isAuthenticated.value || isDeviceActivated.value || hasDeviceJwt.value,
   )
 
-  return { hasKioskAccess }
+  const isCheckingKioskAccess = computed(() =>
+    !hasKioskAccess.value && isStartupProbing.value,
+  )
+
+  return { hasKioskAccess, isCheckingKioskAccess }
 }

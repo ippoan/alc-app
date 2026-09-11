@@ -8,6 +8,9 @@ const accessToken = ref<string | null>(null)
 const deviceTenantId = ref<string | null>(null)
 const hasDeviceJwt = ref(false)
 
+// isStartupProbing は useCoreS3Serial.ts の起動時探索フラグ (Refs #238)。
+const isStartupProbing = ref(false)
+
 mockNuxtImport('useAuth', () => () => ({
   accessToken,
   deviceTenantId,
@@ -19,11 +22,17 @@ mockNuxtImport('useDeviceToken', () => () => ({
   hasDeviceJwt,
 }))
 
+mockNuxtImport('useCoreS3Serial', () => () => ({
+  startupProbe: async () => false,
+  isStartupProbing,
+}))
+
 describe('useKioskAccess', () => {
   beforeEach(() => {
     accessToken.value = null
     deviceTenantId.value = null
     hasDeviceJwt.value = false
+    isStartupProbing.value = false
   })
 
   it('3 条件すべて false なら hasKioskAccess は false', async () => {
@@ -51,5 +60,36 @@ describe('useKioskAccess', () => {
     const { useKioskAccess } = await import('~/composables/useKioskAccess')
     const { hasKioskAccess } = useKioskAccess()
     expect(hasKioskAccess.value).toBe(true)
+  })
+
+  // isCheckingKioskAccess の真理値表 (hasKioskAccess × isStartupProbing, Refs #238)
+  describe('isCheckingKioskAccess', () => {
+    it('hasKioskAccess=false, isStartupProbing=false → false (確認中ではない=未登録確定)', async () => {
+      const { useKioskAccess } = await import('~/composables/useKioskAccess')
+      const { isCheckingKioskAccess } = useKioskAccess()
+      expect(isCheckingKioskAccess.value).toBe(false)
+    })
+
+    it('hasKioskAccess=false, isStartupProbing=true → true (確認中)', async () => {
+      isStartupProbing.value = true
+      const { useKioskAccess } = await import('~/composables/useKioskAccess')
+      const { isCheckingKioskAccess } = useKioskAccess()
+      expect(isCheckingKioskAccess.value).toBe(true)
+    })
+
+    it('hasKioskAccess=true, isStartupProbing=false → false (そもそもアクセスあり)', async () => {
+      accessToken.value = 'jwt'
+      const { useKioskAccess } = await import('~/composables/useKioskAccess')
+      const { isCheckingKioskAccess } = useKioskAccess()
+      expect(isCheckingKioskAccess.value).toBe(false)
+    })
+
+    it('hasKioskAccess=true, isStartupProbing=true → false (アクセスがあるので確認中扱いにしない)', async () => {
+      accessToken.value = 'jwt'
+      isStartupProbing.value = true
+      const { useKioskAccess } = await import('~/composables/useKioskAccess')
+      const { isCheckingKioskAccess } = useKioskAccess()
+      expect(isCheckingKioskAccess.value).toBe(false)
+    })
   })
 })

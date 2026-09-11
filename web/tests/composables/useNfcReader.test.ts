@@ -30,6 +30,8 @@ const coreMock = {
   requestPort: vi.fn(async () => true),
   release: vi.fn(async () => {}),
   disconnect: vi.fn(async () => {}),
+  startupProbe: vi.fn(async () => false),
+  isStartupProbing: ref(false),
 }
 mockNuxtImport('useCoreS3Serial', () => () => ({
   ...coreMock,
