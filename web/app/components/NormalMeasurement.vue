@@ -564,7 +564,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
               autoplay
               playsinline
               muted
-              class="w-40 rounded-lg object-cover border border-gray-200"
+              class="w-full aspect-video rounded-lg object-cover border border-gray-200"
             />
             <div
               v-if="isRecording"
