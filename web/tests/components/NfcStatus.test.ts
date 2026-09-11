@@ -34,6 +34,9 @@ mockNuxtImport('useFingerprint', () => () => ({
   deviceModel: ref<string | null>(null),
 }))
 
+const isCheckingKioskAccess = ref(false)
+mockNuxtImport('useKioskAccess', () => () => ({ isCheckingKioskAccess }))
+
 let webSerialSupported = true
 vi.mock('~/utils/webserial', () => ({
   isWebSerialSupported: () => webSerialSupported,
@@ -48,6 +51,7 @@ describe('NfcStatus — serial ブロックの表示条件 (Refs #234)', () => {
     isConnected.value = false
     coreS3Connected.value = false
     webSerialSupported = true
+    isCheckingKioskAccess.value = false
     requestPortMock.mockClear()
   })
 
@@ -92,6 +96,33 @@ describe('NfcStatus — serial ブロックの表示条件 (Refs #234)', () => {
     const button = findButtonByText(wrapper, 'USB デバイスを選択')
     await (button as unknown as { trigger: (e: string) => Promise<void> }).trigger('click')
     expect(requestPortMock).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  // 起動時 CoreS3 探索中は「未登録」確定の表示を出さない (Refs #238)
+  it('確認中は USB 許可ボタンを出さない (起動時 CoreS3 探索中)', async () => {
+    isCheckingKioskAccess.value = true
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeFalsy()
+    wrapper.unmount()
+  })
+
+  it('確認中は「NFC リーダー未検出」を出さない', async () => {
+    isConnected.value = true
+    isCheckingKioskAccess.value = true
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).not.toContain('NFC リーダー未検出')
+    wrapper.unmount()
+  })
+
+  it('確認が終われば USB 許可ボタン・ステータス文言が出る', async () => {
+    isCheckingKioskAccess.value = true
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeFalsy()
+
+    isCheckingKioskAccess.value = false
+    await wrapper.vm.$nextTick()
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeTruthy()
     wrapper.unmount()
   })
 })

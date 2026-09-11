@@ -11,7 +11,6 @@ const props = defineProps<{
 }>()
 
 // シングルトン再呼出で共有状態取得
-const { hasKioskAccess } = useKioskAccess()
 const { isSyncing: isFaceSyncing } = useFaceSync()
 
 // デモモード (prop 優先、なければ URL クエリ)
@@ -301,16 +300,6 @@ onUnmounted(() => {
       <!-- デモ用点呼予定作成 (NFCステップのみ表示) -->
       <ClientOnly>
         <DemoScheduleCreator v-if="isDemoMode && !remoteMode && step === 'nfc'" :class="['w-full mb-4', landscape ? '' : 'max-w-md']" />
-      </ClientOnly>
-
-      <!-- 端末未アクティベート警告 -->
-      <ClientOnly>
-        <div
-          v-if="!hasKioskAccess"
-          :class="['w-full bg-red-50 border border-red-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-red-700', landscape ? '' : 'max-w-md']"
-        >
-          端末未登録 — <NuxtLink to="/login" class="underline font-medium">管理者ログイン</NuxtLink>で端末を登録してください
-        </div>
       </ClientOnly>
 
       <!-- 顔データ同期中 -->

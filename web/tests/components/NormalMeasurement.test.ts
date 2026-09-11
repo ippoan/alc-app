@@ -43,11 +43,6 @@ mockNuxtImport('useOfflineSync', () => () => ({
   syncQueue: vi.fn(),
 }))
 
-// 「未登録」の判定は useKioskAccess に一本化した (Refs #234)。既定は true (未登録
-// バナーの有無に依存しない他テストに影響させない)、専用テストだけ false に倒す。
-const hasKioskAccess = ref(true)
-mockNuxtImport('useKioskAccess', () => () => ({ hasKioskAccess }))
-
 const faceSyncMock = vi.fn(async () => {})
 mockNuxtImport('useFaceSync', () => () => ({
   isSyncing: ref(false),
@@ -99,21 +94,11 @@ async function touch(wrapper: Awaited<ReturnType<typeof mountNfcStep>>, nfcId: s
 describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    hasKioskAccess.value = true
   })
 
-  it('hasKioskAccess が false なら「端末未登録」を出す', async () => {
-    hasKioskAccess.value = false
-    const wrapper = await mountNfcStep()
-    expect(wrapper.text()).toContain('端末未登録')
-    wrapper.unmount()
-  })
-
-  it('hasKioskAccess が true なら「端末未登録」を出さない', async () => {
-    const wrapper = await mountNfcStep()
-    expect(wrapper.text()).not.toContain('端末未登録')
-    wrapper.unmount()
-  })
+  // 「端末未登録」の案内は index.vue の DeviceUnregisteredBanner 1 つに寄せた (Refs #238)。
+  // 同じ画面に 2 本出ないよう、ここ (NormalMeasurement 内) の帯は削除済み — 表示条件の
+  // テストは tests/components/DeviceUnregisteredBanner.test.ts へ移した。
 
   it('免許証が乗務員に未登録 (by-nfc が失敗) なら赤枠に理由と次の操作を出す', async () => {
     getEmployeeByNfcIdMock.mockRejectedValue(new Error('404'))
