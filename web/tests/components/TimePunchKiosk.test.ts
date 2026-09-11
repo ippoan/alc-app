@@ -32,6 +32,8 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   isConnected: readonly(coreS3Connected),
   isSupported: coreS3Supported.value,
   requestPort: coreS3RequestPortMock,
+  startupProbe: vi.fn(async () => false),
+  isStartupProbing: ref(false),
 }))
 
 mockNuxtImport('useAuth', () => () => ({

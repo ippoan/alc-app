@@ -8,8 +8,7 @@ const accessToken = ref<string | null>(null)
 const deviceTenantId = ref<string | null>(null)
 const hasDeviceJwt = ref(false)
 
-// isStartupProbing は兄弟 #p135-c238-1 が useCoreS3Serial.ts に足す予定 (未マージ)。
-// ここでは mock だけで検証し、マージ後に rebase してそのまま通す (Refs #238)。
+// isStartupProbing は useCoreS3Serial.ts の起動時探索フラグ (Refs #238)。
 const isStartupProbing = ref(false)
 
 mockNuxtImport('useAuth', () => () => ({
@@ -24,6 +23,7 @@ mockNuxtImport('useDeviceToken', () => () => ({
 }))
 
 mockNuxtImport('useCoreS3Serial', () => () => ({
+  startupProbe: async () => false,
   isStartupProbing,
 }))
 

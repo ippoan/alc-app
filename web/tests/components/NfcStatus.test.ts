@@ -27,6 +27,8 @@ const requestPortMock = vi.fn(async () => true)
 mockNuxtImport('useCoreS3Serial', () => () => ({
   isConnected: readonly(coreS3Connected),
   requestPort: requestPortMock,
+  startupProbe: vi.fn(async () => false),
+  isStartupProbing: ref(false),
 }))
 
 mockNuxtImport('useFingerprint', () => () => ({
