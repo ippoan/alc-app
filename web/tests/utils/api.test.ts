@@ -2184,6 +2184,91 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     await expect(getEmployees()).rejects.toThrow('API エラー (500): Server Error')
   })
 
+  // --- Content-Type (Refs #238) ---
+  // JSON の本文に Content-Type が無いとブラウザは text/plain で送り、/api/proxy はそれを
+  // そのまま転送するので上流が JSON として受けなかった (415)。管理者の経路 (createAuthFetch)
+  // は JSON を既定で付けているので、device JWT の経路もそれに揃える
+
+  it('device JWT で POST (測定の開始) → Content-Type: application/json を付ける', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ id: UUID1 }))
+    await startMeasurement(TEST_EMPLOYEE_ID)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/measurements/start')
+    expect(init.method).toBe('POST')
+    const h = new Headers(init.headers)
+    expect(h.get('Content-Type')).toBe('application/json')
+    expect(h.get('Authorization')).toBe('Bearer dev-jwt')
+    expect(JSON.parse(init.body)).toEqual({ employee_id: TEST_EMPLOYEE_ID })
+  })
+
+  it('device JWT で POST (測定の保存 = 未送信の同期) → Content-Type: application/json を付ける', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ id: UUID1 }))
+    const result: MeasurementResult = {
+      employeeId: TEST_EMPLOYEE_ID,
+      alcoholValue: 0,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-09-11T00:00:00Z'),
+    }
+    await saveMeasurement(result)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/measurements')
+    expect(init.method).toBe('POST')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+  })
+
+  it('device JWT で PUT (測定の更新) → Content-Type: application/json を付ける', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ id: UUID1 }))
+    await updateMeasurement(UUID1, { status: 'completed' })
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe(`/api/proxy/measurements/${UUID1}`)
+    expect(init.method).toBe('PUT')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+  })
+
+  it('device JWT で本文の無い GET には Content-Type を付けない', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ id: UUID1 }))
+    await getMeasurement(UUID1)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe(`/api/proxy/measurements/${UUID1}`)
+    expect(new Headers(init.headers).get('Content-Type')).toBeNull()
+  })
+
+  it('device JWT で FormData (顔写真) → Content-Type を付けない (ブラウザの multipart に任せる)', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ url: 'https://r2/x.jpg' }))
+    await uploadFacePhoto(new Blob(['x']))
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/upload/face-photo')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect(new Headers(init.headers).get('Content-Type')).toBeNull()
+  })
+
+  it('device JWT で明示された Content-Type (打刻の route) はそのまま', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ seq: 1 }))
+    await punchTimecard('CARD-1')
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/timecard/punch')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer dev-jwt')
+  })
+
+  it('admin JWT の POST は今までどおり Content-Type: application/json (createAuthFetch)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson({ id: UUID1 }))
+    await startMeasurement(TEST_EMPLOYEE_ID)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/measurements/start')
+    const h = new Headers(init.headers)
+    expect(h.get('Content-Type')).toBe('application/json')
+    expect(h.get('Authorization')).toBe('Bearer admin-jwt')
+  })
+
   // --- proxyRawFetch (blob/FormData raw 経路) の分岐カバレッジ ---
 
   it('device JWT → upload も /api/proxy 経由 (proxyRawFetch device 分岐)', async () => {

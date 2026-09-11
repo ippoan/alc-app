@@ -124,6 +124,13 @@ async function proxyRequest<T>(path: string, jwt: string, options: RequestInit):
 async function bearerRequest<T>(url: string, jwt: string, options: RequestInit): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Authorization', `Bearer ${jwt}`)
+  // 文字列の本文 (このモジュールでは JSON.stringify したもの) に Content-Type が無いと、
+  // ブラウザは text/plain を付けて送り、/api/proxy はそれをそのまま転送するので上流が
+  // JSON として受けない (415 になっていた。Refs #238)。管理者の経路 (createAuthFetch) と
+  // 同じく JSON を付ける。明示された Content-Type と FormData / Blob の本文は触らない
+  if (typeof options.body === 'string' && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   const res = await fetch(url, { ...options, headers })
   if (!res.ok) {
     const body = await res.text()
