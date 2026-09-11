@@ -622,6 +622,24 @@ describe('useBleGateway', () => {
         expect(await gw.autoConnect()).toBe(true)
       })
 
+      it('CoreS3 が先に (起動時の探索で) 繋がっていても、あとから wire すれば isConnected が立つ (Refs #238)', async () => {
+        const dev = createMockPort()
+        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+        await load()
+
+        const { useCoreS3Serial } = await import('~/composables/useCoreS3Serial')
+        const probe = useCoreS3Serial().startupProbe()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(await probe).toBe(true)
+        // まだ wire していない
+        expect(gw.isConnected.value).toBe(false)
+
+        expect(await autoConnect()).toBe(true)
+        expect(gw.isConnected.value).toBe(true)
+        expect(gw.transport.value).toBe('serial')
+      })
+
       it('警告デバイス (VoiceS3R) のポートは掴まない (#135)', async () => {
         const alarm = createMockPort()
         alarm.emit('EVT ALARM state=alarming cause=silence\n')

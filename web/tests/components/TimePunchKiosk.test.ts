@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TimePunchKiosk from '~/components/TimePunchKiosk.vue'
+import { getEmployees, listTimePunches } from '~/utils/api'
+
+/** onMounted の await 群と watch の後段を流し切る */
+const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 // --- API のモック (NFC 表示だけを見るので中身は空で足りる) ---
 
@@ -38,8 +42,10 @@ mockNuxtImport('useFingerprint', () => () => ({
   deviceModel: ref(null),
 }))
 
+const deviceJwtReady = ref(false)
 mockNuxtImport('useDeviceToken', () => () => ({
   getDeviceJwt: vi.fn(() => null),
+  hasDeviceJwt: readonly(deviceJwtReady),
 }))
 
 mockNuxtImport('useHubClaim', () => () => ({
@@ -122,6 +128,41 @@ describe('TimePunchKiosk — CoreS3 の USB 許可ボタン (Refs #234)', () => 
     expect(button).toBeTruthy()
     await button!.trigger('click')
     expect(coreS3RequestPortMock).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('TimePunchKiosk — 端末 JWT が取れたら一覧を引き直す (Refs #238)', () => {
+  beforeEach(() => {
+    deviceJwtReady.value = false
+    vi.mocked(getEmployees).mockClear()
+    vi.mocked(listTimePunches).mockClear()
+  })
+
+  it('hasDeviceJwt が true になったら employees と本日の打刻を引き直す', async () => {
+    const wrapper = await mountSuspended(TimePunchKiosk)
+    await flush()
+    expect(getEmployees).toHaveBeenCalledTimes(1)
+    expect(listTimePunches).toHaveBeenCalledTimes(1)
+
+    deviceJwtReady.value = true
+    await flush()
+    expect(getEmployees).toHaveBeenCalledTimes(2)
+    expect(listTimePunches).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('hasDeviceJwt が false に戻っても (抜線でキャッシュ破棄) 引き直さない', async () => {
+    deviceJwtReady.value = true
+    const wrapper = await mountSuspended(TimePunchKiosk)
+    await flush()
+    vi.mocked(getEmployees).mockClear()
+    vi.mocked(listTimePunches).mockClear()
+
+    deviceJwtReady.value = false
+    await flush()
+    expect(getEmployees).not.toHaveBeenCalled()
+    expect(listTimePunches).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

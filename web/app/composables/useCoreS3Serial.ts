@@ -110,6 +110,14 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let logReplyGeneration = 0
 
 /**
+ * 起動時の探索 (startupProbe) の 1 本。起動から数えて 1 回だけ作り、以後は同じものを返す —
+ * 端末 JWT の取得も「確認中」の表示も、この 1 本の 3 秒を共有する (Refs ippoan/alc-app#238)
+ */
+let startupProbePromise: Promise<boolean> | null = null
+/** startupProbePromise が未解決の間だけ true */
+const isStartupProbing = ref(false)
+
+/**
  * 行の接頭辞から素性を決める。
  *
  * 警告デバイスの行を先に見る: `EVT ALARM` は `EVT ` にも当てはまるため。空白まで見る —
@@ -305,9 +313,15 @@ export function useCoreS3Serial() {
     eventHandlers.add(cb)
   }
 
-  /** ポートを預かった (接続した) */
+  /**
+   * ポートを預かった (接続した)。登録した時点で既に接続済みなら、その場で 1 回呼ぶ —
+   * 先に CoreS3 が開いていても、あとから登録した利用側の接続状態が立つように。
+   * 接続時の配布 (claimant.onOpen) は isConnected を立ててから登録済みの分を写して回すので、
+   * 同じ cb が「登録時」と「接続時」の 2 回呼ばれることは無い
+   */
   function onOpen(cb: () => void): void {
     openHandlers.add(cb)
+    if (isConnected.value) cb()
   }
 
   /** ポートを失った / 返した */
@@ -333,6 +347,20 @@ export function useCoreS3Serial() {
     arbiter.register(CLAIMANT_NAME, claimant)
     arbiter.start(delay)
     return await waitForClaim()
+  }
+
+  /**
+   * 起動時の探索。初回の呼び出しで connect(0) を始め、claim されたら true、
+   * CLAIM_TIMEOUT (3 秒) で false に解決する。2 回目以降は同じ promise を返すので、
+   * 待つのは起動から数えて 1 回だけ。WebSerial 非対応なら探索せず false
+   * (isStartupProbing も立てない)
+   */
+  function startupProbe(): Promise<boolean> {
+    if (!startupProbePromise) {
+      if (isSupported) isStartupProbing.value = true
+      startupProbePromise = connect(0).finally(() => { isStartupProbing.value = false })
+    }
+    return startupProbePromise
   }
 
   /** WebSerial の初回許可 (ユーザー操作が要る) → 許可されたら探索して claim を待つ */
@@ -370,6 +398,8 @@ export function useCoreS3Serial() {
     write,
     sendGrace,
     connect,
+    startupProbe,
+    isStartupProbing: readonly(isStartupProbing),
     requestPort,
     release,
     disconnect,
