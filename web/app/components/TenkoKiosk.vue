@@ -475,7 +475,7 @@ onUnmounted(() => {
               :class="medicalInputTab === 'ble' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'"
               @click="medicalInputTab = 'ble'"
             >
-              BLE機器
+              CoreS3
             </button>
             <button
               class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
@@ -564,7 +564,7 @@ onUnmounted(() => {
               class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
               :class="medicalInputSource === 'manual' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'"
             >
-              {{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'BLE機器' }}
+              {{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'CoreS3' }}
             </span>
           </div>
         </div>

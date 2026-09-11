@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isWebSerialSupported } from '~/utils/webserial'
-import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
+import { SHOW_BLOOD_PRESSURE, MEDICAL_AUTO_NEXT_DELAY_MS } from '~/utils/medical-inputs'
 
 const emit = defineEmits<{
   skip: []
@@ -39,6 +39,43 @@ onMounted(async () => {
     autoConnectFailed.value = true
   }
 })
+
+// 血圧を隠している間 (体温だけの運用) は、mount 後に体温が届いたら値を少し見せてから
+// 自動で次へ進む (Refs #238)。血圧を表示する運用では血圧が後から届くため対象外。
+// immediate にしない — 前の運転者の値や mount 前の古い値では発火させず、mount 後の
+// clearReadings() を経て新しく届いた値だけを見る。
+let autoNextTimer: ReturnType<typeof setTimeout> | null = null
+function clearAutoNextTimer() {
+  if (autoNextTimer) {
+    clearTimeout(autoNextTimer)
+    autoNextTimer = null
+  }
+}
+if (!SHOW_BLOOD_PRESSURE) {
+  watch(latestTemperature, (t) => {
+    if (!t) return
+    clearAutoNextTimer()
+    autoNextTimer = setTimeout(() => {
+      autoNextTimer = null
+      emit('next')
+    }, MEDICAL_AUTO_NEXT_DELAY_MS)
+  })
+}
+onUnmounted(clearAutoNextTimer)
+
+function handleNext() {
+  clearAutoNextTimer()
+  emit('next')
+}
+function handleSkip() {
+  clearAutoNextTimer()
+  emit('skip')
+}
+function handleRescan() {
+  clearAutoNextTimer()
+  resetGateway()
+  clearReadings()
+}
 </script>
 
 <template>
@@ -69,7 +106,7 @@ onMounted(async () => {
         </button>
         <button
           class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition-colors"
-          @click="emit('skip')"
+          @click="handleSkip"
         >
           スキップ
         </button>
@@ -137,13 +174,13 @@ onMounted(async () => {
           医療機器で測定するとデータが表示されます
         </p>
 
-        <!-- 再スキャンボタン (データ受信後に別の機器を測定したい場合) -->
+        <!-- 再測定ボタン (読み値をクリアして測り直す) -->
         <button
           v-if="hasMedicalData"
           class="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs hover:bg-amber-100 transition-colors mx-auto"
-          @click="resetGateway(); clearReadings()"
+          @click="handleRescan"
         >
-          別の機器を測定（再スキャン）
+          測り直す
         </button>
 
         <!-- エラー -->
@@ -157,13 +194,13 @@ onMounted(async () => {
               ? 'bg-blue-600 text-white hover:bg-blue-700'
               : 'bg-gray-200 text-gray-500 cursor-not-allowed'"
             :disabled="!hasMedicalData"
-            @click="emit('next')"
+            @click="handleNext"
           >
             次へ
           </button>
           <button
             class="px-4 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm hover:bg-gray-200 transition-colors"
-            @click="emit('skip')"
+            @click="handleSkip"
           >
             スキップ
           </button>
