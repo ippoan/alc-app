@@ -9,13 +9,16 @@
  * X-Alc-Proxy-Secret を constant-time 検証してから JWT 検証 + ACL + OIDC mint +
  * X-Tenant-ID/X-User-* 注入を行う。
  *
- * - browser JWT は cookie (logi_auth_token) / Bearer のどちらでも受ける。キオスク端末は
- *   device JWT を Bearer で送る (方式 B でも Authorization は素通しされ維持される)。
+ * - browser JWT は cookie (logi_auth_token) / Bearer のどちらでも受ける。
+ * - キオスク端末は device JWT を Bearer で送る。`/alc-proxy` は device JWT を受けない
+ *   ので、handler が送るのが device JWT のときだけ auth-worker `/device-data-proxy/*`
+ *   へ流す (Refs #227、判定は server/utils/proxy-target.ts)。
  * - AUTH_WORKER service binding は方式 B では必須 (未設定は 503)。
  * - INTERNAL_SHARED_SECRET は Secrets Store binding (.get()) のため route 側で resolve。
  */
 import type { H3Event } from 'h3'
 import { createAuthWorkerProxyHandler } from '@ippoan/auth-client/server'
+import { AUTH_COOKIE_NAME, selectProxyPrefix } from '../../utils/proxy-target'
 
 function cfEnv(event: H3Event): Record<string, unknown> {
   return (event.context.cloudflare as { env?: Record<string, unknown> } | undefined)?.env ?? {}
@@ -47,9 +50,14 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  const proxyPrefix = selectProxyPrefix({
+    cookieToken: getCookie(event, AUTH_COOKIE_NAME),
+    bearerToken: /^Bearer\s+(.+)$/i.exec(getHeader(event, 'authorization') ?? '')?.[1],
+  })
   const proxy = createAuthWorkerProxyHandler({
     sharedSecret,
     authWorkerFetch: () => authWorker.fetch.bind(authWorker),
+    proxyPrefix,
   })
   return proxy(event)
 })
