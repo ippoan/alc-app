@@ -42,6 +42,10 @@ watch(() => step.value, (s) => {
   if (s === 'carrying_items') loadCarryingItems()
 })
 
+// PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
+const { syncStep, sendResult } = useCoreS3Stage()
+watch(step, syncStep, { immediate: true })
+
 // アルコール測定完了後 (instruction / report ステップ) に WebRTC 接続
 watch(
   () => step.value,
@@ -181,6 +185,7 @@ onMounted(() => {
 function onMeasurementResult(result: MeasurementResult) {
   const alcoholResult = result.resultType === 'normal' ? 'pass' : 'fail'
   onAlcoholResult(alcoholResult, result.alcoholValue)
+  sendResult(result)
 }
 
 // --- BLE 医療データ → 送信 ---
