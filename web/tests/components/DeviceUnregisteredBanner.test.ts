@@ -1,27 +1,21 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import DeviceUnregisteredBanner from '~/components/DeviceUnregisteredBanner.vue'
 import { deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 
-// useAuth と同じ式 (useAuth.ts:48-49) をモック側でも保つ
-const accessToken = ref<string | null>(null)
-const deviceTenantId = ref<string | null>(null)
+// 「未登録」の判定は useKioskAccess に一本化した (Refs #234)。この banner は
+// hasKioskAccess だけを見るので、その 1 変数だけをモックする。
+const hasKioskAccess = ref(false)
 
-mockNuxtImport('useAuth', () => () => ({
-  accessToken,
-  deviceTenantId,
-  isAuthenticated: computed(() => !!accessToken.value),
-  isDeviceActivated: computed(() => !!deviceTenantId.value),
-}))
+mockNuxtImport('useKioskAccess', () => () => ({ hasKioskAccess }))
 
 describe('DeviceUnregisteredBanner', () => {
   beforeEach(() => {
-    accessToken.value = null
-    deviceTenantId.value = null
+    hasKioskAccess.value = false
   })
 
-  it('端末未登録かつ未ログインなら赤枠で原因と次の操作を出す', async () => {
+  it('hasKioskAccess が false なら赤枠で原因と次の操作を出す', async () => {
     const wrapper = await mountSuspended(DeviceUnregisteredBanner)
 
     const banner = wrapper.find('[data-testid="device-unregistered-banner"]')
@@ -33,24 +27,18 @@ describe('DeviceUnregisteredBanner', () => {
     wrapper.unmount()
   })
 
-  it('端末登録済み / 管理者ログイン済みのどちらでも出さない', async () => {
-    deviceTenantId.value = 'tenant-x'
-    const activated = await mountSuspended(DeviceUnregisteredBanner)
-    expect(activated.find('[data-testid="device-unregistered-banner"]').exists()).toBe(false)
-    activated.unmount()
-
-    deviceTenantId.value = null
-    accessToken.value = 'jwt'
-    const loggedIn = await mountSuspended(DeviceUnregisteredBanner)
-    expect(loggedIn.find('[data-testid="device-unregistered-banner"]').exists()).toBe(false)
-    loggedIn.unmount()
+  it('hasKioskAccess が true なら出さない', async () => {
+    hasKioskAccess.value = true
+    const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+    expect(wrapper.find('[data-testid="device-unregistered-banner"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
-  it('登録が済んだ時点で消える', async () => {
+  it('hasKioskAccess が true になった時点で消える', async () => {
     const wrapper = await mountSuspended(DeviceUnregisteredBanner)
     expect(wrapper.find('[data-testid="device-unregistered-banner"]').exists()).toBe(true)
 
-    deviceTenantId.value = 'tenant-x'
+    hasKioskAccess.value = true
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="device-unregistered-banner"]').exists()).toBe(false)
     wrapper.unmount()

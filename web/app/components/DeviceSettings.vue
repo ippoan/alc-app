@@ -15,7 +15,7 @@ const {
   deactivateDevice, deviceTenantId, deviceId: activatedDeviceId, deviceSettingsToken,
   reAuthenticateDevice,
 } = useAuth()
-const { clearKioskCredential, hasKioskCredential } = useDeviceToken()
+const { hasKioskCredential } = useDeviceToken()
 // 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 
@@ -234,8 +234,8 @@ function resetDeviceRegistration() {
   resetting.value = true
   try {
     // WebView 側 (localStorage): tenant / device_id / settings_token / kiosk credential
+    // (kiosk credential のクリアは deactivateDevice() 内で済んでいる)
     deactivateDevice()
-    clearKioskCredential()
     // Android native 側 (SharedPreferences): device_id / settings_token / fcm 登録マーク /
     // kiosk credential を消し RoomWatcher を停止する (stale device_id 起因の WS未接続・FCM未 を解消)。
     const android = (window as unknown as { Android?: { resetDeviceRegistration?: () => void } }).Android

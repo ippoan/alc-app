@@ -152,9 +152,10 @@ const showNfcGuide = ref(false)
     </div>
 
     <!-- 未接続時の案内 -->
-    <template v-if="!isConnected && !isAndroidApp">
-      <!-- CoreS3 直結 (WebSerial): 常駐アプリは要らない -->
-      <div v-if="canUseSerial" class="flex flex-col items-center gap-2">
+    <!-- CoreS3 直結 (WebSerial): 常駐アプリは要らない。NFC ブリッジの接続状態とは切り離す —
+         NFC ブリッジ (bridge/Android) が繋がっていても CoreS3 の USB 許可はまだかもしれない -->
+    <template v-if="canUseSerial && !coreS3.isConnected.value">
+      <div class="flex flex-col items-center gap-2">
         <p class="text-sm text-center text-gray-500">
           CoreS3 が USB でつながっているか確認してください。<br>
           初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。
@@ -167,17 +168,17 @@ const showNfcGuide = ref(false)
           USB デバイスを選択
         </button>
       </div>
-      <!-- WebSerial が使えない環境は従来の NFC ブリッジ -->
-      <p v-else class="text-sm text-center text-gray-500">
-        NFC ブリッジがインストールされていない場合は
-        <a
-          href="https://github.com/yhonda-ohishi-alc/rust-nfc-bridge/releases/latest"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-blue-600 underline hover:text-blue-800"
-        >こちらからダウンロード</a>
-      </p>
     </template>
+    <!-- WebSerial が使えない環境は従来の NFC ブリッジ -->
+    <p v-else-if="!isConnected && !isAndroidApp" class="text-sm text-center text-gray-500">
+      NFC ブリッジがインストールされていない場合は
+      <a
+        href="https://github.com/yhonda-ohishi-alc/rust-nfc-bridge/releases/latest"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="text-blue-600 underline hover:text-blue-800"
+      >こちらからダウンロード</a>
+    </p>
 
     <!-- NFC ブリッジ更新通知 -->
     <p v-if="showUpdateBanner" class="text-sm text-center text-amber-600">

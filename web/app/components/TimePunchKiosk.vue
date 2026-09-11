@@ -18,6 +18,18 @@ const isKyoceraTablet = computed(() => {
   return KYOCERA_MODELS.some(m => deviceModel.value!.includes(m))
 })
 const showNfcGuide = ref(false)
+
+// CoreS3 の WebSerial 初回許可 (ユーザー操作が要る)。NfcStatus.vue の同名処理を踏襲する
+const isRequestingCoreS3Port = ref(false)
+async function requestCoreS3Port() {
+  isRequestingCoreS3Port.value = true
+  try {
+    await coreS3.requestPort()
+  }
+  finally {
+    isRequestingCoreS3Port.value = false
+  }
+}
 const employees = ref<ApiEmployee[]>([])
 const employeeMap = computed(() => {
   const map: Record<string, string> = {}
@@ -216,6 +228,15 @@ function formatTime(iso: string): string {
                 : 'NFC リーダー未接続' }}
           </span>
         </div>
+        <!-- CoreS3 未接続時の USB 許可ボタン (#234) -->
+        <button
+          v-if="coreS3.isSupported && !coreS3.isConnected.value"
+          class="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors disabled:bg-gray-300"
+          :disabled="isRequestingCoreS3Port"
+          @click="requestCoreS3Port"
+        >
+          CoreS3 を USB で許可
+        </button>
         <!-- インラインエラー -->
         <div
           v-if="errorMsg"
