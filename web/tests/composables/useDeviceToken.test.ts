@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 // useDeviceToken はモジュールスコープに credential ref + JWT cache を持つ
 // シングルトンなので、テスト毎に resetModules + dynamic import で分離する。
@@ -12,11 +13,28 @@ async function load(): Promise<Mod['useDeviceToken']> {
 const ID = 'dev-abc'
 const SECRET = 'sec-xyz'
 
+// 警告デバイス (VoiceS3R) の署名経路 (#231) 用のモック。
+// useAlarmDevice / useAuth は Nuxt auto-import なので mockNuxtImport、
+// signAlarmDeviceNonce は useDeviceToken.ts が明示 import するので vi.mock で差し替える。
+const alarmDeviceMock = vi.hoisted(() => ({ isConnected: { value: false } }))
+mockNuxtImport('useAlarmDevice', () => () => alarmDeviceMock)
+
+const authMock = vi.hoisted(() => ({ deviceTenantId: { value: null as string | null } }))
+mockNuxtImport('useAuth', () => () => authMock)
+
+const signAlarmDeviceNonceMock = vi.hoisted(() => vi.fn())
+vi.mock('~/composables/useDeviceLogin', () => ({
+  signAlarmDeviceNonce: signAlarmDeviceNonceMock,
+}))
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
   vi.resetModules()
   localStorage.clear()
+  alarmDeviceMock.isConnected.value = false
+  authMock.deviceTenantId.value = null
+  signAlarmDeviceNonceMock.mockReset()
 })
 
 describe('useDeviceToken (#434 step 3c)', () => {
@@ -213,6 +231,279 @@ describe('useDeviceToken (#434 step 3c)', () => {
       expect(await setupAsKiosk('admin-jwt', 'kiosk-1')).toBe(false)
       expect(hasKioskCredential.value).toBe(false)
       expect(localStorage.getItem('alc_kiosk_device_id')).toBeNull()
+    })
+  })
+
+  describe('getDeviceJwt: 警告デバイス (VoiceS3R) の署名による短命端末 JWT (#231)', () => {
+    /** URL の末尾 (パス) で振り分ける fetch mock。想定外の URL は throw して見逃しを防ぐ。 */
+    function routeFetch(handlers: Record<string, () => { ok: boolean, status?: number, json: () => Promise<unknown> }>) {
+      return vi.fn((url: string) => {
+        for (const [suffix, handler] of Object.entries(handlers)) {
+          if (url.endsWith(suffix)) return Promise.resolve(handler())
+        }
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+    }
+
+    it('警告デバイス接続中なら credential より優先し、alarm-nonce → AUTH SIGN → alarm-token で取って cache する', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+      storeKioskCredential(ID, SECRET) // credential も持っているが使われないはず
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1')
+      expect(fetchMock.mock.calls.some(([u]) => (u as string).includes('/device/token'))).toBe(false)
+    })
+
+    it('S3R の JWT は既存キャッシュに載り、期限前は再利用する (再 fetch しない)', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(fetchMock).toHaveBeenCalledTimes(2) // nonce + token が 1 回ずつ
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('single-flight: 同時 3 回呼んでも nonce の取得は 1 回だけ', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      let nonceCalls = 0
+      const fetchMock = vi.fn((url: string) => {
+        if (url.endsWith('/device/alarm-nonce')) {
+          nonceCalls += 1
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) })
+        }
+        if (url.endsWith('/device/alarm-token')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
+        }
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      const results = await Promise.all([getDeviceJwt(), getDeviceJwt(), getDeviceJwt()])
+      expect(results).toEqual(['s3r-jwt', 's3r-jwt', 's3r-jwt'])
+      expect(nonceCalls).toBe(1)
+    })
+
+    it('警告デバイス未接続なら nonce を呼ばず、既存の credential 経路だけを試す', async () => {
+      alarmDeviceMock.isConnected.value = false
+      const fetchMock = routeFetch({
+        '/device/token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 'cred-jwt', expires_in: 3600 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+      storeKioskCredential(ID, SECRET)
+
+      expect(await getDeviceJwt()).toBe('cred-jwt')
+      expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
+      expect(fetchMock.mock.calls.some(([u]) => (u as string).includes('alarm-nonce'))).toBe(false)
+    })
+
+    it('S3R が 401/429 で失敗すれば null に落ちて credential 経路を試す', async () => {
+      alarmDeviceMock.isConnected.value = true
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: false, status: 429, json: () => Promise.resolve({}) }),
+        '/device/token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 'cred-jwt', expires_in: 3600 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+      storeKioskCredential(ID, SECRET)
+
+      expect(await getDeviceJwt()).toBe('cred-jwt')
+      expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
+    })
+
+    it('AUTH SIGN が (ERR AUTH: 等で) reject しても catch して null に落ちる (credential 未保存なら null)', async () => {
+      alarmDeviceMock.isConnected.value = true
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      signAlarmDeviceNonceMock.mockRejectedValue(new Error('ERR AUTH: no key'))
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+    })
+
+    it('alarm-nonce の応答に nonce が無ければ null に落ちる', async () => {
+      alarmDeviceMock.isConnected.value = true
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ expires_in: 60 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+      expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
+    })
+
+    it('AUTH SIG の parse に失敗 (signAlarmDeviceNonce が null を返す) は null に落ちる', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue(null)
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+    })
+
+    it('alarm-token が 401 {error:"invalid_alarm_token"} なら (body を見ず status だけで) null に落ちる (nonce 取得・署名は成功していても)', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: false, status: 401, json: () => Promise.resolve({ error: 'invalid_alarm_token' }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+    })
+
+    it('alarm-token の応答に access_token が無ければ null に落ちる', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ expires_in: 900 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+    })
+
+    it('alarm-token の expires_in 欠落時は fallback TTL (900 秒) で cache する', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt' }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(await getDeviceJwt()).toBe('s3r-jwt') // fallback TTL でも cache が効く
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('alarm-token の応答に tenant_id が無ければ warn しない', async () => {
+      alarmDeviceMock.isConnected.value = true
+      authMock.deviceTenantId.value = 'tenant-A'
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', token_type: 'Bearer', expires_in: 900 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(warnSpy).not.toHaveBeenCalled()
+    })
+
+    it('S3R 失敗後 60 秒は nonce を呼ばず (credential 無しなら null)、61 秒後は再試行する', async () => {
+      alarmDeviceMock.isConnected.value = true
+      let nowMs = 1_000_000
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs)
+
+      const nonceMock = vi.fn(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }))
+      vi.stubGlobal('fetch', nonceMock)
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+      expect(nonceMock).toHaveBeenCalledTimes(1)
+
+      nowMs += 59_000 // 59 秒後: まだ抑止期間中
+      expect(await getDeviceJwt()).toBeNull()
+      expect(nonceMock).toHaveBeenCalledTimes(1)
+
+      nowMs += 2_000 // 61 秒後: 抑止解除、再試行する
+      expect(await getDeviceJwt()).toBeNull()
+      expect(nonceMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('alarm-token 応答の tenant_id が deviceTenantId と食い違っても拒否せず warn だけ (#552)', async () => {
+      alarmDeviceMock.isConnected.value = true
+      authMock.deviceTenantId.value = 'tenant-A'
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({
+          ok: true,
+          json: () => Promise.resolve({ access_token: 's3r-jwt', token_type: 'Bearer', expires_in: 900, tenant_id: 'tenant-B' }),
+        }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('S3R 経路は localStorage / sessionStorage に一切書かない', async () => {
+      alarmDeviceMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(setItemSpy).not.toHaveBeenCalled()
     })
   })
 })

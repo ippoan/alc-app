@@ -17,16 +17,11 @@
  *
  * useHubClaim.ts (#213 CoreS3 自動端末登録) と同じ構造 (module-level state + 1 関数)。
  *
- * ★ firmware の `ERR AUTH: no key` / `ERR AUTH: bad nonce` は、useSerialArbiter.request の
- * `errPrefix` (= 送った行そのものを echo し返した行だけを reject 対象にする、
- * `AUTH TICKET` の `ERR AUTH TICKET: <理由>` 用の仕組み) には一致しない可能性がある
- * (送った行は `AUTH SIGN <nonce>` だが ERR 行は `ERR AUTH: ...` で nonce を echo しない
- * ため)。firmware が実際に nonce を echo するかはここでは分からないので、
- * useAlarmDevice.request の reject 理由をメッセージの内容 (`no key` を含むか) で判定する
- * ことで、echo の有無どちらでも `no key` だけは拾えるようにしてある。echo が無い場合、
- * 実機では `no key` も `bad nonce` も 10 秒のタイムアウト経由でしか reject されず
- * (useSerialArbiter は matchPrefix/errPrefix どちらにも当てはまらない行を黙って捨てる)、
- * その場合は `deviceLoginTimeoutMessage` に落ちる。この点は親へ [質問] 済み。
+ * `AUTH SIGN <nonce>` を送って `AUTH SIG <pubkey> <sig>` を parse する部分は
+ * `signAlarmDeviceNonce` に切り出してある (useDeviceToken.ts の短命端末 JWT #231 と共有)。
+ * firmware の `ERR AUTH: no key` / `ERR AUTH: bad nonce` は useSerialArbiter.request の
+ * `errPrefix` (`ERR ${送った行の先頭トークン}` = `ERR AUTH`) に一致するため、nonce を
+ * echo しなくても即 reject される (10 秒のタイムアウトを待たない)。
  */
 import { getAuthCallbackUrl } from '~/composables/useAuth'
 import {
@@ -81,10 +76,21 @@ function fetchNonce(authWorkerUrl: string, redirectUri: string): Promise<string>
 }
 
 /** `AUTH SIG <pubkey> <sig>` を空白で分割して parse。形式が合わなければ null */
-function parseAuthSigLine(line: string): { pubkey: string, sig: string } | null {
+export function parseAuthSigLine(line: string): { pubkey: string, sig: string } | null {
   const parts = line.split(' ')
   if (parts.length !== 4 || parts[0] !== 'AUTH' || parts[1] !== 'SIG') return null
   return { pubkey: parts[2]!, sig: parts[3]! }
+}
+
+/**
+ * 警告デバイスに `AUTH SIGN <nonce>` を送り、応答 `AUTH SIG <pubkey> <sig>` を parse して
+ * 返す (#214 useDeviceLogin / #231 useDeviceToken 共通)。firmware が `ERR AUTH: ...` を
+ * 返せば useAlarmDevice().request がそのまま reject するので、ここでは投げっぱなしにする
+ * (呼び出し側でメッセージを出し分ける)。parse に失敗したときだけ null を返す。
+ */
+export async function signAlarmDeviceNonce(nonce: string): Promise<{ pubkey: string, sig: string } | null> {
+  const line = await useAlarmDevice().request(`AUTH SIGN ${nonce}`, AUTH_SIGN_MATCH_PREFIX, AUTH_SIGN_TIMEOUT_MS)
+  return parseAuthSigLine(line)
 }
 
 export function useDeviceLogin() {
@@ -112,9 +118,9 @@ export function useDeviceLogin() {
         return
       }
 
-      let line: string
+      let parsed: { pubkey: string, sig: string } | null
       try {
-        line = await useAlarmDevice().request(`AUTH SIGN ${nonce}`, AUTH_SIGN_MATCH_PREFIX, AUTH_SIGN_TIMEOUT_MS)
+        parsed = await signAlarmDeviceNonce(nonce)
       }
       catch (e) {
         const message = e instanceof Error ? e.message : String(e)
@@ -122,7 +128,6 @@ export function useDeviceLogin() {
         return
       }
 
-      const parsed = parseAuthSigLine(line)
       if (!parsed) {
         lastError.value = deviceLoginParseFailedMessage
         return

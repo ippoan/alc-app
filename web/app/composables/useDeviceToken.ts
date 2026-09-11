@@ -16,8 +16,28 @@
  * NOTE: 既存の `useAuth` が持つ `alc_device_id` は **rust-alc-api の devices
  * テーブル id** であり、ここで扱う auth-worker の device credential とは別系統。
  * 混同を避けるため別 localStorage key (`alc_kiosk_device_*`) を使う。
+ *
+ * ## 警告デバイス (VoiceS3R) の署名による短命端末 JWT (#231)
+ *
+ * 運行管理者の PC には credential を発行・保存しない (ログイン無しの共用 PC のため)。
+ * 代わりに、警告デバイスが USB で挿さっている間だけ、その ed25519 鍵の署名で
+ * auth-worker (ippoan/auth-worker#551) から `aud=device, role=device-kiosk` の
+ * 短命 JWT (900 秒) を取り、**このモジュールと同じメモリ cache** に載せる
+ * (storage には一切書かない — 抜線すれば次の getDeviceJwt() で消える)。
+ * `getDeviceJwt()` の優先順位は「cache → 警告デバイス署名 → 既存 credential」。
+ *
+ * - 署名の取り方 (`AUTH SIGN <nonce>` → `AUTH SIG <pubkey> <sig>` parse) は
+ *   `useDeviceLogin.ts` の `signAlarmDeviceNonce` を共有する (#214 と同じ firmware I/F)。
+ * - 同時呼び出しは 1 本にまとめる (`jwtInFlight`)。
+ * - 失敗 (ERR / 401 `{error:"invalid_alarm_token"}` / 429 / タイムアウト / 通信エラー、
+ *   いずれも HTTP status だけで判定する) したら `S3R_BACKOFF_MS` の間警告デバイス経路を
+ *   試さず credential 経路へ落ちる。再接続での解除はしない (次に呼ばれたとき抑止期間が
+ *   過ぎていれば自然に再試行する)。
+ * - `/device/alarm-token` の応答に載る `tenant_id` が `deviceTenantId` と食い違っても
+ *   拒否しない (`console.warn` のみ — 発行元 auth-worker 側の判断を尊重する)。
  */
 import { ref, computed, readonly } from 'vue'
+import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
 const KIOSK_DEVICE_SECRET_KEY = 'alc_kiosk_device_secret'
@@ -26,6 +46,10 @@ const KIOSK_DEVICE_SECRET_KEY = 'alc_kiosk_device_secret'
 const REFRESH_BEFORE_MS = 60_000
 /** expires_in 欠落時の fallback TTL (秒、auth-worker DEVICE_JWT_TTL_SECONDS と同値)。 */
 const DEFAULT_TTL_SECONDS = 3600
+/** 警告デバイス署名 JWT の expires_in 欠落時 fallback TTL (秒。auth-worker #552 と同値) */
+const ALARM_DEFAULT_TTL_SECONDS = 900
+/** 警告デバイス経路が失敗してから、これだけ試さない (ms)。再接続での解除は無い。 */
+const S3R_BACKOFF_MS = 60_000
 
 const isClient = typeof window !== 'undefined'
 
@@ -36,13 +60,21 @@ const kioskDeviceSecret = ref<string | null>(
   isClient ? localStorage.getItem(KIOSK_DEVICE_SECRET_KEY) : null,
 )
 
-// 短命 device JWT の cache (module スコープ = 全 caller で共有)。
+// 短命 device JWT の cache (module スコープ = 全 caller で共有。警告デバイス経路も
+// credential 経路も同じ cache に書く — 呼び出し側からは出どころの違いを見せない)。
 let cachedJwt: string | null = null
 let cachedExpMs = 0
+
+// getDeviceJwt() の single-flight。同時に何回呼ばれても実際の取得は 1 本にまとめる。
+let jwtInFlight: Promise<string | null> | null = null
+// 警告デバイス経路の直近の失敗時刻から S3R_BACKOFF_MS 経つまでは試さない (ms epoch)。
+let s3rBackoffUntilMs = 0
 
 export function useDeviceToken() {
   const config = useRuntimeConfig()
   const authWorkerUrl = (config.public.authWorkerUrl as string) || 'https://auth.ippoan.org'
+  // tenant 食い違いの warn 用 (#231)。読むだけ — 購読はしない
+  const { deviceTenantId } = useAuth()
 
   const hasKioskCredential = computed(() => !!kioskDeviceId.value && !!kioskDeviceSecret.value)
 
@@ -71,16 +103,83 @@ export function useDeviceToken() {
   }
 
   /**
-   * device JWT を返す。cache が有効ならそれ、無ければ `/device/token` で mint。
-   * credential 未保存 / mint 失敗時は null (呼び出し側は X-Tenant-ID 経路に fallback)。
+   * device JWT を返す。優先順位は cache → 警告デバイス (VoiceS3R) の署名 (#231) →
+   * 既存 credential (`/device/token`)。全経路失敗時は null (呼び出し側は X-Tenant-ID
+   * 経路に fallback)。同時呼び出しは 1 本にまとめる (`jwtInFlight`)。
    */
   async function getDeviceJwt(): Promise<string | null> {
+    const nowMs = Date.now()
+    if (cachedJwt && cachedExpMs - REFRESH_BEFORE_MS > nowMs) return cachedJwt
+
+    if (!jwtInFlight) {
+      jwtInFlight = mintDeviceJwt().finally(() => { jwtInFlight = null })
+    }
+    return jwtInFlight
+  }
+
+  /** cache 以外の 2 経路を順に試す (警告デバイスの署名 → credential)。 */
+  async function mintDeviceJwt(): Promise<string | null> {
+    const nowMs = Date.now()
+    return (await tryAlarmDeviceJwt(nowMs)) ?? (await tryCredentialJwt(nowMs))
+  }
+
+  /**
+   * 警告デバイスが USB で繋がっていれば、その ed25519 鍵の署名で auth-worker
+   * (#552) から短命 JWT を取りに行く。未接続 / 抑止期間中 / いずれかの失敗
+   * (401 `{error:"invalid_alarm_token"}` / 429 / タイムアウト / 通信エラー、
+   * いずれも HTTP status だけで判定する) なら null を返し、S3R_BACKOFF_MS の
+   * 間この経路を抑止する (再接続での解除はしない)。
+   */
+  async function tryAlarmDeviceJwt(nowMs: number): Promise<string | null> {
+    if (nowMs < s3rBackoffUntilMs) return null
+    if (!useAlarmDevice().isConnected.value) return null
+
+    try {
+      const nonceRes = await fetch(`${authWorkerUrl}/device/alarm-nonce`)
+      if (!nonceRes.ok) throw new Error(`alarm-nonce http ${nonceRes.status}`)
+      const nonceData = (await nonceRes.json()) as { nonce?: string }
+      if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
+
+      const signed = await signAlarmDeviceNonce(nonceData.nonce)
+      if (!signed) throw new Error('AUTH SIG の parse に失敗')
+
+      const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: nonceData.nonce, pubkey: signed.pubkey, sig: signed.sig }),
+      })
+      if (!tokenRes.ok) throw new Error(`alarm-token http ${tokenRes.status}`)
+      const tokenData = (await tokenRes.json()) as {
+        access_token?: string
+        token_type?: string
+        expires_in?: number
+        tenant_id?: string
+      }
+      if (!tokenData.access_token) throw new Error('alarm-token: access_token 欠落')
+
+      // tenant の食い違いは拒否しない (発行元 auth-worker の判断を尊重、warn のみ)
+      if (typeof tokenData.tenant_id === 'string' && tokenData.tenant_id !== deviceTenantId.value) {
+        console.warn(
+          `[useDeviceToken] alarm-token の tenant_id (${tokenData.tenant_id}) が deviceTenantId (${deviceTenantId.value}) と食い違います`,
+        )
+      }
+
+      const ttl = typeof tokenData.expires_in === 'number' ? tokenData.expires_in : ALARM_DEFAULT_TTL_SECONDS
+      cachedJwt = tokenData.access_token
+      cachedExpMs = nowMs + ttl * 1000
+      return cachedJwt
+    }
+    catch {
+      s3rBackoffUntilMs = nowMs + S3R_BACKOFF_MS
+      return null
+    }
+  }
+
+  /** 既存の credential 経路 (`/device/token`)。挙動は変えない。 */
+  async function tryCredentialJwt(nowMs: number): Promise<string | null> {
     const id = kioskDeviceId.value
     const secret = kioskDeviceSecret.value
     if (!id || !secret) return null
-
-    const nowMs = Date.now()
-    if (cachedJwt && cachedExpMs - REFRESH_BEFORE_MS > nowMs) return cachedJwt
 
     try {
       const res = await fetch(`${authWorkerUrl}/device/token`, {

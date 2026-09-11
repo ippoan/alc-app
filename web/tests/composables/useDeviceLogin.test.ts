@@ -245,4 +245,31 @@ describe('useDeviceLogin', () => {
       expect(lastError.value).toBe(deviceLoginParseFailedMessage)
     })
   })
+
+  // ---------- signAlarmDeviceNonce (#231 useDeviceToken と共有する切り出し関数) ----------
+
+  describe('signAlarmDeviceNonce (切り出し。useDeviceToken.ts の警告デバイス署名経路と共有)', () => {
+    it('AUTH SIGN <nonce> を送り、AUTH SIG <pubkey> <sig> を parse して返す', async () => {
+      alarmDeviceMock.request.mockResolvedValue('AUTH SIG pub-9 sig-9')
+      const { signAlarmDeviceNonce } = await import('~/composables/useDeviceLogin')
+
+      await expect(signAlarmDeviceNonce('nonce-xyz')).resolves.toEqual({ pubkey: 'pub-9', sig: 'sig-9' })
+      expect(alarmDeviceMock.request).toHaveBeenCalledWith('AUTH SIGN nonce-xyz', 'AUTH SIG ', 10_000)
+    })
+
+    it('parse できない応答は null (reject しない)', async () => {
+      alarmDeviceMock.request.mockResolvedValue('garbled')
+      const { signAlarmDeviceNonce } = await import('~/composables/useDeviceLogin')
+
+      await expect(signAlarmDeviceNonce('nonce-xyz')).resolves.toBeNull()
+    })
+
+    it('firmware の `ERR AUTH: ...` はタイムアウトを待たず即 reject し、そのまま伝播する (古い★コメントの懸念は解消済み)', async () => {
+      alarmDeviceMock.request.mockRejectedValue(new Error('ERR AUTH: no key'))
+      const { signAlarmDeviceNonce } = await import('~/composables/useDeviceLogin')
+
+      // フェイクタイマーを使わず (= 10 秒のタイムアウトを一切待たず) 即座に reject する
+      await expect(signAlarmDeviceNonce('nonce-xyz')).rejects.toThrow('ERR AUTH: no key')
+    })
+  })
 })
