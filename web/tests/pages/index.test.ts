@@ -161,6 +161,11 @@ describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点
     const html = wrapper.html()
     expect(html.indexOf('normal-measurement-stub')).toBeGreaterThan(-1)
     expect(html.indexOf('today-punch-history-stub')).toBeGreaterThan(html.indexOf('normal-measurement-stub'))
+    // ラッパーは flex にしない (普通のブロック) — NormalMeasurement.vue のルートが静的に
+    // flex-1 を持つため、flex 縦並びだと「残りの高さ」に押しつぶされる (裏取りで発覚)
+    const wrapperEl = wrapper.findComponent(NormalMeasurement).element.parentElement
+    expect(wrapperEl?.className).toBe('flex-1 min-h-0 overflow-y-auto')
+    expect(wrapperEl?.className).not.toContain('flex ')
   })
 
   it('Android では本日の打刻履歴を出さない (通常点呼のみ)', async () => {

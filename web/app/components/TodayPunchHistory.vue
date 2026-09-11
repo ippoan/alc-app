@@ -25,12 +25,13 @@ const employeeMap = computed(() => {
 /** 本日の打刻 (新しい順)。**サーバから引き直したものだけ**を出す。 */
 const recentPunches = ref<{ key: string; name: string; time: string }[]>([])
 /**
- * 取得が 1 度でも成功したか。**「本日の打刻はまだありません」は取得成功で
- * 0 件のときだけ**出す (Refs ippoan/alc-app#238)。端末 JWT がまだ無い/取得に
- * 失敗した間の空を「まだありません」と見せると、実際は打刻があるのに
- * 「無い」と誤解させる — その間は「読み込み中…」のままにする
+ * 直近の取得状態。**「本日の打刻はまだありません」は取得成功で 0 件のときだけ**
+ * 出す (Refs ippoan/alc-app#238)。端末 JWT がまだ無い/取得に失敗した間の空を
+ * 「まだありません」と見せると、実際は打刻があるのに「無い」と誤解させる。
+ * 取得中と取得失敗を区別しないと、失敗し続けたときに「読み込み中…」のまま
+ * 止まって見える (実際は止まっていない) ので、この 2 つも分ける
  */
-const hasLoadedOnce = ref(false)
+const loadStatus = ref<'loading' | 'error' | 'loaded'>('loading')
 /** 直近に自分で打った行 (数秒だけ強調する)。 */
 const highlightedKey = ref<string | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | null = null
@@ -75,9 +76,12 @@ async function loadTodayPunches() {
       name: displayName(p),
       time: formatTime(p.punched_at),
     }))
-    hasLoadedOnce.value = true
+    loadStatus.value = 'loaded'
   }
-  catch (e) { console.error('[TodayPunchHistory] Failed to load today punches:', e) }
+  catch (e) {
+    console.error('[TodayPunchHistory] Failed to load today punches:', e)
+    loadStatus.value = 'error'
+  }
 }
 
 async function loadEmployees() {
@@ -187,8 +191,11 @@ defineExpose({ reload, highlight })
       </table>
     </div>
   </div>
-  <div v-else-if="!hasLoadedOnce" class="bg-white rounded-2xl shadow-sm border p-8 text-center text-gray-400 text-sm">
+  <div v-else-if="loadStatus === 'loading'" class="bg-white rounded-2xl shadow-sm border p-8 text-center text-gray-400 text-sm">
     読み込み中…
+  </div>
+  <div v-else-if="loadStatus === 'error'" class="bg-white rounded-2xl shadow-sm border p-8 text-center text-gray-400 text-sm">
+    打刻履歴を読み込めませんでした
   </div>
   <div v-else class="bg-white rounded-2xl shadow-sm border p-8 text-center text-gray-400 text-sm">
     本日の打刻はまだありません

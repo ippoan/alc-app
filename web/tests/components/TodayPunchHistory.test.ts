@@ -79,12 +79,13 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     wrapper.unmount()
   })
 
-  it('取得に失敗した間は「まだありません」を出さない (端末 JWT が無い/取得失敗の空を「無い」と誤解させない、Refs #238)', async () => {
+  it('取得に失敗したら「打刻履歴を読み込めませんでした」を出す (「まだありません」でも「読み込み中…」のままでもない、Refs #238)', async () => {
     listTimePunchesMock.mockRejectedValueOnce(new Error('network error'))
     const wrapper = await mountSuspended(TodayPunchHistory)
     await flush()
-    expect(wrapper.text()).toContain('読み込み中…')
+    expect(wrapper.text()).toContain('打刻履歴を読み込めませんでした')
     expect(wrapper.text()).not.toContain('本日の打刻はまだありません')
+    expect(wrapper.text()).not.toContain('読み込み中…')
     wrapper.unmount()
   })
 
@@ -188,8 +189,8 @@ describe('TodayPunchHistory — 端末 JWT が取れたら一覧を引き直す 
     listTimePunchesMock.mockRejectedValueOnce(new Error('unauthorized'))
     const wrapper = await mountSuspended(TodayPunchHistory)
     await flush()
-    // JWT 無しの最初の取得は失敗 → 「まだありません」ではなく「読み込み中…」のまま
-    expect(wrapper.text()).toContain('読み込み中…')
+    // JWT 無しの最初の取得は失敗 → 「まだありません」ではなく「読み込めませんでした」
+    expect(wrapper.text()).toContain('打刻履歴を読み込めませんでした')
     expect(wrapper.text()).not.toContain('本日の打刻はまだありません')
 
     listTimePunchesMock.mockResolvedValueOnce({
@@ -201,6 +202,7 @@ describe('TodayPunchHistory — 端末 JWT が取れたら一覧を引き直す 
     await flush()
     expect(wrapper.text()).toContain('田中次郎')
     expect(wrapper.text()).not.toContain('読み込み中…')
+    expect(wrapper.text()).not.toContain('読み込めませんでした')
     wrapper.unmount()
   })
 
