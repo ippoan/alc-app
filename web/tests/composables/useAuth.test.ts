@@ -650,8 +650,9 @@ describe('useAuth', () => {
 
       activateDevice('tenant-abc')
       localStorage.setItem('alc_refresh_token', 'rt_x')
-      // cookie の tenant は空 = consumeAuthCookie が activateDevice しない (端末 tenant 保持の検証)
-      const fakeJwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: '' }, 3600)
+      // consumeAuthCookie はもう activateDevice を呼ばない (#234) — cookie が別テナントを
+      // 持っていても端末 tenant (手動 activateDevice 分) は上書きされない
+      const fakeJwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: 'cookie-tenant' }, 3600)
       setDocCookie(`logi_auth_token=${fakeJwt}`)
       consumeAuthCookie()
 
@@ -1076,7 +1077,7 @@ describe('useAuth', () => {
       envMock.isClient = true
     })
 
-    it('establishes session and activates device from cookie JWT', async () => {
+    it('establishes session from cookie JWT without activating device (#234)', async () => {
       const fakeJwt = createFakeJwtWithExp(defaultPayload, 3600)
       setDocCookie(`logi_auth_token=${fakeJwt}`)
       const { useAuth } = await import('~/composables/useAuth')
@@ -1084,16 +1085,51 @@ describe('useAuth', () => {
       expect(auth.consumeAuthCookie()).toBe(true)
       expect(auth.isAuthenticated.value).toBe(true)
       expect(auth.user.value?.email).toBe('test@example.com')
-      expect(auth.deviceTenantId.value).toBe('tenant-1')
+      // 管理者ログインだけでは端末を「登録済み」にしない (#234)
+      expect(auth.deviceTenantId.value).toBeNull()
     })
 
-    it('does not activate device when tenant_id is empty', async () => {
+    it('sets empty tenant_id on user when JWT has neither tenant_id nor org, still no device activation', async () => {
       const fakeJwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: '', org: '' }, 3600)
       setDocCookie(`logi_auth_token=${fakeJwt}`)
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
       expect(auth.consumeAuthCookie()).toBe(true)
+      expect(auth.user.value?.tenant_id).toBe('')
       expect(auth.deviceTenantId.value).toBeNull()
+    })
+
+    it('returns false and clears cookie/session when the JWT exp is in the past (#234)', async () => {
+      const expiredJwt = createFakeJwtWithExp(defaultPayload, -60)
+      const writes: string[] = []
+      let cookieValue = `logi_auth_token=${expiredJwt}`
+      Object.defineProperty(document, 'cookie', {
+        get: () => cookieValue,
+        set: (v: string) => {
+          writes.push(v)
+          cookieValue = /Max-Age=0/.test(v) ? '' : v
+        },
+        configurable: true,
+      })
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+
+      expect(auth.consumeAuthCookie()).toBe(false)
+      expect(auth.accessToken.value).toBeNull()
+      expect(auth.isAuthenticated.value).toBe(false)
+      // clearAuthCookieClientSide が cookie を Max-Age=0 で上書き
+      expect(writes.some(w => w.includes('logi_auth_token=;') && w.includes('Max-Age=0'))).toBe(true)
+    })
+
+    it('treats a JWT without exp as valid (no expiry claim to check)', async () => {
+      const jwtWithoutExp = createFakeJwt(defaultPayload)
+      setDocCookie(`logi_auth_token=${jwtWithoutExp}`)
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+
+      expect(auth.consumeAuthCookie()).toBe(true)
+      expect(auth.accessToken.value).toBe(jwtWithoutExp)
+      expect(auth.isAuthenticated.value).toBe(true)
     })
 
     it('keeps login state even when JWT payload is malformed', async () => {
@@ -1111,7 +1147,7 @@ describe('useAuth', () => {
       const auth = useAuth()
       expect(auth.consumeAuthCookie()).toBe(true)
       expect(auth.user.value).toEqual({ id: 'uid-9', email: '', name: '', tenant_id: 'org-9', role: 'viewer' })
-      expect(auth.deviceTenantId.value).toBe('org-9')
+      expect(auth.deviceTenantId.value).toBeNull()
     })
 
     it('defaults id to empty string when neither sub nor user_id present', async () => {
@@ -1179,7 +1215,8 @@ describe('useAuth', () => {
       expect(result).toBe(true)
       expect(auth.accessToken.value).toBe(fakeJwt)
       expect(auth.user.value?.email).toBe('lw@example.com')
-      expect(auth.deviceTenantId.value).toBe('lw-tenant')
+      // LINE WORKS ログインでも端末を「登録済み」にしない (#234)
+      expect(auth.deviceTenantId.value).toBeNull()
       expect(localStorage.getItem('alc_refresh_token')).toBe('rt_lw')
       expect(replaceStateSpy).toHaveBeenCalledWith({}, '', '/callback')
 

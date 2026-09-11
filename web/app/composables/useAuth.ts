@@ -136,11 +136,18 @@ export function useAuth() {
     const raw = document.cookie.match(/(?:^|;\s*)logi_auth_token=([^;]+)/)?.[1]
     if (!raw) return false
     const token = decodeURIComponent(raw)
-    accessToken.value = token
     try {
       const parts = token.split('.')
       if (!parts[1]) throw new Error('Invalid JWT')
       const payload = decodeJwtPayload(parts[1])
+      // exp (秒) が過去なら失効: cookie/client state を掃除して false を返す
+      // (accessToken には載せない)。exp を持たない cookie は有効扱い。
+      if (typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) {
+        clearAuthCookieClientSide()
+        clearClientSession()
+        return false
+      }
+      accessToken.value = token
       const tenantId = payload.tenant_id || payload.org || ''
       user.value = {
         id: payload.sub || payload.user_id || '',
@@ -149,8 +156,10 @@ export function useAuth() {
         tenant_id: tenantId,
         role: payload.role || 'viewer',
       }
-      if (tenantId) activateDevice(tenantId)
-    } catch { /* デコード失敗してもログイン状態は維持 */ }
+    } catch {
+      /* デコード失敗してもログイン状態は維持 */
+      accessToken.value = token
+    }
     // ログイン確立 → 無操作 auto-logout の監視を開始
     startInactivityWatch()
     return true
@@ -400,8 +409,6 @@ export function useAuth() {
         tenant_id: tenantId,
         role: payload.role || 'viewer',
       }
-      // tenant_id があればデバイスをアクティベート (X-Tenant-ID ヘッダー用)
-      if (tenantId) activateDevice(tenantId)
     } catch { /* デコード失敗してもログイン状態は維持 */ }
     // ログイン確立 → 無操作 auto-logout の監視を開始
     startInactivityWatch()
