@@ -209,6 +209,7 @@ export async function saveMeasurement(result: MeasurementResult, facePhotoBlob?:
       diastolic: result.diastolic,
       pulse: result.pulse,
       medical_measured_at: result.medicalMeasuredAt?.toISOString(),
+      record_as_tenko: true,
     }),
   })
 }

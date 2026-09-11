@@ -457,6 +457,8 @@ describe('api', () => {
         expect(body.employee_id).toBe(TEST_EMPLOYEE_ID)
         expect(body.alcohol_value).toBe(0.0)
         expect(body.result_type).toBe('normal')
+        // 通常点呼は全件が点呼記録の対象 (Refs #238)
+        expect(body.record_as_tenko).toBe(true)
       })
       expect(response.id).toBeDefined()
       assertMock(() => expect(response.id).toBe('123'))

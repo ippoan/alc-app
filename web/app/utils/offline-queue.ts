@@ -308,6 +308,7 @@ export async function flush(
           diastolic: entry.result.diastolic,
           pulse: entry.result.pulse,
           medical_measured_at: entry.result.medicalMeasuredAt,
+          record_as_tenko: true,
         })
       } else {
         // 従来の POST パス
