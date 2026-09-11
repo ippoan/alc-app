@@ -35,6 +35,7 @@ export interface PairInternalForward {
 export function buildPairInternalForward(input: {
   sharedSecret: string
   tenantId: string
+  deviceId: string
   label: string
   role?: string
 }): PairInternalForward {
@@ -47,7 +48,10 @@ export function buildPairInternalForward(input: {
         'X-Internal-Shared-Secret': input.sharedSecret,
       },
       body: JSON.stringify({
+        // tenant_id は auth-worker 側の切り替え (Refs ippoan/auth-worker#544) が配信されるまで
+        // 引き続き必要。device_id を渡すのはそちら側が device_id から tenant を引く新経路のため。
         tenant_id: input.tenantId,
+        device_id: input.deviceId,
         label: input.label,
         role: input.role ?? DEVICE_ROLE_UPLOADER,
       }),
@@ -82,23 +86,27 @@ async function resolveSecret(binding: unknown): Promise<string | null> {
 }
 
 /**
- * rust レスポンス (claim or status) に tenant_id があれば device credential を mint し、
- * レスポンスへ { auth_device_id, device_secret } を merge して返す共通処理 (pure 相当、
- * fetch は注入された authWorker 経由)。mint 失敗時は元レスポンスをそのまま返す
- * (provisioning 失敗で claim/status 自体を壊さない、非破壊 fallback)。
+ * rust レスポンス (claim or status) に tenant_id と device_id の両方があれば device credential
+ * を mint し、レスポンスへ { auth_device_id, device_secret } を merge して返す共通処理 (pure
+ * 相当、fetch は注入された authWorker 経由)。どちらか片方でも欠けていれば mint しない
+ * (device_id は device_id から tenant を引く auth-worker 側の新経路 Refs
+ * ippoan/auth-worker#544 に必須)。mint 失敗時は元レスポンスをそのまま返す (provisioning
+ * 失敗で claim/status 自体を壊さない、非破壊 fallback)。
  */
-async function mintAndMergeCredential(
+export async function mintAndMergeCredential(
   sharedSecret: string,
   authWorker: { fetch: typeof fetch },
   res: ClaimResponse,
 ): Promise<ClaimResponse> {
   const tenantId = res.tenant_id
-  if (!tenantId) return res
+  const deviceId = res.device_id
+  if (!tenantId || !deviceId) return res
   try {
     const pair = buildPairInternalForward({
       sharedSecret,
       tenantId,
-      label: (res.device_id as string | undefined) || 'alc-device',
+      deviceId,
+      label: deviceId,
     })
     const pairRes = await authWorker.fetch(pair.url, pair.init)
     if (pairRes.ok) {
