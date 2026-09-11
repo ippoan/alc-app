@@ -203,6 +203,7 @@ describe('useBleGateway', () => {
     expect(gw.bloodPressureConnected.value).toBe(false)
     expect(gw.latestTemperature.value).toBeNull()
     expect(gw.latestBloodPressure.value).toBeNull()
+    expect(gw.latestAlcohol.value).toBeNull()
     expect(gw.gatewayVersion.value).toBeNull()
     expect(gw.transport.value).toBeNull()
     expect(gw.hasMedicalData.value).toBe(false)
@@ -374,6 +375,40 @@ describe('useBleGateway', () => {
         expect(gw.error.value).toBe('BLE scan failed')
       })
 
+      it('alcohol → latestAlcohol', async () => {
+        const ws = await connectWs()
+        ws.simulateMessage({ type: 'alcohol', value: 0.15, unit: 'mg/L', result: 'normal', use_count: 42 })
+        expect(gw.latestAlcohol.value!.value).toBe(0.15)
+        expect(gw.latestAlcohol.value!.unit).toBe('mg/L')
+        expect(gw.latestAlcohol.value!.result).toBe('normal')
+        expect(gw.latestAlcohol.value!.useCount).toBe(42)
+      })
+
+      it('alcohol (吹込不良、value=0固定)', async () => {
+        const ws = await connectWs()
+        ws.simulateMessage({ type: 'alcohol', value: 0, unit: 'mg/L', result: 'error', use_count: 5 })
+        expect(gw.latestAlcohol.value!.result).toBe('error')
+        expect(gw.latestAlcohol.value!.value).toBe(0)
+      })
+
+      it('alcohol の形が壊れている (result 無し) → latestAlcohol は変化しない', async () => {
+        const ws = await connectWs()
+        ws.simulateMessage({ type: 'alcohol' })
+        expect(gw.latestAlcohol.value).toBeNull()
+      })
+
+      it('alcohol で value が欠けている (result はある) → 0 扱い', async () => {
+        const ws = await connectWs()
+        ws.simulateMessage({ type: 'alcohol', result: 'error' })
+        expect(gw.latestAlcohol.value!.value).toBe(0)
+      })
+
+      it('alcohol で use_count が欠けている (result はある) → 0 扱い', async () => {
+        const ws = await connectWs()
+        ws.simulateMessage({ type: 'alcohol', value: 0.2, unit: 'mg/L', result: 'normal' })
+        expect(gw.latestAlcohol.value!.useCount).toBe(0)
+      })
+
       it('reset → 状態変化なし', async () => {
         const ws = await connectWs()
         ws.simulateMessage({ type: 'reset', message: 'restarting' })
@@ -464,12 +499,26 @@ describe('useBleGateway', () => {
     ws.simulateOpen()
     ws.simulateMessage({ type: 'temperature', value: 36.7, unit: 'celsius' })
     ws.simulateMessage({ type: 'blood_pressure', systolic: 120, diastolic: 80, unit: 'mmHg' })
+    ws.simulateMessage({ type: 'alcohol', value: 0.1, unit: 'mg/L', result: 'normal', use_count: 1 })
 
     gw.clearReadings()
     expect(gw.latestTemperature.value).toBeNull()
     expect(gw.latestBloodPressure.value).toBeNull()
+    expect(gw.latestAlcohol.value).toBeNull()
     expect(gw.error.value).toBeNull()
     expect(gw.hasMedicalData.value).toBe(false)
+  })
+
+  it('clearAlcoholReading → latestAlcohol だけクリア (他の測定値は触らない)', async () => {
+    await gw.connect()
+    const ws = MockWebSocket.instances[0]!
+    ws.simulateOpen()
+    ws.simulateMessage({ type: 'temperature', value: 36.7, unit: 'celsius' })
+    ws.simulateMessage({ type: 'alcohol', value: 0.1, unit: 'mg/L', result: 'normal', use_count: 1 })
+
+    gw.clearAlcoholReading()
+    expect(gw.latestAlcohol.value).toBeNull()
+    expect(gw.latestTemperature.value!.value).toBe(36.7)
   })
 
   // =============================================
@@ -828,6 +877,7 @@ describe('useBleGateway', () => {
         expect(Object.keys(gw).sort()).toEqual([
           'autoConnect',
           'bloodPressureConnected',
+          'clearAlcoholReading',
           'clearReadings',
           'connect',
           'disconnect',
@@ -835,6 +885,7 @@ describe('useBleGateway', () => {
           'gatewayVersion',
           'hasMedicalData',
           'isConnected',
+          'latestAlcohol',
           'latestBloodPressure',
           'latestTemperature',
           'resetGateway',

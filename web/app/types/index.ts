@@ -246,6 +246,16 @@ export interface BloodPressureReading {
   measuredAt: Date
 }
 
+/** アルコール測定結果 (CoreS3 につないだ FC-1200 から、体温・血圧と同じ経路で受信)。
+ * `result:"error"` (吹込不良) のときの value は測定値ではない (Refs ippoan/alc-app-s3#135)。 */
+export interface AlcoholReading {
+  value: number
+  unit: 'mg/L'
+  result: 'normal' | 'over' | 'error'
+  useCount: number
+  measuredAt: Date
+}
+
 /** BLE Gateway から受信する JSON メッセージ */
 export type BleGatewayMessage =
   | { type: 'ready'; device: string; version: string }
@@ -256,6 +266,7 @@ export type BleGatewayMessage =
   | { type: 'disconnected'; device: BleDeviceType }
   | { type: 'temperature'; value: number; unit: 'celsius' }
   | { type: 'blood_pressure'; systolic: number; diastolic: number; pulse?: number; unit: 'mmHg' }
+  | { type: 'alcohol'; value: number; unit: 'mg/L'; result: 'normal' | 'over' | 'error'; use_count: number }
   | { type: 'error'; message: string }
   | { type: 'heartbeat'; uptime: number; thermo: boolean; bp: boolean }
   | { type: 'reset'; message: string }

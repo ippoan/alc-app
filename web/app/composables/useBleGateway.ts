@@ -2,7 +2,9 @@ import type {
   BleGatewayMessage,
   TemperatureReading,
   BloodPressureReading,
+  AlcoholReading,
 } from '~/types'
+import { readAlcohol } from '~/utils/alcohol'
 
 // Android BLE Bridge WebSocket
 const BLE_WS_URL = 'ws://127.0.0.1:9877'
@@ -19,6 +21,7 @@ const thermometerConnected = ref(false)
 const bloodPressureConnected = ref(false)
 const latestTemperature = ref<TemperatureReading | null>(null)
 const latestBloodPressure = ref<BloodPressureReading | null>(null)
+const latestAlcohol = ref<AlcoholReading | null>(null)
 const gatewayVersion = ref<string | null>(null)
 const transport = ref<'serial' | 'websocket' | null>(null)
 
@@ -234,6 +237,23 @@ export function useBleGateway() {
         }
         break
 
+      case 'alcohol': {
+        // useBleGateway は `JSON.parse(...) as BleGatewayMessage` で受けているだけで
+        // 実行時の形チェックは無いので、HubMeasurementsViewer と同じ readAlcohol で
+        // 値・判定を確かめてから latestAlcohol に入れる (Refs ippoan/alc-app-s3#135)
+        const reading = readAlcohol(msg)
+        if (reading?.result) {
+          latestAlcohol.value = {
+            value: reading.value ?? 0,
+            unit: 'mg/L',
+            result: reading.result as 'normal' | 'over' | 'error',
+            useCount: reading.useCount ?? 0,
+            measuredAt: new Date(),
+          }
+        }
+        break
+      }
+
       case 'reset':
         // スキャン再開のみ — 接続状態は disconnected/heartbeat で管理
         break
@@ -269,7 +289,14 @@ export function useBleGateway() {
   function clearReadings(): void {
     latestTemperature.value = null
     latestBloodPressure.value = null
+    latestAlcohol.value = null
     error.value = null
+  }
+
+  /** アルコール測定値だけをクリア（AlcMeasurement の mount 時に呼ぶ。
+   * 体温・血圧など他の測定値は触らない — 同時に別ステップが進んでいることがある）。 */
+  function clearAlcoholReading(): void {
+    latestAlcohol.value = null
   }
 
   const hasMedicalData = computed(() =>
@@ -368,6 +395,7 @@ export function useBleGateway() {
     bloodPressureConnected: readonly(bloodPressureConnected),
     latestTemperature: readonly(latestTemperature),
     latestBloodPressure: readonly(latestBloodPressure),
+    latestAlcohol: readonly(latestAlcohol),
     gatewayVersion: readonly(gatewayVersion),
     transport: readonly(transport),
     hasMedicalData,
@@ -376,6 +404,7 @@ export function useBleGateway() {
     startAutoConnect,
     disconnect,
     clearReadings,
+    clearAlcoholReading,
     sendCommand,
     resetGateway,
   }

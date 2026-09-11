@@ -24,10 +24,27 @@ const {
   resetSession,
 } = useFc1200Serial()
 
+// CoreS3 につないだ FC-1200 (Refs ippoan/alc-app-s3#135)。CoreS3 を NFC・認証だけに
+// 使い FC-1200 は PC に直結している運用もあるため、CoreS3 の接続有無では判定しない
+// — PC 直結の autoConnect は常に行い、CoreS3 の latestAlcohol も同時に待つ。DB9 は
+// 物理的に PC か CoreS3 のどちらか 1 台にしかつながらないので、先に届いた結果を
+// 1 回だけ emit すれば二重計測にはならない (#238)。
+const coreS3 = useCoreS3Serial()
+const ble = useBleGateway()
+
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
 
-// 接続後に測定を自動開始
+// 結果は先着 1 回だけ emit する (PC 直結 / CoreS3 のどちらが先でも同じ規則)。
+const resultEmitted = ref(false)
+
+function emitResult(result: MeasurementResult) {
+  if (resultEmitted.value) return
+  resultEmitted.value = true
+  emit('result', result)
+}
+
+// 接続後に測定を自動開始 (PC 直結のみ。CoreS3 側の吹込は CoreS3 の画面が案内する)
 watch(isConnected, (connected) => {
   if (connected) {
     startMeasurement()
@@ -39,8 +56,12 @@ watch(state, (s) => {
   emit('stateChange', s)
 })
 
-// マウント時に自動接続を試行
+// マウント時に自動接続を試行 (CoreS3 接続中かどうかに関わらず PC 直結も試す)
 onMounted(async () => {
+  resultEmitted.value = false
+  // 前の運転者の結果を引き継がない (latestAlcohol はシングルトンの composable 状態)
+  ble.clearAlcoholReading()
+
   if (!isSupported() || isConnected.value) return
   autoConnecting.value = true
   const success = await autoConnect()
@@ -50,12 +71,25 @@ onMounted(async () => {
   }
 })
 
-// 結果を親に通知
+// 結果を親に通知 (PC 直結の FC-1200)
 watch(result, (val) => {
   if (val) {
-    emit('result', {
+    emitResult({
       ...val,
       employeeId: props.employeeId,
+    })
+  }
+})
+
+// 結果を親に通知 (CoreS3 につないだ FC-1200)
+watch(() => ble.latestAlcohol.value, (val) => {
+  if (val) {
+    emitResult({
+      employeeId: props.employeeId,
+      alcoholValue: val.value,
+      resultType: val.result,
+      deviceUseCount: val.useCount,
+      measuredAt: val.measuredAt,
     })
   }
 })
@@ -161,7 +195,17 @@ function emitDemoResult() {
       </button>
     </div>
 
-    <!-- 通常モード (FC-1200) -->
+    <!-- CoreS3 につないだ FC-1200: 吹き込み待ちなどの進捗は USB に流れないので、
+         一言だけ案内して CoreS3 の画面 (実機) に委ねる (Refs ippoan/alc-app-s3#135) -->
+    <div
+      v-else-if="coreS3.isConnected.value"
+      class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-6 text-center w-full"
+    >
+      <p class="text-blue-800 font-medium">CoreS3 につないだアルコールチェッカーで測定してください</p>
+      <p class="text-blue-600 text-sm mt-2">(進み具合は CoreS3 の画面に出ます)</p>
+    </div>
+
+    <!-- 通常モード (FC-1200 PC 直結) -->
     <!-- WebSerial 非対応 -->
     <div v-else-if="!isSupported()" class="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
       <p class="text-red-700 font-medium">FC-1200 接続非対応</p>
