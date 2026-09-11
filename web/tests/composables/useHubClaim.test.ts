@@ -11,15 +11,12 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
  * useCoreS3Serial / useDeviceToken の実体は他のテストが担保済みなのでここでは mock する。
  */
 
-const coreS3Mock = vi.hoisted(() => ({
-  onOpen: vi.fn(),
-  startupProbe: vi.fn(async () => false),
-  isStartupProbing: { value: false },
-}))
+const coreS3Mock = vi.hoisted(() => ({ onOpen: vi.fn() }))
 mockNuxtImport('useCoreS3Serial', () => () => coreS3Mock)
 
 const deviceTokenMock = vi.hoisted(() => ({
   getDeviceJwt: vi.fn(async () => 'jwt-1'),
+  startupDeviceJwt: vi.fn(async () => null),
   lastError: { value: null as string | null },
 }))
 mockNuxtImport('useDeviceToken', () => () => deviceTokenMock)
@@ -64,12 +61,12 @@ describe('useHubClaim', () => {
     expect(coreS3Mock.onOpen).toHaveBeenCalledTimes(1)
   })
 
-  it('起動時に CoreS3 の探索 (startupProbe) を 1 回だけ始める (Refs #238)', async () => {
+  it('起動時の 1 本 (startupDeviceJwt) を 1 回だけ始める (Refs #238)', async () => {
     const useHubClaim = await load()
     useHubClaim()
     useHubClaim()
 
-    expect(coreS3Mock.startupProbe).toHaveBeenCalledTimes(1)
+    expect(deviceTokenMock.startupDeviceJwt).toHaveBeenCalledTimes(1)
   })
 
   it('attemptClaim は isDeviceActivated に関係なく毎回 getDeviceJwt を呼ぶ (guard を持たない)', async () => {

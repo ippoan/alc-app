@@ -777,23 +777,20 @@ describe('useCoreS3Serial', () => {
   // ---------- startupProbe (Refs ippoan/alc-app#238) ----------
 
   describe('startupProbe', () => {
-    it('何度呼んでも 1 本で、claim されたら true (isStartupProbing は false → true → false)', async () => {
+    it('何度呼んでも 1 本で、claim されたら true', async () => {
       const dev = createMockPort()
       const getPorts = vi.fn(async () => [dev.port])
       installSerialMock({ getPorts })
       await load()
       dev.emit('{"type":"ready","version":"1.0.0"}\n')
-      expect(core.isStartupProbing.value).toBe(false)
 
       const first = core.startupProbe()
-      expect(core.isStartupProbing.value).toBe(true)
       expect(core.startupProbe()).toBe(first)
       // 別の呼び出し元 (別の useCoreS3Serial()) からも同じ 1 本
       expect(mod.useCoreS3Serial().startupProbe()).toBe(first)
 
       await vi.advanceTimersByTimeAsync(0)
       await expect(first).resolves.toBe(true)
-      expect(core.isStartupProbing.value).toBe(false)
       expect(core.isConnected.value).toBe(true)
       expect(getPorts).toHaveBeenCalledTimes(1)
     })
@@ -808,14 +805,11 @@ describe('useCoreS3Serial', () => {
 
       await vi.advanceTimersByTimeAsync(2999)
       expect(settled).toBe(false)
-      expect(core.isStartupProbing.value).toBe(true)
 
       await vi.advanceTimersByTimeAsync(1)
       await expect(first).resolves.toBe(false)
-      expect(core.isStartupProbing.value).toBe(false)
 
       expect(core.startupProbe()).toBe(first)
-      expect(core.isStartupProbing.value).toBe(false)
     })
 
     it('接続済みなら待たずに true', async () => {
@@ -823,16 +817,13 @@ describe('useCoreS3Serial', () => {
       await connectWithJson(dev)
 
       await expect(core.startupProbe()).resolves.toBe(true)
-      expect(core.isStartupProbing.value).toBe(false)
     })
 
-    it('WebSerial 非対応なら探索せず即 false (isStartupProbing は立たない)', async () => {
+    it('WebSerial 非対応なら探索せず即 false', async () => {
       await load()
 
-      const p = core.startupProbe()
-      expect(core.isStartupProbing.value).toBe(false)
-      await expect(p).resolves.toBe(false)
-      expect(core.isStartupProbing.value).toBe(false)
+      await expect(core.startupProbe()).resolves.toBe(false)
+      expect(core.isConnected.value).toBe(false)
     })
   })
 

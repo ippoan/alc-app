@@ -40,6 +40,9 @@
  *   過ぎていれば自然に再試行する)。失敗理由は `lastError` に残し、成功したら null に戻す。
  * - `/device/alarm-token` の応答に載る `tenant_id` が `deviceTenantId` と食い違っても
  *   拒否しない (`console.warn` のみ — 発行元 auth-worker 側の判断を尊重する)。
+ * - 起動時の 1 本 (`startupDeviceJwt`、Refs #238): 最初の `getDeviceJwt()` を起動から 1 回だけ作って
+ *   共有する (CoreS3 の探索を最大 3 秒待ち、繋がっていれば署名で取る)。`isStartupJwtPending` は
+ *   その 1 本が未解決かつ起動から 3 秒以内の間だけ true — 運行者タブの「確認中」はこれだけを見る。
  */
 import { ref, computed, readonly } from 'vue'
 import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
@@ -55,6 +58,11 @@ const DEFAULT_TTL_SECONDS = 3600
 const CORE_S3_DEFAULT_TTL_SECONDS = 900
 /** CoreS3 署名経路が失敗してから、これだけ試さない (ms)。再接続での解除は無い。 */
 const CORE_S3_BACKOFF_MS = 60_000
+/**
+ * 起動時の 1 本 (startupDeviceJwt) を「確認中」として待つ上限 (ms)。
+ * useCoreS3Serial の claim 待ち (3 秒) と同じ起点・同じ長さ
+ */
+const STARTUP_TIMEOUT_MS = 3000
 
 const isClient = typeof window !== 'undefined'
 
@@ -79,6 +87,10 @@ let coreS3BackoffUntilMs = 0
 const lastError = ref<string | null>(null)
 // CoreS3 の再接続監視 (キャッシュ破棄) を二重登録しないためのガード (useHubClaim と同じ流儀)
 let closeListenerInstalled = false
+// 起動時の 1 本 (= 最初の getDeviceJwt()、Refs #238)。起動から 1 回だけ作り、以後は同じものを返す
+let startupJwtPromise: Promise<string | null> | null = null
+// startupJwtPromise が未解決、かつ起動から STARTUP_TIMEOUT_MS 以内の間だけ true
+const isStartupJwtPending = ref(false)
 
 export function useDeviceToken() {
   const config = useRuntimeConfig()
@@ -138,6 +150,24 @@ export function useDeviceToken() {
       jwtInFlight = mintDeviceJwt().finally(() => { jwtInFlight = null })
     }
     return jwtInFlight
+  }
+
+  /**
+   * 起動時の 1 本。初回の呼び出しで getDeviceJwt() を始める (中で CoreS3 の探索を最大 3 秒待ち、
+   * 繋がっていれば署名で取る)。2 回目以降は同じ promise を返す — 途中の getDeviceJwt() も
+   * single-flight で同じ取得に合流する。`isStartupJwtPending` は「1 本の解決」か
+   * 「起動から STARTUP_TIMEOUT_MS」の早い方で下りる (fetch に timeout が無いので上限を外さない)。
+   * WebSerial 非対応なら null で何もしない (最初から確認中にしない)
+   */
+  function startupDeviceJwt(): Promise<string | null> {
+    if (!coreS3.isSupported) return Promise.resolve(null)
+    if (!startupJwtPromise) {
+      startupJwtPromise = getDeviceJwt()
+      isStartupJwtPending.value = true
+      const deadline = new Promise<void>(resolve => setTimeout(resolve, STARTUP_TIMEOUT_MS))
+      void Promise.race([startupJwtPromise, deadline]).finally(() => { isStartupJwtPending.value = false })
+    }
+    return startupJwtPromise
   }
 
   /** cache 以外の 2 経路を順に試す (CoreS3 の署名 → credential)。 */
@@ -283,6 +313,9 @@ export function useDeviceToken() {
     storeKioskCredential,
     clearKioskCredential,
     getDeviceJwt,
+    startupDeviceJwt,
+    /** 起動時の 1 本 (startupDeviceJwt) が未解決かつ起動から 3 秒以内の間だけ true */
+    isStartupJwtPending: readonly(isStartupJwtPending),
     pairKioskDevice,
     setupAsKiosk,
     /** CoreS3 署名経路の直近の失敗理由。成功 / 未試行なら null */
