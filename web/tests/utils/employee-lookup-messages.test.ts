@@ -26,9 +26,9 @@ describe('employee-lookup-messages', () => {
     expect(msg).toContain('点呼予定を作成')
   })
 
-  it('deviceUnregisteredMessage は未登録であることとペアリングが要ることを言う', () => {
-    expect(deviceUnregisteredMessage).toContain('登録されていません')
-    expect(deviceUnregisteredMessage).toContain('ペアリング')
+  it('deviceUnregisteredMessage はまだ使える状態でないことを言う (ペアリングという運用は無い、Refs #238)', () => {
+    expect(deviceUnregisteredMessage).toContain('使える状態')
+    expect(deviceUnregisteredMessage).not.toContain('ペアリング')
   })
 
   it('autoClaimFailedMessage は CoreS3 経由であることと理由を含む', () => {
