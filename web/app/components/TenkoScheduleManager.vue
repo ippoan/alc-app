@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { TenkoSchedule, TenkoScheduleFilter, CreateTenkoSchedule, ApiEmployee, TenkoType } from '~/types'
 import { listSchedules, createSchedule, batchCreateSchedules, updateSchedule, deleteSchedule, getEmployees } from '~/utils/api'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const schedules = ref<TenkoSchedule[]>([])
 const total = ref(0)
@@ -156,10 +157,6 @@ function formatDate(iso: string) {
   })
 }
 
-function tenkoTypeLabel(t: string) {
-  return t === 'pre_operation' ? '業務前' : '業務後'
-}
-
 onMounted(() => { loadEmployees(); fetchData() })
 </script>
 
@@ -174,8 +171,8 @@ onMounted(() => { loadEmployees(); fetchData() })
         </select>
         <select v-model="filterTenkoType" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="">全種別</option>
-          <option value="pre_operation">業務前</option>
-          <option value="post_operation">業務後</option>
+          <option value="pre_operation">{{ tenkoTypeLabel('pre_operation') }}</option>
+          <option value="post_operation">{{ tenkoTypeLabel('post_operation') }}</option>
         </select>
         <select v-model="filterConsumed" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="">全状態</option>
@@ -202,8 +199,8 @@ onMounted(() => { loadEmployees(); fetchData() })
           <option v-for="emp in employees" :key="emp.id" :value="emp.id">{{ emp.name }}</option>
         </select>
         <select v-model="row.tenko_type" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="pre_operation">業務前</option>
-          <option value="post_operation">業務後</option>
+          <option value="pre_operation">{{ tenkoTypeLabel('pre_operation') }}</option>
+          <option value="post_operation">{{ tenkoTypeLabel('post_operation') }}</option>
         </select>
         <input v-model="row.scheduled_at" type="datetime-local" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input v-model="row.responsible_manager_name" type="text" placeholder="管理者名" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">

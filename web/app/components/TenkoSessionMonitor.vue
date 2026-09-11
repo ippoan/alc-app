@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { TenkoSession, TenkoSessionFilter, TenkoType, ApiEmployee } from '~/types'
-import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees } from '~/utils/api'
+import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee } from '~/types'
+import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv } from '~/utils/api'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const emit = defineEmits<{ changed: [] }>()
 
@@ -55,6 +56,27 @@ async function fetchData() {
 function applyFilter() { page.value = 1; fetchData() }
 function changePage(p: number) { page.value = p; fetchData() }
 const totalPages = computed(() => Math.ceil(total.value / perPage))
+
+// CSV 出力 (今の絞り込みの値をそのまま渡す。TenkoSessionFilter と TenkoRecordFilter は同じフィールド)
+const isDownloading = ref(false)
+
+async function handleCsvDownload() {
+  isDownloading.value = true
+  error.value = null
+  try {
+    const filter: TenkoRecordFilter = {}
+    if (filterEmployeeId.value) filter.employee_id = filterEmployeeId.value
+    if (filterStatus.value) filter.status = filterStatus.value
+    if (filterTenkoType.value) filter.tenko_type = filterTenkoType.value
+    if (filterDateFrom.value) filter.date_from = filterDateFrom.value
+    if (filterDateTo.value) filter.date_to = filterDateTo.value
+    await downloadTenkoRecordsCsv(filter)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'CSVダウンロードエラー'
+  } finally {
+    isDownloading.value = false
+  }
+}
 
 // 中断操作
 const interruptingId = ref<string | null>(null)
@@ -162,10 +184,6 @@ function formatDate(iso: string | null) {
   })
 }
 
-function tenkoTypeLabel(t: string) {
-  return t === 'pre_operation' ? '業務前' : '業務後'
-}
-
 function statusLabel(s: string) {
   const map: Record<string, string> = {
     identity_verified: '本人確認済',
@@ -240,13 +258,20 @@ onMounted(() => { loadEmployees(); fetchData() })
         </select>
         <select v-model="filterTenkoType" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="">全種別</option>
-          <option value="pre_operation">業務前</option>
-          <option value="post_operation">業務後</option>
+          <option value="pre_operation">{{ tenkoTypeLabel('pre_operation') }}</option>
+          <option value="post_operation">{{ tenkoTypeLabel('post_operation') }}</option>
         </select>
         <input v-model="filterDateFrom" type="date" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input v-model="filterDateTo" type="date" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
       </div>
-      <button class="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors" @click="applyFilter">検索</button>
+      <div class="flex gap-2 mt-3">
+        <button class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors" @click="applyFilter">検索</button>
+        <button
+          :disabled="isDownloading"
+          class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700 transition-colors disabled:opacity-50"
+          @click="handleCsvDownload"
+        >{{ isDownloading ? 'ダウンロード中...' : 'CSV出力' }}</button>
+      </div>
     </div>
 
     <!-- エラー -->
@@ -306,7 +331,7 @@ onMounted(() => { loadEmployees(); fetchData() })
               <td class="px-4 py-3 text-gray-700">{{ employeeName(s.employee_id) }}</td>
               <td class="px-4 py-3 text-center">
                 <span class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-                  :class="s.tenko_type === 'pre_operation' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'">
+                  :class="s.tenko_type === 'pre_operation' ? 'bg-blue-100 text-blue-800' : s.tenko_type === 'post_operation' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-700'">
                   {{ tenkoTypeLabel(s.tenko_type) }}
                 </span>
               </td>

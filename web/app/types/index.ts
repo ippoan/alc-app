@@ -273,7 +273,7 @@ export type BleGatewayMessage =
 
 // --- 自動点呼 (Tenko) ---
 
-export type TenkoType = 'pre_operation' | 'post_operation'
+export type TenkoType = 'pre_operation' | 'post_operation' | 'normal'
 
 export type TenkoSessionStatus =
   | 'identity_verified'
@@ -502,7 +502,7 @@ export interface TenkoRecord {
   status: string
   record_data: unknown
   employee_name: string
-  responsible_manager_name: string
+  responsible_manager_name: string | null
   tenko_method: string
   location: string | null
   alcohol_result: string | null
@@ -537,13 +537,6 @@ export interface TenkoRecordFilter {
   date_to?: string
   page?: number
   per_page?: number
-}
-
-export interface TenkoRecordsResponse {
-  records: TenkoRecord[]
-  total: number
-  page: number
-  per_page: number
 }
 
 /** Webhook 設定 */

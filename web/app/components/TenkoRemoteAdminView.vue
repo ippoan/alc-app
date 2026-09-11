@@ -2,6 +2,7 @@
 import type { FaceAuthResult, TenkoSession, DriverInfo } from '~/types'
 import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const props = defineProps<{
   initialRoomId?: string | null
@@ -441,7 +442,7 @@ onUnmounted(() => {
       <div class="px-3 py-1 border-b border-gray-200 flex items-center gap-2">
         <span class="font-bold text-sm text-gray-800">{{ liveEmployeeName || liveSession.employee_id.slice(0, 8) }}</span>
         <span class="text-xs px-1.5 py-0.5 rounded-full" :class="liveSession.tenko_type === 'pre_operation' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'">
-          {{ liveSession.tenko_type === 'pre_operation' ? '業務前' : '業務後' }}
+          {{ tenkoTypeLabel(liveSession.tenko_type) }}
         </span>
         <span class="text-xs px-1.5 py-0.5 rounded-full" :class="statusColor(liveSession.status)">
           {{ statusLabel(liveSession.status) }}

@@ -5,7 +5,7 @@ import type {
   TenkoSession, StartTenkoSession, SubmitAlcoholResult, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
   TenkoSessionFilter, TenkoSessionsResponse,
-  TenkoRecord, TenkoRecordFilter, TenkoRecordsResponse,
+  TenkoRecordFilter,
   WebhookConfig, CreateWebhookConfig, WebhookDelivery,
   TenkoDashboard,
   EmployeeHealthBaseline, CreateHealthBaseline, UpdateHealthBaseline,
@@ -593,14 +593,6 @@ export async function resumeTenkoSession(sessionId: string, data: ResumeSession)
 }
 
 // --- レコード ---
-
-export async function listTenkoRecords(filter: TenkoRecordFilter = {}): Promise<TenkoRecordsResponse> {
-  return request<TenkoRecordsResponse>(`/api/tenko/records${toParams(filter)}`)
-}
-
-export async function getTenkoRecord(id: string): Promise<TenkoRecord> {
-  return request<TenkoRecord>(`/api/tenko/records/${id}`)
-}
 
 export async function downloadTenkoRecordsCsv(filter: TenkoRecordFilter = {}): Promise<void> {
   await downloadCsv(`/api/tenko/records/csv${toParams(filter)}`, 'tenko-records.csv')

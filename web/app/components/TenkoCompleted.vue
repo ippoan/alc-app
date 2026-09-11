@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TenkoSession } from '~/types'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 defineProps<{
   session: TenkoSession
@@ -32,7 +33,7 @@ function formatTime(iso: string | null): string {
     <div class="w-full rounded-xl border border-gray-200 divide-y divide-gray-100 text-sm">
       <div class="flex justify-between px-4 py-2">
         <span class="text-gray-500">点呼種別</span>
-        <span class="font-medium">{{ session.tenko_type === 'pre_operation' ? '業務前' : '業務後' }}</span>
+        <span class="font-medium">{{ tenkoTypeLabel(session.tenko_type) }}</span>
       </div>
       <div class="flex justify-between px-4 py-2">
         <span class="text-gray-500">運行管理者</span>

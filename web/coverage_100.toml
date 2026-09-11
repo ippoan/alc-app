@@ -211,3 +211,7 @@ branches = true
 [[files]]
 path = "app/utils/serialDiagLog.ts"
 branches = true
+
+[[files]]
+path = "app/utils/tenko-type.ts"
+branches = true

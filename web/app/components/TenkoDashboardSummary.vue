@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { TenkoDashboard, TenkoSchedule, ApiEmployee } from '~/types'
 import { getTenkoDashboard, getEmployees } from '~/utils/api'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const dashboard = ref<TenkoDashboard | null>(null)
 const isLoading = ref(false)
@@ -35,10 +36,6 @@ function formatDate(iso: string) {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
-}
-
-function tenkoTypeLabel(type: string) {
-  return type === 'pre_operation' ? '業務前' : '業務後'
 }
 
 function overdueMinutes(schedule: TenkoSchedule) {
