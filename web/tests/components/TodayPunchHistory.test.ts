@@ -57,9 +57,35 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     wrapper.unmount()
   })
 
-  it('打刻が無ければ「本日の打刻はまだありません」を出す', async () => {
+  it('取得成功で 0 件なら「本日の打刻はまだありません」を出す', async () => {
     const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
     expect(wrapper.text()).toContain('本日の打刻はまだありません')
+    wrapper.unmount()
+  })
+
+  it('取得が完了するまでは「読み込み中…」を出す (「まだありません」ではない)', async () => {
+    let resolvePunches: ((v: { punches: any[] }) => void) | undefined
+    listTimePunchesMock.mockImplementationOnce(() => new Promise((resolve) => { resolvePunches = resolve }))
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    expect(wrapper.text()).toContain('読み込み中…')
+    expect(wrapper.text()).not.toContain('本日の打刻はまだありません')
+
+    // 取得が完了すれば「まだありません」に切り替わる
+    resolvePunches!({ punches: [] })
+    await flush()
+    expect(wrapper.text()).toContain('本日の打刻はまだありません')
+    wrapper.unmount()
+  })
+
+  it('取得に失敗したら「打刻履歴を読み込めませんでした」を出す (「まだありません」でも「読み込み中…」のままでもない、Refs #238)', async () => {
+    listTimePunchesMock.mockRejectedValueOnce(new Error('network error'))
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    expect(wrapper.text()).toContain('打刻履歴を読み込めませんでした')
+    expect(wrapper.text()).not.toContain('本日の打刻はまだありません')
+    expect(wrapper.text()).not.toContain('読み込み中…')
     wrapper.unmount()
   })
 
@@ -156,6 +182,27 @@ describe('TodayPunchHistory — 端末 JWT が取れたら一覧を引き直す 
     await flush()
     expect(getEmployeesMock).toHaveBeenCalledTimes(2)
     expect(listTimePunchesMock).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('JWT が無くて最初の取得が失敗しても、hasDeviceJwt が true になったら取り直して表示する (index.vue に置いたときの再現、Refs #238)', async () => {
+    listTimePunchesMock.mockRejectedValueOnce(new Error('unauthorized'))
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    // JWT 無しの最初の取得は失敗 → 「まだありません」ではなく「読み込めませんでした」
+    expect(wrapper.text()).toContain('打刻履歴を読み込めませんでした')
+    expect(wrapper.text()).not.toContain('本日の打刻はまだありません')
+
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        { id: 'p1', employee_id: null, employee_name: '田中次郎', card_id: null, punched_at: '2026-09-11T02:00:00Z' },
+      ],
+    })
+    deviceJwtReady.value = true
+    await flush()
+    expect(wrapper.text()).toContain('田中次郎')
+    expect(wrapper.text()).not.toContain('読み込み中…')
+    expect(wrapper.text()).not.toContain('読み込めませんでした')
     wrapper.unmount()
   })
 

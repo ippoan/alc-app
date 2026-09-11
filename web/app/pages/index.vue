@@ -445,11 +445,20 @@ function onRoleTabClick(role: RoleTab) {
 
         <!-- コンテンツ (1箇所のみ: 横画面=flex子要素, 縦画面=contents透過でルート直下) -->
         <div :class="isAndroidLandscape ? 'flex-1 min-w-0 flex flex-col' : 'contents'">
-          <!-- PC のときだけ「本日の打刻履歴」を通常点呼の隣に出す (Refs ippoan/alc-app#238)。
-               isPC でなければ contents で透過し、NormalMeasurement 単体のレイアウトのまま -->
-          <div v-if="driverSubTab === 'normal'" :class="isPC ? 'flex-1 min-h-0 flex gap-4' : 'contents'">
-            <NormalMeasurement :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
-            <TodayPunchHistory v-if="isPC" class="w-96 shrink-0" />
+          <!-- PC のときだけ「本日の打刻履歴」を通常点呼のカードの下に出す (Refs ippoan/alc-app#238)。
+               isPC でなければ contents で透過し、NormalMeasurement 単体のレイアウトのまま。
+               幅は NormalMeasurement のカードの外枠 (max-w-md) に揃え、間隔は TimePunchKiosk の
+               NFC カードと打刻履歴の間隔 (mt-4) に合わせる。横に並べていたときは画面全幅に
+               広がって見出し・サブタブ (max-w-lg mx-auto) とバランスが崩れていたため縦積みに変更
+               (ユーザー報告)。NormalMeasurement 自身が flex-1 + overflow-y-auto を内蔵しているため
+               (ルートに静的クラスとして付いており、外から打ち消せない)、isPC のときは
+               ラッパーを **flex にしない (普通のブロック)**。ブロックの中では子の flex-1 は
+               効かないので、NormalMeasurement はその内容の高さのまま上に積まれる (「残りの高さ」
+               に縮められてカードが押しつぶされることがない)。スクロールはラッパーの overflow-y-auto
+               1 か所に集約する -->
+          <div v-if="driverSubTab === 'normal'" :class="isPC ? 'flex-1 min-h-0 overflow-y-auto' : 'contents'">
+            <NormalMeasurement :landscape="isAndroidLandscape" :class="isPC ? '' : 'flex-1 min-h-0'" />
+            <TodayPunchHistory v-if="isPC" class="w-full max-w-md mx-auto mt-4 px-4 pb-4" />
           </div>
           <TenkoKiosk v-if="driverSubTab === 'tenko'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'remote'" :remote-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
