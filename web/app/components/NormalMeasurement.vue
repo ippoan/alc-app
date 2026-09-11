@@ -557,14 +557,14 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
           <h2 class="text-lg font-semibold text-gray-700 mb-4">アルコール測定</h2>
           <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
 
-          <!-- 録画カメラプレビュー -->
-          <div v-if="isMeasuringCameraActive" class="relative mb-4 flex justify-center">
+          <!-- 録画カメラプレビュー (v-show: useCamera.start の時点で video が在る必要がある。v-if だと srcObject が入らず映像が出ない) -->
+          <div v-show="isMeasuringCameraActive" class="relative mb-4 flex justify-center">
             <video
               ref="measuringVideoRef"
               autoplay
               playsinline
               muted
-              class="w-40 h-30 rounded-lg object-cover border border-gray-200"
+              class="w-40 rounded-lg object-cover border border-gray-200"
             />
             <div
               v-if="isRecording"
