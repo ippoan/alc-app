@@ -10,7 +10,7 @@ import {
   updateEmployeeFace, approveFace, rejectFace, getFaceData,
   updateEmployeeNfcId, updateEmployeeLicense, clearEmployeeLicense,
   // Face photo
-  fetchFacePhoto, uploadFacePhoto, uploadReportAudio, uploadBlowVideo,
+  fetchFacePhoto, fetchMeasurementVideo, uploadFacePhoto, uploadReportAudio, uploadBlowVideo,
   // Tenko schedules
   createSchedule, batchCreateSchedules, listSchedules, getSchedule, updateSchedule, deleteSchedule, getPendingSchedules,
   // Tenko sessions
@@ -1344,6 +1344,53 @@ restoreNativeApis()
       initApi('')
       const result = await fetchFacePhoto(UUID1)
       expect(result).toBeNull()
+    })
+  })
+
+  // ============================================================
+  // fetchMeasurementVideo
+  // ============================================================
+
+  describe('fetchMeasurementVideo', () => {
+    beforeEach(() => {
+      if (!isLive) {
+        vi.stubGlobal('URL', {
+          createObjectURL: vi.fn(() => 'blob:http://localhost/video'),
+          revokeObjectURL: vi.fn(),
+        })
+      }
+    })
+
+    afterEach(async () => {
+      if (!isLive) vi.unstubAllGlobals()
+      await setupApi()
+    })
+
+    it('should fetch the video and return an object URL on success', async () => {
+      if (isLive) {
+        restoreNativeApis()
+        ;(globalThis.URL as any).createObjectURL = vi.fn((_blob: Blob) => 'blob:test/video')
+        try {
+          const result = await fetchMeasurementVideo(SEED_MEASUREMENT_ID)
+          // 録画が存在する場合は blob URL、存在しない場合は null (R2 に未保存)
+          if (result !== null) {
+            expect(result).toBe('blob:test/video')
+          }
+        } finally {
+          delete (globalThis.URL as any).createObjectURL
+        }
+        return
+      }
+      stubResponse({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['video'])),
+      })
+
+      const result = await fetchMeasurementVideo(UUID1)
+      assertMock(() => {
+        expect(result).toBe('blob:http://localhost/video')
+        expect(mockFetch.mock.calls[0][0]).toBe(`https://api.example.com/api/measurements/${UUID1}/video`)
+      })
     })
   })
 

@@ -10,9 +10,9 @@
 //
 // 並びは backend 固定で `created_at DESC`。総件数は返らない (ingest テーブルが
 // 伸び続けるため) ので、ページャは has_more と offset だけで組む。
-import { getEmployees, listHubMeasurements } from '~/utils/api'
+import { getEmployees, getMeasurements, listHubMeasurements } from '~/utils/api'
 import { readAlcohol, type AlcoholPayload } from '~/utils/alcohol'
-import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type HubMeasurement } from '~/types'
+import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type ApiMeasurement, type HubMeasurement } from '~/types'
 
 const PAGE_SIZE = 50
 
@@ -264,6 +264,53 @@ function employeeOf(row: SessionRow): ApiEmployee | null {
   return row.license ? (employeeByNfc.value.get(row.license.nfcId) ?? null) : null
 }
 
+// --- 測定詳細を開く (点呼タブ → PC 側の測定、Refs #238, ippoan/alc-app-s3#135) ---
+// hub_measurements には PC 側の measurements への直接のキーが無いので、
+// 「同じ乗務員・近い時刻」で探して当てる (厳密な 1 対 1 の紐づけではない)。
+
+/** 行ごとの取得状態。押した行だけ更新する。 */
+const measurementLookup = ref<Map<string, { loading: boolean, error: string | null }>>(new Map())
+const selectedMeasurement = ref<ApiMeasurement | null>(null)
+const selectedEmployeeName = ref('')
+
+const MEASUREMENT_LOOKUP_WINDOW_MS = 15 * 60 * 1000
+
+function setLookupState(key: string, state: { loading: boolean, error: string | null }) {
+  const next = new Map(measurementLookup.value)
+  next.set(key, state)
+  measurementLookup.value = next
+}
+
+async function openMeasurementForRow(row: SessionRow) {
+  const employee = employeeOf(row)
+  if (!employee) return
+
+  setLookupState(row.key, { loading: true, error: null })
+  try {
+    const center = new Date(row.createdAt).getTime()
+    const res = await getMeasurements({
+      employee_id: employee.id,
+      date_from: new Date(center - MEASUREMENT_LOOKUP_WINDOW_MS).toISOString(),
+      date_to: new Date(center + MEASUREMENT_LOOKUP_WINDOW_MS).toISOString(),
+    })
+    if (res.measurements.length === 0) {
+      setLookupState(row.key, { loading: false, error: 'この点呼に対応する測定が見つかりません' })
+      return
+    }
+    const nearest = res.measurements.reduce((best, m) => {
+      const diff = Math.abs(new Date(m.measured_at).getTime() - center)
+      const bestDiff = Math.abs(new Date(best.measured_at).getTime() - center)
+      return diff < bestDiff ? m : best
+    })
+    setLookupState(row.key, { loading: false, error: null })
+    selectedEmployeeName.value = employee.name
+    selectedMeasurement.value = nearest
+  }
+  catch {
+    setLookupState(row.key, { loading: false, error: '測定を取得できませんでした' })
+  }
+}
+
 // ★ 畳むのは**このページに載っている測定だけ**。点呼がページ境界をまたぐと
 // 前後のページに分かれて出る (API は測定単位で offset を切るため)。件数表示に
 // 測定と点呼の両方を出して、行数と件数が合わないのを迷わせない。
@@ -435,9 +482,23 @@ onMounted(() => {
                   >{{ item.kind }}</span>
                 </td>
                 <td class="px-2 py-2">
-                  <button class="text-blue-600 hover:underline text-xs" @click="toggle(row.key)">
-                    {{ expanded.has(row.key) ? '閉じる' : `JSON を表示 (${row.items.length})` }}
-                  </button>
+                  <div class="flex flex-col items-start gap-1">
+                    <button class="text-blue-600 hover:underline text-xs" @click="toggle(row.key)">
+                      {{ expanded.has(row.key) ? '閉じる' : `JSON を表示 (${row.items.length})` }}
+                    </button>
+                    <button
+                      v-if="employeeOf(row)"
+                      class="text-blue-600 hover:underline text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                      :disabled="measurementLookup.get(row.key)?.loading"
+                      @click="openMeasurementForRow(row)"
+                    >
+                      {{ measurementLookup.get(row.key)?.loading ? '検索中…' : '測定詳細' }}
+                    </button>
+                    <span
+                      v-if="measurementLookup.get(row.key)?.error"
+                      class="text-xs text-red-600"
+                    >{{ measurementLookup.get(row.key)?.error }}</span>
+                  </div>
                 </td>
               </tr>
               <tr v-if="expanded.has(row.key)" class="bg-gray-50">
@@ -476,5 +537,13 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 測定詳細 (近い時刻の測定を探して当てる。厳密な 1 対 1 の紐づけではない) -->
+    <MeasurementDetail
+      v-if="selectedMeasurement"
+      :measurement="selectedMeasurement"
+      :employee-name="selectedEmployeeName"
+      @close="selectedMeasurement = null"
+    />
   </div>
 </template>
