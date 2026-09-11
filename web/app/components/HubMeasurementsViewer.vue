@@ -11,6 +11,7 @@
 // 並びは backend 固定で `created_at DESC`。総件数は返らない (ingest テーブルが
 // 伸び続けるため) ので、ページャは has_more と offset だけで組む。
 import { getEmployees, listHubMeasurements } from '~/utils/api'
+import { readAlcohol, type AlcoholPayload } from '~/utils/alcohol'
 import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type HubMeasurement } from '~/types'
 
 const PAGE_SIZE = 50
@@ -70,7 +71,7 @@ interface SessionRow {
   /** 免許証の測定。点呼を免許証から始めていなければ null。 */
   license: { nfcId: string, issue: string | null, expiry: string | null } | null
   /** アルコール測定 (吹込不良は result のみで value は信用しない)。 */
-  alcohol: { value: number | null, result: string | null } | null
+  alcohol: AlcoholPayload | null
   /** 体温 (℃)。測っていなければ null。 */
   temperature: number | null
   /** 打刻 (kind=timecard)。かざしたカードの生値と種別。打刻でなければ null。 */
@@ -106,20 +107,6 @@ function readLicense(payload: unknown): SessionRow['license'] {
     issue: typeof p.issue === 'string' ? p.issue : null,
     expiry: typeof p.expiry === 'string' ? p.expiry : null,
   }
-}
-
-/**
- * アルコールの payload から値と判定を取り出す (形が違えば null)。
- * CoreS3 は `{type:"alcohol",value:0.000,unit:"mg/L",result:"normal"|"over"|"error",use_count:N}`
- * を送る。`result:"error"` (吹込不良) のときの value は 0.000 固定で測定値ではない。
- */
-function readAlcohol(payload: unknown): SessionRow['alcohol'] {
-  if (typeof payload !== 'object' || payload === null) return null
-  const p = payload as { value?: unknown, result?: unknown }
-  const value = typeof p.value === 'number' ? p.value : null
-  const result = typeof p.result === 'string' ? p.result : null
-  if (value === null && result === null) return null
-  return { value, result }
 }
 
 /** 体温の payload から ℃ を取り出す (形が違えば null)。 */
