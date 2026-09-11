@@ -178,6 +178,8 @@ describe('offline-queue', () => {
         alcohol_value: 0.0,
         result_type: 'normal',
         face_photo_url: 'https://example.com/photo.jpg',
+        // 通常点呼は全件が点呼記録の対象 (Refs #238)
+        record_as_tenko: true,
       })
       expect(result).toEqual({ sent: 1, failed: 0 })
     })

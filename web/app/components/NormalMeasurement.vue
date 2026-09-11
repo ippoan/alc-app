@@ -285,6 +285,7 @@ async function onMeasurementResult(result: MeasurementResult) {
         medical_measured_at: result.medicalMeasuredAt?.toISOString(),
         face_verified: null,
         medical_manual_input: medicalInputSource.value === 'manual' ? true : undefined,
+        record_as_tenko: true,
       }
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(updateData))
       await updateMeasurement(activeMeasurementId.value, updateData)

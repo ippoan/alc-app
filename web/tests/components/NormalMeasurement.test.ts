@@ -3,6 +3,7 @@ import { ref, readonly, defineComponent } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
 import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
+import { updateMeasurement } from '~/utils/api'
 
 // --- API のモック (NFC → 乗務員照合だけを動かす) ---
 
@@ -63,8 +64,10 @@ mockNuxtImport('useVideoRecorder', () => () => ({
   stopRecording: vi.fn(async () => null),
 }))
 
+// record_as_tenko のテストで測定途中の温度 PUT を発火させたいので、値を差し替えられる ref にしておく
+const bleTemperatureRef = ref<{ value: number; unit: 'celsius'; measuredAt: Date } | null>(null)
 mockNuxtImport('useBleGateway', () => () => ({
-  latestTemperature: readonly(ref(null)),
+  latestTemperature: readonly(bleTemperatureRef),
   latestBloodPressure: readonly(ref(null)),
 }))
 
@@ -304,6 +307,73 @@ describe('NormalMeasurement — 録画カメラプレビュー (v-show、Refs #2
 
     // useCamera のモックは isActive: ref(false) なので、v-if だった頃はここで要素が消えていた
     expect(wrapper.find('video').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    bleTemperatureRef.value = null
+  })
+
+  async function mountWithStubs() {
+    return await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: {
+          NfcStatus: NfcStatusStub,
+          BleStatus: BleStatusStub,
+          AlcMeasurement: AlcMeasurementStub,
+          ClientOnly: false,
+          Teleport: true,
+        },
+      },
+    })
+  }
+
+  it('完了の PUT (measuring 終了時) には record_as_tenko: true が入る', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    const result = {
+      employeeId: 'emp-1',
+      alcoholValue: 0.1,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-01-01'),
+    }
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', result)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    const completedCall = vi.mocked(updateMeasurement).mock.calls.find(
+      call => (call[1] as Record<string, unknown>).status === 'completed',
+    )
+    expect(completedCall).toBeDefined()
+    expect(completedCall![0]).toBe('measurement-1')
+    expect((completedCall![1] as Record<string, unknown>).record_as_tenko).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('測定途中 (BLE 体温) の PUT には record_as_tenko が入らない', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+
+    bleTemperatureRef.value = { value: 36.5, unit: 'celsius', measuredAt: new Date('2026-01-01') }
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(vi.mocked(updateMeasurement)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(updateMeasurement).mock.calls[0]![0]).toBe('measurement-1')
+    const body = vi.mocked(updateMeasurement).mock.calls[0]![1] as Record<string, unknown>
+    expect(body.temperature).toBe(36.5)
+    expect(body).not.toHaveProperty('record_as_tenko')
     wrapper.unmount()
   })
 })
