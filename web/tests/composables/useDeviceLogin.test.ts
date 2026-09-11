@@ -271,5 +271,15 @@ describe('useDeviceLogin', () => {
       // フェイクタイマーを使わず (= 10 秒のタイムアウトを一切待たず) 即座に reject する
       await expect(signAlarmDeviceNonce('nonce-xyz')).rejects.toThrow('ERR AUTH: no key')
     })
+
+    it('request を明示指定すればそちら宛てに送る (#234-2、useDeviceToken.ts が CoreS3 の request を渡す想定)', async () => {
+      const customRequest = vi.fn().mockResolvedValue('AUTH SIG pub-7 sig-7')
+      const { signAlarmDeviceNonce } = await import('~/composables/useDeviceLogin')
+
+      await expect(signAlarmDeviceNonce('nonce-xyz', customRequest)).resolves.toEqual({ pubkey: 'pub-7', sig: 'sig-7' })
+      expect(customRequest).toHaveBeenCalledWith('AUTH SIGN nonce-xyz', 'AUTH SIG ', 10_000)
+      // 警告デバイス (既定値) には送らない
+      expect(alarmDeviceMock.request).not.toHaveBeenCalled()
+    })
   })
 })

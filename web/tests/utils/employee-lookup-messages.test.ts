@@ -36,4 +36,11 @@ describe('employee-lookup-messages', () => {
     expect(msg).toContain('CoreS3')
     expect(msg).toContain('http 404')
   })
+
+  it('autoClaimFailedMessage は ERR AUTH: no key のとき鍵の登録先を案内する', () => {
+    const msg = autoClaimFailedMessage('ERR AUTH: no key')
+    expect(msg).toContain('鍵が未登録')
+    expect(msg).toContain('auth.ippoan.org/device/setup')
+    expect(msg).toContain('ERR AUTH: no key')
+  })
 })

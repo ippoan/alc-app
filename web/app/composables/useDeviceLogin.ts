@@ -18,7 +18,9 @@
  * useHubClaim.ts (#213 CoreS3 自動端末登録) と同じ構造 (module-level state + 1 関数)。
  *
  * `AUTH SIGN <nonce>` を送って `AUTH SIG <pubkey> <sig>` を parse する部分は
- * `signAlarmDeviceNonce` に切り出してある (useDeviceToken.ts の短命端末 JWT #231 と共有)。
+ * `signAlarmDeviceNonce` に切り出してある (useDeviceToken.ts の短命端末 JWT #231 と共有。
+ * #234-2 で送り先を引数化 — useDeviceToken.ts は CoreS3 (`useCoreS3Serial().request`) を渡し、
+ * ここ (/login) は既定値のまま警告デバイス (`useAlarmDevice().request`) を使い続ける)。
  * firmware の `ERR AUTH: no key` / `ERR AUTH: bad nonce` は useSerialArbiter.request の
  * `errPrefix` (`ERR ${送った行の先頭トークン}` = `ERR AUTH`) に一致するため、nonce を
  * echo しなくても即 reject される (10 秒のタイムアウトを待たない)。
@@ -83,13 +85,18 @@ export function parseAuthSigLine(line: string): { pubkey: string, sig: string } 
 }
 
 /**
- * 警告デバイスに `AUTH SIGN <nonce>` を送り、応答 `AUTH SIG <pubkey> <sig>` を parse して
- * 返す (#214 useDeviceLogin / #231 useDeviceToken 共通)。firmware が `ERR AUTH: ...` を
- * 返せば useAlarmDevice().request がそのまま reject するので、ここでは投げっぱなしにする
+ * `AUTH SIGN <nonce>` を送り、応答 `AUTH SIG <pubkey> <sig>` を parse して
+ * 返す (#214 useDeviceLogin / #231 useDeviceToken 共通)。送り先は `request` (既定は
+ * 警告デバイス `useAlarmDevice().request`、useDeviceToken.ts は CoreS3
+ * `useCoreS3Serial().request` を渡す。#234-2)。firmware が `ERR AUTH: ...` を
+ * 返せば request がそのまま reject するので、ここでは投げっぱなしにする
  * (呼び出し側でメッセージを出し分ける)。parse に失敗したときだけ null を返す。
  */
-export async function signAlarmDeviceNonce(nonce: string): Promise<{ pubkey: string, sig: string } | null> {
-  const line = await useAlarmDevice().request(`AUTH SIGN ${nonce}`, AUTH_SIGN_MATCH_PREFIX, AUTH_SIGN_TIMEOUT_MS)
+export async function signAlarmDeviceNonce(
+  nonce: string,
+  request: (line: string, matchPrefix: string, timeoutMs: number) => Promise<string> = useAlarmDevice().request,
+): Promise<{ pubkey: string, sig: string } | null> {
+  const line = await request(`AUTH SIGN ${nonce}`, AUTH_SIGN_MATCH_PREFIX, AUTH_SIGN_TIMEOUT_MS)
   return parseAuthSigLine(line)
 }
 

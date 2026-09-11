@@ -22,10 +22,14 @@ export function noPendingSchedule(): string {
 export const deviceUnregisteredMessage = 'この端末は登録されていません (ペアリングが必要です)'
 
 /**
- * CoreS3 経由の自動端末登録 (#213) が失敗したとき。理由 (AUTH TICKET の ERR / タイムアウト /
- * auth-worker の HTTP エラー) を添えて、現地の人が次の一手 (管理者に連絡する等) を選べるように
- * する。文言だけを出す — 端末登録は依然として管理者の Google ログイン (device-claim) で可能
+ * CoreS3 経由の短命端末 JWT 取得 (#234-2、`useDeviceToken` の署名経路) が失敗したとき。
+ * firmware が `ERR AUTH: no key` (CoreS3 に鍵が登録されていない) を返したときは、
+ * 管理者が鍵を登録する場所を明示する。それ以外の理由 (タイムアウト / auth-worker の
+ * HTTP エラー等) はそのまま添えるだけ — 現地の人が次の一手を選べるようにする
  */
 export function autoClaimFailedMessage(reason: string): string {
-  return `CoreS3 経由の端末登録に失敗しました: ${reason}`
+  if (reason.includes('no key')) {
+    return `CoreS3 の鍵が未登録です。管理者が auth.ippoan.org/device/setup で登録してください (${reason})`
+  }
+  return `CoreS3 経由の端末認証に失敗しました: ${reason}`
 }
