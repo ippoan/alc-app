@@ -68,49 +68,20 @@ describe('ManagerAlarmBar', () => {
     settingState.enabled.value = true
   })
 
-  it('mount で購読 → heartbeat の順に始め、unmount では止めない (ロールタブ切替で鳴らさない)', async () => {
-    // まだ購読していない状態から mount する
+  it('購読も接続も始めず止めもしない (見張りはトップ画面の useAlarmWatch の役目 = 二重に起動しない)', async () => {
+    // まだ購読していない・未接続の状態から mount しても、バーは表示だけ
     roomsState.isWatching.value = false
     const wrapper = await mountSuspended(ManagerAlarmBar)
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(wrapper.find('[data-testid="manager-alarm-bar"]').exists()).toBe(true)
+    expect(calls).toEqual([])
 
-    // 運行管理者タブを離れても singleton は動いたまま — disconnect / stop は入らない (#205)
-    wrapper.unmount()
-    expect(calls).toEqual(['start', 'connect(0)'])
-  })
-
-  it('ロールタブを往復して再 mount しても購読も探索も二重に始めず、設定 off では切れる', async () => {
-    roomsState.isWatching.value = false
-    const wrapper = await mountSuspended(ManagerAlarmBar)
-    expect(calls).toEqual(['start', 'connect(0)'])
-    wrapper.unmount()
-
-    // singleton は動き続けている (購読中・デバイス接続済み) ので、戻ってきても呼び直さない
-    roomsState.isWatching.value = true
-    alarmState.isConnected.value = true
-    const again = await mountSuspended(ManagerAlarmBar)
-    expect(calls).toEqual(['start', 'connect(0)'])
-
-    // 呼び直していない再 mount 側でも、設定 off なら切れる
-    settingState.enabled.value = false
-    await again.vm.$nextTick()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
-
-    again.unmount()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
-  })
-
-  it('デバイス設定を off にしたときだけ切る (切った後の unmount では二重に切らない)', async () => {
-    roomsState.isWatching.value = false
-    const wrapper = await mountSuspended(ManagerAlarmBar)
-    expect(calls).toEqual(['start', 'connect(0)'])
-
+    // 設定 off に変わっても、切るのはバーではない
     settingState.enabled.value = false
     await wrapper.vm.$nextTick()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+    expect(calls).toEqual([])
 
     wrapper.unmount()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+    expect(calls).toEqual([])
   })
 
   it('Web Serial が無いブラウザでは何も描画せず、購読も heartbeat も立てない', async () => {
@@ -136,7 +107,7 @@ describe('ManagerAlarmBar', () => {
     expect(calls).toEqual([])
   })
 
-  it('未設定 (既存の端末) なら問いかけカードだけを出し、[つなぐ] で保存してから探索を始める', async () => {
+  it('未設定 (既存の端末) なら問いかけカードだけを出し、[つなぐ] で保存してバーに切り替わる', async () => {
     settingState.enabled.value = null
     roomsState.isWatching.value = false
     const wrapper = await mountSuspended(ManagerAlarmBar)
@@ -152,11 +123,11 @@ describe('ManagerAlarmBar', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="manager-alarm-ask"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="manager-alarm-bar"]').exists()).toBe(true)
-    expect(calls).toEqual(['start', 'connect(0)'])
+    // 探索を始めるのはバーではなく、設定の変化を見ている useAlarmWatch (トップ画面)
+    expect(calls).toEqual([])
 
-    // 始めた後にロールタブを離れても止めない
     wrapper.unmount()
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual([])
   })
 
   it('未設定で [つながない] を選ぶと保存して非表示になり、unmount でも何も止めない', async () => {

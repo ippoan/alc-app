@@ -1,54 +1,25 @@
 <script setup lang="ts">
 /**
- * 据置警告デバイス (Atom VoiceS3R / USB) の heartbeat と着信購読。
+ * 据置警告デバイス (Atom VoiceS3R / USB) の状態表示と「接続」ボタン。
  *
- * 運行管理者の PC は普段、トップ画面「運行管理者」タブの認証ゲートのまま置かれる。
- * 見張る対象は「その PWA がブラウザで開いているか」であって認証の有無ではないので、
- * このバーは認証ゲートの外 (タブに入った時点) に置く。
+ * 見張り (着信購読 + heartbeat) を始める・止めるのはこのバーではなく useAlarmWatch
+ * (トップ画面 pages/index.vue が全タブ共通で 1 回だけ呼ぶ)。運行管理者の PC は運行者などの
+ * タブをログイン無しで使うので、運行管理者タブにだけ出るこのバーの mount を起点にすると、
+ * 警告デバイスが繋がらないままになる (Refs #231)。
  *
  * 止める (= デバイスが鳴る) のは次の 3 つだけ:
  *   PWA を閉じる / reload (app.vue の pagehide → grace=45) / デバイス設定を off にする
- * **SPA 内のロールタブ切替 (このバーの unmount) では切らない** — 運行管理者から
- * システム管理者へ移っただけで鳴るのは誤報だった (#205)。useAlarmDevice / useActiveRooms は
- * singleton なので、mount 中に始めた heartbeat と着信購読は unmount 後もそのまま続く。
- * どのロールタブに居ても着信 (`call=1`) は鳴る — これは望ましい副作用 (#135)
+ * ロールタブ切替 (このバーの unmount) では切らない (#205)。どのロールタブに居ても
+ * 着信 (`call=1`) は鳴る — これは望ましい副作用 (#135)
  */
 const alarm = useAlarmDevice()
-// Web Serial の無いブラウザでは購読も heartbeat も立てない
+// Web Serial の無いブラウザではバーを出さない
 const isSupported = alarm.isSupported
 // この端末で警告デバイスを使うか (端末登録 / デバイス設定で選ぶ)。false の端末では
-// バーもポート探索も出さない。null は未設定 (既存の端末) なので問いかけカードを出す
+// バーを出さない。null は未設定 (既存の端末) なので問いかけカードを出す
+// ([つなぐ] で true になった瞬間に useAlarmWatch が見張りを始める)
 const { enabled, setEnabled } = useAlarmDeviceSetting()
-const { isWatching, activeRooms, joinedRoomId, start, stop } = useActiveRooms()
-
-if (isSupported && enabled.value !== false) {
-  // この instance が「使う」状態か。unmount では下ろさない (singleton は動いたまま)
-  let started = false
-  const startWatching = () => {
-    started = true
-    // 別のロールタブから戻ってきた再 mount では singleton が既に動いている。start() は
-    // 参照カウント (対になる stop が無いと下がらない)、connect() も no-op ではない
-    // (installNgWatch / arbiter.register / 再接続の印の削除) ので、二重に呼ばない
-    if (!isWatching.value) start()
-    // BLE ゲートウェイと同居しない PC なので、ポートの取り合いを待つ必要が無い
-    if (!alarm.isConnected.value) alarm.connect(0)
-  }
-  onMounted(() => {
-    // 探索は「使う」と決まってから。未設定のあいだは問いかけカードだけを出す
-    if (enabled.value === true) startWatching()
-  })
-  watch(enabled, (v) => {
-    // 問いかけカードで [つなぐ] を選んだ瞬間に探索を始める
-    if (v === true && !started) startWatching()
-    // 設定を off にしたときだけ切る (unmount では切らない = ロールタブ切替で鳴らさない)
-    if (v === false && started) {
-      started = false
-      void alarm.disconnect()
-      // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
-      stop()
-    }
-  })
-}
+const { isWatching, activeRooms, joinedRoomId } = useActiveRooms()
 
 const alarmCauseLabels: Record<string, string> = {
   silence: '無音',
