@@ -278,3 +278,32 @@ describe('NormalMeasurement — PC の段を CoreS3 に送る (useCoreS3Stage、
     wrapper.unmount()
   })
 })
+
+describe('NormalMeasurement — 録画カメラプレビュー (v-show、Refs #238)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('測定ステップでは、カメラ未起動 (isActive: false) でも video 要素はマウント済み (v-show で隠れているだけ)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: {
+          NfcStatus: NfcStatusStub,
+          BleStatus: BleStatusStub,
+          AlcMeasurement: AlcMeasurementStub,
+          ClientOnly: false,
+          Teleport: true,
+        },
+      },
+    })
+
+    await touch(wrapper, '2601012901010')
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    // useCamera のモックは isActive: ref(false) なので、v-if だった頃はここで要素が消えていた
+    expect(wrapper.find('video').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
