@@ -9,7 +9,11 @@ const {
   deactivateDevice, deviceTenantId, deviceId: activatedDeviceId, deviceSettingsToken,
   reAuthenticateDevice,
 } = useAuth()
-const { hasKioskCredential } = useDeviceToken()
+const { hasKioskCredential, hasDeviceJwt } = useDeviceToken()
+const coreS3 = useCoreS3Serial()
+// CoreS3 の署名で短命 JWT を取って動く運行者 PC (資格情報は持たない設計、#238)。
+// 接続中 (isConnected) はまだ JWT を取得しきっていない起動直後も含むので or で見る。
+const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJwt.value)
 // 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 
@@ -202,9 +206,15 @@ onMounted(() => {
   // 登録済みだが credential が欠落している端末 (rust-alc-api#480 の取りこぼし等) は、
   // 管理者が window を開けていれば起動時の自動 1 回試行だけで無人復旧できる。
   // 未許可 (window 外) なら黙って失敗する (再認証ボタンが常時案内として残る)。
-  if (activatedDeviceId && !hasKioskCredential.value) {
-    reAuthenticate()
-  }
+  // CoreS3 で動く運行者 PC は資格情報を保存しない設計 (#238) なので、起動時の探索
+  // (最大 3 秒) が終わるのを待ってから、CoreS3 で動作中と分かれば試さない — 待たずに
+  // 呼ぶと探索中は必ず失敗し「再認証に失敗しました」が出てしまう。
+  void (async () => {
+    await coreS3.startupProbe()
+    if (activatedDeviceId && !hasKioskCredential.value && !isRunningViaCoreS3.value) {
+      reAuthenticate()
+    }
+  })()
   refreshDeviceSettings()
 })
 onUnmounted(() => {
@@ -384,7 +394,7 @@ async function testBleGw() {
         SHOW_BLOOD_PRESSURE ? `血圧計: ${bp ? '接続' : '未接続'}` : null,
       ].filter(Boolean).join(' / ')
     } else {
-      bleGwTestResult.value = '接続失敗 — ATOM Lite が USB に接続されているか確認してください'
+      bleGwTestResult.value = '接続失敗 — CoreS3 が USB に接続されているか確認してください'
     }
   } catch (e) {
     bleGwTestResult.value = `エラー: ${e instanceof Error ? e.message : '不明'}`
@@ -440,8 +450,9 @@ async function syncFc1200Date() {
       </div>
       <div class="p-4 space-y-3">
         <div class="text-xs text-gray-600 space-y-1">
-          <p>状態:
-            <span :class="deviceTenantId ? 'text-green-600 font-medium' : 'text-gray-400'">
+          <p data-testid="device-registration-status">状態:
+            <span v-if="hasDeviceJwt" class="text-green-600 font-medium">CoreS3 で動作中 (端末登録は不要)</span>
+            <span v-else :class="deviceTenantId ? 'text-green-600 font-medium' : 'text-gray-400'">
               {{ deviceTenantId ? '登録済み' : '未登録' }}
             </span>
           </p>
@@ -493,6 +504,7 @@ async function syncFc1200Date() {
             認証情報: {{ hasKioskCredential ? '取得済み' : '未取得' }}
           </span>
           <button
+            data-testid="reauth-button"
             class="px-2 py-1 text-xs border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
             :disabled="reAuthing"
             @click="reAuthenticate"
@@ -500,7 +512,9 @@ async function syncFc1200Date() {
             {{ reAuthing ? '再認証中...' : '再認証' }}
           </button>
         </div>
-        <p v-if="reAuthResult" class="text-[11px] rounded px-2 py-1"
+        <p v-if="reAuthResult && !(reAuthResult === 'failure' && isRunningViaCoreS3)"
+          data-testid="reauth-result"
+          class="text-[11px] rounded px-2 py-1"
           :class="reAuthResult === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'">
           {{ reAuthResult === 'success' ? '✓ 再認証に成功しました' : '⚠ 再認証に失敗しました (管理者に「再認証を許可」を依頼してください)' }}
         </p>
