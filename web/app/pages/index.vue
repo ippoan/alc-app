@@ -445,7 +445,12 @@ function onRoleTabClick(role: RoleTab) {
 
         <!-- コンテンツ (1箇所のみ: 横画面=flex子要素, 縦画面=contents透過でルート直下) -->
         <div :class="isAndroidLandscape ? 'flex-1 min-w-0 flex flex-col' : 'contents'">
-          <NormalMeasurement v-if="driverSubTab === 'normal'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
+          <!-- PC のときだけ「本日の打刻履歴」を通常点呼の隣に出す (Refs ippoan/alc-app#238)。
+               isPC でなければ contents で透過し、NormalMeasurement 単体のレイアウトのまま -->
+          <div v-if="driverSubTab === 'normal'" :class="isPC ? 'flex-1 min-h-0 flex gap-4' : 'contents'">
+            <NormalMeasurement :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
+            <TodayPunchHistory v-if="isPC" class="w-96 shrink-0" />
+          </div>
           <TenkoKiosk v-if="driverSubTab === 'tenko'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'remote'" :remote-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'remote_demo'" :remote-mode="true" :demo-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
