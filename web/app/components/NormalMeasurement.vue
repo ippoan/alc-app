@@ -19,6 +19,10 @@ const step = ref<'nfc' | 'medical' | 'measuring' | 'result'>('nfc')
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
 
+// PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
+const { syncStep, sendResult } = useCoreS3Stage()
+watch(step, syncStep, { immediate: true })
+
 const saveError = ref<string | null>(null)
 const isSaving = ref(false)
 const saveStatus = ref<'saved' | 'queued' | null>(null)
@@ -325,6 +329,8 @@ async function onMeasurementResult(result: MeasurementResult) {
   } finally {
     isSaving.value = false
   }
+
+  sendResult(result)
 }
 
 // リセット

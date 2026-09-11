@@ -68,11 +68,31 @@ mockNuxtImport('useBleGateway', () => () => ({
   latestBloodPressure: readonly(ref(null)),
 }))
 
+// PC の段を CoreS3 に送る口 (Refs #238)。ここでは呼ばれたかだけを見る
+const syncStepMock = vi.fn()
+const sendResultMock = vi.fn()
+mockNuxtImport('useCoreS3Stage', () => () => ({
+  syncStep: syncStepMock,
+  sendResult: sendResultMock,
+}))
+
 // NfcStatus は表示と emit('read') だけなので、read を直接投げられるスタブに差し替える
 const NfcStatusStub = defineComponent({
   name: 'NfcStatus',
   emits: ['read'],
   template: '<div data-testid="nfc-stub" />',
+})
+
+// BleStatus / AlcMeasurement は composable への依存が重いので、emit だけ発火できるスタブに差し替える
+const BleStatusStub = defineComponent({
+  name: 'BleStatus',
+  emits: ['skip', 'next'],
+  template: '<div data-testid="ble-status-stub" />',
+})
+const AlcMeasurementStub = defineComponent({
+  name: 'AlcMeasurement',
+  emits: ['result', 'error', 'stateChange'],
+  template: '<div data-testid="alc-measurement-stub" />',
 })
 
 const APPROVED_EMPLOYEE = { id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' }
@@ -186,6 +206,75 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     expect(slotIndex).toBeGreaterThan(-1)
     expect(linkIndex).toBeGreaterThan(-1)
     expect(slotIndex).toBeLessThan(linkIndex)
+    wrapper.unmount()
+  })
+})
+
+describe('NormalMeasurement — PC の段を CoreS3 に送る (useCoreS3Stage、Refs #238)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  async function mountWithStubs() {
+    return await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: {
+          NfcStatus: NfcStatusStub,
+          BleStatus: BleStatusStub,
+          AlcMeasurement: AlcMeasurementStub,
+          ClientOnly: false,
+          Teleport: true,
+        },
+      },
+    })
+  }
+
+  // watch(step, syncStep, { immediate: true }) は Vue の watch コールバック引数
+  // (newValue, oldValue, onCleanup) をそのまま syncStep に渡すので、見るのは 1 番目の引数だけ
+  function stepArgOf(call: unknown[]): unknown {
+    return call[0]
+  }
+
+  it('mount 時 (nfc ステップ) に syncStep が呼ばれる', async () => {
+    const wrapper = await mountWithStubs()
+    expect(syncStepMock.mock.calls.map(stepArgOf)).toContain('nfc')
+    wrapper.unmount()
+  })
+
+  it('ステップが変わるたびに syncStep が呼ばれる (nfc → medical → measuring)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    expect(syncStepMock.mock.calls.map(stepArgOf)).toContain('medical')
+
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+    expect(syncStepMock.mock.calls.map(stepArgOf)).toContain('measuring')
+    wrapper.unmount()
+  })
+
+  it('測定結果が出ると sendResult が呼ばれる', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    const result = {
+      employeeId: 'emp-1',
+      alcoholValue: 0.1,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-01-01'),
+    }
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', result)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(sendResultMock).toHaveBeenCalledTimes(1)
+    expect(sendResultMock.mock.calls[0]![0]).toMatchObject({ alcoholValue: 0.1, resultType: 'normal' })
     wrapper.unmount()
   })
 })
