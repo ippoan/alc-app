@@ -2238,6 +2238,26 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     expect(new Headers(init.headers).get('Content-Type')).toBeNull()
   })
 
+  it('device JWT で FormData (顔写真) → Content-Type を付けない (ブラウザの multipart に任せる)', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ url: 'https://r2/x.jpg' }))
+    await uploadFacePhoto(new Blob(['x']))
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/proxy/upload/face-photo')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect(new Headers(init.headers).get('Content-Type')).toBeNull()
+  })
+
+  it('device JWT で明示された Content-Type (打刻の route) はそのまま', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ seq: 1 }))
+    await punchTimecard('CARD-1')
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/timecard/punch')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer dev-jwt')
+  })
+
   it('admin JWT の POST は今までどおり Content-Type: application/json (createAuthFetch)', async () => {
     initApi(API_BASE, () => 'admin-jwt', () => 'tid')
     mockFetch.mockResolvedValueOnce(okJson({ id: UUID1 }))
