@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee } from '~/types'
-import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv } from '~/utils/api'
+import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
+import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const emit = defineEmits<{ changed: [] }>()
@@ -175,6 +175,29 @@ async function handleBulkCancel() {
 
 // 詳細モーダル
 const selectedSession = ref<TenkoSession | null>(null)
+
+// 測定詳細 (動画・顔写真)
+const selectedMeasurement = ref<ApiMeasurement | null>(null)
+const measurementLoading = ref(false)
+const measurementError = ref(false)
+
+async function openMeasurement(id: string) {
+  measurementLoading.value = true
+  measurementError.value = false
+  try {
+    selectedMeasurement.value = await getMeasurement(id)
+  } catch {
+    selectedMeasurement.value = null
+    measurementError.value = true
+  } finally {
+    measurementLoading.value = false
+  }
+}
+
+function closeSessionDetail() {
+  selectedSession.value = null
+  measurementError.value = false
+}
 
 function formatDate(iso: string | null) {
   if (!iso) return '-'
@@ -410,12 +433,12 @@ onMounted(() => { loadEmployees(); fetchData() })
     <div
       v-if="selectedSession"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="selectedSession = null"
+      @click.self="closeSessionDetail"
     >
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl mx-4 p-6 max-h-[80vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-lg font-semibold text-gray-800">セッション詳細</h3>
-          <button class="text-gray-400 hover:text-gray-600 text-xl leading-none" @click="selectedSession = null">&times;</button>
+          <button class="text-gray-400 hover:text-gray-600 text-xl leading-none" @click="closeSessionDetail">&times;</button>
         </div>
 
         <div class="space-y-4 text-sm">
@@ -439,6 +462,18 @@ onMounted(() => { loadEmployees(); fetchData() })
               <div><span class="text-gray-500">値:</span> {{ selectedSession.alcohol_value != null ? selectedSession.alcohol_value.toFixed(3) + ' mg/L' : '-' }}</div>
               <div><span class="text-gray-500">検査日時:</span> {{ formatDate(selectedSession.alcohol_tested_at) }}</div>
             </div>
+          </div>
+
+          <!-- 測定詳細 (動画・顔写真) -->
+          <div v-if="selectedSession.measurement_id">
+            <button
+              :disabled="measurementLoading"
+              class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              @click="openMeasurement(selectedSession.measurement_id)"
+            >
+              {{ measurementLoading ? '読み込み中...' : '測定詳細 (動画・顔写真)' }}
+            </button>
+            <p v-if="measurementError" class="text-red-600 text-xs mt-1">測定詳細を取得できませんでした</p>
           </div>
 
           <!-- 医療データ -->
@@ -510,5 +545,13 @@ onMounted(() => { loadEmployees(); fetchData() })
         </div>
       </div>
     </div>
+
+    <!-- 測定詳細 (動画・顔写真) -->
+    <MeasurementDetail
+      v-if="selectedMeasurement"
+      :measurement="selectedMeasurement"
+      :employee-name="employeeName(selectedMeasurement.employee_id)"
+      @close="selectedMeasurement = null"
+    />
   </div>
 </template>
