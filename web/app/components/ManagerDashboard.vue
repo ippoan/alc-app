@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type TabKey = 'employees' | 'license' | 'history' | 'tenko' | 'remote_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices'
+type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices'
 
 const props = defineProps<{
   initialTab?: string
@@ -21,7 +21,6 @@ const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
             { key: 'tenko', label: '点呼' },
             { key: 'remote_tenko', label: '遠隔点呼' },
             { key: 'screen_share', label: '画面共有' },
-            { key: 'history', label: '測定履歴' },
             { key: 'schedules', label: '予定管理' },
             { key: 'baselines', label: '健康基準' },
             { key: 'failures', label: '故障記録' },
@@ -61,10 +60,6 @@ const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
 
       <div v-if="activeTab === 'screen_share'">
         <ScreenShareAdminView />
-      </div>
-
-      <div v-if="activeTab === 'history'">
-        <MeasurementHistory />
       </div>
 
       <div v-if="activeTab === 'schedules'">

@@ -32,4 +32,13 @@ describe('ManagerDashboard — 点呼記録タブの廃止', () => {
     expect(wrapper.text()).not.toContain('点呼記録')
     wrapper.unmount()
   })
+
+  it('「測定履歴」のタブが無い (点呼タブに統合、Refs ippoan/alc-app-s3#135)', async () => {
+    const wrapper = await mountSuspended(ManagerDashboard)
+    await flush()
+    await wrapper.vm.$nextTick()
+    const tabLabels = wrapper.findAll('button').map(b => b.text())
+    expect(tabLabels).not.toContain('測定履歴')
+    wrapper.unmount()
+  })
 })
