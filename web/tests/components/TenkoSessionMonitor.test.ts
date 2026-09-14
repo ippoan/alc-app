@@ -3,6 +3,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import TenkoSessionMonitor from '~/components/TenkoSessionMonitor.vue'
 
 // 「点呼記録」タブを廃止し、CSV 出力をここへ移植する (Refs #238, ippoan/alc-app-s3#135)
+// 行クリックで開くセッション詳細 1 枚の中に動画・顔写真も表示する (Refs #238, #259, ippoan/alc-app-s3#135)
 
 const listTenkoSessionsMock = vi.fn(async () => ({ sessions: [] as any[], total: 0, page: 1, per_page: 20 }))
 const getEmployeesMock = vi.fn(async () => [] as any[])
@@ -33,7 +34,7 @@ const SESSION_WITH_MEASUREMENT = {
 
 async function mountMonitor() {
   const wrapper = await mountSuspended(TenkoSessionMonitor, {
-    global: { stubs: { MeasurementDetail: true } },
+    global: { stubs: { MeasurementFacePhoto: true, MeasurementVideo: true } },
   })
   await flush()
   await wrapper.vm.$nextTick()
@@ -74,7 +75,7 @@ describe('TenkoSessionMonitor — 点呼記録タブ統合後の CSV 出力と�
   })
 })
 
-describe('TenkoSessionMonitor — 一覧の行から測定詳細 (動画) を開く', () => {
+describe('TenkoSessionMonitor — 行クリックのセッション詳細に動画・顔写真を表示', () => {
   beforeEach(() => {
     listTenkoSessionsMock.mockClear()
     listTenkoSessionsMock.mockResolvedValue({ sessions: [SESSION_WITH_MEASUREMENT], total: 1, page: 1, per_page: 20 })
@@ -85,102 +86,107 @@ describe('TenkoSessionMonitor — 一覧の行から測定詳細 (動画) を開
     getMeasurementMock.mockResolvedValue({ id: 'm-1', employee_id: 'emp-1' } as any)
   })
 
-  it('measurement_id があるセッションの行では測定詳細ボタンが出て、押すと getMeasurement が id で呼ばれ MeasurementDetail が描画される', async () => {
+  it('行クリックで getMeasurement(id) が呼ばれ、詳細内に MeasurementFacePhoto と MeasurementVideo が出る', async () => {
     const wrapper = await mountMonitor()
 
-    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
-    expect(button).toBeTruthy()
-    await button!.trigger('click')
+    await wrapper.find('tbody > tr').trigger('click')
     await flush()
     await wrapper.vm.$nextTick()
 
     expect(getMeasurementMock).toHaveBeenCalledWith('m-1')
-    expect(wrapper.findComponent({ name: 'MeasurementDetail' }).exists()).toBe(true)
+    expect(wrapper.text()).toContain('セッション詳細')
+    expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'MeasurementVideo' }).exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('行の測定詳細ボタンを押してもセッション詳細モーダルは開かない', async () => {
-    const wrapper = await mountMonitor()
-
-    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
-    await button!.trigger('click')
-    await flush()
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.text()).not.toContain('セッション詳細')
-    wrapper.unmount()
-  })
-
-  it('measurement_id が null のセッションでは行に測定詳細ボタンが出ない', async () => {
+  it('measurement_id が null の行をクリックしても getMeasurement は呼ばれず、2 部品も出ない', async () => {
     listTenkoSessionsMock.mockResolvedValue({ sessions: [SESSION_NORMAL], total: 1, page: 1, per_page: 20 })
     const wrapper = await mountMonitor()
 
+    await wrapper.find('tbody > tr').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(getMeasurementMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('セッション詳細')
+    expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'MeasurementVideo' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('getMeasurement が reject するとエラー文言が出て、種別・アルコールの欄は出たまま', async () => {
+    getMeasurementMock.mockRejectedValue(new Error('network error'))
+    const wrapper = await mountMonitor()
+
+    await wrapper.find('tbody > tr').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('動画・写真を取得できませんでした')
+    expect(wrapper.text()).toContain('通常')
+    expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('一覧の行に「測定詳細」ボタンが無い', async () => {
+    const wrapper = await mountMonitor()
     const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
     expect(button).toBeFalsy()
     wrapper.unmount()
   })
 
-  it('getMeasurement が reject すると MeasurementDetail は出ず、一覧の上にエラー表示が出て、他の欄 (種別) は出たままになる', async () => {
-    getMeasurementMock.mockRejectedValue(new Error('network error'))
-    const wrapper = await mountMonitor()
-
-    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
-    await button!.trigger('click')
-    await flush()
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.findComponent({ name: 'MeasurementDetail' }).exists()).toBe(false)
-    expect(wrapper.text()).toContain('測定詳細を取得できませんでした')
-    expect(wrapper.text()).toContain('通常')
-    wrapper.unmount()
-  })
-
-  it('2 行あるとき、1 行目を押して読み込み中の間、2 行目のボタンは disabled にならない', async () => {
-    const SESSION_WITH_MEASUREMENT_2 = { ...SESSION_WITH_MEASUREMENT, id: 's-3', measurement_id: 'm-2' }
-    listTenkoSessionsMock.mockResolvedValue({ sessions: [SESSION_WITH_MEASUREMENT, SESSION_WITH_MEASUREMENT_2], total: 2, page: 1, per_page: 20 })
+  it('応答前にセッション詳細を閉じる → 後から resolve しても 2 部品は出ない', async () => {
     let resolveGetMeasurement!: (v: any) => void
     getMeasurementMock.mockImplementation(() => new Promise(resolve => { resolveGetMeasurement = resolve }))
     const wrapper = await mountMonitor()
 
-    const buttons = wrapper.findAll('button').filter(b => b.text().includes('測定詳細'))
-    expect(buttons.length).toBe(2)
-    await buttons[0]!.trigger('click')
+    await wrapper.find('tbody > tr').trigger('click')
     await wrapper.vm.$nextTick()
-
-    const buttonsAfterClick = wrapper.findAll('button').filter(b => b.text().includes('測定詳細') || b.text().includes('読み込み中'))
-    expect(buttonsAfterClick[0]!.attributes('disabled')).toBeDefined()
-    expect(buttonsAfterClick[1]!.attributes('disabled')).toBeUndefined()
+    // 閉じる (背景クリック相当): × ボタン
+    const closeButton = wrapper.findAll('button').find(b => b.text() === '×')
+    await closeButton!.trigger('click')
+    await wrapper.vm.$nextTick()
 
     resolveGetMeasurement({ id: 'm-1', employee_id: 'emp-1' })
     await flush()
     await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('セッション詳細')
+    expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'MeasurementVideo' }).exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('MeasurementDetail の close で消える', async () => {
+  it('閉じて同じ行を開き直す → 1 本目の遅れた応答で 2 本目の loading が消えず、2 本目の結果が出る', async () => {
+    const resolvers: Array<(v: any) => void> = []
+    getMeasurementMock.mockImplementation(() => new Promise(resolve => { resolvers.push(resolve) }))
     const wrapper = await mountMonitor()
 
-    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
-    await button!.trigger('click')
+    const row = wrapper.find('tbody > tr')
+    await row.trigger('click')
+    await wrapper.vm.$nextTick()
+    const closeButton = wrapper.findAll('button').find(b => b.text() === '×')
+    await closeButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    await row.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('動画・写真を読み込み中…')
+
+    // 1 本目 (古い世代) が遅れて解決しても loading は消えず、部品も出ない
+    resolvers[0]!({ id: 'm-1', employee_id: 'emp-1' })
     await flush()
     await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('動画・写真を読み込み中…')
+    expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(false)
 
-    const detail = wrapper.findComponent({ name: 'MeasurementDetail' })
-    expect(detail.exists()).toBe(true)
-    detail.vm.$emit('close')
+    // 2 本目 (今の世代) が解決すると結果が出る
+    resolvers[1]!({ id: 'm-1', employee_id: 'emp-1' })
+    await flush()
     await wrapper.vm.$nextTick()
-
-    expect(wrapper.findComponent({ name: 'MeasurementDetail' }).exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('セッション詳細モーダルに測定詳細ボタンが無い', async () => {
-    const wrapper = await mountMonitor()
-    await wrapper.find('tbody > tr').trigger('click')
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.text()).toContain('セッション詳細')
-    expect(wrapper.text()).not.toContain('測定詳細 (動画・顔写真)')
+    expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'MeasurementVideo' }).exists()).toBe(true)
     wrapper.unmount()
   })
 

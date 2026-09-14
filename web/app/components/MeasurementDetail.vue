@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import type { ApiMeasurement } from '~/types'
-import { fetchFacePhoto, fetchMeasurementVideo } from '~/utils/api'
 
-const props = defineProps<{
+defineProps<{
   measurement: ApiMeasurement
   employeeName: string
 }>()
@@ -11,61 +10,11 @@ const emit = defineEmits<{
   close: []
 }>()
 
-const facePhotoUrl = ref<string | null>(null)
-const isLoadingPhoto = ref(false)
-
-const videoUrl = ref<string | null>(null)
-const isLoadingVideo = ref(false)
-
-async function loadFacePhoto() {
-  if (!props.measurement.face_photo_url) return
-  isLoadingPhoto.value = true
-  try {
-    facePhotoUrl.value = await fetchFacePhoto(props.measurement.id)
-  } finally {
-    isLoadingPhoto.value = false
-  }
-}
-
-async function loadVideo() {
-  if (!props.measurement.video_url) return
-  isLoadingVideo.value = true
-  try {
-    videoUrl.value = await fetchMeasurementVideo(props.measurement.id)
-  } finally {
-    isLoadingVideo.value = false
-  }
-}
-
-/** MediaRecorder で録った webm は長さの情報を持たず `duration === Infinity` になり、
- * シークバーが効かない。既知の回避: 一度末尾近くまで seek すると duration が確定する。 */
-function onVideoLoadedMetadata(e: Event) {
-  const video = e.target as HTMLVideoElement
-  if (video.duration === Infinity) {
-    video.currentTime = 1e101
-  }
-}
-
-function onVideoTimeUpdate(e: Event) {
-  const video = e.target as HTMLVideoElement
-  if (video.currentTime > 1e100) {
-    video.currentTime = 0
-  }
-}
-
 onMounted(() => {
-  loadFacePhoto()
-  loadVideo()
   document.addEventListener('keydown', onKeydown)
 })
 
 onUnmounted(() => {
-  if (facePhotoUrl.value) {
-    URL.revokeObjectURL(facePhotoUrl.value)
-  }
-  if (videoUrl.value) {
-    URL.revokeObjectURL(videoUrl.value)
-  }
   document.removeEventListener('keydown', onKeydown)
 })
 
@@ -136,23 +85,7 @@ function statusColor(m: ApiMeasurement) {
 
       <div class="p-6 space-y-5">
         <!-- 顔写真 -->
-        <div class="flex justify-center">
-          <div v-if="isLoadingPhoto" class="w-32 h-32 rounded-xl bg-gray-200 animate-pulse" />
-          <img
-            v-else-if="facePhotoUrl"
-            :src="facePhotoUrl"
-            alt="認証時の顔写真"
-            class="w-32 h-32 rounded-xl object-cover shadow-sm"
-          >
-          <div
-            v-else
-            class="w-32 h-32 rounded-xl bg-gray-100 flex items-center justify-center text-gray-400"
-          >
-            <svg class="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0" />
-            </svg>
-          </div>
-        </div>
+        <MeasurementFacePhoto :measurement="measurement" />
 
         <!-- 基本情報 -->
         <div class="space-y-3">
@@ -176,21 +109,7 @@ function statusColor(m: ApiMeasurement) {
         </div>
 
         <!-- 録画 -->
-        <div v-if="measurement.video_url" class="space-y-2">
-          <p class="text-xs text-gray-400 font-medium">録画</p>
-          <div v-if="isLoadingVideo" class="text-sm text-gray-400">読み込み中…</div>
-          <video
-            v-else-if="videoUrl"
-            :src="videoUrl"
-            controls
-            playsinline
-            preload="metadata"
-            class="w-full aspect-video rounded-lg bg-black"
-            @loadedmetadata="onVideoLoadedMetadata"
-            @timeupdate="onVideoTimeUpdate"
-          />
-          <div v-else class="text-sm text-gray-400">録画を読み込めませんでした</div>
-        </div>
+        <MeasurementVideo :measurement="measurement" />
 
         <!-- アルコール検査 -->
         <div class="bg-gray-50 rounded-xl p-4 space-y-3">

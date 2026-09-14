@@ -3,19 +3,14 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import MeasurementDetail from '~/components/MeasurementDetail.vue'
 import type { ApiMeasurement } from '~/types'
 
-// 測定詳細に録画を再生する (Refs #238, ippoan/alc-app-s3#135)。
-// video_url がある測定だけ fetchMeasurementVideo を呼んで <video> を出す。
-
-const fetchFacePhotoMock = vi.fn(async () => null as string | null)
-const fetchMeasurementVideoMock = vi.fn(async () => null as string | null)
+// 録画・顔写真の表示は MeasurementFacePhoto / MeasurementVideo に分離済み
+// (Refs #238, #259, ippoan/alc-app-s3#135)。MeasurementDetail は 2 部品へ measurement を渡し、
+// 表示順 (顔写真が先頭、録画は基本情報の後) を保つことだけ確認する。
 
 vi.mock('~/utils/api', () => ({
-  fetchFacePhoto: (...args: any[]) => fetchFacePhotoMock(...args),
-  fetchMeasurementVideo: (...args: any[]) => fetchMeasurementVideoMock(...args),
+  fetchFacePhoto: vi.fn(async () => null),
+  fetchMeasurementVideo: vi.fn(async () => null),
 }))
-
-/** onMounted の await 群を流し切る */
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 function baseMeasurement(overrides: Partial<ApiMeasurement> = {}): ApiMeasurement {
   return {
@@ -33,59 +28,62 @@ function baseMeasurement(overrides: Partial<ApiMeasurement> = {}): ApiMeasuremen
   }
 }
 
-describe('MeasurementDetail — 録画の再生', () => {
+async function mountDetail(overrides: Partial<ApiMeasurement> = {}) {
+  return mountSuspended(MeasurementDetail, {
+    props: { measurement: baseMeasurement(overrides), employeeName: '山田太郎' },
+    global: { stubs: { MeasurementFacePhoto: true, MeasurementVideo: true } },
+  })
+}
+
+describe('MeasurementDetail — 顔写真・録画の委譲と表示順', () => {
   beforeEach(() => {
-    fetchFacePhotoMock.mockClear()
-    fetchFacePhotoMock.mockResolvedValue(null)
-    fetchMeasurementVideoMock.mockClear()
-    fetchMeasurementVideoMock.mockResolvedValue(null)
     vi.stubGlobal('URL', {
-      createObjectURL: vi.fn(() => 'blob:http://localhost/video'),
+      createObjectURL: vi.fn(() => 'blob:http://localhost/x'),
       revokeObjectURL: vi.fn(),
     })
   })
 
-  it('video_url がある測定では fetchMeasurementVideo を呼び <video> を出す', async () => {
-    fetchMeasurementVideoMock.mockResolvedValueOnce('blob:http://localhost/video')
+  it('MeasurementFacePhoto と MeasurementVideo が描画され measurement が渡る', async () => {
+    const measurement = baseMeasurement({ video_url: 'https://example.com/video.webm' })
     const wrapper = await mountSuspended(MeasurementDetail, {
-      props: { measurement: baseMeasurement({ video_url: 'https://example.com/video.webm' }), employeeName: '山田太郎' },
+      props: { measurement, employeeName: '山田太郎' },
+      global: { stubs: { MeasurementFacePhoto: true, MeasurementVideo: true } },
     })
-    await flush()
-    expect(fetchMeasurementVideoMock).toHaveBeenCalledWith('m-1')
-    const video = wrapper.find('video')
+
+    const facePhoto = wrapper.findComponent({ name: 'MeasurementFacePhoto' })
+    const video = wrapper.findComponent({ name: 'MeasurementVideo' })
+    expect(facePhoto.exists()).toBe(true)
     expect(video.exists()).toBe(true)
-    expect(video.attributes('src')).toBe('blob:http://localhost/video')
+    expect(facePhoto.props('measurement')).toEqual(measurement)
+    expect(video.props('measurement')).toEqual(measurement)
     wrapper.unmount()
   })
 
-  it('video_url が無い測定では fetchMeasurementVideo を呼ばず <video> も出さない', async () => {
-    const wrapper = await mountSuspended(MeasurementDetail, {
-      props: { measurement: baseMeasurement({ video_url: null }), employeeName: '山田太郎' },
-    })
-    await flush()
-    expect(fetchMeasurementVideoMock).not.toHaveBeenCalled()
-    expect(wrapper.find('video').exists()).toBe(false)
+  it('録画 (MeasurementVideo) は基本情報 (乗務員・測定日時) より後にある', async () => {
+    const wrapper = await mountDetail()
+    const html = wrapper.html()
+    const employeeIdx = html.indexOf('山田太郎')
+    const videoStubIdx = html.indexOf('measurement-video-stub')
+    expect(employeeIdx).toBeGreaterThan(-1)
+    expect(videoStubIdx).toBeGreaterThan(-1)
+    expect(videoStubIdx).toBeGreaterThan(employeeIdx)
     wrapper.unmount()
   })
 
-  it('取得に失敗 (null) したら「録画を読み込めませんでした」を出す', async () => {
-    fetchMeasurementVideoMock.mockResolvedValueOnce(null)
-    const wrapper = await mountSuspended(MeasurementDetail, {
-      props: { measurement: baseMeasurement({ video_url: 'https://example.com/video.webm' }), employeeName: '山田太郎' },
-    })
-    await flush()
-    expect(wrapper.text()).toContain('録画を読み込めませんでした')
-    expect(wrapper.find('video').exists()).toBe(false)
+  it('顔写真 (MeasurementFacePhoto) は本文の先頭にある', async () => {
+    const wrapper = await mountDetail()
+    const html = wrapper.html()
+    const facePhotoIdx = html.indexOf('measurement-face-photo-stub')
+    const employeeIdx = html.indexOf('山田太郎')
+    expect(facePhotoIdx).toBeGreaterThan(-1)
+    expect(facePhotoIdx).toBeLessThan(employeeIdx)
     wrapper.unmount()
   })
 
-  it('unmount で動画の object URL を revoke する', async () => {
-    fetchMeasurementVideoMock.mockResolvedValueOnce('blob:http://localhost/video')
-    const wrapper = await mountSuspended(MeasurementDetail, {
-      props: { measurement: baseMeasurement({ video_url: 'https://example.com/video.webm' }), employeeName: '山田太郎' },
-    })
-    await flush()
+  it('Escape で close を emit する', async () => {
+    const wrapper = await mountDetail()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(wrapper.emitted('close')).toBeTruthy()
     wrapper.unmount()
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:http://localhost/video')
   })
 })
