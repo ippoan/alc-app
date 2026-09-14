@@ -7,11 +7,13 @@ import TenkoSessionMonitor from '~/components/TenkoSessionMonitor.vue'
 const listTenkoSessionsMock = vi.fn(async () => ({ sessions: [] as any[], total: 0, page: 1, per_page: 20 }))
 const getEmployeesMock = vi.fn(async () => [] as any[])
 const downloadTenkoRecordsCsvMock = vi.fn(async () => {})
+const getMeasurementMock = vi.fn(async (_id: string) => ({}) as any)
 
 vi.mock('~/utils/api', () => ({
   listTenkoSessions: (...args: any[]) => listTenkoSessionsMock(...args),
   getEmployees: (...args: any[]) => getEmployeesMock(...args),
   downloadTenkoRecordsCsv: (...args: any[]) => downloadTenkoRecordsCsvMock(...args),
+  getMeasurement: (...args: any[]) => getMeasurementMock(...args),
   interruptTenkoSession: vi.fn(),
   resumeTenkoSession: vi.fn(),
   cancelTenkoSession: vi.fn(),
@@ -22,11 +24,17 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 const SESSION_NORMAL = {
   id: 's-1', tenant_id: 't-1', employee_id: 'emp-1', tenko_type: 'normal', status: 'completed',
   responsible_manager_name: null, started_at: '2026-09-12T00:00:00Z', created_at: '2026-09-12T00:00:00Z',
-  completed_at: '2026-09-12T00:05:00Z',
+  completed_at: '2026-09-12T00:05:00Z', measurement_id: null,
+}
+
+const SESSION_WITH_MEASUREMENT = {
+  ...SESSION_NORMAL, id: 's-2', measurement_id: 'm-1',
 }
 
 async function mountMonitor() {
-  const wrapper = await mountSuspended(TenkoSessionMonitor)
+  const wrapper = await mountSuspended(TenkoSessionMonitor, {
+    global: { stubs: { MeasurementDetail: true } },
+  })
   await flush()
   await wrapper.vm.$nextTick()
   return wrapper
@@ -62,6 +70,81 @@ describe('TenkoSessionMonitor — 点呼記録タブ統合後の CSV 出力と�
     expect(badge).toBeTruthy()
     expect(badge!.classes()).toContain('bg-gray-100')
     expect(badge!.classes()).toContain('text-gray-700')
+    wrapper.unmount()
+  })
+})
+
+describe('TenkoSessionMonitor — セッション詳細から測定詳細 (動画) を開く', () => {
+  beforeEach(() => {
+    listTenkoSessionsMock.mockClear()
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [SESSION_WITH_MEASUREMENT], total: 1, page: 1, per_page: 20 })
+    getEmployeesMock.mockClear()
+    getEmployeesMock.mockResolvedValue([])
+    downloadTenkoRecordsCsvMock.mockClear()
+    getMeasurementMock.mockClear()
+    getMeasurementMock.mockResolvedValue({ id: 'm-1', employee_id: 'emp-1' } as any)
+  })
+
+  it('measurement_id があるセッションの詳細では測定詳細ボタンが出て、押すと getMeasurement が id で呼ばれ MeasurementDetail が描画される', async () => {
+    const wrapper = await mountMonitor()
+    await wrapper.find('tbody > tr').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
+    expect(button).toBeTruthy()
+    await button!.trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(getMeasurementMock).toHaveBeenCalledWith('m-1')
+    expect(wrapper.findComponent({ name: 'MeasurementDetail' }).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('measurement_id が null のセッションでは測定詳細ボタンが出ない', async () => {
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [SESSION_NORMAL], total: 1, page: 1, per_page: 20 })
+    const wrapper = await mountMonitor()
+    await wrapper.find('tbody > tr').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
+    expect(button).toBeFalsy()
+    wrapper.unmount()
+  })
+
+  it('getMeasurement が reject すると MeasurementDetail は出ず、エラー表示が出て、他の欄 (種別) は出たままになる', async () => {
+    getMeasurementMock.mockRejectedValue(new Error('network error'))
+    const wrapper = await mountMonitor()
+    await wrapper.find('tbody > tr').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
+    await button!.trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'MeasurementDetail' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('測定詳細を取得できませんでした')
+    expect(wrapper.text()).toContain('通常')
+    wrapper.unmount()
+  })
+
+  it('MeasurementDetail の close で消える', async () => {
+    const wrapper = await mountMonitor()
+    await wrapper.find('tbody > tr').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.findAll('button').find(b => b.text().includes('測定詳細'))
+    await button!.trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    const detail = wrapper.findComponent({ name: 'MeasurementDetail' })
+    expect(detail.exists()).toBe(true)
+    detail.vm.$emit('close')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'MeasurementDetail' }).exists()).toBe(false)
     wrapper.unmount()
   })
 })
