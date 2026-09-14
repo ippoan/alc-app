@@ -47,6 +47,9 @@ onUnmounted(() => {
       alt="認証時の顔写真"
       class="w-32 h-32 rounded-xl object-cover shadow-sm"
     >
+    <p v-else-if="!measurement.face_photo_url" class="text-sm text-gray-400">
+      顔認証なし
+    </p>
     <div
       v-else
       class="w-32 h-32 rounded-xl bg-gray-100 flex items-center justify-center text-gray-400"
