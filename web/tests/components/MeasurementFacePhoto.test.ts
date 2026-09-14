@@ -54,14 +54,28 @@ describe('MeasurementFacePhoto — 顔写真の表示', () => {
     wrapper.unmount()
   })
 
-  it('face_photo_url が無い測定では fetchFacePhoto を呼ばずプレースホルダを出す', async () => {
+  it('face_photo_url が無い測定では fetchFacePhoto を呼ばず「顔認証なし」を出す', async () => {
     const wrapper = await mountSuspended(MeasurementFacePhoto, {
       props: { measurement: baseMeasurement({ face_photo_url: undefined }) },
     })
     await flush()
     expect(fetchFacePhotoMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('顔認証なし')
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(wrapper.find('svg').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('face_photo_url はあるが読み込めなかった測定ではプレースホルダを出し「顔認証なし」は出さない', async () => {
+    fetchFacePhotoMock.mockResolvedValueOnce(null)
+    const wrapper = await mountSuspended(MeasurementFacePhoto, {
+      props: { measurement: baseMeasurement({ face_photo_url: 'https://example.com/photo.jpg' }) },
+    })
+    await flush()
+    expect(fetchFacePhotoMock).toHaveBeenCalledWith('m-1')
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.find('svg').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('顔認証なし')
     wrapper.unmount()
   })
 
