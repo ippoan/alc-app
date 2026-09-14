@@ -176,22 +176,38 @@ async function handleBulkCancel() {
 // 詳細モーダル
 const selectedSession = ref<TenkoSession | null>(null)
 
-// 測定詳細 (動画・顔写真)
-const selectedMeasurement = ref<ApiMeasurement | null>(null)
-const measurementLoadingId = ref<string | null>(null)
-const measurementError = ref(false)
+// セッション詳細内の測定 (動画・顔写真)
+const sessionMeasurement = ref<ApiMeasurement | null>(null)
+const sessionMeasurementLoading = ref(false)
+const sessionMeasurementError = ref(false)
+let sessionMeasurementGen = 0
 
-async function openMeasurement(id: string) {
-  measurementLoadingId.value = id
-  measurementError.value = false
+async function openSessionDetail(s: TenkoSession) {
+  selectedSession.value = s
+  sessionMeasurement.value = null
+  sessionMeasurementLoading.value = false
+  sessionMeasurementError.value = false
+  const gen = ++sessionMeasurementGen
+  if (!s.measurement_id) return
+  sessionMeasurementLoading.value = true
   try {
-    selectedMeasurement.value = await getMeasurement(id)
+    const m = await getMeasurement(s.measurement_id)
+    if (gen !== sessionMeasurementGen) return
+    sessionMeasurement.value = m
   } catch {
-    selectedMeasurement.value = null
-    measurementError.value = true
+    if (gen !== sessionMeasurementGen) return
+    sessionMeasurementError.value = true
   } finally {
-    measurementLoadingId.value = null
+    if (gen === sessionMeasurementGen) sessionMeasurementLoading.value = false
   }
+}
+
+function closeSessionDetail() {
+  selectedSession.value = null
+  ++sessionMeasurementGen
+  sessionMeasurement.value = null
+  sessionMeasurementLoading.value = false
+  sessionMeasurementError.value = false
 }
 
 function formatDate(iso: string | null) {
@@ -295,7 +311,6 @@ onMounted(() => { loadEmployees(); fetchData() })
 
     <!-- エラー -->
     <div v-if="error" class="bg-red-50 text-red-700 p-3 rounded-lg mb-4 text-sm">{{ error }}</div>
-    <p v-if="measurementError" class="text-red-600 text-xs mb-4">測定詳細を取得できませんでした</p>
 
     <!-- ローディング -->
     <div v-if="isLoading" class="text-center py-8 text-gray-500">読み込み中...</div>
@@ -339,7 +354,7 @@ onMounted(() => { loadEmployees(); fetchData() })
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
-            <tr v-for="s in sessions" :key="s.id" class="hover:bg-gray-50 cursor-pointer" @click="selectedSession = s">
+            <tr v-for="s in sessions" :key="s.id" class="hover:bg-gray-50 cursor-pointer" @click="openSessionDetail(s)">
               <td class="px-3 py-3 text-center" @click.stop>
                 <input
                   v-if="!['completed', 'cancelled'].includes(s.status)"
@@ -411,16 +426,6 @@ onMounted(() => { loadEmployees(); fetchData() })
                 </template>
 
                 <span v-else class="text-gray-400 text-xs">-</span>
-
-                <!-- 測定詳細 (動画・顔写真) -->
-                <button
-                  v-if="s.measurement_id"
-                  :disabled="measurementLoadingId === s.measurement_id"
-                  class="px-2 py-1 text-blue-600 hover:bg-blue-50 rounded text-xs disabled:opacity-50"
-                  @click="openMeasurement(s.measurement_id)"
-                >
-                  {{ measurementLoadingId === s.measurement_id ? '読み込み中...' : '測定詳細' }}
-                </button>
               </td>
             </tr>
           </tbody>
@@ -444,12 +449,12 @@ onMounted(() => { loadEmployees(); fetchData() })
     <div
       v-if="selectedSession"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="selectedSession = null"
+      @click.self="closeSessionDetail"
     >
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl mx-4 p-6 max-h-[80vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-lg font-semibold text-gray-800">セッション詳細</h3>
-          <button class="text-gray-400 hover:text-gray-600 text-xl leading-none" @click="selectedSession = null">&times;</button>
+          <button class="text-gray-400 hover:text-gray-600 text-xl leading-none" @click="closeSessionDetail">&times;</button>
         </div>
 
         <div class="space-y-4 text-sm">
@@ -473,6 +478,17 @@ onMounted(() => { loadEmployees(); fetchData() })
               <div><span class="text-gray-500">値:</span> {{ selectedSession.alcohol_value != null ? selectedSession.alcohol_value.toFixed(3) + ' mg/L' : '-' }}</div>
               <div><span class="text-gray-500">検査日時:</span> {{ formatDate(selectedSession.alcohol_tested_at) }}</div>
             </div>
+          </div>
+
+          <!-- 動画・顔写真 -->
+          <div v-if="selectedSession.measurement_id" class="bg-gray-50 rounded-lg p-3">
+            <h4 class="font-medium text-gray-700 mb-1">動画・顔写真</h4>
+            <p v-if="sessionMeasurementLoading" class="text-sm text-gray-400">動画・写真を読み込み中…</p>
+            <p v-else-if="sessionMeasurementError" class="text-red-600 text-xs">動画・写真を取得できませんでした</p>
+            <template v-else-if="sessionMeasurement">
+              <MeasurementFacePhoto :key="`p-${sessionMeasurement.id}`" :measurement="sessionMeasurement" />
+              <MeasurementVideo :key="`v-${sessionMeasurement.id}`" :measurement="sessionMeasurement" />
+            </template>
           </div>
 
           <!-- 医療データ -->
@@ -544,13 +560,5 @@ onMounted(() => { loadEmployees(); fetchData() })
         </div>
       </div>
     </div>
-
-    <!-- 測定詳細 (動画・顔写真) -->
-    <MeasurementDetail
-      v-if="selectedMeasurement"
-      :measurement="selectedMeasurement"
-      :employee-name="employeeName(selectedMeasurement.employee_id)"
-      @close="selectedMeasurement = null"
-    />
   </div>
 </template>
