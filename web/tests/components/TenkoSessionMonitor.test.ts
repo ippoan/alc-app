@@ -220,3 +220,98 @@ describe('TenkoSessionMonitor — 行クリックのセッション詳細に動�
     wrapper.unmount()
   })
 })
+
+// 車検の列・詳細 (Refs ippoan/alc-app-s3#110)
+describe('TenkoSessionMonitor — 車検の一覧・詳細', () => {
+  beforeEach(() => {
+    listTenkoSessionsMock.mockClear()
+    getEmployeesMock.mockClear()
+    getEmployeesMock.mockResolvedValue([])
+  })
+
+  it('「車検」列のヘッダーがある', async () => {
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [SESSION_NORMAL], total: 1, page: 1, per_page: 20 })
+    const wrapper = await mountMonitor()
+    const headers = wrapper.findAll('th').map(h => h.text())
+    expect(headers).toContain('車検')
+    wrapper.unmount()
+  })
+
+  it('carins_matched_by が null なら列は "-" (番号を受け取っていない)', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [{ ...SESSION_NORMAL, carins_cert_no: null, carins_vehicle_id: null, carins_expires_on: null, carins_matched_by: null }],
+      total: 1, page: 1, per_page: 20,
+    })
+    const wrapper = await mountMonitor()
+    const row = wrapper.find('tbody > tr')
+    const pill = row.findAll('span').find(s => s.text() === '未登録')
+    expect(pill).toBeFalsy()
+    expect(row.findAll('td').some(td => td.text() === '-')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('matched_by="none" (carins に無い車) は灰 pill「未登録」', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [{ ...SESSION_NORMAL, carins_cert_no: '000000000001', carins_vehicle_id: null, carins_expires_on: null, carins_matched_by: 'none' }],
+      total: 1, page: 1, per_page: 20,
+    })
+    const wrapper = await mountMonitor()
+    const row = wrapper.find('tbody > tr')
+    const pill = row.findAll('span').find(s => s.text() === '未登録')
+    expect(pill).toBeTruthy()
+    expect(pill!.classes()).toContain('bg-gray-100')
+    wrapper.unmount()
+  })
+
+  it('期限切れは赤 pill「期限切れ」', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [{ ...SESSION_NORMAL, carins_cert_no: '000000000001', carins_vehicle_id: 'TESTCARID00001', carins_expires_on: '2020-01-01', carins_matched_by: 'cert_no' }],
+      total: 1, page: 1, per_page: 20,
+    })
+    const wrapper = await mountMonitor()
+    const row = wrapper.find('tbody > tr')
+    const pill = row.findAll('span').find(s => s.text() === '期限切れ')
+    expect(pill).toBeTruthy()
+    expect(pill!.classes()).toContain('bg-red-100')
+    wrapper.unmount()
+  })
+
+  it('詳細に管理番号・車両 ID・車検期限・照合を出す', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [{
+        ...SESSION_NORMAL,
+        carins_cert_no: '000000000001',
+        carins_vehicle_id: 'TESTCARID00001',
+        carins_expires_on: '2030-12-31',
+        carins_matched_by: 'cert_no',
+      }],
+      total: 1, page: 1, per_page: 20,
+    })
+    const wrapper = await mountMonitor()
+
+    await wrapper.find('tbody > tr').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('000000000001')
+    expect(wrapper.text()).toContain('TESTCARID00001')
+    expect(wrapper.text()).toContain('2030-12-31')
+    expect(wrapper.text()).toContain('管理番号')
+    wrapper.unmount()
+  })
+
+  it('carins の情報が無いセッションでは詳細に「車検証」ブロックが出ない', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [{ ...SESSION_NORMAL, carins_cert_no: null, carins_vehicle_id: null, carins_expires_on: null, carins_matched_by: null }],
+      total: 1, page: 1, per_page: 20,
+    })
+    const wrapper = await mountMonitor()
+
+    await wrapper.find('tbody > tr').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('車検証')
+    wrapper.unmount()
+  })
+})

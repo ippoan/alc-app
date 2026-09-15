@@ -2,6 +2,7 @@
 import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
 import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { expiryTone, EXPIRY_TONE_CLASS, checkLicenseExpiryFromString, type ExpiryTone } from '~/utils/license'
 
 const emit = defineEmits<{ changed: [] }>()
 
@@ -252,6 +253,23 @@ function alcoholLabel(r: string | null) {
   return map[r] || r
 }
 
+/**
+ * 車検の pill の色調・短い名札 (Refs ippoan/alc-app-s3#110)。carins_matched_by が
+ * truthy (cert_no / car_id / none) のときだけ呼ぶ — null (番号を受け取っていない) は
+ * 呼び出し側で「-」に落とす
+ */
+function carinsTone(s: TenkoSession): ExpiryTone {
+  if (s.carins_matched_by === 'none' || !s.carins_expires_on) return { tone: 'gray', label: '未登録' }
+  return expiryTone(checkLicenseExpiryFromString(s.carins_expires_on))
+}
+
+function carinsMatchedByLabel(matched: string | null): string {
+  if (matched === 'cert_no') return '管理番号'
+  if (matched === 'car_id') return '車両 ID'
+  if (matched === 'none') return '未登録'
+  return '-'
+}
+
 function selfDeclarationLabel(key: string) {
   const map: Record<string, string> = { illness: '疾病', fatigue: '疲労', sleep_deprivation: '睡眠不足' }
   return map[key] || key
@@ -349,6 +367,7 @@ onMounted(() => { loadEmployees(); fetchData() })
               <th class="px-4 py-3 text-center font-medium">アルコール</th>
               <th class="px-4 py-3 text-center font-medium">体温</th>
               <th class="px-4 py-3 text-center font-medium">血圧</th>
+              <th class="px-4 py-3 text-center font-medium">車検</th>
               <th class="px-4 py-3 text-left font-medium">管理者</th>
               <th class="px-4 py-3 text-center font-medium">操作</th>
             </tr>
@@ -387,6 +406,14 @@ onMounted(() => { loadEmployees(); fetchData() })
               </td>
               <td class="px-4 py-3 text-center text-gray-700">{{ s.temperature != null ? s.temperature.toFixed(1) + ' ℃' : '-' }}</td>
               <td class="px-4 py-3 text-center text-gray-700">{{ s.systolic != null ? `${s.systolic}/${s.diastolic}` : '-' }}</td>
+              <td class="px-4 py-3 text-center">
+                <span v-if="s.carins_matched_by"
+                  class="inline-block px-2 py-1 rounded-full text-xs font-medium"
+                  :class="EXPIRY_TONE_CLASS.pill[carinsTone(s).tone]">
+                  {{ carinsTone(s).label }}
+                </span>
+                <span v-else class="text-gray-400 text-xs">-</span>
+              </td>
               <td class="px-4 py-3 text-gray-700">{{ s.responsible_manager_name }}</td>
               <td class="px-4 py-3 text-center" @click.stop>
                 <!-- 中断/キャンセルボタン (進行中セッションのみ) -->
@@ -498,6 +525,20 @@ onMounted(() => { loadEmployees(); fetchData() })
               <div v-if="selectedSession.temperature != null"><span class="text-gray-500">体温:</span> {{ selectedSession.temperature.toFixed(1) }} &#8451;</div>
               <div v-if="selectedSession.systolic != null"><span class="text-gray-500">血圧:</span> {{ selectedSession.systolic }}/{{ selectedSession.diastolic }} mmHg</div>
               <div v-if="selectedSession.pulse != null"><span class="text-gray-500">脈拍:</span> {{ selectedSession.pulse }} bpm</div>
+            </div>
+          </div>
+
+          <!-- 車検証 (Refs ippoan/alc-app-s3#110) -->
+          <div
+            v-if="selectedSession.carins_cert_no || selectedSession.carins_vehicle_id || selectedSession.carins_matched_by"
+            class="bg-gray-50 rounded-lg p-3"
+          >
+            <h4 class="font-medium text-gray-700 mb-1">車検証</h4>
+            <div class="grid grid-cols-2 gap-2">
+              <div><span class="text-gray-500">管理番号:</span> {{ selectedSession.carins_cert_no || '-' }}</div>
+              <div><span class="text-gray-500">車両 ID:</span> {{ selectedSession.carins_vehicle_id || '-' }}</div>
+              <div><span class="text-gray-500">車検期限:</span> {{ selectedSession.carins_expires_on || '-' }}</div>
+              <div><span class="text-gray-500">照合:</span> {{ carinsMatchedByLabel(selectedSession.carins_matched_by) }}</div>
             </div>
           </div>
 

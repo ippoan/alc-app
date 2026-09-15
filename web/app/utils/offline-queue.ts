@@ -25,6 +25,9 @@ export interface SerializedResult {
   videoStoreId?: string
   /** 通常点呼の種別 (Refs ippoan/alc-app-s3#135) */
   tenkoType?: MeasurementResult['tenkoType']
+  /** 電子車検証の管理番号・車両 ID (Refs ippoan/alc-app-s3#110) */
+  carinsCertNo?: string
+  carinsVehicleId?: string
 }
 
 export interface PendingMeasurement {
@@ -100,6 +103,8 @@ export async function enqueue(
     medicalMeasuredAt: result.medicalMeasuredAt?.toISOString(),
     videoStoreId,
     tenkoType: result.tenkoType,
+    carinsCertNo: result.carinsCertNo,
+    carinsVehicleId: result.carinsVehicleId,
   }
   const entry: Omit<PendingMeasurement, 'id'> = {
     result: serialized,
@@ -313,6 +318,8 @@ export async function flush(
           medical_measured_at: entry.result.medicalMeasuredAt,
           record_as_tenko: true,
           tenko_type: entry.result.tenkoType ?? 'normal',
+          carins_cert_no: entry.result.carinsCertNo,
+          carins_vehicle_id: entry.result.carinsVehicleId,
         })
       } else {
         // 従来の POST パス

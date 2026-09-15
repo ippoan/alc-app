@@ -6,6 +6,8 @@ import {
   parseLicenseExpiryDate,
   formatDateForInput,
   checkLicenseExpiryFromString,
+  expiryTone,
+  EXPIRY_TONE_CLASS,
   type LicenseExpiryStatus,
 } from '~/utils/license'
 
@@ -174,21 +176,11 @@ function syncStatusLabel(status: number): string {
 }
 
 function statusLabel(status: LicenseExpiryStatus | null): string {
-  switch (status) {
-    case 'valid': return '有効'
-    case 'expiring_soon': return '期限間近'
-    case 'expired': return '期限切れ'
-    default: return '未登録'
-  }
+  return expiryTone(status).label
 }
 
 function statusClass(status: LicenseExpiryStatus | null): string {
-  switch (status) {
-    case 'valid': return 'bg-green-100 text-green-800'
-    case 'expiring_soon': return 'bg-amber-100 text-amber-800'
-    case 'expired': return 'bg-red-100 text-red-800'
-    default: return 'bg-gray-100 text-gray-500'
-  }
+  return EXPIRY_TONE_CLASS.pill[expiryTone(status).tone]
 }
 
 onMounted(() => {

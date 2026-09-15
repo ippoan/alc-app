@@ -81,3 +81,48 @@ export function checkLicenseExpiryFromString(dateStr: string, warningDays: numbe
   if (!y || !m || !d) return 'expired'
   return checkLicenseExpiry(new Date(y, m - 1, d), warningDays)
 }
+
+/**
+ * 期限ステータス → 色調・短い名札の対応 (免許証・車検で共有)。
+ *
+ * 免許証 3 か所 (LicenseRegistration.vue の一覧 pill / NfcStatus.vue の文 / NormalMeasurement.vue
+ * の帯) と車検 2 か所 (NormalMeasurement.vue の vehicle 段の帯 / TenkoSessionMonitor.vue の
+ * 一覧 pill) は見た目 (pill / 文 / 帯) が違うが、状態 → 色調の対応は同じなのでここに寄せる
+ * (ユーザーの判断、Refs ippoan/alc-app-s3#110)。見た目ごとの文言・クラスは各画面に残し、
+ * 状態 → tone だけをここで決める
+ */
+export interface ExpiryTone {
+  tone: 'red' | 'yellow' | 'green' | 'gray'
+  label: string
+}
+
+export function expiryTone(status: LicenseExpiryStatus | null): ExpiryTone {
+  switch (status) {
+    case 'expired': return { tone: 'red', label: '期限切れ' }
+    case 'expiring_soon': return { tone: 'yellow', label: '期限間近' }
+    case 'valid': return { tone: 'green', label: '有効' }
+    default: return { tone: 'gray', label: '未登録' }
+  }
+}
+
+/** tone → 見た目ごとの Tailwind クラス (各画面のクラスはこの表から選ぶだけにする) */
+export const EXPIRY_TONE_CLASS: Record<'pill' | 'text' | 'banner', Record<ExpiryTone['tone'], string>> = {
+  pill: {
+    red: 'bg-red-100 text-red-800',
+    yellow: 'bg-amber-100 text-amber-800',
+    green: 'bg-green-100 text-green-800',
+    gray: 'bg-gray-100 text-gray-500',
+  },
+  text: {
+    red: 'bg-red-100 text-red-700 rounded-lg',
+    yellow: 'bg-amber-100 text-amber-700 rounded-lg',
+    green: 'bg-green-100 text-green-700 rounded-lg',
+    gray: 'bg-gray-100 text-gray-700 rounded-lg',
+  },
+  banner: {
+    red: 'bg-red-50 border-red-200 text-red-700',
+    yellow: 'bg-amber-50 border-amber-200 text-amber-700',
+    green: 'bg-green-50 border-green-200 text-green-700',
+    gray: 'bg-gray-50 border-gray-200 text-gray-700',
+  },
+}

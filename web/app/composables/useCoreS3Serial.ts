@@ -163,6 +163,18 @@ function pickLogLines(lines: string[]): string[] {
   return picked.reverse()
 }
 
+/**
+ * `EVT` の `key=value` の並びから値を取り出す (無ければ空文字)。
+ *
+ * useNfcReader (NFC_LICENSE) と NormalMeasurement (NFC_CARINS) の両方が `EVT <NAME>
+ * <args...>` の args を読むので、ここ (EVT の分解元) に置く (Refs ippoan/alc-app-s3#110)。
+ */
+export function evtArg(args: string[], key: string): string {
+  const prefix = `${key}=`
+  const hit = args.find(arg => arg.startsWith(prefix))
+  return hit === undefined ? '' : hit.slice(prefix.length)
+}
+
 export function useCoreS3Serial() {
   // ポートの探索と調停は arbiter に任せる (navigator.serial を自前で叩かない)
   const arbiter = useSerialArbiter()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { NfcReadEvent, NfcLicenseReadEvent } from '~/types'
-import { parseLicenseExpiryDate, checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
+import { parseLicenseExpiryDate, checkLicenseExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
 import { isWebSerialSupported } from '~/utils/webserial'
 
 const emit = defineEmits<{
@@ -141,13 +141,15 @@ const showNfcGuide = ref(false)
         </p>
         <p
           v-if="licenseExpiryStatus === 'expired'"
-          class="mt-1 px-3 py-1 bg-red-100 text-red-700 rounded-lg font-medium"
+          class="mt-1 px-3 py-1 font-medium"
+          :class="EXPIRY_TONE_CLASS.text[expiryTone('expired').tone]"
         >
           免許証の有効期限が切れています
         </p>
         <p
           v-if="licenseExpiryStatus === 'expiring_soon'"
-          class="mt-1 px-3 py-1 bg-amber-100 text-amber-700 rounded-lg font-medium"
+          class="mt-1 px-3 py-1 font-medium"
+          :class="EXPIRY_TONE_CLASS.text[expiryTone('expiring_soon').tone]"
         >
           免許証の有効期限が近づいています
         </p>

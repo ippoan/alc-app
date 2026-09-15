@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { MeasurementResult, TenkoType } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo } from '~/utils/api'
+import type { MeasurementResult, TenkoType, CarInspectionLookupResponse } from '~/types'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
-import { checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
+import { checkLicenseExpiry, checkLicenseExpiryFromString, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
+import { evtArg } from '~/composables/useCoreS3Serial'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
 
@@ -31,10 +32,46 @@ function chooseVehicleStep(type: TenkoType) {
 const { syncStep, sendResult } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
 
+// 電子車検証の管理番号・車両 ID (タップで保持。段は進めない。Refs ippoan/alc-app-s3#110)
+const carinsCertNo = ref<string | undefined>(undefined)
+const carinsVehicleId = ref<string | undefined>(undefined)
+/** rc= (読み取り失敗、再タップ促し) */
+const carinsReadError = ref(false)
+const carinsLookup = ref<CarInspectionLookupResponse | null>(null)
+/** matched_by === 'none' は別に灰表示するのでここでは判定しない */
+const carinsExpiryStatus = computed<LicenseExpiryStatus | null>(() => {
+  const expiresOn = carinsLookup.value?.expires_on
+  return expiresOn ? checkLicenseExpiryFromString(expiresOn) : null
+})
+
 // 電子車検証の段で CoreS3 の NFC_CARINS を直接受ける (新しい component は作らず、
-// 免許証の通り道 (useNfcReader) にも流さない。Refs ippoan/alc-app-s3#135)
-const offCarinsEvent = useCoreS3Serial().onEvent((name) => {
-  if (name === 'NFC_CARINS' && step.value === 'vehicle') chooseVehicleStep('normal')
+// 免許証の通り道 (useNfcReader) にも流さない。Refs ippoan/alc-app-s3#135)。
+// 番号を保持して段に留まる — chooseVehicleStep は 3 つのボタンでだけ呼ぶ
+// (Refs ippoan/alc-app-s3#110)
+const offCarinsEvent = useCoreS3Serial().onEvent((name, args) => {
+  if (name !== 'NFC_CARINS' || step.value !== 'vehicle') return
+
+  const rc = evtArg(args, 'rc')
+  if (rc) {
+    // 再タップで上書きされるまで残す
+    carinsReadError.value = true
+    return
+  }
+
+  const mgno = evtArg(args, 'mgno')
+  const carid = evtArg(args, 'carid')
+  carinsReadError.value = false
+  // 旧 firmware (引数なし) は番号なしのまま段に留まる
+  if (!mgno && !carid) return
+
+  carinsCertNo.value = mgno || undefined
+  carinsVehicleId.value = carid || undefined
+  carinsLookup.value = null
+  lookupCarInspection(carinsCertNo.value, carinsVehicleId.value)
+    .then((res) => { carinsLookup.value = res })
+    // lookupCarInspection 自身が失敗を吸収する契約だが、テストの直接モック等でも
+    // 確実に警告なしで進めるため二重に守る
+    .catch(() => { carinsLookup.value = null })
 })
 onUnmounted(offCarinsEvent)
 
@@ -234,6 +271,8 @@ function onAlcStateChange(alcState: string) {
 // FC-1200 測定結果 → BLE 医療データ / 手動入力データをマージ → API に保存
 async function onMeasurementResult(result: MeasurementResult) {
   result.tenkoType = tenkoType.value
+  result.carinsCertNo = carinsCertNo.value
+  result.carinsVehicleId = carinsVehicleId.value
   // BLE Medical Gateway のデータをマージ
   if (bleTemperature.value) {
     result.temperature = bleTemperature.value.value
@@ -303,8 +342,14 @@ async function onMeasurementResult(result: MeasurementResult) {
         medical_manual_input: medicalInputSource.value === 'manual' ? true : undefined,
         record_as_tenko: true,
         tenko_type: result.tenkoType ?? 'normal',
+        carins_cert_no: result.carinsCertNo,
+        carins_vehicle_id: result.carinsVehicleId,
       }
-      console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(updateData))
+      // carins の番号は console に出さない (simplify-reviewer の検査点、Refs ippoan/alc-app-s3#110)
+      const loggableUpdateData: Record<string, unknown> = { ...updateData }
+      delete loggableUpdateData.carins_cert_no
+      delete loggableUpdateData.carins_vehicle_id
+      console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(loggableUpdateData))
       await updateMeasurement(activeMeasurementId.value, updateData)
       console.log('[Measurement] updateMeasurement success')
       saveStatus.value = 'saved'
@@ -366,6 +411,10 @@ function reset() {
   isSaving.value = false
   licenseExpiryDate.value = null
   licenseExpiryStatus.value = null
+  carinsCertNo.value = undefined
+  carinsVehicleId.value = undefined
+  carinsReadError.value = false
+  carinsLookup.value = null
   activeMeasurementId.value = null
   manualMedicalData.value = null
   medicalInputSource.value = null
@@ -418,13 +467,13 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
       <!-- 免許証有効期限切れ警告 -->
       <div
         v-if="licenseExpiryStatus === 'expired' && licenseExpiryDate"
-        :class="['w-full bg-red-50 border border-red-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-red-700', landscape ? '' : 'max-w-md']"
+        :class="['w-full border rounded-xl px-4 py-2 mb-2 text-center text-sm', EXPIRY_TONE_CLASS.banner[expiryTone('expired').tone], landscape ? '' : 'max-w-md']"
       >
         免許証の有効期限が切れています ({{ formatExpiryDate(licenseExpiryDate) }})
       </div>
       <div
         v-if="licenseExpiryStatus === 'expiring_soon' && licenseExpiryDate"
-        :class="['w-full bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-amber-700', landscape ? '' : 'max-w-md']"
+        :class="['w-full border rounded-xl px-4 py-2 mb-2 text-center text-sm', EXPIRY_TONE_CLASS.banner[expiryTone('expiring_soon').tone], landscape ? '' : 'max-w-md']"
       >
         免許証の有効期限が近づいています ({{ formatExpiryDate(licenseExpiryDate) }})
       </div>
@@ -538,6 +587,40 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">電子車検証をタップしてください</h2>
           <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
+
+          <!-- 読み取り失敗 (rc=): 再タップを促す (Refs ippoan/alc-app-s3#110) -->
+          <div
+            v-if="carinsReadError"
+            :class="['w-full border rounded-xl px-4 py-2 mb-4 text-center text-sm', EXPIRY_TONE_CLASS.banner.red]"
+          >
+            車検証を読み取れませんでした。もう一度タップしてください
+          </div>
+
+          <!-- 番号を保持中 (段はここに留まる) -->
+          <div v-else-if="carinsCertNo || carinsVehicleId" class="mb-4">
+            <p class="text-sm text-green-700 mb-2">
+              車検証: 読取済み<template v-if="carinsLookup?.car_no"> (登録番号 = {{ carinsLookup.car_no }})</template>
+            </p>
+            <div
+              v-if="carinsLookup?.matched_by === 'none'"
+              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.gray]"
+            >
+              車検証データ未登録
+            </div>
+            <div
+              v-else-if="carinsExpiryStatus === 'expired' && carinsLookup?.expires_on"
+              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.red]"
+            >
+              車検の有効期限が切れています ({{ carinsLookup.expires_on.replace(/-/g, '/') }})
+            </div>
+            <div
+              v-else-if="carinsExpiryStatus === 'expiring_soon' && carinsLookup?.expires_on"
+              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.yellow]"
+            >
+              車検の有効期限が近づいています ({{ carinsLookup.expires_on.replace(/-/g, '/') }})
+            </div>
+          </div>
+
           <div class="flex flex-col gap-3">
             <button
               data-testid="vehicle-pre-operation"
