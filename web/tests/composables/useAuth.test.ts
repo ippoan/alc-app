@@ -431,7 +431,10 @@ describe('useAuth', () => {
     })
 
     it('decodes multibyte claims from the cookie JWT', async () => {
-      const fakeJwt = createFakeJwtMultibyte({ ...defaultPayload, name: '田中太郎' })
+      // #560: findValidAuthCookieToken は exp (数値) を要求するため、cookie 由来の
+      // 候補には exp を持たせる (auth-worker 発行の token は必ず exp を持つ)。
+      const exp = Math.floor(Date.now() / 1000) + 3600
+      const fakeJwt = createFakeJwtMultibyte({ ...defaultPayload, name: '田中太郎', exp })
       setDocCookie(`logi_auth_token=${fakeJwt}`)
 
       const { useAuth } = await import('~/composables/useAuth')
@@ -1121,23 +1124,49 @@ describe('useAuth', () => {
       expect(writes.some(w => w.includes('logi_auth_token=;') && w.includes('Max-Age=0'))).toBe(true)
     })
 
-    it('treats a JWT without exp as valid (no expiry claim to check)', async () => {
+    it('treats a JWT without exp as invalid (auth-client findValidAuthCookieToken requires numeric exp; #560)', async () => {
+      // auth-worker 発行の token は必ず exp を持つため実運用に影響しない (PR 本文に明記)。
       const jwtWithoutExp = createFakeJwt(defaultPayload)
       setDocCookie(`logi_auth_token=${jwtWithoutExp}`)
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
 
-      expect(auth.consumeAuthCookie()).toBe(true)
-      expect(auth.accessToken.value).toBe(jwtWithoutExp)
-      expect(auth.isAuthenticated.value).toBe(true)
+      expect(auth.consumeAuthCookie()).toBe(false)
+      expect(auth.accessToken.value).toBeNull()
+      expect(auth.isAuthenticated.value).toBe(false)
     })
 
-    it('keeps login state even when JWT payload is malformed', async () => {
+    it('returns false and clears cookie/session when the JWT payload is malformed (no decodable exp; #560)', async () => {
       setDocCookie('logi_auth_token=not-a-jwt')
       const { useAuth } = await import('~/composables/useAuth')
       const auth = useAuth()
+      expect(auth.consumeAuthCookie()).toBe(false)
+      expect(auth.accessToken.value).toBeNull()
+      expect(auth.isAuthenticated.value).toBe(false)
+    })
+
+    it('recovers the valid cookie behind an earlier expired same-name cookie (shadowing, ippoan/auth-worker#559)', async () => {
+      const expiredJwt = createFakeJwtWithExp(defaultPayload, -60)
+      const validJwt = createFakeJwtWithExp({ ...defaultPayload, tenant_id: 'valid-tenant' }, 3600)
+      const writes: string[] = []
+      let cookieValue = `logi_auth_token=${expiredJwt}; logi_auth_token=${validJwt}`
+      Object.defineProperty(document, 'cookie', {
+        get: () => cookieValue,
+        set: (v: string) => {
+          writes.push(v)
+          cookieValue = /Max-Age=0/.test(v) ? '' : v
+        },
+        configurable: true,
+      })
+      const { useAuth } = await import('~/composables/useAuth')
+      const auth = useAuth()
+
       expect(auth.consumeAuthCookie()).toBe(true)
-      expect(auth.accessToken.value).toBe('not-a-jwt')
+      expect(auth.accessToken.value).toBe(validJwt)
+      expect(auth.user.value?.tenant_id).toBe('valid-tenant')
+      // 巻き添えで cookie がクリアされない (先頭の期限切れ cookie につられて両方消さない)
+      expect(writes).toEqual([])
+      expect(cookieValue).toContain('logi_auth_token=')
     })
 
     it('uses fallback claim fields (user_id / org) and defaults for missing email/name/role', async () => {
