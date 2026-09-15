@@ -459,9 +459,20 @@ describe('api', () => {
         expect(body.result_type).toBe('normal')
         // 通常点呼は全件が点呼記録の対象 (Refs #238)
         expect(body.record_as_tenko).toBe(true)
+        // tenkoType が無ければ既定は normal (Refs ippoan/alc-app-s3#135)
+        expect(body.tenko_type).toBe('normal')
       })
       expect(response.id).toBeDefined()
       assertMock(() => expect(response.id).toBe('123'))
+    })
+
+    it('tenkoType (始業/終業) を tenko_type として送る', async () => {
+      await verifyApi(() => saveMeasurement({ ...baseResult, tenkoType: 'pre_operation' }), { id: '789' })
+
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body.tenko_type).toBe('pre_operation')
+      })
     })
 
     it('should throw on API error', async () => {

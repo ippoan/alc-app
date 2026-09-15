@@ -1,7 +1,7 @@
 import type { MeasurementResult } from '~/types'
 
 /** PC → CoreS3 に送る段階 (firmware の HostStage と固定の語彙。変えない) */
-export type CoreS3Stage = 'NFC' | 'TEMP' | 'ALCOHOL' | 'PC'
+export type CoreS3Stage = 'NFC' | 'CARINS' | 'TEMP' | 'ALCOHOL' | 'PC'
 
 /**
  * 通常点呼 / 自動点呼 (TenkoKiosk) の step 名 → CoreS3 に送る段階の対応表 (1 か所に集約)。
@@ -12,6 +12,7 @@ const STEP_TO_STAGE: Record<string, CoreS3Stage | undefined> = {
   nfc: 'NFC',
   interrupted: 'NFC',
   cancelled: 'NFC',
+  vehicle: 'CARINS',
   medical: 'TEMP',
   measuring: 'ALCOHOL',
   alcohol: 'ALCOHOL',

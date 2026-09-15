@@ -180,8 +180,24 @@ describe('offline-queue', () => {
         face_photo_url: 'https://example.com/photo.jpg',
         // 通常点呼は全件が点呼記録の対象 (Refs #238)
         record_as_tenko: true,
+        // tenkoType 無しの旧 entry は既定で normal (Refs ippoan/alc-app-s3#135)
+        tenko_type: 'normal',
       })
       expect(result).toEqual({ sent: 1, failed: 0 })
+    })
+
+    it('should carry tenkoType (始業/終業) as tenko_type in the updateFn PUT', async () => {
+      await enqueue(
+        createResult({ tenkoType: 'pre_operation' }),
+        undefined,
+        'measurement-999',
+      )
+
+      const saveFn = vi.fn().mockResolvedValue(undefined)
+      const updateFn = vi.fn().mockResolvedValue(undefined)
+      await flush(saveFn, updateFn)
+
+      expect(updateFn.mock.calls[0][1]).toMatchObject({ tenko_type: 'pre_operation' })
     })
 
     it('should use updateFn path with facePhotoBase64 and existing facePhotoUrl', async () => {

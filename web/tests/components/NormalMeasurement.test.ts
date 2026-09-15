@@ -79,6 +79,17 @@ mockNuxtImport('useCoreS3Stage', () => () => ({
   sendResult: sendResultMock,
 }))
 
+// vehicle 段の NFC_CARINS 受け口 (Refs ippoan/alc-app-s3#135)。捕まえた handler に
+// テストから直接イベントを流せるよう、onEvent の引数を carinsHandler に控える
+let carinsHandler: ((name: string, args: string[]) => void) | null = null
+const carinsOffMock = vi.fn()
+mockNuxtImport('useCoreS3Serial', () => () => ({
+  onEvent: (cb: (name: string, args: string[]) => void) => {
+    carinsHandler = cb
+    return carinsOffMock
+  },
+}))
+
 // NfcStatus は表示と emit('read') だけなので、read を直接投げられるスタブに差し替える
 const NfcStatusStub = defineComponent({
   name: 'NfcStatus',
@@ -111,6 +122,12 @@ async function mountNfcStep() {
 async function touch(wrapper: Awaited<ReturnType<typeof mountNfcStep>>, nfcId: string) {
   wrapper.findComponent(NfcStatusStub).vm.$emit('read', nfcId)
   await new Promise(resolve => setTimeout(resolve, 0))
+  await wrapper.vm.$nextTick()
+}
+
+/** vehicle 段のボタンを押して次 (medical) へ進める */
+async function chooseVehicle(wrapper: Awaited<ReturnType<typeof mountNfcStep>>, testid: string) {
+  await wrapper.find(`[data-testid="${testid}"]`).trigger('click')
   await wrapper.vm.$nextTick()
 }
 
@@ -151,11 +168,26 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     wrapper.unmount()
   })
 
-  it('乗務員が引ければ顔認証を経ずに体温ステップへ進む (血圧は隠す、Refs #238)', async () => {
+  it('乗務員が引ければ顔認証を経ずに車検証ステップへ進む (Refs ippoan/alc-app-s3#135)', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountNfcStep()
 
     await touch(wrapper, '2601012901010')
+
+    // 現在ステップのパンくず (青) が「車検証」
+    const active = wrapper.findAll('div.rounded-full').filter(d => d.classes('bg-blue-600'))
+    expect(active).toHaveLength(1)
+    expect(active[0]!.text()).toBe('車検証')
+    expect(wrapper.text()).toContain('電子車検証をタップしてください')
+    wrapper.unmount()
+  })
+
+  it('車検証ステップで [スキップ] を押すと体温ステップへ進む (血圧は隠す、Refs #238)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+
+    await touch(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, 'vehicle-skip')
 
     // 現在ステップのパンくず (青) が「体温」(血圧は隠しているのでラベルからも落ちる)
     const active = wrapper.findAll('div.rounded-full').filter(d => d.classes('bg-blue-600'))
@@ -180,7 +212,7 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     const wrapper = await mountNfcStep()
 
     const labels = wrapper.findAll('div.rounded-full').map(d => d.text())
-    expect(labels).toEqual(['NFC', '体温', '測定', '結果'])
+    expect(labels).toEqual(['NFC', '車検証', '体温', '測定', '結果'])
     wrapper.unmount()
   })
 
@@ -244,11 +276,14 @@ describe('NormalMeasurement — PC の段を CoreS3 に送る (useCoreS3Stage、
     wrapper.unmount()
   })
 
-  it('ステップが変わるたびに syncStep が呼ばれる (nfc → medical → measuring)', async () => {
+  it('ステップが変わるたびに syncStep が呼ばれる (nfc → vehicle → medical → measuring)', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountWithStubs()
 
     await touch(wrapper, '2601012901010')
+    expect(syncStepMock.mock.calls.map(stepArgOf)).toContain('vehicle')
+
+    await chooseVehicle(wrapper, 'vehicle-skip')
     expect(syncStepMock.mock.calls.map(stepArgOf)).toContain('medical')
 
     wrapper.findComponent(BleStatusStub).vm.$emit('skip')
@@ -262,6 +297,7 @@ describe('NormalMeasurement — PC の段を CoreS3 に送る (useCoreS3Stage、
     const wrapper = await mountWithStubs()
 
     await touch(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, 'vehicle-skip')
     wrapper.findComponent(BleStatusStub).vm.$emit('skip')
     await wrapper.vm.$nextTick()
 
@@ -302,6 +338,7 @@ describe('NormalMeasurement — 録画カメラプレビュー (v-show、Refs #2
     })
 
     await touch(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, 'vehicle-skip')
     wrapper.findComponent(BleStatusStub).vm.$emit('skip')
     await wrapper.vm.$nextTick()
 
@@ -331,11 +368,12 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
     })
   }
 
-  it('完了の PUT (measuring 終了時) には record_as_tenko: true が入る', async () => {
+  it('完了の PUT (measuring 終了時) には record_as_tenko: true と tenko_type: normal (スキップ) が入る', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountWithStubs()
 
     await touch(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, 'vehicle-skip')
     wrapper.findComponent(BleStatusStub).vm.$emit('skip')
     await wrapper.vm.$nextTick()
 
@@ -356,10 +394,41 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
     expect(completedCall).toBeDefined()
     expect(completedCall![0]).toBe('measurement-1')
     expect((completedCall![1] as Record<string, unknown>).record_as_tenko).toBe(true)
+    expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe('normal')
     wrapper.unmount()
   })
 
-  it('測定途中 (BLE 体温) の PUT には record_as_tenko が入らない', async () => {
+  it.each([
+    ['vehicle-pre-operation', 'pre_operation'],
+    ['vehicle-post-operation', 'post_operation'],
+  ])('車検証ステップで %s を選ぶと完了の PUT の tenko_type が %s になる', async (testid, expected) => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, testid)
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    const result = {
+      employeeId: 'emp-1',
+      alcoholValue: 0.1,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-01-01'),
+    }
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', result)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    const completedCall = vi.mocked(updateMeasurement).mock.calls.find(
+      call => (call[1] as Record<string, unknown>).status === 'completed',
+    )
+    expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe(expected)
+    wrapper.unmount()
+  })
+
+  it('測定途中 (BLE 体温) の PUT には record_as_tenko も tenko_type も入らない', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountWithStubs()
 
@@ -374,6 +443,63 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
     const body = vi.mocked(updateMeasurement).mock.calls[0]![1] as Record<string, unknown>
     expect(body.temperature).toBe(36.5)
     expect(body).not.toHaveProperty('record_as_tenko')
+    expect(body).not.toHaveProperty('tenko_type')
     wrapper.unmount()
+  })
+})
+
+describe('NormalMeasurement — vehicle 段の NFC_CARINS 受け口 (Refs ippoan/alc-app-s3#135)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    carinsHandler = null
+  })
+
+  async function mountWithStubs() {
+    return await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: {
+          NfcStatus: NfcStatusStub,
+          BleStatus: BleStatusStub,
+          AlcMeasurement: AlcMeasurementStub,
+          ClientOnly: false,
+          Teleport: true,
+        },
+      },
+    })
+  }
+
+  it('vehicle 段で NFC_CARINS を受けると medical へ進む (種別は normal)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    expect(wrapper.text()).toContain('電子車検証をタップしてください')
+
+    carinsHandler!('NFC_CARINS', [])
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('電子車検証をタップしてください')
+    expect(wrapper.text()).toContain('体温')
+    wrapper.unmount()
+  })
+
+  it('vehicle 以外の段で NFC_CARINS が来ても何も起きない', async () => {
+    const wrapper = await mountNfcStep()
+
+    carinsHandler!('NFC_CARINS', [])
+    await wrapper.vm.$nextTick()
+
+    // NFC ステップのまま
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('unmount で onEvent の解除が呼ばれる (解除は useCoreS3Serial.onEvent 側で検証済み)', async () => {
+    const wrapper = await mountWithStubs()
+    expect(carinsOffMock).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+
+    expect(carinsOffMock).toHaveBeenCalledTimes(1)
   })
 })

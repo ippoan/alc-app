@@ -306,9 +306,10 @@ export function useCoreS3Serial() {
     jsonHandlers.add(cb)
   }
 
-  /** `EVT <NAME> <args...>` を受け取る */
-  function onEvent(cb: (name: string, args: string[]) => void): void {
+  /** `EVT <NAME> <args...>` を受け取る。返り値を呼ぶと解除できる */
+  function onEvent(cb: (name: string, args: string[]) => void): () => void {
     eventHandlers.add(cb)
+    return () => { eventHandlers.delete(cb) }
   }
 
   /**

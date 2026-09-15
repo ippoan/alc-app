@@ -23,6 +23,8 @@ export interface SerializedResult {
   medicalMeasuredAt?: string
   // 録画
   videoStoreId?: string
+  /** 通常点呼の種別 (Refs ippoan/alc-app-s3#135) */
+  tenkoType?: MeasurementResult['tenkoType']
 }
 
 export interface PendingMeasurement {
@@ -97,6 +99,7 @@ export async function enqueue(
     pulse: result.pulse,
     medicalMeasuredAt: result.medicalMeasuredAt?.toISOString(),
     videoStoreId,
+    tenkoType: result.tenkoType,
   }
   const entry: Omit<PendingMeasurement, 'id'> = {
     result: serialized,
@@ -309,6 +312,7 @@ export async function flush(
           pulse: entry.result.pulse,
           medical_measured_at: entry.result.medicalMeasuredAt,
           record_as_tenko: true,
+          tenko_type: entry.result.tenkoType ?? 'normal',
         })
       } else {
         // 従来の POST パス

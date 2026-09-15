@@ -44,6 +44,7 @@ describe('useCoreS3Stage', () => {
       ['nfc', 'NFC'],
       ['interrupted', 'NFC'],
       ['cancelled', 'NFC'],
+      ['vehicle', 'CARINS'],
       ['medical', 'TEMP'],
       ['measuring', 'ALCOHOL'],
       ['alcohol', 'ALCOHOL'],

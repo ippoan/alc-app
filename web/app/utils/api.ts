@@ -210,6 +210,7 @@ export async function saveMeasurement(result: MeasurementResult, facePhotoBlob?:
       pulse: result.pulse,
       medical_measured_at: result.medicalMeasuredAt?.toISOString(),
       record_as_tenko: true,
+      tenko_type: result.tenkoType ?? 'normal',
     }),
   })
 }

@@ -20,6 +20,8 @@ export interface MeasurementResult {
   diastolic?: number
   pulse?: number
   medicalMeasuredAt?: Date
+  /** 通常点呼の種別 (免許証の次の段で選ぶ。Refs ippoan/alc-app-s3#135) */
+  tenkoType?: TenkoType
 }
 
 /** NFC 読み取りイベント */
