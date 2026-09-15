@@ -17,6 +17,75 @@ const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJ
 // 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 
+// CoreS3 の Omron 血圧計 (HEM-6231T) 受信の ON/OFF。保存先は CoreS3 の NVS で既定 OFF
+// (Refs ippoan/alc-app-s3#237)。表示は常に CoreS3 の応答に従う (楽観更新しない)。
+// 古い firmware は応答しないので、そのときは押せなくして案内を出す。
+const OMRON_REQUEST_TIMEOUT_MS = 3000
+// request は同時に 1 本しか待てず、端末 JWT の `AUTH SIGN` (最大 10 秒) と重なると即 reject される。
+// その理由のときだけ間を置いて呼び直す (上限 12 秒。切断・unmount で中止)
+const OMRON_BUSY_RETRY_MS = 300
+const OMRON_BUSY_RETRY_LIMIT = 40
+let omronUnmounted = false
+const omronBpEnabled = ref(false)
+const omronBpBusy = ref(false)
+/** 照会に失敗した (古い firmware 等)。押せなくする */
+const omronBpQueryFailed = ref(false)
+/** 照会か変更に失敗した。案内を出す */
+const omronBpError = ref(false)
+
+async function requestOmronBp(line: string, matchPrefix: string): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const value = (await coreS3.request(line, matchPrefix, OMRON_REQUEST_TIMEOUT_MS)).slice(matchPrefix.length).trim()
+      if (value !== '0' && value !== '1') throw new Error(`OMRON: unexpected value "${value}"`)
+      return value === '1'
+    } catch (e) {
+      // 判定は useSerialArbiter.ts:552 の reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致。
+      // 文言を変えたらここも合わせること
+      const busy = String(e).includes('既に応答待ちです')
+      if (!busy || attempt >= OMRON_BUSY_RETRY_LIMIT) throw e
+      await new Promise(resolve => setTimeout(resolve, OMRON_BUSY_RETRY_MS))
+      if (!coreS3.isConnected.value || omronUnmounted) throw e
+    }
+  }
+}
+
+async function refreshOmronBp() {
+  omronBpBusy.value = true
+  omronBpQueryFailed.value = false
+  omronBpError.value = false
+  try {
+    omronBpEnabled.value = await requestOmronBp('OMRON STATUS', 'OMRON BP=')
+  } catch {
+    omronBpQueryFailed.value = true
+    omronBpError.value = true
+  } finally {
+    omronBpBusy.value = false
+  }
+}
+
+async function setOmronBp(event: Event) {
+  const input = event.target as HTMLInputElement
+  const previous = omronBpEnabled.value
+  omronBpBusy.value = true
+  omronBpError.value = false
+  try {
+    omronBpEnabled.value = await requestOmronBp(input.checked ? 'OMRON BP ON' : 'OMRON BP OFF', 'OK OMRON BP=')
+  } catch {
+    omronBpEnabled.value = previous
+    omronBpError.value = true
+  } finally {
+    // :checked が同じ値のままだと再描画で DOM が戻らないので、確定値を直接書き戻す
+    input.checked = omronBpEnabled.value
+    omronBpBusy.value = false
+  }
+}
+
+// マウント時に既に接続中ならその時点で、以後は接続するたびに 1 回照会する
+watch(() => coreS3.isConnected.value, (connected) => {
+  if (connected) void refreshOmronBp()
+}, { immediate: true })
+
 // 常時起動 ON/OFF (端末自身での切替)。call_enabled / call_schedule は現在値を
 // 保持したまま always_on だけ差し替える (updateDeviceCallSettings は全項目送信の
 // ため、取得済み設定を持たずに叩くと他項目を意図せず上書きする)。
@@ -218,6 +287,7 @@ onMounted(() => {
   refreshDeviceSettings()
 })
 onUnmounted(() => {
+  omronUnmounted = true
   if (diagTimer) clearInterval(diagTimer)
   if (resetConfirmTimer) clearTimeout(resetConfirmTimer)
 })
@@ -545,6 +615,22 @@ async function syncFc1200Date() {
           <span>
             この端末に警告デバイス (Atom VoiceS3R) をつなぐ (運行管理者 PC のみ)
             <span v-if="alarmDeviceEnabled === null" class="block text-gray-400">未設定 — 「運行管理者」タブで問いかけが出ます</span>
+          </span>
+        </label>
+
+        <!-- CoreS3 の Omron 血圧計 (保存先は CoreS3 の NVS、既定 OFF)。CoreS3 接続中のみ -->
+        <label v-if="coreS3.isConnected.value" class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+          <input
+            type="checkbox"
+            class="mt-0.5"
+            data-testid="omron-bp-checkbox"
+            :checked="omronBpEnabled"
+            :disabled="omronBpBusy || omronBpQueryFailed"
+            @change="setOmronBp"
+          />
+          <span>
+            この端末の CoreS3 で Omron 血圧計 (HEM-6231T) を使う
+            <span v-if="omronBpError" data-testid="omron-bp-error" class="block text-red-500">CoreS3 が応答しません (firmware が古い可能性があります)</span>
           </span>
         </label>
 

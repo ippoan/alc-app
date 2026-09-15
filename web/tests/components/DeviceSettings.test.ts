@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import DeviceSettings from '~/components/DeviceSettings.vue'
@@ -33,9 +33,11 @@ mockNuxtImport('useDeviceToken', () => () => ({
 
 const coreS3Connected = ref(false)
 const startupProbeMock = vi.fn(async () => false)
+const coreS3RequestMock = vi.fn(async (_line: string, _matchPrefix: string, _timeoutMs: number) => 'OMRON BP=0')
 mockNuxtImport('useCoreS3Serial', () => () => ({
   isConnected: coreS3Connected,
   startupProbe: startupProbeMock,
+  request: coreS3RequestMock,
 }))
 
 mockNuxtImport('useFc1200Serial', () => () => ({
@@ -58,10 +60,17 @@ mockNuxtImport('useBleGateway', () => () => ({
   gatewayVersion: ref(null),
 }))
 
+// mountSuspended は自動で unmount しないので、前のテストの watch (CoreS3 の接続) が残らないよう畳む
+const mountedWrappers: { unmount: () => void }[] = []
+afterEach(() => {
+  mountedWrappers.splice(0).forEach(w => w.unmount())
+})
+
 async function mountDeviceSettings() {
   const wrapper = await mountSuspended(DeviceSettings, {
     global: { stubs: { GwStatusCard: true } },
   })
+  mountedWrappers.push(wrapper)
   await flush()
   await wrapper.vm.$nextTick()
   return wrapper
@@ -78,6 +87,8 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     reAuthenticateDeviceMock.mockClear()
     reAuthenticateDeviceMock.mockResolvedValue(true)
     startupProbeMock.mockClear()
+    coreS3RequestMock.mockReset()
+    coreS3RequestMock.mockResolvedValue('OMRON BP=0')
   })
 
   describe('状態: の表示', () => {
@@ -194,6 +205,177 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       const result = wrapper.find('[data-testid="reauth-result"]')
       expect(result.exists()).toBe(true)
       expect(result.text()).toContain('✓ 再認証に成功しました')
+    })
+  })
+
+  describe('CoreS3 の Omron 血圧計 ON/OFF (Refs ippoan/alc-app-s3#237)', () => {
+    const checkbox = (wrapper: Awaited<ReturnType<typeof mountDeviceSettings>>) =>
+      wrapper.find<HTMLInputElement>('[data-testid="omron-bp-checkbox"]')
+    const settle = async (wrapper: Awaited<ReturnType<typeof mountDeviceSettings>>) => {
+      await flush()
+      await wrapper.vm.$nextTick()
+    }
+
+    it('CoreS3 が未接続なら表示せず、照会も送らない', async () => {
+      coreS3Connected.value = false
+      const wrapper = await mountDeviceSettings()
+      expect(checkbox(wrapper).exists()).toBe(false)
+      expect(coreS3RequestMock).not.toHaveBeenCalled()
+    })
+
+    it('接続中なら OMRON STATUS を照会し、OMRON BP=1 なら checked', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockResolvedValue('OMRON BP=1')
+      const wrapper = await mountDeviceSettings()
+      expect(coreS3RequestMock).toHaveBeenCalledTimes(1)
+      expect(coreS3RequestMock).toHaveBeenCalledWith('OMRON STATUS', 'OMRON BP=', 3000)
+      expect(checkbox(wrapper).element.checked).toBe(true)
+      expect(checkbox(wrapper).element.disabled).toBe(false)
+      expect(wrapper.text()).toContain('この端末の CoreS3 で Omron 血圧計 (HEM-6231T) を使う')
+      expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+    })
+
+    it('マウント後に接続したら、そのときに 1 回照会する', async () => {
+      coreS3Connected.value = false
+      coreS3RequestMock.mockResolvedValue('OMRON BP=1')
+      const wrapper = await mountDeviceSettings()
+      coreS3Connected.value = true
+      await settle(wrapper)
+      expect(coreS3RequestMock).toHaveBeenCalledTimes(1)
+      expect(checkbox(wrapper).element.checked).toBe(true)
+    })
+
+    it('外すと OMRON BP OFF を送り、OK OMRON BP=0 で unchecked に確定する', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockResolvedValueOnce('OMRON BP=1')
+      const wrapper = await mountDeviceSettings()
+
+      let resolveSet!: (line: string) => void
+      coreS3RequestMock.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveSet = resolve }))
+      await checkbox(wrapper).setValue(false)
+      expect(coreS3RequestMock).toHaveBeenLastCalledWith('OMRON BP OFF', 'OK OMRON BP=', 3000)
+      // 応答待ちの間は押せない
+      expect(checkbox(wrapper).element.disabled).toBe(true)
+
+      resolveSet('OK OMRON BP=0')
+      await settle(wrapper)
+      expect(checkbox(wrapper).element.checked).toBe(false)
+      expect(checkbox(wrapper).element.disabled).toBe(false)
+    })
+
+    it('付けても応答が OK OMRON BP=0 なら、応答に従って unchecked に戻す', async () => {
+      coreS3Connected.value = true
+      const wrapper = await mountDeviceSettings()
+      coreS3RequestMock.mockResolvedValueOnce('OK OMRON BP=0')
+      await checkbox(wrapper).setValue(true)
+      await settle(wrapper)
+      expect(coreS3RequestMock).toHaveBeenLastCalledWith('OMRON BP ON', 'OK OMRON BP=', 3000)
+      expect(checkbox(wrapper).element.checked).toBe(false)
+      expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+    })
+
+    it('変更が timeout したら元に戻してエラー文言を出す (押せるまま)', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockResolvedValueOnce('OMRON BP=1')
+      const wrapper = await mountDeviceSettings()
+      coreS3RequestMock.mockRejectedValueOnce(new Error('request(CoreS3): timeout waiting for "OK OMRON BP="'))
+      await checkbox(wrapper).setValue(false)
+      await settle(wrapper)
+      expect(checkbox(wrapper).element.checked).toBe(true)
+      expect(checkbox(wrapper).element.disabled).toBe(false)
+      expect(wrapper.find('[data-testid="omron-bp-error"]').text())
+        .toBe('CoreS3 が応答しません (firmware が古い可能性があります)')
+    })
+
+    it('変更の応答値が 0/1 でなければ元に戻してエラー文言を出す', async () => {
+      coreS3Connected.value = true
+      const wrapper = await mountDeviceSettings()
+      coreS3RequestMock.mockResolvedValueOnce('OK OMRON BP=x')
+      await checkbox(wrapper).setValue(true)
+      await settle(wrapper)
+      expect(checkbox(wrapper).element.checked).toBe(false)
+      expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(true)
+    })
+
+    it('照会が失敗したら (古い firmware) エラー文言を出して押せなくする', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockRejectedValue(new Error('request(CoreS3): timeout waiting for "OMRON BP="'))
+      const wrapper = await mountDeviceSettings()
+      expect(checkbox(wrapper).element.checked).toBe(false)
+      expect(checkbox(wrapper).element.disabled).toBe(true)
+      expect(wrapper.find('[data-testid="omron-bp-error"]').text())
+        .toBe('CoreS3 が応答しません (firmware が古い可能性があります)')
+    })
+
+    it('他の応答待ち (AUTH SIGN 等) と重なって「既に応答待ちです」なら、間を置いて呼び直す', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock
+        .mockRejectedValueOnce(new Error('request(CoreS3): 既に応答待ちです'))
+        .mockResolvedValueOnce('OMRON BP=1')
+      vi.useFakeTimers()
+      try {
+        const wrapper = await mountSuspended(DeviceSettings, { global: { stubs: { GwStatusCard: true } } })
+        mountedWrappers.push(wrapper)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(coreS3RequestMock).toHaveBeenCalledTimes(1)
+        await vi.advanceTimersByTimeAsync(300)
+        await wrapper.vm.$nextTick()
+        expect(coreS3RequestMock).toHaveBeenCalledTimes(2)
+        expect(coreS3RequestMock).toHaveBeenLastCalledWith('OMRON STATUS', 'OMRON BP=', 3000)
+        expect(checkbox(wrapper).element.checked).toBe(true)
+        expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('変更 (OMRON BP ON) も「既に応答待ちです」なら呼び直し、応答で確定する', async () => {
+      coreS3Connected.value = true
+      const wrapper = await mountDeviceSettings()
+      vi.useFakeTimers()
+      try {
+        coreS3RequestMock
+          .mockRejectedValueOnce(new Error('request(CoreS3): 既に応答待ちです'))
+          .mockResolvedValueOnce('OK OMRON BP=1')
+        await checkbox(wrapper).setValue(true)
+        await vi.advanceTimersByTimeAsync(300)
+        await wrapper.vm.$nextTick()
+        expect(coreS3RequestMock).toHaveBeenCalledTimes(3)
+        expect(coreS3RequestMock).toHaveBeenLastCalledWith('OMRON BP ON', 'OK OMRON BP=', 3000)
+        expect(checkbox(wrapper).element.checked).toBe(true)
+        expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('「既に応答待ちです」の再試行中に unmount されたら呼び直さない', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockRejectedValue(new Error('request(CoreS3): 既に応答待ちです'))
+      vi.useFakeTimers()
+      try {
+        const wrapper = await mountSuspended(DeviceSettings, { global: { stubs: { GwStatusCard: true } } })
+        await vi.advanceTimersByTimeAsync(0)
+        const calls = coreS3RequestMock.mock.calls.length
+        wrapper.unmount()
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(coreS3RequestMock.mock.calls.length).toBe(calls)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('「既に応答待ちです」でも切断されていれば呼び直さず失敗にする', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockImplementationOnce(async () => {
+        coreS3Connected.value = false
+        throw new Error('request(CoreS3): 既に応答待ちです')
+      })
+      const wrapper = await mountDeviceSettings()
+      await new Promise(resolve => setTimeout(resolve, 400))
+      await settle(wrapper)
+      expect(coreS3RequestMock).toHaveBeenCalledTimes(1)
+      expect(checkbox(wrapper).exists()).toBe(false)
     })
   })
 })
