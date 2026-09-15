@@ -17,7 +17,7 @@ import type {
   ClaimRegistrationRequest, ClaimRegistrationResponse, CreateTokenResponse, CreatePermanentQrResponse, ApproveDeviceResponse,
   DeviceSettingsResponse, CallSchedule,
   AuthorizeRepairResponse, RePairRequest, RePairResponse,
-  DailyHealthResponse, VehicleCategories,
+  DailyHealthResponse, VehicleCategories, CarInspectionLookupResponse,
   GuidanceRecord, CreateGuidanceRecord, GuidanceRecordsResponse, GuidanceRecordAttachment,
   CommunicationItem, CreateCommunicationItem, CommunicationItemsResponse,
   // Hub measurements (CoreS3 統合ハブ)
@@ -211,6 +211,8 @@ export async function saveMeasurement(result: MeasurementResult, facePhotoBlob?:
       medical_measured_at: result.medicalMeasuredAt?.toISOString(),
       record_as_tenko: true,
       tenko_type: result.tenkoType ?? 'normal',
+      carins_cert_no: result.carinsCertNo,
+      carins_vehicle_id: result.carinsVehicleId,
     }),
   })
 }
@@ -1035,6 +1037,26 @@ export async function getDtakoDailyHours(filter: {
 
 export async function getVehicleCategories(): Promise<VehicleCategories> {
   return request<VehicleCategories>('/api/car-inspections/vehicle-categories')
+}
+
+/**
+ * 電子車検証の管理番号 / 車両 ID で車検期限を照合する (運行者端末の vehicle 段、
+ * Refs ippoan/alc-app-s3#110)。**番号を URL (request log) に載せないよう POST**。
+ * 404 (未配備) / 403 (kiosk 未許可) / 405 (D が A より先に出た) / ネットワークエラーの
+ * どれでも警告を出さず点呼を進めたいので、ここで吸収して null を返す。番号は console に
+ * 出さない (simplify-reviewer の検査点)
+ */
+export async function lookupCarInspection(certNo?: string, carId?: string): Promise<CarInspectionLookupResponse | null> {
+  if (!certNo && !carId) return null
+  try {
+    return await request<CarInspectionLookupResponse>('/api/car-inspections/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ cert_no: certNo, car_id: carId }),
+    })
+  } catch {
+    console.warn('[CarInspection] lookup failed (警告なしで点呼を進める)')
+    return null
+  }
 }
 
 // --- 日常健康状態 ---

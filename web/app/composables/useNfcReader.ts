@@ -17,6 +17,7 @@
 
 import type { NfcReadEvent, NfcLicenseReadEvent, NfcErrorEvent } from '~/types'
 import { isWebSerialSupported } from '~/utils/webserial'
+import { evtArg as argValue } from '~/composables/useCoreS3Serial'
 
 /** 同じ免許証を配り直さない窓 (経路の切り替わり際の二重配布を断つ) */
 const DEDUPE_WINDOW_MS = 3000
@@ -47,13 +48,6 @@ type EventSink = (name: string, args: string[]) => void
 // module 単位で 1 回だけ購読するので、繋ぐのは 1 度だけにして、配る先はここで出し入れする
 const sinks = new Set<EventSink>()
 let wired = false
-
-/** `key=value` の並びから値を取り出す (無ければ空文字) */
-function argValue(args: string[], key: string): string {
-  const prefix = `${key}=`
-  const hit = args.find(arg => arg.startsWith(prefix))
-  return hit === undefined ? '' : hit.slice(prefix.length)
-}
 
 export function useNfcReader() {
   const ws = useNfcWebSocket()

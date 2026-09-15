@@ -9,6 +9,8 @@ import { updateMeasurement } from '~/utils/api'
 
 const getEmployeeByNfcIdMock = vi.fn()
 const checkFaceApprovalMock = vi.fn(() => null)
+// vehicle 段の照合 (Refs ippoan/alc-app-s3#110)。既定は null (未登録扱い) — 個別のテストで差し替える
+const lookupCarInspectionMock = vi.fn(async () => null as import('~/types').CarInspectionLookupResponse | null)
 
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: (nfcId: string) => getEmployeeByNfcIdMock(nfcId),
@@ -16,6 +18,7 @@ vi.mock('~/utils/api', () => ({
   startMeasurement: vi.fn(async () => ({ id: 'measurement-1' })),
   updateMeasurement: vi.fn(async () => ({})),
   uploadBlowVideo: vi.fn(async () => 'https://example.com/blow.webm'),
+  lookupCarInspection: (certNo?: string, carId?: string) => lookupCarInspectionMock(certNo, carId),
 }))
 
 // 通常点呼は顔承認 gate を通さない (呼ばれないことを assert するためにモックする)
@@ -448,10 +451,11 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
   })
 })
 
-describe('NormalMeasurement — vehicle 段の NFC_CARINS 受け口 (Refs ippoan/alc-app-s3#135)', () => {
+describe('NormalMeasurement — vehicle 段の NFC_CARINS 受け口 (番号を保持して段に留まる、Refs ippoan/alc-app-s3#110)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     carinsHandler = null
+    lookupCarInspectionMock.mockResolvedValue(null)
   })
 
   async function mountWithStubs() {
@@ -468,29 +472,218 @@ describe('NormalMeasurement — vehicle 段の NFC_CARINS 受け口 (Refs ippoan
     })
   }
 
-  it('vehicle 段で NFC_CARINS を受けると medical へ進む (種別は normal)', async () => {
+  it('mgno/carid を受けても段は vehicle のまま。番号で lookupCarInspection を呼ぶ', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountWithStubs()
 
     await touch(wrapper, '2601012901010')
     expect(wrapper.text()).toContain('電子車検証をタップしてください')
 
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    // 段は進まない (medical の見出しに切り替わらない)
+    expect(wrapper.text()).toContain('電子車検証をタップしてください')
+    expect(wrapper.text()).toContain('車検証: 読取済み')
+    expect(lookupCarInspectionMock).toHaveBeenCalledWith('000000000001', 'TESTCARID00001')
+    wrapper.unmount()
+  })
+
+  it('rc= (読み取り失敗) は再タップを促す文言を出し、lookupCarInspection を呼ばない', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['rc=timeout'])
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('読み取れませんでした')
+    expect(wrapper.text()).toContain('もう一度タップしてください')
+    expect(lookupCarInspectionMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('引数なし (旧 firmware) は番号なしのまま段に留まる', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
     carinsHandler!('NFC_CARINS', [])
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.text()).not.toContain('電子車検証をタップしてください')
+    expect(wrapper.text()).toContain('電子車検証をタップしてください')
+    expect(wrapper.text()).not.toContain('車検証: 読取済み')
+    expect(lookupCarInspectionMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('lookupCarInspection が reject しても警告を出さず進める', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    lookupCarInspectionMock.mockRejectedValueOnce(new Error('network error'))
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('車検証: 読取済み')
+    expect(wrapper.text()).not.toContain('エラー')
+    // [始業] へ進める (点呼は止まらない)
+    await chooseVehicle(wrapper, 'vehicle-pre-operation')
     expect(wrapper.text()).toContain('体温')
+    wrapper.unmount()
+  })
+
+  it('期限切れは赤で表示する', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    lookupCarInspectionMock.mockResolvedValue({ expires_on: '2020-01-01', matched_by: 'cert_no', car_no: null })
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('車検の有効期限が切れています')
+    wrapper.unmount()
+  })
+
+  it('30 日以内の期限は「近づいています」と表示する', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const soon = new Date()
+    soon.setDate(soon.getDate() + 10)
+    const soonStr = soon.toISOString().slice(0, 10)
+    lookupCarInspectionMock.mockResolvedValue({ expires_on: soonStr, matched_by: 'car_id', car_no: 'TEST-1' })
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('車検の有効期限が近づいています')
+    expect(wrapper.text()).toContain('登録番号 = TEST-1')
+    wrapper.unmount()
+  })
+
+  it('matched_by が "none" (carins に無い車) は「車検証データ未登録」', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    lookupCarInspectionMock.mockResolvedValue({ expires_on: null, matched_by: 'none', car_no: null })
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('車検証データ未登録')
+    wrapper.unmount()
+  })
+
+  it('[始業] を押すと medical へ進み、完了の PUT に carins の番号と tenko_type=pre_operation が乗る', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: { NfcStatus: NfcStatusStub, BleStatus: BleStatusStub, AlcMeasurement: AlcMeasurementStub, ClientOnly: false, Teleport: true },
+      },
+    })
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    await chooseVehicle(wrapper, 'vehicle-pre-operation')
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    const result = {
+      employeeId: 'emp-1', alcoholValue: 0.1, resultType: 'normal', deviceUseCount: 1, measuredAt: new Date('2026-01-01'),
+    }
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', result)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    const completedCall = vi.mocked(updateMeasurement).mock.calls.find(
+      call => (call[1] as Record<string, unknown>).status === 'completed',
+    )
+    expect(completedCall).toBeDefined()
+    expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe('pre_operation')
+    expect((completedCall![1] as Record<string, unknown>).carins_cert_no).toBe('000000000001')
+    expect((completedCall![1] as Record<string, unknown>).carins_vehicle_id).toBe('TESTCARID00001')
+    wrapper.unmount()
+  })
+
+  it('[スキップ] でも完了の PUT に carins の番号が乗る', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: { NfcStatus: NfcStatusStub, BleStatus: BleStatusStub, AlcMeasurement: AlcMeasurementStub, ClientOnly: false, Teleport: true },
+      },
+    })
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    await chooseVehicle(wrapper, 'vehicle-skip')
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    const result = {
+      employeeId: 'emp-1', alcoholValue: 0.1, resultType: 'normal', deviceUseCount: 1, measuredAt: new Date('2026-01-01'),
+    }
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', result)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    const completedCall = vi.mocked(updateMeasurement).mock.calls.find(
+      call => (call[1] as Record<string, unknown>).status === 'completed',
+    )
+    expect((completedCall![1] as Record<string, unknown>).carins_cert_no).toBe('000000000001')
+    expect((completedCall![1] as Record<string, unknown>).carins_vehicle_id).toBe('TESTCARID00001')
     wrapper.unmount()
   })
 
   it('vehicle 以外の段で NFC_CARINS が来ても何も起きない', async () => {
     const wrapper = await mountNfcStep()
 
-    carinsHandler!('NFC_CARINS', [])
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001'])
     await wrapper.vm.$nextTick()
 
     // NFC ステップのまま
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(lookupCarInspectionMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('「最初からやり直す」(reset) で番号・表示が消える', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    carinsHandler!('NFC_CARINS', ['mgno=000000000001', 'carid=TESTCARID00001'])
+    await wrapper.vm.$nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('車検証: 読取済み')
+
+    const resetButton = wrapper.findAll('button').find(b => b.text() === '最初からやり直す')
+    await resetButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('車検証: 読取済み')
     wrapper.unmount()
   })
 

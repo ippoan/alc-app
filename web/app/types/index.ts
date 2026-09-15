@@ -22,6 +22,10 @@ export interface MeasurementResult {
   medicalMeasuredAt?: Date
   /** 通常点呼の種別 (免許証の次の段で選ぶ。Refs ippoan/alc-app-s3#135) */
   tenkoType?: TenkoType
+  /** 電子車検証の管理番号 (vehicle 段でタップして保持。Refs ippoan/alc-app-s3#110) */
+  carinsCertNo?: string
+  /** 電子車検証の車両 ID */
+  carinsVehicleId?: string
 }
 
 /** NFC 読み取りイベント */
@@ -415,6 +419,14 @@ export interface TenkoSession {
   completed_at: string | null
   created_at: string
   updated_at: string
+  /** 電子車検証の管理番号 (Refs ippoan/alc-app-s3#110) */
+  carins_cert_no: string | null
+  /** 電子車検証の車両 ID */
+  carins_vehicle_id: string | null
+  /** 車検期限 ("YYYY-MM-DD") */
+  carins_expires_on: string | null
+  /** `cert_no` / `car_id` / `none` (carins に無い車) / null (番号を受け取っていない) */
+  carins_matched_by: string | null
 }
 
 export interface StartTenkoSession {
@@ -750,6 +762,18 @@ export interface VehicleCategories {
   uses: string[]
   car_shapes: string[]
   private_businesses: string[]
+}
+
+// --- 車検証照合 (Refs ippoan/alc-app-s3#110、rust-alc-api の ts-rs 生成物 CarInspectionLookupResponse と同形) ---
+
+/** `POST /api/car-inspections/lookup` の応答。所有者・住所・車台番号は返らない */
+export interface CarInspectionLookupResponse {
+  /** "YYYY-MM-DD" */
+  expires_on: string | null
+  /** `cert_no` / `car_id` / `none` */
+  matched_by: string
+  /** 登録番号 */
+  car_no: string | null
 }
 
 // --- 日常健康状態 ---

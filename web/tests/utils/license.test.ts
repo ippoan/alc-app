@@ -6,6 +6,8 @@ import {
   formatExpiryDate,
   formatDateForInput,
   checkLicenseExpiryFromString,
+  expiryTone,
+  EXPIRY_TONE_CLASS,
 } from '~/utils/license'
 
 describe('license', () => {
@@ -149,6 +151,39 @@ describe('license', () => {
       date.setDate(date.getDate() + 5)
       const str = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
       expect(checkLicenseExpiryFromString(str, 3)).toBe('valid')
+    })
+  })
+
+  // 免許証 3 か所 + 車検 2 か所の共有表 (ユーザーの判断、Refs ippoan/alc-app-s3#110)
+  describe('expiryTone', () => {
+    it('4 分岐: expired=red / expiring_soon=yellow / valid=green / null=gray', () => {
+      expect(expiryTone('expired')).toEqual({ tone: 'red', label: '期限切れ' })
+      expect(expiryTone('expiring_soon')).toEqual({ tone: 'yellow', label: '期限間近' })
+      expect(expiryTone('valid')).toEqual({ tone: 'green', label: '有効' })
+      expect(expiryTone(null)).toEqual({ tone: 'gray', label: '未登録' })
+    })
+  })
+
+  describe('EXPIRY_TONE_CLASS', () => {
+    // 置き換え前の各画面のクラスと同じであることを固定する
+    // (LicenseRegistration.vue の pill / NfcStatus.vue の文 / NormalMeasurement.vue の帯)
+    it('pill は LicenseRegistration.vue の置き換え前のクラスと同じ', () => {
+      expect(EXPIRY_TONE_CLASS.pill.green).toBe('bg-green-100 text-green-800')
+      expect(EXPIRY_TONE_CLASS.pill.yellow).toBe('bg-amber-100 text-amber-800')
+      expect(EXPIRY_TONE_CLASS.pill.red).toBe('bg-red-100 text-red-800')
+      expect(EXPIRY_TONE_CLASS.pill.gray).toBe('bg-gray-100 text-gray-500')
+    })
+
+    it('text は NfcStatus.vue の置き換え前のクラスと同じ (rounded-lg 込み)', () => {
+      expect(EXPIRY_TONE_CLASS.text.red).toBe('bg-red-100 text-red-700 rounded-lg')
+      expect(EXPIRY_TONE_CLASS.text.yellow).toBe('bg-amber-100 text-amber-700 rounded-lg')
+    })
+
+    it('banner は NormalMeasurement.vue の置き換え前のクラスと同じ (border は別トークン)', () => {
+      // 元は `bg-red-50 border border-red-200 ... text-red-700` — `border` はここでは持たず
+      // wrapper 側の共通クラスに残す (トークンの集合として同じであればよい)
+      expect(EXPIRY_TONE_CLASS.banner.red).toBe('bg-red-50 border-red-200 text-red-700')
+      expect(EXPIRY_TONE_CLASS.banner.yellow).toBe('bg-amber-50 border-amber-200 text-amber-700')
     })
   })
 })

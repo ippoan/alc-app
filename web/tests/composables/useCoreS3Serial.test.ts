@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { evtArg } from '~/composables/useCoreS3Serial'
 
 // --- Mock SerialPort (useAlarmDevice.test.ts と同型) ---
 
@@ -913,5 +914,19 @@ describe('useCoreS3Serial', () => {
     // 探索 1 回。プローブは arbiter が撃つ
     expect(getPorts).toHaveBeenCalledTimes(1)
     expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+  })
+})
+
+// evtArg (旧 useNfcReader の argValue。NFC_LICENSE / NFC_CARINS 両方が使うのでここに
+// 置く純移動、Refs ippoan/alc-app-s3#110)
+describe('evtArg', () => {
+  it('key=value から値を取り出す', () => {
+    expect(evtArg(['mgno=000000000001', 'carid=TESTCARID00001'], 'mgno')).toBe('000000000001')
+    expect(evtArg(['mgno=000000000001', 'carid=TESTCARID00001'], 'carid')).toBe('TESTCARID00001')
+  })
+
+  it('key が無ければ空文字', () => {
+    expect(evtArg(['rc=timeout'], 'mgno')).toBe('')
+    expect(evtArg([], 'mgno')).toBe('')
   })
 })

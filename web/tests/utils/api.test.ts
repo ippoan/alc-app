@@ -46,6 +46,8 @@ import {
   getDtakoDrivers, getDtakoDailyHours,
   // Vehicle categories
   getVehicleCategories,
+  // Car inspection lookup (Refs ippoan/alc-app-s3#110)
+  lookupCarInspection,
   // Daily health
   getDailyHealthStatus,
   // Guidance records
@@ -542,6 +544,72 @@ describe('api', () => {
         expect(body.medical_measured_at).toBe('2026-01-15T07:55:00.000Z')
         expect(body.face_photo_url).toBe('https://existing.com/photo.jpg')
       })
+    })
+
+    it('carinsCertNo/carinsVehicleId を carins_cert_no/carins_vehicle_id として送る (Refs ippoan/alc-app-s3#110)', async () => {
+      await verifyApi(() => saveMeasurement({ ...baseResult, carinsCertNo: '000000000001', carinsVehicleId: 'TESTCARID00001' }), { id: '999' })
+
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body.carins_cert_no).toBe('000000000001')
+        expect(body.carins_vehicle_id).toBe('TESTCARID00001')
+      })
+    })
+  })
+
+  // ============================================================
+  // lookupCarInspection (Refs ippoan/alc-app-s3#110)
+  // ============================================================
+
+  describe('lookupCarInspection', () => {
+    it('POST /api/car-inspections/lookup、body に番号を JSON で載せる (URL には載せない)', async () => {
+      const apiResponse = { expires_on: '2030-12-31', matched_by: 'cert_no', car_no: 'TEST-1' }
+      const response = await verifyApi(
+        () => lookupCarInspection('000000000001', 'TESTCARID00001'),
+        apiResponse,
+      )
+
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/car-inspections/lookup')
+        expect(mockFetch.mock.calls[0][0]).not.toContain('000000000001')
+        expect(mockFetch.mock.calls[0][1].method).toBe('POST')
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body.cert_no).toBe('000000000001')
+        expect(body.car_id).toBe('TESTCARID00001')
+      })
+      assertMock(() => expect(response).toEqual(apiResponse))
+    })
+
+    it('番号を両方渡さなければ request を投げずに null を返す', async () => {
+      const response = await lookupCarInspection()
+      expect(response).toBeNull()
+      assertMock(() => expect(mockFetch).not.toHaveBeenCalled())
+    })
+
+    it.each([404, 403, 405])('%i は警告を出さず null を返す (点呼を進める)', async (status) => {
+      if (isLive) return
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      stubResponse({ ok: false, status, statusText: 'Error', text: () => Promise.resolve('') })
+
+      const response = await lookupCarInspection('000000000001', 'TESTCARID00001')
+
+      expect(response).toBeNull()
+      // 番号を console に出さない
+      for (const call of warnSpy.mock.calls) {
+        for (const arg of call) expect(String(arg)).not.toContain('000000000001')
+      }
+      warnSpy.mockRestore()
+    })
+
+    it('ネットワークエラーでも null を返す (警告を出さず進める)', async () => {
+      if (isLive) return
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      stubReject(new TypeError('Failed to fetch'))
+
+      const response = await lookupCarInspection('000000000001', 'TESTCARID00001')
+
+      expect(response).toBeNull()
+      warnSpy.mockRestore()
     })
   })
 

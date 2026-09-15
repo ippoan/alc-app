@@ -66,6 +66,13 @@ describe('offline-queue', () => {
       expect(items[0].facePhotoBase64).toContain('data:')
     })
 
+    it('should serialize carinsCertNo/carinsVehicleId (Refs ippoan/alc-app-s3#110)', async () => {
+      await enqueue(createResult({ carinsCertNo: '000000000001', carinsVehicleId: 'TESTCARID00001' }))
+      const items = await getAll()
+      expect(items[0].result.carinsCertNo).toBe('000000000001')
+      expect(items[0].result.carinsVehicleId).toBe('TESTCARID00001')
+    })
+
     it('should add multiple items with auto-increment IDs', async () => {
       await enqueue(createResult({ employeeId: 'A' }))
       await enqueue(createResult({ employeeId: 'B' }))
@@ -200,6 +207,36 @@ describe('offline-queue', () => {
       expect(updateFn.mock.calls[0][1]).toMatchObject({ tenko_type: 'pre_operation' })
     })
 
+    // 電子車検証の管理番号・車両 ID (Refs ippoan/alc-app-s3#110)
+    it('should carry carinsCertNo/carinsVehicleId as carins_cert_no/carins_vehicle_id in the updateFn PUT', async () => {
+      await enqueue(
+        createResult({ carinsCertNo: '000000000001', carinsVehicleId: 'TESTCARID00001' }),
+        undefined,
+        'measurement-carins-1',
+      )
+
+      const saveFn = vi.fn().mockResolvedValue(undefined)
+      const updateFn = vi.fn().mockResolvedValue(undefined)
+      await flush(saveFn, updateFn)
+
+      expect(updateFn.mock.calls[0][1]).toMatchObject({
+        carins_cert_no: '000000000001',
+        carins_vehicle_id: 'TESTCARID00001',
+      })
+    })
+
+    it('carinsCertNo/carinsVehicleId の無い旧 entry は PUT に carins_* を載せない', async () => {
+      await enqueue(createResult(), undefined, 'measurement-old-1')
+
+      const saveFn = vi.fn().mockResolvedValue(undefined)
+      const updateFn = vi.fn().mockResolvedValue(undefined)
+      await flush(saveFn, updateFn)
+
+      const body = updateFn.mock.calls[0][1] as Record<string, unknown>
+      expect(body.carins_cert_no).toBeUndefined()
+      expect(body.carins_vehicle_id).toBeUndefined()
+    })
+
     it('should use updateFn path with facePhotoBase64 and existing facePhotoUrl', async () => {
       const blob = new Blob(['photo-data'], { type: 'image/jpeg' })
       await enqueue(
@@ -260,6 +297,20 @@ describe('offline-queue', () => {
       expect(saveFn).toHaveBeenCalledTimes(1)
       const passedBlob = saveFn.mock.calls[0][1]
       expect(passedBlob).toBeInstanceOf(Blob)
+    })
+
+    // 従来の POST パス (activeMeasurementId 無し) にも carins の番号を載せる
+    // (Refs ippoan/alc-app-s3#110)
+    it('should carry carinsCertNo/carinsVehicleId to saveFn (traditional POST path)', async () => {
+      await enqueue(createResult({ carinsCertNo: '000000000001', carinsVehicleId: 'TESTCARID00001' }))
+
+      const saveFn = vi.fn().mockResolvedValue(undefined)
+      await flush(saveFn)
+
+      expect(saveFn).toHaveBeenCalledTimes(1)
+      const passedResult = saveFn.mock.calls[0][0] as MeasurementResult
+      expect(passedResult.carinsCertNo).toBe('000000000001')
+      expect(passedResult.carinsVehicleId).toBe('TESTCARID00001')
     })
 
     it('should upload linked video after successful send', async () => {
