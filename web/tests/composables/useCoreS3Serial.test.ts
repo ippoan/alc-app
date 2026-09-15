@@ -307,6 +307,23 @@ describe('useCoreS3Serial', () => {
 
       expect(seen).toEqual([])
     })
+
+    it('返り値を呼ぶと解除でき、以後は届かない (Refs ippoan/alc-app-s3#135)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const seen: string[] = []
+      const off = core.onEvent(name => seen.push(name))
+
+      dev.emit('EVT NFC_CARINS\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(seen).toEqual(['NFC_CARINS'])
+
+      off()
+      dev.emit('EVT NFC_CARINS\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen).toEqual(['NFC_CARINS'])
+    })
   })
 
   // ---------- CoreS3 の EVT を置き場に残す (Refs ippoan/alc-app#225) ----------

@@ -43,8 +43,8 @@ const CARD_ID_PAD = '0'.repeat(10)
 /** `EVT` を受け取る、生きている useNfcReader の受け口 */
 type EventSink = (name: string, args: string[]) => void
 
-// useNfcReader は複数の component から呼ばれる。useCoreS3Serial.onEvent に解除が
-// 無いので、繋ぐのは 1 度だけにして、配る先はここで出し入れする
+// useNfcReader は複数の component から呼ばれる。onEvent は解除を返すが、useNfcReader は
+// module 単位で 1 回だけ購読するので、繋ぐのは 1 度だけにして、配る先はここで出し入れする
 const sinks = new Set<EventSink>()
 let wired = false
 

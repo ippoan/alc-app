@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MeasurementResult } from '~/types'
+import type { MeasurementResult, TenkoType } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, formatExpiryDate, type LicenseExpiryStatus } from '~/utils/license'
@@ -15,13 +15,28 @@ const props = defineProps<{
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 
-const step = ref<'nfc' | 'medical' | 'measuring' | 'result'>('nfc')
+const step = ref<'nfc' | 'vehicle' | 'medical' | 'measuring' | 'result'>('nfc')
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
+
+// 電子車検証の段 (免許証の次)。タップ / スキップ → normal、始業 → pre_operation、
+// 終業 → post_operation (Refs ippoan/alc-app-s3#135)
+const tenkoType = ref<TenkoType>('normal')
+function chooseVehicleStep(type: TenkoType) {
+  tenkoType.value = type
+  step.value = 'medical'
+}
 
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
 const { syncStep, sendResult } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
+
+// 電子車検証の段で CoreS3 の NFC_CARINS を直接受ける (新しい component は作らず、
+// 免許証の通り道 (useNfcReader) にも流さない。Refs ippoan/alc-app-s3#135)
+const offCarinsEvent = useCoreS3Serial().onEvent((name) => {
+  if (name === 'NFC_CARINS' && step.value === 'vehicle') chooseVehicleStep('normal')
+})
+onUnmounted(offCarinsEvent)
 
 const saveError = ref<string | null>(null)
 const isSaving = ref(false)
@@ -86,7 +101,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
     employeeName.value = emp.name
     await tryStartMeasurement(emp.id)
     await faceSync()
-    step.value = 'medical'
+    step.value = 'vehicle'
   } catch {
     const msg = employeeNotFoundByNfc(nfcId)
     console.error(msg)
@@ -107,7 +122,7 @@ async function onManualSubmit() {
     employeeName.value = emp.name
     await tryStartMeasurement(emp.id)
     await faceSync()
-    step.value = 'medical'
+    step.value = 'vehicle'
   } catch {
     manualError.value = employeeNotFoundByCode(input)
   }
@@ -218,6 +233,7 @@ function onAlcStateChange(alcState: string) {
 
 // FC-1200 測定結果 → BLE 医療データ / 手動入力データをマージ → API に保存
 async function onMeasurementResult(result: MeasurementResult) {
+  result.tenkoType = tenkoType.value
   // BLE Medical Gateway のデータをマージ
   if (bleTemperature.value) {
     result.temperature = bleTemperature.value.value
@@ -286,6 +302,7 @@ async function onMeasurementResult(result: MeasurementResult) {
         face_verified: null,
         medical_manual_input: medicalInputSource.value === 'manual' ? true : undefined,
         record_as_tenko: true,
+        tenko_type: result.tenkoType ?? 'normal',
       }
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(updateData))
       await updateMeasurement(activeMeasurementId.value, updateData)
@@ -339,6 +356,7 @@ function reset() {
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''
+  tenkoType.value = 'normal'
   manualIdInput.value = ''
   manualError.value = null
   useManualInput.value = false
@@ -357,8 +375,8 @@ function reset() {
   stopMeasuringCamera()
 }
 
-const steps = ['NFC', SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温', '測定', '結果'] as const
-const stepKeys = ['nfc', 'medical', 'measuring', 'result'] as const
+const steps = ['NFC', '車検証', SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温', '測定', '結果'] as const
+const stepKeys = ['nfc', 'vehicle', 'medical', 'measuring', 'result'] as const
 const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
 </script>
 
@@ -515,7 +533,38 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         </div>
       </div>
 
-      <!-- Step 2: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
+      <!-- Step 2: 電子車検証 (タップ待ち。スキップ・始業・終業も選べる、Refs ippoan/alc-app-s3#135) -->
+      <div v-if="step === 'vehicle'" class="flex flex-col gap-4">
+        <div class="bg-white rounded-2xl p-6 shadow-sm">
+          <h2 class="text-lg font-semibold text-gray-700 mb-4">電子車検証をタップしてください</h2>
+          <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
+          <div class="flex flex-col gap-3">
+            <button
+              data-testid="vehicle-pre-operation"
+              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+              @click="chooseVehicleStep('pre_operation')"
+            >
+              始業点呼
+            </button>
+            <button
+              data-testid="vehicle-post-operation"
+              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+              @click="chooseVehicleStep('post_operation')"
+            >
+              終業点呼
+            </button>
+            <button
+              data-testid="vehicle-skip"
+              class="w-full px-6 py-3 text-gray-500 hover:text-gray-700 text-sm underline"
+              @click="chooseVehicleStep('normal')"
+            >
+              スキップ
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
       <div v-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}</h2>
@@ -552,7 +601,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         </div>
       </div>
 
-      <!-- Step 3: FC-1200 測定 -->
+      <!-- Step 4: FC-1200 測定 -->
       <div v-if="step === 'measuring'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">アルコール測定</h2>
@@ -585,7 +634,7 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
         </div>
       </div>
 
-      <!-- Step 4: 結果表示 -->
+      <!-- Step 5: 結果表示 -->
       <div v-if="step === 'result' && measurementResult" class="flex flex-col gap-4">
         <ResultCard
           :result="measurementResult"
