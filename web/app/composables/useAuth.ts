@@ -2,7 +2,7 @@ import type { AuthUser } from '~/types'
 import { isClient } from '~/utils/env'
 import { rePairDevice } from '~/utils/api'
 import { getOrCreateWebInstallId } from '~/utils/webInstallId'
-import { decodeJwtPayload, findValidAuthCookieToken, readCookieValues } from '@ippoan/auth-client'
+import { decodeJwtPayload, decodeJwtPayloadFromToken, findValidAuthCookieToken, readCookieValues } from '@ippoan/auth-client'
 
 const REFRESH_TOKEN_KEY = 'alc_refresh_token'
 const DEVICE_TENANT_KEY = 'alc_device_tenant_id'
@@ -139,9 +139,11 @@ export function useAuth() {
     }
     // 既存挙動の維持 (percent-encode された値の保険)。findValidAuthCookieToken が
     // 同じ文字列を decode 済み (exp 数値あり) のため、以降の decode は必ず成功する
-    // (base64url は `%` を含まないので decodeURIComponent は no-op)。
+    // (base64url は `%` を含まないので decodeURIComponent は no-op)。token 全体を
+    // 渡せる decodeJwtPayloadFromToken を使う (segment 版は index access が
+    // `string | undefined` になり tsconfig の noUncheckedIndexedAccess に触れる)。
     const token = decodeURIComponent(valid)
-    const payload = decodeJwtPayload(token.split('.')[1]) as Record<string, unknown>
+    const payload = decodeJwtPayloadFromToken(token) as Record<string, unknown>
     accessToken.value = token
     const tenantId = (payload.tenant_id || payload.org || '') as string
     user.value = {
