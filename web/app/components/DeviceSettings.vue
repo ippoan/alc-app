@@ -22,9 +22,10 @@ const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAl
 // 古い firmware は応答しないので、そのときは押せなくして案内を出す。
 const OMRON_REQUEST_TIMEOUT_MS = 3000
 // request は同時に 1 本しか待てず、端末 JWT の `AUTH SIGN` (最大 10 秒) と重なると即 reject される。
-// その理由のときだけ間を置いて呼び直す (上限 12 秒)
+// その理由のときだけ間を置いて呼び直す (上限 12 秒。切断・unmount で中止)
 const OMRON_BUSY_RETRY_MS = 300
 const OMRON_BUSY_RETRY_LIMIT = 40
+let omronUnmounted = false
 const omronBpEnabled = ref(false)
 const omronBpBusy = ref(false)
 /** 照会に失敗した (古い firmware 等)。押せなくする */
@@ -39,8 +40,12 @@ async function requestOmronBp(line: string, matchPrefix: string): Promise<boolea
       if (value !== '0' && value !== '1') throw new Error(`OMRON: unexpected value "${value}"`)
       return value === '1'
     } catch (e) {
-      if (!String(e).includes('既に応答待ちです') || attempt >= OMRON_BUSY_RETRY_LIMIT || !coreS3.isConnected.value) throw e
+      // 判定は useSerialArbiter.ts:552 の reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致。
+      // 文言を変えたらここも合わせること
+      const busy = String(e).includes('既に応答待ちです')
+      if (!busy || attempt >= OMRON_BUSY_RETRY_LIMIT) throw e
       await new Promise(resolve => setTimeout(resolve, OMRON_BUSY_RETRY_MS))
+      if (!coreS3.isConnected.value || omronUnmounted) throw e
     }
   }
 }
@@ -282,6 +287,7 @@ onMounted(() => {
   refreshDeviceSettings()
 })
 onUnmounted(() => {
+  omronUnmounted = true
   if (diagTimer) clearInterval(diagTimer)
   if (resetConfirmTimer) clearTimeout(resetConfirmTimer)
 })

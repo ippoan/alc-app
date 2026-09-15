@@ -312,12 +312,57 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       coreS3RequestMock
         .mockRejectedValueOnce(new Error('request(CoreS3): 既に応答待ちです'))
         .mockResolvedValueOnce('OMRON BP=1')
+      vi.useFakeTimers()
+      try {
+        const wrapper = await mountSuspended(DeviceSettings, { global: { stubs: { GwStatusCard: true } } })
+        mountedWrappers.push(wrapper)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(coreS3RequestMock).toHaveBeenCalledTimes(1)
+        await vi.advanceTimersByTimeAsync(300)
+        await wrapper.vm.$nextTick()
+        expect(coreS3RequestMock).toHaveBeenCalledTimes(2)
+        expect(coreS3RequestMock).toHaveBeenLastCalledWith('OMRON STATUS', 'OMRON BP=', 3000)
+        expect(checkbox(wrapper).element.checked).toBe(true)
+        expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('変更 (OMRON BP ON) も「既に応答待ちです」なら呼び直し、応答で確定する', async () => {
+      coreS3Connected.value = true
       const wrapper = await mountDeviceSettings()
-      await new Promise(resolve => setTimeout(resolve, 400))
-      await settle(wrapper)
-      expect(coreS3RequestMock).toHaveBeenCalledTimes(2)
-      expect(checkbox(wrapper).element.checked).toBe(true)
-      expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+      vi.useFakeTimers()
+      try {
+        coreS3RequestMock
+          .mockRejectedValueOnce(new Error('request(CoreS3): 既に応答待ちです'))
+          .mockResolvedValueOnce('OK OMRON BP=1')
+        await checkbox(wrapper).setValue(true)
+        await vi.advanceTimersByTimeAsync(300)
+        await wrapper.vm.$nextTick()
+        expect(coreS3RequestMock).toHaveBeenCalledTimes(3)
+        expect(coreS3RequestMock).toHaveBeenLastCalledWith('OMRON BP ON', 'OK OMRON BP=', 3000)
+        expect(checkbox(wrapper).element.checked).toBe(true)
+        expect(wrapper.find('[data-testid="omron-bp-error"]').exists()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('「既に応答待ちです」の再試行中に unmount されたら呼び直さない', async () => {
+      coreS3Connected.value = true
+      coreS3RequestMock.mockRejectedValue(new Error('request(CoreS3): 既に応答待ちです'))
+      vi.useFakeTimers()
+      try {
+        const wrapper = await mountSuspended(DeviceSettings, { global: { stubs: { GwStatusCard: true } } })
+        await vi.advanceTimersByTimeAsync(0)
+        const calls = coreS3RequestMock.mock.calls.length
+        wrapper.unmount()
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(coreS3RequestMock.mock.calls.length).toBe(calls)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('「既に応答待ちです」でも切断されていれば呼び直さず失敗にする', async () => {
