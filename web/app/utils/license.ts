@@ -126,3 +126,23 @@ export const EXPIRY_TONE_CLASS: Record<'pill' | 'text' | 'banner', Record<Expiry
     gray: 'bg-gray-50 border-gray-200 text-gray-700',
   },
 }
+
+/**
+ * "YYYY-MM-DD" の有効期限まで**あと何日**かを返す (過ぎていれば負、読めなければ null)。
+ *
+ * 帯に「あと N 日」「N 日前」を出すための純関数 (Refs ippoan/alc-app-s3#135)。
+ * - **ローカル時刻の 0 時どうしの差**で数える (`checkLicenseExpiry` と同じ基準)。
+ *   時刻を持ち込まないので切り上げ / 切り捨ての選択自体が発生せず、色 (status) と
+ *   日数が食い違わない。DST で 1 日が 23/25 時間になる地域向けに `Math.round` で丸める
+ * - **満了日当日は 0** =「あと 0 日」。車検は満了日当日まで有効なので「本日まで」ではなく
+ *   0 日として残す (`checkLicenseExpiry` も当日を expired にしない)
+ */
+export function daysUntilExpiry(expiresOn: string | null | undefined, today: Date = new Date()): number | null {
+  if (!expiresOn) return null
+  const [y, m, d] = expiresOn.split('-').map(Number)
+  if (!y || !m || !d) return null
+
+  const expiry = new Date(y, m - 1, d)
+  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  return Math.round((expiry.getTime() - base.getTime()) / 86_400_000)
+}

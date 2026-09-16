@@ -2,7 +2,7 @@
 import type { MeasurementResult, TenkoType, CarInspectionLookupResponse } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection, punchTimecard } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
-import { checkLicenseExpiry, checkLicenseExpiryFromString, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
+import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 import { evtArg } from '~/composables/useCoreS3Serial'
@@ -20,11 +20,18 @@ const step = ref<'nfc' | 'choice' | 'vehicle' | 'medical' | 'measuring' | 'resul
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
 
-// 電子車検証の段 (免許証の次)。タップ / スキップ → normal、始業 → pre_operation、
-// 終業 → post_operation (Refs ippoan/alc-app-s3#135)
+// 点呼種別は choice の段 (免許証タッチの直後) で選び終えている (Refs ippoan/alc-app-s3#135)
 const tenkoType = ref<TenkoType>('normal')
-function chooseVehicleStep(type: TenkoType) {
-  tenkoType.value = type
+
+/**
+ * 車検証の段を飛ばして体温へ進む。
+ *
+ * **種別は上書きしない** — 始業で入ってきた人がスキップしても `pre_operation` のまま
+ * 体温へ進む (以前はここで `'normal'` を代入していたため、始業が消えていた。
+ * Refs ippoan/alc-app-s3#135)
+ */
+function skipVehicleStep() {
+  clearCarinsAdvanceTimer()
   step.value = 'medical'
 }
 
@@ -135,16 +142,55 @@ const carinsExpiryStatus = computed<LicenseExpiryStatus | null>(() => {
   return expiresOn ? checkLicenseExpiryFromString(expiresOn) : null
 })
 
+/**
+ * 車検の期限の帯は **5 通りのどれかを必ず 1 つ描く** (Refs ippoan/alc-app-s3#135)。
+ *
+ * 以前は「未登録 / 期限切れ / 期限間近」の 3 分岐しか無く、**期限が有効なとき**と
+ * **照合は当たったのに期限が取れなかったとき**はどれにも当たらず、画面には
+ * 「車検証: 読取済み」だけが残って期限が出なかった (本番で 2 回報告)。
+ * 色は `EXPIRY_TONE_CLASS.banner` の表をそのまま引く (新しい色の表は作らない)。
+ */
+const carinsExpiryBanner = computed<{ tone: ExpiryTone['tone']; text: string }>(() => {
+  if (carinsLookup.value?.matched_by === 'none') return { tone: expiryTone(null).tone, text: '車検証データ未登録' }
+
+  const expiresOn = carinsLookup.value?.expires_on
+  const daysLeft = daysUntilExpiry(expiresOn)
+  // 照合は当たったのに期限が無い / 読めない (lookup 自体が失敗した場合も含む) — 黙らずに灰で言う
+  if (!expiresOn || daysLeft === null) return { tone: expiryTone(null).tone, text: '車検の有効期限を取得できませんでした' }
+
+  const date = expiresOn.replace(/-/g, '/')
+  const status = carinsExpiryStatus.value
+  const tone = expiryTone(status).tone
+  return status === 'expired'
+    ? { tone, text: `車検の有効期限が切れています (${date}、${-daysLeft} 日前)` }
+    : { tone, text: `車検: ${date} まで (あと ${daysLeft} 日)` }
+})
+
+/**
+ * 車検証を読めてから体温の段へ自動で進むまでの待ち時間 (Refs ippoan/alc-app-s3#135)。
+ *
+ * 読めたらボタンを押さずに進むが、**期限の帯 (色付き) を読む時間だけは残す** —
+ * 0 にすると期限切れの赤が目に入る前に画面が切り替わる。
+ */
+const CARINS_AUTO_ADVANCE_MS = 1500
+let carinsAdvanceTimer: ReturnType<typeof setTimeout> | null = null
+function clearCarinsAdvanceTimer() {
+  if (carinsAdvanceTimer === null) return
+  clearTimeout(carinsAdvanceTimer)
+  carinsAdvanceTimer = null
+}
+
 // 電子車検証の段で CoreS3 の NFC_CARINS を直接受ける (新しい component は作らず、
 // 免許証の通り道 (useNfcReader) にも流さない。Refs ippoan/alc-app-s3#135)。
-// 番号を保持して段に留まる — chooseVehicleStep は 3 つのボタンでだけ呼ぶ
-// (Refs ippoan/alc-app-s3#110)
+// 番号を保持したまま帯を出し、少し置いてから自動で体温の段へ進む
+// (Refs ippoan/alc-app-s3#110、#135)
 const offCarinsEvent = useCoreS3Serial().onEvent((name, args) => {
   if (name !== 'NFC_CARINS' || step.value !== 'vehicle') return
 
   const rc = evtArg(args, 'rc')
   if (rc) {
-    // 再タップで上書きされるまで残す
+    // 再タップで上書きされるまで残す。読めていないので自動では進めない
+    clearCarinsAdvanceTimer()
     carinsReadError.value = true
     return
   }
@@ -155,6 +201,8 @@ const offCarinsEvent = useCoreS3Serial().onEvent((name, args) => {
   // 旧 firmware (引数なし) は番号なしのまま段に留まる
   if (!mgno && !carid) return
 
+  // タイマー中に別のカードがタップされたら、古いタイマーでは進めない
+  clearCarinsAdvanceTimer()
   carinsCertNo.value = mgno || undefined
   carinsVehicleId.value = carid || undefined
   carinsLookup.value = null
@@ -163,8 +211,21 @@ const offCarinsEvent = useCoreS3Serial().onEvent((name, args) => {
     // lookupCarInspection 自身が失敗を吸収する契約だが、テストの直接モック等でも
     // 確実に警告なしで進めるため二重に守る
     .catch(() => { carinsLookup.value = null })
+    .finally(() => {
+      // 読めたら自動で次の段へ (lookup が失敗しても点呼は止めない)。
+      // 待っている間に段が変わっていたら何もしない
+      if (step.value !== 'vehicle') return
+      clearCarinsAdvanceTimer()
+      carinsAdvanceTimer = setTimeout(() => {
+        carinsAdvanceTimer = null
+        step.value = 'medical'
+      }, CARINS_AUTO_ADVANCE_MS)
+    })
 })
 onUnmounted(offCarinsEvent)
+onUnmounted(clearCarinsAdvanceTimer)
+// 段が vehicle から離れたらタイマーを捨てる (戻ってきたときに二重に進まない)
+watch(step, (s) => { if (s !== 'vehicle') clearCarinsAdvanceTimer() })
 
 const saveError = ref<string | null>(null)
 const isSaving = ref(false)
@@ -515,6 +576,7 @@ function reset() {
   carinsVehicleId.value = undefined
   carinsReadError.value = false
   carinsLookup.value = null
+  clearCarinsAdvanceTimer()
   clearPunchState()
   lastPunchedCardId = null
   lastPunchedAt = 0
@@ -756,7 +818,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
         </div>
       </div>
 
-      <!-- Step 2: 電子車検証 (タップ待ち。スキップ・始業・終業も選べる、Refs ippoan/alc-app-s3#135) -->
+      <!-- Step 2: 電子車検証 (タップ待ち。読めたら自動で次へ。スキップだけ手で選べる、Refs ippoan/alc-app-s3#135) -->
       <div v-if="step === 'vehicle'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">電子車検証をタップしてください</h2>
@@ -775,45 +837,23 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             <p class="text-sm text-green-700 mb-2">
               車検証: 読取済み<template v-if="carinsLookup?.car_no"> (登録番号 = {{ carinsLookup.car_no }})</template>
             </p>
+            <!-- 期限は必ず 1 つ出す (有効なら緑、取れなければ灰。出ない状態を作らない) -->
             <div
-              v-if="carinsLookup?.matched_by === 'none'"
-              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.gray]"
+              data-testid="carins-expiry"
+              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner[carinsExpiryBanner.tone]]"
             >
-              車検証データ未登録
-            </div>
-            <div
-              v-else-if="carinsExpiryStatus === 'expired' && carinsLookup?.expires_on"
-              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.red]"
-            >
-              車検の有効期限が切れています ({{ carinsLookup.expires_on.replace(/-/g, '/') }})
-            </div>
-            <div
-              v-else-if="carinsExpiryStatus === 'expiring_soon' && carinsLookup?.expires_on"
-              :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.yellow]"
-            >
-              車検の有効期限が近づいています ({{ carinsLookup.expires_on.replace(/-/g, '/') }})
+              {{ carinsExpiryBanner.text }}
             </div>
           </div>
 
           <div class="flex flex-col gap-3">
-            <button
-              data-testid="vehicle-pre-operation"
-              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-              @click="chooseVehicleStep('pre_operation')"
-            >
-              始業点呼
-            </button>
-            <button
-              data-testid="vehicle-post-operation"
-              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-              @click="chooseVehicleStep('post_operation')"
-            >
-              終業点呼
-            </button>
+            <!-- 始業・終業は choice の段で選び終えているのでここには置かない。
+                 スキップは主要動作の青 (choice の 3 ボタン) と別系統の灰アウトラインにする —
+                 タップ待ちの画面で押し間違えると車検証なしで進んでしまうため (Refs ippoan/alc-app-s3#135) -->
             <button
               data-testid="vehicle-skip"
-              class="w-full px-6 py-3 text-gray-500 hover:text-gray-700 text-sm underline"
-              @click="chooseVehicleStep('normal')"
+              class="w-full px-6 py-3 bg-white border-2 border-gray-300 text-gray-600 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+              @click="skipVehicleStep"
             >
               スキップ
             </button>
