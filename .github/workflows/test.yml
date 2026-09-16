@@ -8,23 +8,41 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-    # PR 側は無駄打ちを抑えるため paths を残す (push/tag は常に発火させる)。
-    # .claude/** も含める: required check (Vitest+Coverage) が paths 不一致だと
-    # 永遠に来ず PR が "2 expected checks" で blocked になり管理者バイパス必須に
-    # なるため、skill / CLAUDE.md など .claude 配下の変更でも CI を発火させる。
+    # ★★ ここに paths フィルタを **置かない**。復活させるなら、先に下の
+    # 「required check の扱い」を解くこと (解かずに戻すと必ずデッドロックする)。
+    #
+    # (1) paths フィルタと required status checks は両立しない。
+    #     main の required checks は `ci / Vitest + Coverage` と `ci / PR Limit Check`
+    #     の 2 本 (branch protection に文字列で刻まれている)。paths に当たらない PR では
+    #     workflow が 1 度も起動しないので、この 2 本が永遠に報告されない。GitHub は
+    #     それを「まだ来ていない」と扱うため、PR は mergeStateStatus: BLOCKED のまま
+    #     永久に詰む (管理者バイパス必須)。
+    #
+    # (2) この repo は 4 回踏んだ。
+    #       1. signaling-only の PR        → cf-alc-signaling/** を追加
+    #       2. plan/** のみの PR (#92)     → plan/** を追加 (Refs #93)
+    #       3. docs/** のみの PR (#165)    → docs/** を追加 (Refs #167)
+    #       4. .gitignore のみの PR (#281) → .gitignore を追加
+    #     毎回「足りない要素を足す」症状対処をしてきたが、**発生源は「足りない要素」では
+    #     なく「フィルタが在ること」そのもの**だった。実際 5 回目の候補は今も root 直下に
+    #     ある (CLAUDE.md / mkdocs.yml / scripts/** / .githooks/** / .github/ の
+    #     workflows 以外 / requirements-docs.txt はどれも旧 paths に当たらない)。
+    #     列挙で追いつく問題ではないのでフィルタごと捨て、「PR では必ず起動する」に倒した
+    #     (足し忘れが「詰み」ではなく「余計に走るだけ」になる向き)。
+    #     なお過去 3 回の対処 (plan/** docs/** cf-alc-*/**) は無効化していない —
+    #     フィルタ無しはそれらの上位集合で、同じ PR は従来どおり起動する。
+    #
+    # (3) 削除しても run は増えない (実測)。main の first-parent 108 commit のうち、
+    #     旧 paths に一切当たらないものは 0 件 = この削除で新たに走る run は 0。
+    #     加えて上の push: branches:[main] は元から paths 無しで、全 merge に full CI を
+    #     走らせている。PR 側だけ絞っても節約はほぼ無かった。
+    #
+    # (4) 「起動はさせるが job 側で早期 skip」も解にならない。required check 名は
+    #     reusable workflow (ippoan/ci-workflows/.github/workflows/frontend-ci.yml) の
+    #     **内側 job 名** (test: = Vitest + Coverage / pr-limit: = PR Limit Check) で、
+    #     caller の `ci` job を if: で skip すると内側 job が 1 本も check を作らず、
+    #     (1) と同じデッドロックを別の形で作る。
     branches: [main]
-    # workflow ファイル単独の変更でも必ず CI を発火させるため `.github/workflows/**`
-    # を catch-all で含める。個別 file 列挙だと新規 workflow を追加する PR
-    # (例: ci-shape-report.yml) で required check が来ず "2 expected checks" の
-    # デッドロックになる (上記コメント参照)。
-    # cf-alc-signaling/** も含める: signaling-only の PR (例: wrangler.toml の
-    # account_id 追加) でも required check (ci / Vitest+Coverage, ci / PR Limit Check)
-    # を発火させないと "2 expected checks" で永遠に blocked になるため (上記デッドロック)。
-    # plan/** も含める: 設計ドキュメントのみの PR (#92) でも同じデッドロックを踏んだため
-    # (Refs #93)。cf-alc-recorder/** も同様 (recorder-only PR でも required check を発火させる)。
-    # docs/** も含める: doc のみの PR (#165) でも同じデッドロックを踏んだため (Refs #167)。
-    # .gitignore も含める: .gitignore のみの PR (#281) でも同じデッドロックを踏んだため (Refs #281)。
-    paths: ['web/**', '.claude/**', '.github/workflows/**', 'cf-alc-signaling/**', 'cf-alc-recorder/**', 'plan/**', 'docs/**', '.gitignore']
 
 permissions:
   contents: write
