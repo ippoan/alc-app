@@ -875,6 +875,8 @@ export interface DeviceSettingsResponse {
   last_login_employee_name?: string | null
   last_login_employee_role?: string[] | null
   always_on: boolean
+  /** この端末で血圧計 (Omron HEM-6231T) を使うか。正本はサーバ (Refs ippoan/alc-app-s3#135) */
+  bp_enabled: boolean
 }
 
 export interface DeviceRegistrationRequest {
