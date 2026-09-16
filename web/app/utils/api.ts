@@ -932,9 +932,13 @@ export async function updateDeviceCallSettings(
   callEnabled: boolean,
   callSchedule?: CallSchedule | null,
   alwaysOn?: boolean,
+  bpEnabled?: boolean,
 ): Promise<void> {
+  // always_on / bp_enabled は省略すると backend 側の COALESCE で現在値が保たれる
+  // (rust-alc-api#642)。呼び元が触らない項目は渡さないこと。
   const body: Record<string, unknown> = { call_enabled: callEnabled, call_schedule: callSchedule }
   if (alwaysOn !== undefined) body.always_on = alwaysOn
+  if (bpEnabled !== undefined) body.bp_enabled = bpEnabled
   return request<void>(`/api/devices/${id}/call-settings`, {
     method: 'PUT',
     body: JSON.stringify(body),

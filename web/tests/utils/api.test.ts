@@ -1056,6 +1056,17 @@ describe('api', () => {
       })
     })
 
+    it('updateDeviceCallSettings with bpEnabled sends bp_enabled (Refs ippoan/alc-app-s3#135)', async () => {
+      stubOk({})
+      await callApi(() => updateDeviceCallSettings(UUID7, true, null, undefined, true))
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body.bp_enabled).toBe(true)
+        // 触らない項目は送らない (backend の COALESCE で現在値が保たれる)
+        expect(body).not.toHaveProperty('always_on')
+      })
+    })
+
     it('updateDeviceCallSettings without alwaysOn omits always_on', async () => {
       stubOk({})
       await callApi(() => updateDeviceCallSettings(UUID7, false, null))
@@ -1064,6 +1075,7 @@ describe('api', () => {
         expect(body.call_enabled).toBe(false)
         expect(body.call_schedule).toBeNull()
         expect(body).not.toHaveProperty('always_on')
+        expect(body).not.toHaveProperty('bp_enabled')
       })
     })
 

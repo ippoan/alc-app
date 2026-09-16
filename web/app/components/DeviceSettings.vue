@@ -15,75 +15,12 @@ const coreS3 = useCoreS3Serial()
 const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJwt.value)
 // 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
+const alarmDevice = useAlarmDevice()
 
-// CoreS3 の Omron 血圧計 (HEM-6231T) 受信の ON/OFF。保存先は CoreS3 の NVS で既定 OFF
-// (Refs ippoan/alc-app-s3#237)。表示は常に CoreS3 の応答に従う (楽観更新しない)。
-// 古い firmware は応答しないので、そのときは押せなくして案内を出す。
-const OMRON_REQUEST_TIMEOUT_MS = 3000
-// request は同時に 1 本しか待てず、端末 JWT の `AUTH SIGN` (最大 10 秒) と重なると即 reject される。
-// その理由のときだけ間を置いて呼び直す (上限 12 秒。切断・unmount で中止)
-const OMRON_BUSY_RETRY_MS = 300
-const OMRON_BUSY_RETRY_LIMIT = 40
-let omronUnmounted = false
-const omronBpEnabled = ref(false)
-const omronBpBusy = ref(false)
-/** 照会に失敗した (古い firmware 等)。押せなくする */
-const omronBpQueryFailed = ref(false)
-/** 照会か変更に失敗した。案内を出す */
-const omronBpError = ref(false)
-
-async function requestOmronBp(line: string, matchPrefix: string): Promise<boolean> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const value = (await coreS3.request(line, matchPrefix, OMRON_REQUEST_TIMEOUT_MS)).slice(matchPrefix.length).trim()
-      if (value !== '0' && value !== '1') throw new Error(`OMRON: unexpected value "${value}"`)
-      return value === '1'
-    } catch (e) {
-      // 判定は useSerialArbiter.ts:552 の reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致。
-      // 文言を変えたらここも合わせること
-      const busy = String(e).includes('既に応答待ちです')
-      if (!busy || attempt >= OMRON_BUSY_RETRY_LIMIT) throw e
-      await new Promise(resolve => setTimeout(resolve, OMRON_BUSY_RETRY_MS))
-      if (!coreS3.isConnected.value || omronUnmounted) throw e
-    }
-  }
-}
-
-async function refreshOmronBp() {
-  omronBpBusy.value = true
-  omronBpQueryFailed.value = false
-  omronBpError.value = false
-  try {
-    omronBpEnabled.value = await requestOmronBp('OMRON STATUS', 'OMRON BP=')
-  } catch {
-    omronBpQueryFailed.value = true
-    omronBpError.value = true
-  } finally {
-    omronBpBusy.value = false
-  }
-}
-
-async function setOmronBp(event: Event) {
-  const input = event.target as HTMLInputElement
-  const previous = omronBpEnabled.value
-  omronBpBusy.value = true
-  omronBpError.value = false
-  try {
-    omronBpEnabled.value = await requestOmronBp(input.checked ? 'OMRON BP ON' : 'OMRON BP OFF', 'OK OMRON BP=')
-  } catch {
-    omronBpEnabled.value = previous
-    omronBpError.value = true
-  } finally {
-    // :checked が同じ値のままだと再描画で DOM が戻らないので、確定値を直接書き戻す
-    input.checked = omronBpEnabled.value
-    omronBpBusy.value = false
-  }
-}
-
-// マウント時に既に接続中ならその時点で、以後は接続するたびに 1 回照会する
-watch(() => coreS3.isConnected.value, (connected) => {
-  if (connected) void refreshOmronBp()
-}, { immediate: true })
+// この端末で血圧計 (Omron HEM-6231T) を使うか (Refs ippoan/alc-app-s3#135)。
+// 正本はサーバの端末設定 (`devices.bp_enabled`) — 端末の NVS に置くと端末を
+// 入れ替えたときに消えるため。画面の表示はこの 1 系統だけを見る。
+const { bpEnabled, setBpEnabled } = useBloodPressureSetting()
 
 // 常時起動 ON/OFF (端末自身での切替)。call_enabled / call_schedule は現在値を
 // 保持したまま always_on だけ差し替える (updateDeviceCallSettings は全項目送信の
@@ -94,6 +31,8 @@ async function refreshDeviceSettings() {
   if (!activatedDeviceId.value) return
   try {
     deviceSettings.value = await getDeviceSettings(activatedDeviceId.value, deviceSettingsToken.value)
+    // 血圧計を使うかはサーバが正本。画面への流し込み口は useBloodPressureSetting 1 本
+    setBpEnabled(deviceSettings.value.bp_enabled)
   } catch {
     // 取得失敗時は表示なし (トグルボタンを非表示にする、Refs #480 パターンに準拠)
   }
@@ -114,6 +53,104 @@ async function toggleAlwaysOnSelf() {
     // 失敗時は表示を変えない (再取得は次回リロード時)
   } finally {
     alwaysOnToggling.value = false
+  }
+}
+
+// --- 血圧計 (Omron HEM-6231T) を使うか (Refs ippoan/alc-app-s3#135) ---
+// 正本はサーバ (`devices.bp_enabled`)。保存はサーバへの更新を正とし、繋がっている
+// 端末があれば同じ値を流し込む。端末が 1 台も繋がっていなくても保存でき、次に端末が
+// 繋がったときに効く。端末側の保存先は NVS (CoreS3 / VoiceS3R とも同じ 1 行の口)。
+const OMRON_REQUEST_TIMEOUT_MS = 3000
+// request は同時に 1 本しか待てず、端末 JWT の `AUTH SIGN` (最大 10 秒) と重なると即 reject される。
+// その理由のときだけ間を置いて呼び直す (上限 12 秒。切断・unmount で中止)
+const OMRON_BUSY_RETRY_MS = 300
+const OMRON_BUSY_RETRY_LIMIT = 40
+const OMRON_REPLY_PREFIX = 'OK OMRON BP='
+let omronUnmounted = false
+/** サーバへ保存中。押せなくする */
+const omronBpBusy = ref(false)
+/** サーバへの保存に失敗した */
+const omronBpSaveError = ref(false)
+/** 端末への送信に失敗した (firmware が古い等)。サーバの値は変わっている */
+const omronBpDeviceError = ref(false)
+/** VoiceS3R へ送った。再起動しないと効かない旨を出す */
+const omronBpRestartNotice = ref(false)
+
+/**
+ * `OMRON BP ON|OFF` の送り先。CoreS3 でも VoiceS3R でも同じ 1 行を撃てる
+ * (どちらも arbiter の `request` を持つ)。どちらも繋がっていなければ null。
+ * `needsRestart` = 設定の反映に再起動が要る (VoiceS3R の firmware の作り)。
+ */
+const omronTarget = computed(() => {
+  if (coreS3.isConnected.value) return { needsRestart: false, request: coreS3.request }
+  if (alarmDevice.isConnected.value) return { needsRestart: true, request: alarmDevice.request }
+  return null
+})
+
+/**
+ * 今つながっている端末へ設定を 1 回送る (機種に依らない唯一の送信口)。
+ * 応答は `OK OMRON BP=<0|1>`。送れなかった / 応答が要求と違うときは案内を出すが、
+ * サーバの値 (正本) は動かさない — 次に繋がったときに改めて流し込まれる。
+ */
+async function sendOmronBp(enabled: boolean): Promise<void> {
+  omronBpDeviceError.value = false
+  for (let attempt = 0; ; attempt++) {
+    const target = omronTarget.value
+    if (!target) return
+    try {
+      const reply = await target.request(enabled ? 'OMRON BP ON' : 'OMRON BP OFF', OMRON_REPLY_PREFIX, OMRON_REQUEST_TIMEOUT_MS)
+      const value = reply.slice(OMRON_REPLY_PREFIX.length).trim()
+      if (value !== (enabled ? '1' : '0')) throw new Error(`OMRON: unexpected value "${value}"`)
+      return
+    } catch (e) {
+      // 判定は useSerialArbiter.ts の reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致。
+      // 文言を変えたらここも合わせること
+      const busy = String(e).includes('既に応答待ちです')
+      if (!busy || attempt >= OMRON_BUSY_RETRY_LIMIT) {
+        omronBpDeviceError.value = true
+        return
+      }
+      await new Promise(resolve => setTimeout(resolve, OMRON_BUSY_RETRY_MS))
+      if (omronUnmounted) return
+    }
+  }
+}
+
+// 端末が繋がったとき / サーバの設定が届いたときに、今の設定を端末へ流し込む。
+// マウント時に既に繋がっていればその時点で 1 回送る。
+watch([omronTarget, bpEnabled], ([target, enabled]) => {
+  if (target) void sendOmronBp(enabled)
+}, { immediate: true })
+
+/** チェックを変えた。サーバへの保存が正で、端末へは watch が流し込む */
+async function setOmronBp(event: Event) {
+  const input = event.target as HTMLInputElement
+  const next = input.checked
+  omronBpBusy.value = true
+  omronBpSaveError.value = false
+  omronBpRestartNotice.value = false
+  try {
+    // 端末登録が無い (CoreS3 で動く運行者 PC 等) / 設定を取れていないときは端末にだけ効かせる。
+    // updateDeviceCallSettings は call_enabled / call_schedule も送るので、
+    // 取得済みの設定を持たずに叩くと他項目を意図せず上書きする
+    if (activatedDeviceId.value && deviceSettings.value) {
+      await updateDeviceCallSettings(
+        activatedDeviceId.value,
+        deviceSettings.value.call_enabled,
+        deviceSettings.value.call_schedule,
+        undefined,
+        next,
+      )
+      deviceSettings.value = { ...deviceSettings.value, bp_enabled: next }
+    }
+    setBpEnabled(next)
+    omronBpRestartNotice.value = omronTarget.value?.needsRestart === true
+  } catch {
+    omronBpSaveError.value = true
+  } finally {
+    // :checked が同じ値のままだと再描画で DOM が戻らないので、確定値を直接書き戻す
+    input.checked = bpEnabled.value
+    omronBpBusy.value = false
   }
 }
 
@@ -329,9 +366,6 @@ const fc1200 = useFc1200Serial()
 
 // BLE Gateway composable
 const bleGw = useBleGateway()
-
-// この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
-const { bpEnabled } = useBloodPressureSetting()
 
 // FC-1200 diagnostics
 const fc1200Testing = ref(false)
@@ -620,19 +654,22 @@ async function syncFc1200Date() {
           </span>
         </label>
 
-        <!-- CoreS3 の Omron 血圧計 (保存先は CoreS3 の NVS、既定 OFF)。CoreS3 接続中のみ -->
-        <label v-if="coreS3.isConnected.value" class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+        <!-- 血圧計 (Omron HEM-6231T) を使うか。正本はサーバ (devices.bp_enabled、既定 OFF)。
+             端末 (CoreS3 / VoiceS3R) が繋がっていなくても保存でき、次に繋がったときに効く -->
+        <label class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
           <input
             type="checkbox"
             class="mt-0.5"
             data-testid="omron-bp-checkbox"
-            :checked="omronBpEnabled"
-            :disabled="omronBpBusy || omronBpQueryFailed"
+            :checked="bpEnabled"
+            :disabled="omronBpBusy"
             @change="setOmronBp"
           />
           <span>
-            この端末の CoreS3 で Omron 血圧計 (HEM-6231T) を使う
-            <span v-if="omronBpError" data-testid="omron-bp-error" class="block text-red-500">CoreS3 が応答しません (firmware が古い可能性があります)</span>
+            この端末で Omron 血圧計 (HEM-6231T) を使う
+            <span v-if="omronBpSaveError" data-testid="omron-bp-error" class="block text-red-500">設定を保存できませんでした (通信を確認してください)</span>
+            <span v-else-if="omronBpDeviceError" data-testid="omron-bp-device-error" class="block text-red-500">端末に設定を送れませんでした (firmware が古い可能性があります)</span>
+            <span v-else-if="omronBpRestartNotice" data-testid="omron-bp-restart-notice" class="block text-amber-600">設定を変えました。VoiceS3R は再起動すると有効になります</span>
           </span>
         </label>
 

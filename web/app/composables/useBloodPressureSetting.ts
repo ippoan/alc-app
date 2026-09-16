@@ -5,9 +5,9 @@
  * `utils/medical-inputs.ts` の表示フラグ定数が画面から血圧を一律に隠していたが、
  * 血圧計を繋ぐ端末と繋がない端末が混在するため、「この端末で使うか」の 1 系統へ寄せた。
  *
- * サーバ側の端末設定 (`devices.bp_enabled`) は別 PR で入る。それまでの値は
- * 下の既定値 1 か所だけが決める。**流し込み口はこの composable 1 本に絞る** —
- * 次の PR は `setBpEnabled()` を端末設定から呼ぶだけでよく、画面側は触らない。
+ * 正本はサーバの端末設定 (`devices.bp_enabled`) — 端末の中だけに持つと端末を
+ * 入れ替えたときに消えるため。**流し込み口は `setBpEnabled()` 1 本**で、端末設定の
+ * 画面 (DeviceSettings) と、下の初回読み込みの両方がここを通る。
  */
 
 /** サーバ設定が届くまでの既定値。血圧計を繋いでいない端末が多数なので false */
@@ -16,11 +16,41 @@ const BP_ENABLED_DEFAULT = false
 // 画面をまたいで同じ値を見せる (デバイス設定で変えた直後に点呼画面へ反映する)
 const bpEnabled = ref(BP_ENABLED_DEFAULT)
 
+/** 端末設定からの唯一の受け口 */
+function setBpEnabled(v: boolean) {
+  bpEnabled.value = v
+  applied = true
+}
+
+/** サーバの設定が決まったか (初回読み込みが遅れて届いても上書きしないための印) */
+let applied = false
+/** サーバへ読みに行ったか。アプリの生存期間で 1 回だけ */
+let loadStarted = false
+
+/**
+ * サーバの端末設定を 1 回だけ読んで流し込む。端末設定の画面を開かない端末
+ * (キオスク) でもサーバの設定が効くよう、**この composable を最初に使った画面**が
+ * 引き金になる。取得できない端末 (未登録・オフライン・旧 API) は既定 (false) の
+ * まま進む — 点呼を止めないため。
+ */
+function loadFromServerOnce() {
+  if (loadStarted) return
+  loadStarted = true
+  void (async () => {
+    try {
+      const { deviceId, deviceSettingsToken } = useAuth()
+      if (!deviceId.value) return
+      const settings = await getDeviceSettings(deviceId.value, deviceSettingsToken.value)
+      // 待っている間に端末設定の画面から決まっていたら、そちらが新しい
+      if (!applied) setBpEnabled(settings.bp_enabled)
+    } catch {
+      // 取得できなければ既定のまま (画面は体温だけで進む)
+    }
+  })()
+}
+
 export function useBloodPressureSetting() {
-  /** 端末設定からの唯一の受け口 (次の PR で `devices.bp_enabled` を繋ぐ) */
-  function setBpEnabled(v: boolean) {
-    bpEnabled.value = v
-  }
+  loadFromServerOnce()
 
   return {
     /** true = この端末で血圧計を使う */
