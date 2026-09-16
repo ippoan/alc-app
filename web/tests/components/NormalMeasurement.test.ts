@@ -888,7 +888,7 @@ describe('NormalMeasurement — 打刻と種別の選択 (Refs ippoan/alc-app-s3
 
     await touch(wrapper, '2601012901010')
 
-    // 打刻はタイムカードタブと同じ口へ、NfcStatus が emit した生の値で飛ぶ
+    // 打刻は NFC の段から既存の打刻の口へ、NfcStatus が emit した生の値で飛ぶ
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
     expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')
 

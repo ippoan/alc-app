@@ -91,8 +91,8 @@ function clearPunchState() {
 
 /**
  * 打刻失敗の文言。**status を握りつぶさない** — 未ペアリング (資格情報が無い) と
- * 通信障害を同じ文言にすると、現地で「ペアリングすれば直る」と分からない
- * (TimePunchKiosk.vue と同じ切り分け)。
+ * 通信障害を同じ文言にすると、現地で「ペアリングすれば直る」と分からない。
+ * 打刻の失敗の切り分けはこの component が持つ。
  */
 function punchFailureMessage(e: unknown): string {
   const err = e as { punchFailure?: string, status?: number } | undefined
