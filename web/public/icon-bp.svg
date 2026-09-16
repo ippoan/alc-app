@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="血圧測定">
+  <title>血圧測定</title>
+  <!-- maskable 用に全面を teal で塗る (safe zone = 中心 半径 204 の円) -->
+  <rect width="512" height="512" fill="#0f766e"/>
+  <!-- 血圧計のカフ (腕に巻く帯) と脈波。フォントに依存しないよう図形だけで描く -->
+  <g fill="#ffffff">
+    <path d="M148 176h216a28 28 0 0 1 28 28v104a28 28 0 0 1-28 28H148a28 28 0 0 1-28-28V204a28 28 0 0 1 28-28zm0 44a8 8 0 0 0-8 8v76a8 8 0 0 0 8 8h216a8 8 0 0 0 8-8v-76a8 8 0 0 0-8-8z"/>
+    <path d="M168 256h40l20-40 32 80 24-52 16 12h44v24h-56l-10-8-30 66-32-80-12 22h-36z"/>
+  </g>
+</svg>

@@ -61,13 +61,14 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
   : route.query.tab === 'remote' ? 'remote'
   : route.query.tab === 'remote_demo' ? 'remote_demo'
   : route.query.tab === 'device' ? 'device'
+  : route.query.tab === 'bp' ? 'bp'
   : 'normal',
 )
 
@@ -278,7 +279,7 @@ function onRoleTabClick(role: RoleTab) {
         <div ref="menuRef" class="relative">
           <button
             class="p-2 rounded-md transition-colors"
-            :class="['demo', 'remote_demo', 'device'].includes(driverSubTab)
+            :class="['demo', 'remote_demo', 'device', 'bp'].includes(driverSubTab)
               ? 'bg-blue-600 text-white'
               : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
             @click.stop="menuOpen = !menuOpen"
@@ -296,6 +297,7 @@ function onRoleTabClick(role: RoleTab) {
                 { key: 'demo' as const, label: '自動点呼デモ' },
                 { key: 'remote_demo' as const, label: '遠隔点呼デモ' },
                 { key: 'device' as const, label: 'デバイス設定' },
+                { key: 'bp' as const, label: '血圧測定' },
               ])"
               :key="item.key"
               class="w-full text-left px-4 py-2 text-sm transition-colors"
@@ -356,7 +358,7 @@ function onRoleTabClick(role: RoleTab) {
           <div ref="menuRef" class="relative">
             <button
               class="p-1.5 rounded-md transition-colors"
-              :class="['demo', 'remote_demo', 'device'].includes(driverSubTab)
+              :class="['demo', 'remote_demo', 'device', 'bp'].includes(driverSubTab)
                 ? 'bg-blue-600 text-white'
                 : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
               @click.stop="menuOpen = !menuOpen"
@@ -389,6 +391,7 @@ function onRoleTabClick(role: RoleTab) {
                   { key: 'demo' as const, label: '自動点呼デモ' },
                   { key: 'remote_demo' as const, label: '遠隔点呼デモ' },
                   { key: 'device' as const, label: 'デバイス設定' },
+                  { key: 'bp' as const, label: '血圧測定' },
                 ])"
                 :key="item.key"
                 class="w-full text-left px-4 py-2 text-sm transition-colors"
@@ -459,6 +462,9 @@ function onRoleTabClick(role: RoleTab) {
           <TenkoKiosk v-if="driverSubTab === 'remote_demo'" :remote-mode="true" :demo-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'demo'" :demo-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <DeviceSettings v-if="driverSubTab === 'device'" class="flex-1 min-h-0" />
+          <!-- 血圧測定タブ。血圧だけを測る端末はこのタブを start_url に持つ manifest で
+               インストールする (Refs ippoan/alc-app-s3#135) -->
+          <BloodPressureMeasurement v-if="driverSubTab === 'bp'" class="flex-1 min-h-0" />
         </div>
       </div>
 
