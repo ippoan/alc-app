@@ -23,7 +23,8 @@ on:
     # plan/** も含める: 設計ドキュメントのみの PR (#92) でも同じデッドロックを踏んだため
     # (Refs #93)。cf-alc-recorder/** も同様 (recorder-only PR でも required check を発火させる)。
     # docs/** も含める: doc のみの PR (#165) でも同じデッドロックを踏んだため (Refs #167)。
-    paths: ['web/**', '.claude/**', '.github/workflows/**', 'cf-alc-signaling/**', 'cf-alc-recorder/**', 'plan/**', 'docs/**']
+    # .gitignore も含める: .gitignore のみの PR (#281) でも同じデッドロックを踏んだため (Refs #281)。
+    paths: ['web/**', '.claude/**', '.github/workflows/**', 'cf-alc-signaling/**', 'cf-alc-recorder/**', 'plan/**', 'docs/**', '.gitignore']
 
 permissions:
   contents: write
