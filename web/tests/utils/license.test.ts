@@ -8,6 +8,7 @@ import {
   checkLicenseExpiryFromString,
   expiryTone,
   EXPIRY_TONE_CLASS,
+  daysUntilExpiry,
 } from '~/utils/license'
 
 describe('license', () => {
@@ -184,6 +185,49 @@ describe('license', () => {
       // wrapper 側の共通クラスに残す (トークンの集合として同じであればよい)
       expect(EXPIRY_TONE_CLASS.banner.red).toBe('bg-red-50 border-red-200 text-red-700')
       expect(EXPIRY_TONE_CLASS.banner.yellow).toBe('bg-amber-50 border-amber-200 text-amber-700')
+    })
+  })
+  // 車検の帯の「あと N 日 / N 日前」(Refs ippoan/alc-app-s3#135)
+  describe('daysUntilExpiry', () => {
+    const today = new Date(2026, 8, 16) // 2026-09-16 (ローカル時刻の 0 時基準)
+
+    it('当日は 0 (満了日当日まで有効なので「あと 0 日」)', () => {
+      expect(daysUntilExpiry('2026-09-16', today)).toBe(0)
+    })
+
+    it('1 日後は 1', () => {
+      expect(daysUntilExpiry('2026-09-17', today)).toBe(1)
+    })
+
+    it('1 日前は -1 (過ぎていれば負)', () => {
+      expect(daysUntilExpiry('2026-09-15', today)).toBe(-1)
+    })
+
+    it('時刻を持つ today でも 0 時基準で数える (同じ日なら 0)', () => {
+      expect(daysUntilExpiry('2026-09-16', new Date(2026, 8, 16, 23, 59, 59))).toBe(0)
+    })
+
+    it('年をまたいでも日数で数える', () => {
+      expect(daysUntilExpiry('2027-09-16', today)).toBe(365)
+    })
+
+    it('不正な文字列は null', () => {
+      expect(daysUntilExpiry('2026/09/16', today)).toBeNull()
+      expect(daysUntilExpiry('not-a-date', today)).toBeNull()
+      expect(daysUntilExpiry('2026-09', today)).toBeNull()
+    })
+
+    it('null / undefined / 空文字は null', () => {
+      expect(daysUntilExpiry(null, today)).toBeNull()
+      expect(daysUntilExpiry(undefined, today)).toBeNull()
+      expect(daysUntilExpiry('', today)).toBeNull()
+    })
+
+    it('today を省略すると今日を基準にする', () => {
+      const now = new Date()
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+      const str = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`
+      expect(daysUntilExpiry(str)).toBe(1)
     })
   })
 })
