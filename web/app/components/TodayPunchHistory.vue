@@ -2,9 +2,9 @@
 /**
  * 「本日の打刻履歴」(名前と時刻の一覧)。
  *
- * **TimePunchKiosk.vue (タイムカード画面) から切り出した部品**
- * (Refs ippoan/alc-app#238)。通常点呼の画面 (index.vue, PC のときだけ) でも
- * 同じ表示を使うため、取得・購読・表示を 1 箇所にまとめる。
+ * もとはタイムカード専用画面から切り出した部品 (Refs ippoan/alc-app#238)。
+ * タイムカードタブ廃止後は通常点呼の画面 (index.vue) だけで使う
+ * (Refs ippoan/alc-app-s3#135)。取得・購読・表示を 1 箇所にまとめておき、
  * `useTimecardWatch` のコメントが 2 実装目を禁じているのと同じ理由で、
  * この一覧も 2 実装目を作らない。
  */
@@ -146,7 +146,7 @@ function highlight(key: string | null) {
 }
 
 /**
- * 打刻直後に呼び出し元 (TimePunchKiosk / 通常点呼) から呼ぶ。
+ * 打刻直後に呼び出し元 (通常点呼) から呼ぶ。
  * 引き直してから先頭行 (今打ったはずの行) を数秒だけ強調する。
  */
 async function reload() {

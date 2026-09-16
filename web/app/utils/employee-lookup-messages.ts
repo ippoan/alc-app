@@ -19,7 +19,7 @@ export function noPendingSchedule(): string {
  * 端末登録も CoreS3 の短命 JWT も無く、まだキオスクとして動けないとき
  * (`useKioskAccess`)。今の運行者端末の手順に「ペアリング」という操作は無いので
  * 文言には含めない (Refs #238)。
- * 打刻の失敗表示 (TimePunchKiosk) と運行者タブの入口バナーで同じ文言を使う (Refs #206)
+ * 打刻の失敗表示 (通常点呼) と運行者タブの入口バナーで同じ文言を使う (Refs #206)
  */
 export const deviceUnregisteredMessage = 'この端末はまだ使える状態になっていません'
 

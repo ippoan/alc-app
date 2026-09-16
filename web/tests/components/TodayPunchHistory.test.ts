@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TodayPunchHistory from '~/components/TodayPunchHistory.vue'
 
-// TimePunchKiosk.vue から切り出した部品 (Refs ippoan/alc-app#238)。
+// もとはタイムカード専用画面から切り出した部品 (Refs ippoan/alc-app#238)。
 // 取得 (今日の打刻を JST で引く) / 表示 (未登録カード) / 購読での引き直し /
 // unmount での購読停止 / reload・highlight の公開 を見る。
 

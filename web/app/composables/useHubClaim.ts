@@ -10,8 +10,7 @@
  * 起動時の 1 本 (`useDeviceToken().startupDeviceJwt`: CoreS3 の探索 → 最初の端末 JWT の取得、
  * 上限 3 秒) もここで 1 回だけ始める (Refs ippoan/alc-app#238)。
  *
- * ファイル名と戻り値の形 `{ lastError, attemptClaim }` は据え置く
- * (`TimePunchKiosk.vue` が `useHubClaim().lastError` を参照するため)。
+ * ファイル名と戻り値の形 `{ lastError, attemptClaim }` は据え置く。
  * `lastError` は useDeviceToken のもの (CoreS3 署名経路の失敗理由) をそのまま返す。
  */
 
@@ -28,7 +27,7 @@ export function useHubClaim() {
   }
 
   // CoreS3 の接続 (再接続含む) のたびに 1 回試す。listenerInstalled で二重登録を避ける
-  // (useHubClaim() は app.vue と TimePunchKiosk.vue の双方から呼ばれる想定)
+  // (useHubClaim() は app.vue から呼ばれる想定)
   if (!listenerInstalled) {
     listenerInstalled = true
     coreS3.onOpen(() => { void attemptClaim() })

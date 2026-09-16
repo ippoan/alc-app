@@ -7,7 +7,7 @@
  * 行の形 (区分 / card_id / 社員解決の凍結 / JST 境界) は rust-alc-api が持っており、
  * 画面や Worker に 2 実装目を作ると必ずズレるため。
  *
- * **管理画面 (TimecardManager) とキオスク (TimePunchKiosk) で共有する。**
+ * **管理画面 (TimecardManager) と運行者タブの打刻履歴 (TodayPunchHistory) で共有する。**
  * どちらも「打刻が入ったら一覧を引き直す」だけなので、2 実装目を作らない。
  *
  * # 取りこぼさないための 3 点

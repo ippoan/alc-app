@@ -61,13 +61,12 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'timecard' | 'demo' | 'remote_demo' | 'device'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
   : route.query.tab === 'remote' ? 'remote'
   : route.query.tab === 'remote_demo' ? 'remote_demo'
-  : route.query.tab === 'timecard' ? 'timecard'
   : route.query.tab === 'device' ? 'device'
   : 'normal',
 )
@@ -264,7 +263,6 @@ function onRoleTabClick(role: RoleTab) {
               { key: 'normal' as const, label: '通常点呼' },
               { key: 'tenko' as const, label: '自動点呼' },
               { key: 'remote' as const, label: '遠隔点呼' },
-              { key: 'timecard' as const, label: 'タイムカード' },
             ])"
             :key="tab.key"
             class="flex-1 px-3 py-2 rounded-md text-sm font-medium transition-colors"
@@ -343,7 +341,6 @@ function onRoleTabClick(role: RoleTab) {
               { key: 'normal' as const, label: '通常点呼' },
               { key: 'tenko' as const, label: '自動点呼' },
               { key: 'remote' as const, label: '遠隔点呼' },
-              { key: 'timecard' as const, label: 'タイムカード' },
             ])"
             :key="tab.key"
             class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
@@ -445,13 +442,15 @@ function onRoleTabClick(role: RoleTab) {
 
         <!-- コンテンツ (1箇所のみ: 横画面=flex子要素, 縦画面=contents透過でルート直下) -->
         <div :class="isAndroidLandscape ? 'flex-1 min-w-0 flex flex-col' : 'contents'">
-          <!-- PC のときだけ「本日の打刻履歴」を通常点呼のカードの下に出す (Refs ippoan/alc-app#238)。
+          <!-- 「本日の打刻履歴」を通常点呼のカードの下に出す (Refs ippoan/alc-app#238)。
+               タイムカードタブ廃止後は打刻の口がここだけになるため、PC 限定をやめて
+               タブレットでも出す (Refs ippoan/alc-app-s3#135)。
                NormalMeasurement の below-card slot に入れる — 「顔登録」「メンテナンス」の
                リンクより上 (= 画面最下部はリンクのまま) に置かれ、NormalMeasurement 自身が
                持つ flex-1 + overflow-y-auto で一緒にスクロールする。ラッパーの特別な class 分岐は
                不要 (#248 の overflow-y-auto トリックは NormalMeasurement 側に既にあるため) -->
           <NormalMeasurement v-if="driverSubTab === 'normal'" :landscape="isAndroidLandscape" class="flex-1 min-h-0">
-            <template v-if="isPC" #below-card>
+            <template #below-card>
               <TodayPunchHistory class="w-full max-w-md mx-auto mt-4" />
             </template>
           </NormalMeasurement>
@@ -459,7 +458,6 @@ function onRoleTabClick(role: RoleTab) {
           <TenkoKiosk v-if="driverSubTab === 'remote'" :remote-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'remote_demo'" :remote-mode="true" :demo-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'demo'" :demo-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
-          <TimePunchKiosk v-if="driverSubTab === 'timecard'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <DeviceSettings v-if="driverSubTab === 'device'" class="flex-1 min-h-0" />
         </div>
       </div>
