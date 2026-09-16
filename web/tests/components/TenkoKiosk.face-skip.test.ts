@@ -36,6 +36,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   tenkoType: ref(null),
   isPreOperation: ref(true),
   escalatedToRemote: ref(false),
+  escalationReason: ref(null),
   isRemote: ref(false),
   escalateToRemote: vi.fn(async () => {}),
   stepLabels: ref(['NFC']),

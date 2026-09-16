@@ -3,6 +3,7 @@ import type {
   FaceAuthResult, SubmitAlcoholResult, SubmitMedicalData,
   SubmitSelfDeclaration, SubmitDailyInspection, SubmitOperationReport,
   StartTenkoSession, SafetyJudgment, CarryingItem, CarryingItemCheckInput,
+  TenkoRemoteEscalationReason,
 } from '~/types'
 import {
   getPendingSchedules, startTenkoSession,
@@ -42,6 +43,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
    * `remoteMode` とは**混ぜない** — 混ぜると段の一覧が途中で変わる。
    */
   const escalatedToRemote = ref(false)
+  /** 切り替えた理由 (未切り替えは null)。画面の文言とサーバへの通知の両方が見る */
+  const escalationReason = ref<TenkoRemoteEscalationReason | null>(null)
   /**
    * いま遠隔か。最初から遠隔 / 途中で昇格 のどちらでも true。
    * **画面の「遠隔かどうか」の判定はすべてこれ 1 つを見る。**
@@ -390,15 +393,18 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
   /**
    * 同じセッションのまま遠隔へ移す。**新しいセッションは起こさない** (点呼が二重になる)。
    *
-   * サーバへの通知より先に昇格の状態を立てるので、**口がまだ無くても遠隔の画面へ入れる**。
-   * 通知が通ればサーバの記録も更新されるが、失敗しても運行管理者との通話は始められる。
+   * `reason` は `TENKO_REMOTE_ESCALATION_REASONS` から画面で選ばせた語。サーバは必須で受ける。
+   *
+   * **画面の状態を先に遠隔へ移してから**サーバへ知らせる。握り潰すのは**通信の失敗だけ**で、
+   * 「サーバが応えなかったから切り替わらない」は起こさない — 現場でそれが一番困る。
    */
-  async function escalateToRemote() {
+  async function escalateToRemote(reason: TenkoRemoteEscalationReason) {
     if (isRemote.value) return
     escalatedToRemote.value = true
+    escalationReason.value = reason
     if (!session.value) return
     try {
-      session.value = await escalateTenkoSessionToRemote(session.value.id)
+      session.value = await escalateTenkoSessionToRemote(session.value.id, reason)
     } catch {
       // サーバ側の口は別 PR。無くても遠隔の画面には入れる (ここで止めない)
     }
@@ -419,6 +425,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     faceSkipped.value = false
     safetyJudgment.value = null
     escalatedToRemote.value = false
+    escalationReason.value = null
   }
 
   return {
@@ -437,6 +444,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     tenkoType,
     isPreOperation,
     escalatedToRemote,
+    escalationReason,
     isRemote,
 
     // Step indicator

@@ -126,6 +126,20 @@ function currentStepOf(wrapper: Parameters<typeof stepChips>[0]) {
 function escalateButton(wrapper: Parameters<typeof stepChips>[0]) {
   return wrapper.findAll('button').find(b => b.text() === '遠隔点呼に切り替える')
 }
+function reasonButton(wrapper: Parameters<typeof stepChips>[0], reason: string) {
+  return wrapper.findAll('button').find(b => b.text() === reason)
+}
+
+/**
+ * 切り替えボタン → 理由を選ぶ、の 2 手。理由は自由入力にせず選択肢から選ばせるので、
+ * サーバへ渡る `reason` は必ずこの一覧のどれかになる。
+ */
+async function escalate(wrapper: Parameters<typeof stepChips>[0], reason = '血圧計の故障') {
+  await escalateButton(wrapper)!.trigger('click')
+  await settle(wrapper)
+  await reasonButton(wrapper, reason)!.trigger('click')
+  await settle(wrapper)
+}
 
 /** 自動点呼を血圧の段まで進める */
 async function mountAtMedicalStep(props: { remoteMode?: boolean } = {}) {
@@ -161,13 +175,46 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     escalateTenkoSessionToRemote.mockResolvedValue({ ...makeSession(), escalated_to_remote_at: '2026-09-16T08:05:00Z' })
   })
 
+  it('切り替えの理由は選択肢から選ばせる (自由入力にしない)', async () => {
+    const wrapper = await mountAtMedicalStep()
+
+    // 1 手目では理由を聞くだけで、まだ切り替わらない
+    await escalateButton(wrapper)!.trigger('click')
+    await settle(wrapper)
+    expect(wrapper.text()).toContain('切り替える理由を選んでください')
+    expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
+    for (const reason of ['血圧計の故障', '血圧計が繋がっていない', 'その他']) {
+      expect(reasonButton(wrapper, reason)).toBeDefined()
+    }
+
+    await reasonButton(wrapper, '血圧計が繋がっていない')!.trigger('click')
+    await settle(wrapper)
+
+    // 選んだ語がそのまま reason として届く
+    expect(escalateTenkoSessionToRemote).toHaveBeenCalledWith(SESSION_ID, '血圧計が繋がっていない')
+    wrapper.unmount()
+  })
+
+  it('理由を選ばずにやめれば切り替わらない', async () => {
+    const wrapper = await mountAtMedicalStep()
+
+    await escalateButton(wrapper)!.trigger('click')
+    await settle(wrapper)
+    await wrapper.findAll('button').find(b => b.text() === 'やめる')!.trigger('click')
+    await settle(wrapper)
+
+    expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
+    expect(webRtcConnect).not.toHaveBeenCalled()
+    expect(escalateButton(wrapper)).toBeDefined()
+    wrapper.unmount()
+  })
+
   it('遠隔に切り替えると映像が繋がる', async () => {
     const wrapper = await mountAtMedicalStep()
     // 血圧の段では、自動点呼のあいだは繋がない
     expect(webRtcConnect).not.toHaveBeenCalled()
 
-    await escalateButton(wrapper)!.trigger('click')
-    await settle(wrapper)
+    await escalate(wrapper)
 
     // 部屋の登録は接続時なので、繋がないと運行管理者の一覧に出てこない
     expect(cameraStart).toHaveBeenCalled()
@@ -183,8 +230,7 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     expect(labelsBefore).toContain('予定選択')
     expect(currentBefore).toBeGreaterThanOrEqual(0)
 
-    await escalateButton(wrapper)!.trigger('click')
-    await settle(wrapper)
+    await escalate(wrapper)
 
     // 段の一覧は setup 時の remoteMode で固定 → 数もラベルも現在地も動かない
     expect(stepLabelsOf(wrapper)).toEqual(labelsBefore)
@@ -196,13 +242,12 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     const wrapper = await mountAtMedicalStep()
     expect(startTenkoSession).toHaveBeenCalledTimes(1)
 
-    await escalateButton(wrapper)!.trigger('click')
-    await settle(wrapper)
+    await escalate(wrapper)
 
     // 新しい点呼を起こさず、同じ id のまま切り替える
     expect(startTenkoSession).toHaveBeenCalledTimes(1)
     expect(escalateTenkoSessionToRemote).toHaveBeenCalledTimes(1)
-    expect(escalateTenkoSessionToRemote.mock.calls[0]![0]).toBe(SESSION_ID)
+    expect(escalateTenkoSessionToRemote).toHaveBeenCalledWith(SESSION_ID, '血圧計の故障')
     wrapper.unmount()
   })
 
@@ -211,10 +256,10 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     escalateTenkoSessionToRemote.mockRejectedValue(new Error('API エラー (404)'))
     const wrapper = await mountAtMedicalStep()
 
-    await escalateButton(wrapper)!.trigger('click')
-    await settle(wrapper)
+    await escalate(wrapper, 'その他')
 
-    expect(wrapper.text()).toContain('血圧が測れないため遠隔点呼に切り替えました')
+    // 通信は落ちても画面は必ず遠隔へ移る (「サーバが応えないから切り替わらない」を作らない)
+    expect(wrapper.text()).toContain('遠隔点呼に切り替えました (その他)')
     expect(webRtcConnect).toHaveBeenCalledTimes(1)
     // 切り替え済みなのでボタンは消える (二度押しで二重に切り替わらない)
     expect(escalateButton(wrapper)).toBeUndefined()

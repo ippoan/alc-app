@@ -995,7 +995,7 @@ describe('api', () => {
       ['submitSelfDeclaration', () => submitSelfDeclaration(SEED_SESSION_ID, { illness: false, fatigue: false, sleep_deprivation: false } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/self-declaration`],
       ['submitDailyInspection', () => submitDailyInspection(SEED_SESSION_ID, { brakes: 'ok', tires: 'ok', lights: 'ok', steering: 'ok', wipers: 'ok', mirrors: 'ok', horn: 'ok', seatbelts: 'ok' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/daily-inspection`],
       ['confirmInstruction', () => confirmInstruction(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}/instruction-confirm`],
-      ['escalateTenkoSessionToRemote', () => escalateTenkoSessionToRemote(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}/escalate-remote`],
+      ['escalateTenkoSessionToRemote', () => escalateTenkoSessionToRemote(SEED_SESSION_ID, '血圧計の故障'), `/api/tenko/sessions/${SEED_SESSION_ID}/escalate-remote`],
       ['submitReport', () => submitReport(SEED_SESSION_ID, { report: 'ok' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/report`],
       ['updateBaseline', () => updateBaseline(TEST_EMPLOYEE_ID, createHealthBaselineBody as any), `/api/tenko/health-baselines/${TEST_EMPLOYEE_ID}`],
       ['resolveFailure', () => resolveFailure(SEED_FAILURE_ID, { resolution: 'fixed' } as any), `/api/tenko/equipment-failures/${SEED_FAILURE_ID}`],
@@ -1107,10 +1107,11 @@ describe('api', () => {
     // サーバ側の口は別 PR — 形をここで固定しておく
     it('escalateTenkoSessionToRemote sends the escalation reason', async () => {
       stubOk({})
-      await callApi(() => escalateTenkoSessionToRemote(UUID3))
+      await callApi(() => escalateTenkoSessionToRemote(UUID3, '血圧計の故障'))
       assertMock(() => {
         const body = JSON.parse(mockFetch.mock.calls[0][1].body)
-        expect(body).toEqual({ reason: 'blood_pressure_unavailable' })
+        // reason は必須 (サーバが空文字を弾く)。画面が選択肢から選ばせた語をそのまま送る
+        expect(body).toEqual({ reason: '血圧計の故障' })
       })
     })
 

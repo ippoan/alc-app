@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { FaceAuthResult, MeasurementResult, SubmitMedicalData } from '~/types'
+import type { FaceAuthResult, MeasurementResult, SubmitMedicalData, TenkoRemoteEscalationReason } from '~/types'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
+import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
@@ -29,7 +30,7 @@ const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVid
 const {
   step, employeeId, employeeName, pendingSchedules, selectedSchedule, session,
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
-  escalatedToRemote, isRemote, escalateToRemote,
+  escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
   identifyEmployee, selectSchedule, onFaceAuthComplete,
   onAlcoholResult, onMedicalSubmit, onSelfDeclarationSubmit,
@@ -251,6 +252,15 @@ function onMedicalSkip() {
 // 医療データ入力元トラッキング
 const medicalInputSource = ref<'ble' | 'manual' | null>(null)
 
+// --- 遠隔点呼への切り替え (Refs ippoan/alc-app-s3#135) ---
+// 理由は自由入力にせず選択肢から選ばせる (サーバが `reason` を必須で受け、後で集計する)
+const isChoosingEscalationReason = ref(false)
+
+function chooseEscalationReason(reason: TenkoRemoteEscalationReason) {
+  isChoosingEscalationReason.value = false
+  escalateToRemote(reason)
+}
+
 // 手動入力からの医療データ送信
 function onManualMedicalSubmit(data: SubmitMedicalData) {
   medicalInputSource.value = 'manual'
@@ -278,6 +288,7 @@ function handleReset() {
   faceSkipNotice.value = null
   medicalInputSource.value = null
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
+  isChoosingEscalationReason.value = false
 }
 
 onUnmounted(() => {
@@ -326,7 +337,7 @@ onUnmounted(() => {
           :class="['w-full bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-blue-700 font-medium', landscape ? '' : 'max-w-md']"
         >
           {{ escalatedToRemote
-            ? '血圧が測れないため遠隔点呼に切り替えました — 運行管理者がビデオ通話で確認しています'
+            ? `遠隔点呼に切り替えました (${escalationReason}) — 運行管理者がビデオ通話で確認しています`
             : '遠隔点呼モード — 運行管理者がビデオ通話で確認しています' }}
         </div>
       </ClientOnly>
@@ -557,14 +568,34 @@ onUnmounted(() => {
             血圧が測れないときの逃げ道 (Refs ippoan/alc-app-s3#135)。
             血圧は必須なのでスキップも手入力もさせず、運行管理者が遠隔で対応する経路へ移す。
             自動点呼で血圧を使う端末のときだけ出す (最初から遠隔なら出ない)。
+            理由は自由入力にせず選択肢から選ばせる — サーバが `reason` を必須で受ける。
           -->
-          <button
-            v-if="bpEnabled && !isRemote"
-            class="w-full mt-4 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"
-            @click="escalateToRemote"
-          >
-            遠隔点呼に切り替える
-          </button>
+          <template v-if="bpEnabled && !isRemote">
+            <button
+              v-if="!isChoosingEscalationReason"
+              class="w-full mt-4 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"
+              @click="isChoosingEscalationReason = true"
+            >
+              遠隔点呼に切り替える
+            </button>
+            <div v-else class="mt-4 border border-amber-200 bg-amber-50 rounded-xl p-3">
+              <p class="text-sm font-medium text-amber-800 mb-2">切り替える理由を選んでください</p>
+              <button
+                v-for="reason in TENKO_REMOTE_ESCALATION_REASONS"
+                :key="reason"
+                class="w-full mb-2 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"
+                @click="chooseEscalationReason(reason)"
+              >
+                {{ reason }}
+              </button>
+              <button
+                class="w-full text-sm text-gray-500 hover:text-gray-700 underline"
+                @click="isChoosingEscalationReason = false"
+              >
+                やめる
+              </button>
+            </div>
+          </template>
         </div>
       </div>
 

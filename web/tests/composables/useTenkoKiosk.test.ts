@@ -948,11 +948,12 @@ describe('useTenkoKiosk', () => {
       const escalated = makeSession({ escalated_to_remote_at: '2026-09-16T08:05:00Z' })
       vi.mocked(escalateTenkoSessionToRemote).mockResolvedValue(escalated)
 
-      await k.escalateToRemote()
+      await k.escalateToRemote('血圧計の故障')
 
       expect(k.escalatedToRemote.value).toBe(true)
       expect(k.isRemote.value).toBe(true)
-      expect(escalateTenkoSessionToRemote).toHaveBeenCalledWith('sess-1')
+      expect(k.escalationReason.value).toBe('血圧計の故障')
+      expect(escalateTenkoSessionToRemote).toHaveBeenCalledWith('sess-1', '血圧計の故障')
       expect(k.session.value).toEqual(escalated)
     })
 
@@ -960,18 +961,19 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk({ remoteMode: true })
       k.session.value = makeSession()
 
-      await k.escalateToRemote()
+      await k.escalateToRemote('血圧計の故障')
 
       expect(k.isRemote.value).toBe(true)
       // 最初から遠隔の点呼を「昇格した点呼」に見せない
       expect(k.escalatedToRemote.value).toBe(false)
+      expect(k.escalationReason.value).toBeNull()
       expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
     })
 
     it('セッション開始前でも落ちず、遠隔にはなる', async () => {
       const k = useTenkoKiosk()
 
-      await k.escalateToRemote()
+      await k.escalateToRemote('その他')
 
       expect(k.isRemote.value).toBe(true)
       expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
@@ -983,9 +985,11 @@ describe('useTenkoKiosk', () => {
       k.session.value = before
       vi.mocked(escalateTenkoSessionToRemote).mockRejectedValue(new Error('API エラー (404)'))
 
-      await k.escalateToRemote()
+      await k.escalateToRemote('血圧計が繋がっていない')
 
+      // 握り潰すのは通信の失敗だけ。画面の状態は必ず遠隔へ移る
       expect(k.isRemote.value).toBe(true)
+      expect(k.escalationReason.value).toBe('血圧計が繋がっていない')
       expect(k.error.value).toBeNull()
       expect(k.session.value).toEqual(before)
     })
@@ -997,7 +1001,7 @@ describe('useTenkoKiosk', () => {
       const labelsBefore = [...k.stepLabels.value]
       const indexBefore = k.currentStepIndex.value
 
-      await k.escalateToRemote()
+      await k.escalateToRemote('血圧計の故障')
 
       expect(k.stepLabels.value).toEqual(labelsBefore)
       expect(k.currentStepIndex.value).toBe(indexBefore)
@@ -1006,12 +1010,13 @@ describe('useTenkoKiosk', () => {
 
     it('reset で昇格は畳まれる', async () => {
       const k = useTenkoKiosk()
-      await k.escalateToRemote()
+      await k.escalateToRemote('血圧計の故障')
       expect(k.isRemote.value).toBe(true)
 
       k.reset()
 
       expect(k.escalatedToRemote.value).toBe(false)
+      expect(k.escalationReason.value).toBeNull()
       expect(k.isRemote.value).toBe(false)
     })
   })
