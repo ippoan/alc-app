@@ -763,6 +763,14 @@ export interface TimePunchWithDevice {
   /** 'timecard' (打刻) か 'license' (点呼)。**両方が同じ一覧に来る** */
   kind: string
   employee_name: string | null
+  /**
+   * かざしたカードの種別 (Refs ippoan/rust-alc-api#644)。`'license'` (免許証) /
+   * `'felica_idm'` `'nfca_uid'` (その他の IC カード) / `null` (ブラウザ経由の
+   * 打刻・種別が記録されていない古い行)。表示の畳み込みは `~/utils/card-kind`
+   * に 1 箇所だけ置く。**サーバがこのフィールドをまだ返さない間は `undefined`
+   * になりうる** — 型は `string | null` だが、実行時は防御的に扱うこと。
+   */
+  card_kind: string | null
   punched_at: string
   created_at: string
 }

@@ -11,6 +11,7 @@
 import type { ApiEmployee, TimePunchWithDevice } from '~/types'
 import { listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
+import { cardKindOf } from '~/utils/card-kind'
 
 const { accessToken } = useAuth()
 const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
@@ -23,7 +24,7 @@ const employeeMap = computed(() => {
 })
 
 /** 本日の打刻 (新しい順)。**サーバから引き直したものだけ**を出す。 */
-const recentPunches = ref<{ key: string; name: string; time: string }[]>([])
+const recentPunches = ref<{ key: string; name: string; time: string; isLicense: boolean }[]>([])
 /**
  * 直近の取得状態。**「本日の打刻はまだありません」は取得成功で 0 件のときだけ**
  * 出す (Refs ippoan/alc-app#238)。端末 JWT がまだ無い/取得に失敗した間の空を
@@ -75,6 +76,7 @@ async function loadTodayPunches() {
       key: p.id,
       name: displayName(p),
       time: formatTime(p.punched_at),
+      isLicense: cardKindOf(p.card_kind) === 'license',
     }))
     loadStatus.value = 'loaded'
   }
@@ -179,7 +181,12 @@ defineExpose({ reload, highlight })
               ? 'bg-green-100 text-green-800 font-medium'
               : (i === 0 ? 'bg-blue-50 text-gray-800 font-medium' : 'text-gray-600')"
           >
-            <td class="py-2 px-4">{{ p.name }}</td>
+            <td class="py-2 px-4">
+              <span
+                v-if="p.isLicense"
+                class="inline-block mr-1 px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"
+              >免許証</span>{{ p.name }}
+            </td>
             <td
               class="py-2 px-4 text-right tabular-nums transition-colors duration-1000"
               :class="p.key === highlightedKey ? 'text-green-700' : (i === 0 ? 'text-blue-600' : 'text-gray-400')"
