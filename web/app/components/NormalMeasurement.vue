@@ -34,12 +34,16 @@ function chooseVehicleStep(type: TenkoType) {
  *
  * **アルコールチェック = 種別なしの測定**。点呼種別の列は NULL を受けない
  * (`migrations/140_normal_tenko_sessions.sql` の CHECK / `015` の NOT NULL) ので、
- * スキップと同じ `'normal'` で記録し、車検証の段を飛ばして体温へ進む
+ * スキップと同じ `'normal'` で記録する
  * (保存経路は増やさない — 既存の完了 PUT / offline-queue をそのまま通る)。
+ *
+ * **車検証の段へ進むのは始業点呼だけ。** 終業に車検証は要らない (ユーザー判断) ので、
+ * 終業点呼はアルコールチェックと同じく車検証を飛ばして体温へ直行する。種別
+ * (`'post_operation'`) はそのまま残るので、完了の PUT には終業として載る。
  */
 function chooseType(type: TenkoType) {
   tenkoType.value = type
-  step.value = type === 'normal' ? 'medical' : 'vehicle'
+  step.value = type === 'pre_operation' ? 'vehicle' : 'medical'
 }
 
 // --- 免許証タッチのその場で打刻する (Refs ippoan/alc-app-s3#135) ---
@@ -531,12 +535,12 @@ const STEP_LABEL: Record<string, string> = {
   result: '結果',
 }
 /**
- * 段の見出し。**アルコールチェック (= 種別なしの測定) は車検証の段を通らない**ので
- * 見出しからも落とす (Refs ippoan/alc-app-s3#135)。
+ * 段の見出し。**車検証の段を通るのは始業点呼だけ**なので、アルコールチェックと
+ * 終業点呼では見出しからも「車検証」を落とす (Refs ippoan/alc-app-s3#135)。
  */
-const stepKeys = computed<string[]>(() => tenkoType.value === 'normal'
-  ? ['nfc', 'medical', 'measuring', 'result']
-  : ['nfc', 'vehicle', 'medical', 'measuring', 'result'])
+const stepKeys = computed<string[]>(() => tenkoType.value === 'pre_operation'
+  ? ['nfc', 'vehicle', 'medical', 'measuring', 'result']
+  : ['nfc', 'medical', 'measuring', 'result'])
 const steps = computed(() => stepKeys.value.map(k => STEP_LABEL[k]!))
 // choice は免許証をタッチした人がその場で種別を選ぶだけの段なので、見出しの現在地は
 // NFC のまま動かさない (CoreS3 に送る段階も `choice: 'NFC'` で揃えてある)

@@ -904,4 +904,46 @@ describe('NormalMeasurement — 打刻と種別の選択 (Refs ippoan/alc-app-s3
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('終業点呼を選ぶと車検証の段を飛ばして体温へ進む', async () => {
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    await chooseType(wrapper, 'choice-post-operation')
+
+    // 終業に車検証は要らない (ユーザー判断) — 段も見出しも飛ばす。車検証へ進むのは始業だけ
+    expect(wrapper.text()).not.toContain('電子車検証をタップしてください')
+    const labels = wrapper.findAll('div.rounded-full').map(d => d.text())
+    expect(labels).toEqual(['NFC', '体温', '測定', '結果'])
+    const active = wrapper.findAll('div.rounded-full').filter(d => d.classes('bg-blue-600'))
+    expect(active).toHaveLength(1)
+    expect(active[0]!.text()).toBe('体温')
+    wrapper.unmount()
+  })
+
+  it('終業点呼でも完了 PUT の tenko_type が post_operation', async () => {
+    const wrapper = await mountWithStubs()
+
+    await touch(wrapper, '2601012901010')
+    await chooseType(wrapper, 'choice-post-operation')
+
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', {
+      employeeId: 'emp-1',
+      alcoholValue: 0,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-01-01'),
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    // 段を飛ばしても種別は残る
+    const completedCall = vi.mocked(updateMeasurement).mock.calls.find(
+      call => (call[1] as Record<string, unknown>).status === 'completed',
+    )
+    expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe('post_operation')
+    wrapper.unmount()
+  })
 })
