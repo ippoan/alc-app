@@ -7,14 +7,22 @@ import { deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 // 「未登録」の判定は useKioskAccess に一本化した (Refs #234, #238)。この banner は
 // hasKioskAccess / isCheckingKioskAccess / reasons を見る。
 // #135: 診断行のため useDeviceToken の lastFailureStage / lastFailureStatus もモックする。
+// #135 続報: 案内の出し分けのため lastFailureDetail / coreS3BackoffUntil もモックする。
 const hasKioskAccess = ref(false)
 const isCheckingKioskAccess = ref(false)
 const reasons = ref({ isAuthenticated: false, isDeviceActivated: false, hasDeviceJwt: false })
 const lastFailureStage = ref<'no-core-s3' | 'nonce' | 'coreS3-sign' | 'token-exchange' | null>(null)
 const lastFailureStatus = ref<number | null>(null)
+const lastFailureDetail = ref<string | null>(null)
+const coreS3BackoffUntil = ref(0)
 
 mockNuxtImport('useKioskAccess', () => () => ({ hasKioskAccess, isCheckingKioskAccess, reasons }))
-mockNuxtImport('useDeviceToken', () => () => ({ lastFailureStage, lastFailureStatus }))
+mockNuxtImport('useDeviceToken', () => () => ({
+  lastFailureStage,
+  lastFailureStatus,
+  lastFailureDetail,
+  coreS3BackoffUntil,
+}))
 
 describe('DeviceUnregisteredBanner', () => {
   beforeEach(() => {
@@ -23,6 +31,8 @@ describe('DeviceUnregisteredBanner', () => {
     reasons.value = { isAuthenticated: false, isDeviceActivated: false, hasDeviceJwt: false }
     lastFailureStage.value = null
     lastFailureStatus.value = null
+    lastFailureDetail.value = null
+    coreS3BackoffUntil.value = 0
   })
 
   it('hasKioskAccess が false なら赤枠で原因と次の操作を出す', async () => {
@@ -31,10 +41,78 @@ describe('DeviceUnregisteredBanner', () => {
     const banner = wrapper.find('[data-testid="device-unregistered-banner"]')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain(deviceUnregisteredMessage)
-    expect(banner.text()).toContain('CoreS3 を USB でつなぐと自動で使えるようになります')
-    expect(banner.text()).toContain('初めて使う CoreS3 は、管理者が登録画面で鍵を登録してください')
+    expect(banner.text()).toContain('CoreS3 を USB でつないでください')
     expect(wrapper.find('.border-red-200').exists()).toBe(true)
     wrapper.unmount()
+  })
+
+  // 案内の出し分け (Refs ippoan/alc-app-s3#135 続報)
+  describe('原因ごとの案内', () => {
+    it('CoreS3 が見えないときは USB の案内を出す', async () => {
+      lastFailureStage.value = 'no-core-s3'
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('CoreS3 を USB でつないでください')
+      expect(guidance.text()).toContain('CoreS3 を USB で許可')
+      wrapper.unmount()
+    })
+
+    it('鍵が無いときは鍵の登録を案内する', async () => {
+      lastFailureStage.value = 'coreS3-sign'
+      lastFailureDetail.value = 'no key'
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('この端末には鍵が登録されていません')
+      expect(guidance.text()).toContain('管理者が登録画面で鍵を登録してください')
+      wrapper.unmount()
+    })
+
+    it('署名がその他の理由 (no key 以外) で失敗したときは USB 挿し直し・再起動を案内する', async () => {
+      lastFailureStage.value = 'coreS3-sign'
+      lastFailureDetail.value = 'bad nonce'
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('端末が署名に応じません')
+      expect(guidance.text()).not.toContain('鍵が登録されていません')
+      wrapper.unmount()
+    })
+
+    it('nonce の取得に失敗したときはネットワークを案内する', async () => {
+      lastFailureStage.value = 'nonce'
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('サーバに繋がりません')
+      wrapper.unmount()
+    })
+
+    it('トークンの交換に失敗したときは鍵の登録し直しを案内する', async () => {
+      lastFailureStage.value = 'token-exchange'
+      lastFailureStatus.value = 401
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('鍵を登録し直してください')
+      wrapper.unmount()
+    })
+
+    it('待ちの最中も直前の原因の案内が消えない (残り秒を添えるだけ)', async () => {
+      lastFailureStage.value = 'nonce'
+      lastFailureDetail.value = null
+      coreS3BackoffUntil.value = Date.now() + 30_000
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('サーバに繋がりません')
+      expect(guidance.text()).toMatch(/あと \d+ 秒で再試行します/)
+      wrapper.unmount()
+    })
+
+    it('抑止期限が過ぎていれば残り秒を添えない', async () => {
+      lastFailureStage.value = 'token-exchange'
+      coreS3BackoffUntil.value = Date.now() - 1_000
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).not.toContain('再試行します')
+      wrapper.unmount()
+    })
   })
 
   it('hasKioskAccess が true なら出さない', async () => {
