@@ -106,6 +106,28 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     wrapper.unmount()
   })
 
+  it('card_kind が license の行だけ「免許証」チップを出す (Refs ippoan/rust-alc-api#644)', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        { id: 'p1', employee_id: null, employee_name: '田中太郎', card_id: null, card_kind: 'license', punched_at: '2026-09-16T00:00:00Z' },
+        { id: 'p2', employee_id: null, employee_name: '鈴木花子', card_id: null, card_kind: 'felica_idm', punched_at: '2026-09-16T00:01:00Z' },
+        { id: 'p3', employee_id: null, employee_name: '佐藤次郎', card_id: null, card_kind: null, punched_at: '2026-09-16T00:02:00Z' },
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+
+    const rows = wrapper.findAll('tbody tr')
+    const licenseRow = rows.find(r => r.text().includes('田中太郎'))!
+    const felicaRow = rows.find(r => r.text().includes('鈴木花子'))!
+    const browserRow = rows.find(r => r.text().includes('佐藤次郎'))!
+
+    expect(licenseRow.text()).toContain('免許証')
+    expect(felicaRow.text()).not.toContain('免許証')
+    expect(browserRow.text()).not.toContain('免許証')
+    wrapper.unmount()
+  })
+
   it('購読の onChange が呼ばれたら一覧を引き直す', async () => {
     const wrapper = await mountSuspended(TodayPunchHistory)
     listTimePunchesMock.mockClear()

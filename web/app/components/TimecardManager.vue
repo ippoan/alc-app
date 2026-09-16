@@ -5,6 +5,7 @@ import {
   listTimePunches, downloadTimePunchesCsv,
 } from '~/utils/api'
 import { jstTodayDate } from '~/utils/jst'
+import { cardKindOf } from '~/utils/card-kind'
 
 type SubTab = 'cards' | 'punches'
 
@@ -118,6 +119,11 @@ interface HistoryRow {
   deviceName: string
   /** `punch` = 打刻、`tenko` = 点呼 */
   origin: 'punch' | 'tenko'
+  /**
+   * かざしたカードの種別 (Refs ippoan/rust-alc-api#644)。「区分」(打刻か点呼か)
+   * とは別の軸 — 既存の「区分」列とは混同しないこと。
+   */
+  cardKind: ReturnType<typeof cardKindOf>
 }
 
 /**
@@ -141,6 +147,7 @@ const historyRows = computed<HistoryRow[]>(() =>
       employeeName: displayName(p),
       deviceName: p.device_name ?? '-',
       origin: p.kind === 'license' ? ('tenko' as const) : ('punch' as const),
+      cardKind: cardKindOf(p.card_kind),
     }))
     // 表示は日付で絞ってあるので、同日内の新しい順に並べれば足りる
     .sort((a, b) => b.at.localeCompare(a.at)),
@@ -351,15 +358,16 @@ async function exportCsv() {
               <th class="text-left px-4 py-2 font-medium text-gray-600">社員名</th>
               <th class="text-left px-4 py-2 font-medium text-gray-600">打刻日時</th>
               <th class="text-left px-4 py-2 font-medium text-gray-600">区分</th>
+              <th class="text-left px-4 py-2 font-medium text-gray-600">カード</th>
               <th class="text-left px-4 py-2 font-medium text-gray-600">デバイス</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="isLoadingPunches">
-              <td colspan="4" class="px-4 py-6 text-center text-gray-500">読み込み中...</td>
+              <td colspan="5" class="px-4 py-6 text-center text-gray-500">読み込み中...</td>
             </tr>
             <tr v-else-if="historyRows.length === 0">
-              <td colspan="4" class="px-4 py-6 text-center text-gray-500">打刻記録なし</td>
+              <td colspan="5" class="px-4 py-6 text-center text-gray-500">打刻記録なし</td>
             </tr>
             <tr v-for="row in historyRows" :key="row.key" class="border-t">
               <td class="px-4 py-2">{{ row.employeeName }}</td>
@@ -369,6 +377,14 @@ async function exportCsv() {
                   class="px-2 py-0.5 rounded text-xs font-medium"
                   :class="row.origin === 'tenko' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'"
                 >{{ row.origin === 'tenko' ? '点呼' : '打刻' }}</span>
+              </td>
+              <td class="px-4 py-2">
+                <span
+                  v-if="row.cardKind === 'license'"
+                  class="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"
+                >免許証</span>
+                <span v-else-if="row.cardKind === 'other'" class="text-gray-500">ICカード</span>
+                <span v-else class="text-gray-400">—</span>
               </td>
               <td class="px-4 py-2 text-gray-500">{{ row.deviceName }}</td>
             </tr>
