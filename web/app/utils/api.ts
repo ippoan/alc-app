@@ -4,6 +4,7 @@ import type {
   TenkoSchedule, CreateTenkoSchedule, UpdateTenkoSchedule, TenkoScheduleFilter, TenkoSchedulesResponse,
   TenkoSession, StartTenkoSession, SubmitAlcoholResult, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
+  TenkoRemoteEscalationReason,
   TenkoSessionFilter, TenkoSessionsResponse,
   TenkoRecordFilter,
   WebhookConfig, CreateWebhookConfig, WebhookDelivery,
@@ -562,6 +563,28 @@ export async function submitReport(sessionId: string, data: SubmitOperationRepor
   return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/report`, {
     method: 'PUT',
     body: JSON.stringify(data),
+  })
+}
+
+/**
+ * 自動点呼を遠隔点呼へ切り替えたことをサーバへ伝える (Refs ippoan/alc-app-s3#135)。
+ *
+ * 血圧を必須にすると血圧計が壊れた日に全車が出庫できなくなるため、測れないときは
+ * 運行管理者が遠隔で対応する経路へ移す。**セッションは切り替えず同じ id のまま**で、
+ * サーバは「この点呼は途中から遠隔になった」ことだけを記録する。
+ *
+ * `reason` は**必須** (サーバが空文字を弾く)。呼び出し側は
+ * `TENKO_REMOTE_ESCALATION_REASONS` から選ばせた語を渡すこと。
+ *
+ * サーバ側の口は別 PR。**まだ無くても画面は遠隔へ入れる** — 呼び出し側は失敗を握り潰す。
+ */
+export async function escalateTenkoSessionToRemote(
+  sessionId: string,
+  reason: TenkoRemoteEscalationReason,
+): Promise<TenkoSession> {
+  return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/escalate-remote`, {
+    method: 'PUT',
+    body: JSON.stringify({ reason }),
   })
 }
 

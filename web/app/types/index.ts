@@ -381,6 +381,18 @@ export interface DailyInspection {
 }
 
 /** 点呼セッション */
+/**
+ * 自動点呼を遠隔点呼へ切り替える理由の選択肢 (Refs ippoan/alc-app-s3#135)。
+ *
+ * サーバは `reason` を**必須**で受け、空文字を弾く。自由入力にすると後から集計できず
+ * 表記も揺れるので、**画面はこの一覧から選ばせる**。増やすときはここへ足す
+ * (サーバ側は文字列として受けるだけなので、追加にサーバの変更は要らない)。
+ */
+export const TENKO_REMOTE_ESCALATION_REASONS = ['血圧計の故障', '血圧計が繋がっていない', 'その他'] as const
+
+/** 上の選択肢のどれか。`reason` に入れて送る短い語 */
+export type TenkoRemoteEscalationReason = typeof TENKO_REMOTE_ESCALATION_REASONS[number]
+
 export interface TenkoSession {
   id: string
   tenant_id: string
@@ -429,6 +441,11 @@ export interface TenkoSession {
   carins_expires_on: string | null
   /** `cert_no` / `car_id` / `none` (carins に無い車) / null (番号を受け取っていない) */
   carins_matched_by: string | null
+  /**
+   * 自動点呼から遠隔点呼へ切り替えた時刻 (Refs ippoan/alc-app-s3#135)。
+   * null / 未定義 = 切り替えていない。**サーバ側で埋めるのは別 PR** なので optional。
+   */
+  escalated_to_remote_at?: string | null
 }
 
 export interface StartTenkoSession {

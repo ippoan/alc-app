@@ -11,6 +11,7 @@ vi.mock('~/utils/api', () => ({
   confirmInstruction: vi.fn(),
   submitReport: vi.fn(),
   cancelTenkoSession: vi.fn(),
+  escalateTenkoSessionToRemote: vi.fn(),
   uploadFacePhoto: vi.fn(),
   getCarryingItems: vi.fn(),
   submitCarryingItemChecks: vi.fn(),
@@ -28,6 +29,7 @@ import {
   confirmInstruction,
   submitReport,
   cancelTenkoSession,
+  escalateTenkoSessionToRemote,
   uploadFacePhoto,
   getCarryingItems,
   submitCarryingItemChecks,
@@ -934,6 +936,88 @@ describe('useTenkoKiosk', () => {
     it('何もなし → null', () => {
       const k = useTenkoKiosk()
       expect(k.tenkoType.value).toBeNull()
+    })
+  })
+
+  // ---------- 遠隔点呼への切り替え (Refs ippoan/alc-app-s3#135) ----------
+
+  describe('escalateToRemote — 血圧が測れないとき遠隔へ移す', () => {
+    it('昇格すると isRemote が立ち、同じセッションのままサーバへ伝える', async () => {
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      const escalated = makeSession({ escalated_to_remote_at: '2026-09-16T08:05:00Z' })
+      vi.mocked(escalateTenkoSessionToRemote).mockResolvedValue(escalated)
+
+      await k.escalateToRemote('血圧計の故障')
+
+      expect(k.escalatedToRemote.value).toBe(true)
+      expect(k.isRemote.value).toBe(true)
+      expect(k.escalationReason.value).toBe('血圧計の故障')
+      expect(escalateTenkoSessionToRemote).toHaveBeenCalledWith('sess-1', '血圧計の故障')
+      expect(k.session.value).toEqual(escalated)
+    })
+
+    it('最初から遠隔なら何もしない (昇格と混ぜない)', async () => {
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.session.value = makeSession()
+
+      await k.escalateToRemote('血圧計の故障')
+
+      expect(k.isRemote.value).toBe(true)
+      // 最初から遠隔の点呼を「昇格した点呼」に見せない
+      expect(k.escalatedToRemote.value).toBe(false)
+      expect(k.escalationReason.value).toBeNull()
+      expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
+    })
+
+    it('セッション開始前でも落ちず、遠隔にはなる', async () => {
+      const k = useTenkoKiosk()
+
+      await k.escalateToRemote('その他')
+
+      expect(k.isRemote.value).toBe(true)
+      expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
+    })
+
+    it('サーバへの通知が失敗しても遠隔のまま (口はまだ無い)', async () => {
+      const k = useTenkoKiosk()
+      const before = makeSession()
+      k.session.value = before
+      vi.mocked(escalateTenkoSessionToRemote).mockRejectedValue(new Error('API エラー (404)'))
+
+      await k.escalateToRemote('血圧計が繋がっていない')
+
+      // 握り潰すのは通信の失敗だけ。画面の状態は必ず遠隔へ移る
+      expect(k.isRemote.value).toBe(true)
+      expect(k.escalationReason.value).toBe('血圧計が繋がっていない')
+      expect(k.error.value).toBeNull()
+      expect(k.session.value).toEqual(before)
+    })
+
+    it('段の一覧は昇格しても変わらない (現在地がずれない)', async () => {
+      const k = useTenkoKiosk()
+      k.selectedSchedule.value = makeSchedule({ tenko_type: 'pre_operation' })
+      k.step.value = 'medical'
+      const labelsBefore = [...k.stepLabels.value]
+      const indexBefore = k.currentStepIndex.value
+
+      await k.escalateToRemote('血圧計の故障')
+
+      expect(k.stepLabels.value).toEqual(labelsBefore)
+      expect(k.currentStepIndex.value).toBe(indexBefore)
+      expect(k.stepLabels.value).toContain('予定選択')
+    })
+
+    it('reset で昇格は畳まれる', async () => {
+      const k = useTenkoKiosk()
+      await k.escalateToRemote('血圧計の故障')
+      expect(k.isRemote.value).toBe(true)
+
+      k.reset()
+
+      expect(k.escalatedToRemote.value).toBe(false)
+      expect(k.escalationReason.value).toBeNull()
+      expect(k.isRemote.value).toBe(false)
     })
   })
 })
