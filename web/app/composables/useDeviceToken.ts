@@ -51,9 +51,18 @@
  * `lastFailureStage` (4 段) と `lastFailureStatus` (HTTP status)、抑止の期限 `coreS3BackoffUntil` を
  * 公開し、試行のたびにコンソールへ 1 行だけ出す。**挙動 (抑止の秒数・経路の優先順位) は変えない。**
  *
- * コンソールに出すのは「段 / HTTP status / サーバの error コード / 経過 ms / 抑止の残り秒」だけ。
- * **token・nonce・署名・device_id・乗務員名は先頭数文字でも出さない** — 出す項目を
+ * コンソールに出すのは「段 / HTTP status / サーバの error コード / 理由の語 / 経過 ms / 抑止の残り秒」
+ * だけ。**token・nonce・署名・device_id・乗務員名は先頭数文字でも出さない** — 出す項目を
  * `warnCoreS3Failure()` で明示的に組み立て、応答オブジェクトはそのまま渡さない。
+ *
+ * ### 理由の語 (`lastFailureDetail`、続報 Refs ippoan/alc-app-s3#135)
+ *
+ * firmware は鍵が無ければ `ERR AUTH: no key`、nonce の形が不正なら `ERR AUTH: bad nonce` を
+ * 即座に返す (`AUTH SIGN` の応答。`console.ts` 側)。この `ERR AUTH: ` に続く理由の語だけを
+ * `coreS3-sign` 段の失敗から取り出して `lastFailureDetail` に残す — 画面側 (banner) が
+ * 「鍵が無い」を他の失敗と出し分けられるようにするため。**署名・nonce・トークン・device_id は
+ * 絶対に保持しない** (理由の語だけ)。firmware が想定外に長い文字列を返しても画面が壊れないよう
+ * `MAX_FAILURE_DETAIL_LEN` で切り詰める。coreS3-sign 以外の段では null。
  */
 import { ref, computed, readonly } from 'vue'
 import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
@@ -69,6 +78,8 @@ const DEFAULT_TTL_SECONDS = 3600
 const CORE_S3_DEFAULT_TTL_SECONDS = 900
 /** CoreS3 署名経路が失敗してから、これだけ試さない (ms)。再接続での解除は無い。 */
 const CORE_S3_BACKOFF_MS = 60_000
+/** lastFailureDetail に保持する理由の語の長さ上限 (#135 続報)。想定外の長い文字列で画面が壊れないように。 */
+const MAX_FAILURE_DETAIL_LEN = 40
 /**
  * 起動時の 1 本 (startupDeviceJwt) を「確認中」として待つ上限 (ms)。
  * useCoreS3Serial の claim 待ち (3 秒) と同じ起点・同じ長さ
@@ -110,6 +121,25 @@ const lastError = ref<string | null>(null)
 const lastFailureStage = ref<DeviceTokenFailureStage | null>(null)
 // 直近の失敗の HTTP status (#135)。HTTP を伴わない失敗 / 成功 / 未試行なら null
 const lastFailureStatus = ref<number | null>(null)
+// 直近の coreS3-sign 失敗の理由の語 (#135 続報。例: 'no key', 'bad nonce')。
+// coreS3-sign 以外の段の失敗 / 成功 / 未試行なら null。**署名・nonce・トークン・device_id は含まない**
+const lastFailureDetail = ref<string | null>(null)
+
+const ERR_AUTH_PREFIX = 'ERR AUTH: '
+
+/**
+ * `coreS3-sign` 段の失敗理由から `ERR AUTH: ` に続く語だけを取り出す (#135 続報)。
+ * firmware の応答行そのもの (署名や nonce を含みうる) ではなく、prefix が一致した場合の
+ * 残り部分だけを扱う。長さは `MAX_FAILURE_DETAIL_LEN` で切り詰める (想定外の文字列対策)。
+ * `coreS3-sign` 以外の段、または prefix が一致しない失敗は null (その他の理由として扱う)。
+ */
+function extractFailureDetail(stage: DeviceTokenFailureStage, message: string): string | null {
+  if (stage !== 'coreS3-sign') return null
+  if (!message.startsWith(ERR_AUTH_PREFIX)) return null
+  const detail = message.slice(ERR_AUTH_PREFIX.length).trim()
+  if (!detail) return null
+  return detail.length > MAX_FAILURE_DETAIL_LEN ? detail.slice(0, MAX_FAILURE_DETAIL_LEN) : detail
+}
 
 /**
  * 失敗を 1 行だけコンソールに出す (#135)。**引数は呼び出し側が組み立てた scalar だけ**で、
@@ -119,11 +149,12 @@ function warnCoreS3Failure(
   stage: DeviceTokenFailureStage | 'backoff',
   status: number | null,
   code: string,
+  detail: string | null,
   elapsedMs: number,
   backoffRemainSec: number,
 ): void {
   console.warn(
-    `[useDeviceToken] 端末の署名に失敗 stage=${stage} status=${status ?? '-'} code=${code} elapsed=${elapsedMs}ms backoff=${backoffRemainSec}s`,
+    `[useDeviceToken] 端末の署名に失敗 stage=${stage} status=${status ?? '-'} code=${code} detail=${detail ?? '-'} elapsed=${elapsedMs}ms backoff=${backoffRemainSec}s`,
   )
 }
 
@@ -244,8 +275,8 @@ export function useDeviceToken() {
   async function tryCoreS3Jwt(nowMs: number): Promise<string | null> {
     if (nowMs < coreS3BackoffUntil.value) {
       // 抑止中は試さない (従来どおり)。空振りした事実と残り秒だけ出す —
-      // 直近の失敗の段 (lastFailureStage) は次の試行まで保持する
-      warnCoreS3Failure('backoff', lastFailureStatus.value, '-', 0, Math.ceil((coreS3BackoffUntil.value - nowMs) / 1000))
+      // 直近の失敗の段・理由の語 (lastFailureStage / lastFailureDetail) は次の試行まで保持する
+      warnCoreS3Failure('backoff', lastFailureStatus.value, '-', lastFailureDetail.value, 0, Math.ceil((coreS3BackoffUntil.value - nowMs) / 1000))
       return null
     }
     if (!coreS3.isConnected.value) {
@@ -255,7 +286,8 @@ export function useDeviceToken() {
         // 署名を頼む相手が居ない。抑止も lastError も立てない (従来どおり) が、段だけは残す
         lastFailureStage.value = 'no-core-s3'
         lastFailureStatus.value = null
-        warnCoreS3Failure('no-core-s3', null, '-', Date.now() - nowMs, 0)
+        lastFailureDetail.value = null
+        warnCoreS3Failure('no-core-s3', null, '-', null, Date.now() - nowMs, 0)
         return null
       }
     }
@@ -263,6 +295,7 @@ export function useDeviceToken() {
     lastError.value = null
     lastFailureStage.value = null
     lastFailureStatus.value = null
+    lastFailureDetail.value = null
     // どの段まで進んだか (#135)。throw した時点の値がそのまま失敗の段になる
     let stage: DeviceTokenFailureStage = 'nonce'
     let status: number | null = null
@@ -318,8 +351,9 @@ export function useDeviceToken() {
       lastError.value = e instanceof Error ? e.message : String(e)
       lastFailureStage.value = stage
       lastFailureStatus.value = status
+      lastFailureDetail.value = extractFailureDetail(stage, lastError.value)
       coreS3BackoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
-      warnCoreS3Failure(stage, status, code, Date.now() - nowMs, CORE_S3_BACKOFF_MS / 1000)
+      warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, CORE_S3_BACKOFF_MS / 1000)
       return null
     }
   }
@@ -411,6 +445,8 @@ export function useDeviceToken() {
     lastFailureStage: readonly(lastFailureStage),
     /** 直近の失敗の HTTP status (#135)。HTTP を伴わない失敗 / 成功 / 未試行なら null */
     lastFailureStatus: readonly(lastFailureStatus),
+    /** 直近の coreS3-sign 失敗の理由の語 (#135 続報。例: 'no key')。それ以外の段 / 成功 / 未試行なら null */
+    lastFailureDetail: readonly(lastFailureDetail),
     /** CoreS3 署名経路を抑止している期限 (ms epoch)。0 なら抑止していない (#135) */
     coreS3BackoffUntil: readonly(coreS3BackoffUntil),
   }
