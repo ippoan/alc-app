@@ -3,6 +3,8 @@ export interface FaceAuthResult {
   verified: boolean
   similarity: number
   snapshot?: Blob
+  /** 顔が未登録でスキップした本人確認 (顔写真は無い。Refs ippoan/alc-app-s3#135) */
+  skipped?: boolean
 }
 
 /** 測定結果 */

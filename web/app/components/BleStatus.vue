@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isWebSerialSupported } from '~/utils/webserial'
-import { SHOW_BLOOD_PRESSURE, MEDICAL_AUTO_NEXT_DELAY_MS } from '~/utils/medical-inputs'
+import { MEDICAL_AUTO_NEXT_DELAY_MS } from '~/utils/medical-inputs'
 
 const emit = defineEmits<{
   skip: []
@@ -22,6 +22,8 @@ const {
   resetGateway,
 } = useBleGateway()
 
+const { bpEnabled } = useBloodPressureSetting()
+
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
 
@@ -40,10 +42,15 @@ onMounted(async () => {
   }
 })
 
-// 血圧を隠している間 (体温だけの運用) は、mount 後に体温が届いたら値を少し見せてから
-// 自動で次へ進む (Refs #238)。血圧を表示する運用では血圧が後から届くため対象外。
+// mount 後に必要な測定値がそろったら、値を少し見せてから自動で次へ進む (Refs #238)。
+// 「必要な値」は端末によって変わる — 血圧計を使わない端末は体温だけ、使う端末は
+// 血圧が後から届くので両方そろうまで待つ。watcher を 1 本に保つ (分けると、血圧計を
+// 繋いでいない端末で自動遷移が丸ごと消えて点呼がそこで止まる)。
 // immediate にしない — 前の運転者の値や mount 前の古い値では発火させず、mount 後の
 // clearReadings() を経て新しく届いた値だけを見る。
+const autoNextReady = computed(() =>
+  Boolean(latestTemperature.value) && (!bpEnabled.value || Boolean(latestBloodPressure.value)),
+)
 let autoNextTimer: ReturnType<typeof setTimeout> | null = null
 function clearAutoNextTimer() {
   if (autoNextTimer) {
@@ -51,16 +58,14 @@ function clearAutoNextTimer() {
     autoNextTimer = null
   }
 }
-if (!SHOW_BLOOD_PRESSURE) {
-  watch(latestTemperature, (t) => {
-    if (!t) return
-    clearAutoNextTimer()
-    autoNextTimer = setTimeout(() => {
-      autoNextTimer = null
-      emit('next')
-    }, MEDICAL_AUTO_NEXT_DELAY_MS)
-  })
-}
+watch(autoNextReady, (ready) => {
+  if (!ready) return
+  clearAutoNextTimer()
+  autoNextTimer = setTimeout(() => {
+    autoNextTimer = null
+    emit('next')
+  }, MEDICAL_AUTO_NEXT_DELAY_MS)
+})
 onUnmounted(clearAutoNextTimer)
 
 function handleNext() {
@@ -124,17 +129,20 @@ function handleRescan() {
             />
             体温計
           </span>
-          <span v-if="SHOW_BLOOD_PRESSURE" class="flex items-center gap-2">
+          <span v-if="bpEnabled" class="flex items-center gap-2">
             <span
               class="w-2.5 h-2.5 rounded-full"
               :class="bloodPressureConnected ? 'bg-green-500' : 'bg-gray-300'"
             />
             血圧計
           </span>
+          <span v-else class="text-gray-400">
+            血圧計: この端末では未使用
+          </span>
         </div>
 
         <!-- 測定値カード -->
-        <div class="grid gap-3" :class="SHOW_BLOOD_PRESSURE ? 'grid-cols-2' : 'grid-cols-1'">
+        <div class="grid gap-3" :class="bpEnabled ? 'grid-cols-2' : 'grid-cols-1'">
           <!-- 体温 -->
           <div
             class="rounded-xl p-4 text-center"
@@ -150,7 +158,7 @@ function handleRescan() {
 
           <!-- 血圧 -->
           <div
-            v-if="SHOW_BLOOD_PRESSURE"
+            v-if="bpEnabled"
             class="rounded-xl p-4 text-center"
             :class="latestBloodPressure ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 border border-gray-200'"
           >

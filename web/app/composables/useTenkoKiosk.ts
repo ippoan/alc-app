@@ -44,6 +44,12 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
 
   // 顔認証結果
   const faceSnapshot = ref<Blob | null>(null)
+  /**
+   * 顔が未登録でスキップした本人確認か (Refs ippoan/alc-app-s3#135)。
+   * いまサーバへ送るのは「顔写真なし」= `identity_face_photo_url` が無いことだけ。
+   * サーバ側にスキップを表す欄が入る次の PR で、ここを送信本体へ繋ぐ。
+   */
+  const faceSkipped = ref(false)
   const facePhotoUrl = ref<string | null>(null)
 
   // 安全判定結果
@@ -123,6 +129,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     isLoading.value = true
 
     faceSnapshot.value = result.snapshot ?? null
+    faceSkipped.value = result.skipped === true
 
     try {
       // 顔写真アップロード
@@ -376,6 +383,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     isLoading.value = false
     faceSnapshot.value = null
     facePhotoUrl.value = null
+    faceSkipped.value = false
     safetyJudgment.value = null
   }
 
@@ -390,6 +398,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     error,
     isLoading,
     faceSnapshot,
+    faceSkipped,
     safetyJudgment,
     tenkoType,
     isPreOperation,

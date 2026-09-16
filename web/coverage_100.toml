@@ -143,6 +143,10 @@ path = "app/composables/useHubClaim.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useBloodPressureSetting.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useKioskAccess.ts"
 branches = true
 

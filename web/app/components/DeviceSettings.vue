@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { DeviceSettingsResponse } from '~/types'
 import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
-import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
@@ -331,6 +330,9 @@ const fc1200 = useFc1200Serial()
 // BLE Gateway composable
 const bleGw = useBleGateway()
 
+// この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
+const { bpEnabled } = useBloodPressureSetting()
+
 // FC-1200 diagnostics
 const fc1200Testing = ref(false)
 const fc1200TestResult = ref<string | null>(null)
@@ -461,7 +463,7 @@ async function testBleGw() {
         `接続成功`,
         ver ? `FW: v${ver}` : null,
         `体温計: ${thermo ? '接続' : '未接続'}`,
-        SHOW_BLOOD_PRESSURE ? `血圧計: ${bp ? '接続' : '未接続'}` : null,
+        bpEnabled.value ? `血圧計: ${bp ? '接続' : '未接続'}` : null,
       ].filter(Boolean).join(' / ')
     } else {
       bleGwTestResult.value = '接続失敗 — CoreS3 が USB に接続されているか確認してください'
@@ -486,7 +488,7 @@ async function testAndroidBle() {
       bleGwTestResult.value = [
         `BLE ブリッジ接続成功`,
         `体温計: ${thermo ? '検出済み' : '未検出'}`,
-        SHOW_BLOOD_PRESSURE ? `血圧計: ${bp ? '検出済み' : '未検出'}` : null,
+        bpEnabled.value ? `血圧計: ${bp ? '検出済み' : '未検出'}` : null,
       ].filter(Boolean).join(' / ')
     } else {
       bleGwTestResult.value = 'BLE ブリッジ接続失敗 — アプリを再起動してください'
@@ -730,7 +732,7 @@ async function syncFc1200Date() {
       <!-- BLE セクション (Android) -->
       <div class="bg-white rounded-xl shadow-sm overflow-hidden">
         <div class="px-4 py-3 bg-gray-50 border-b">
-          <h3 class="text-sm font-medium text-gray-800">BLE 医療機器 ({{ SHOW_BLOOD_PRESSURE ? '体温計・血圧計' : '体温計' }})</h3>
+          <h3 class="text-sm font-medium text-gray-800">BLE 医療機器 ({{ bpEnabled ? '体温計・血圧計' : '体温計' }})</h3>
           <p class="text-xs text-gray-500">Android BLE スキャン → WebSocket ブリッジ</p>
         </div>
         <div class="p-4">
@@ -749,7 +751,7 @@ async function syncFc1200Date() {
                 <span class="w-1.5 h-1.5 rounded-full" :class="bleGw.thermometerConnected.value ? 'bg-green-500' : 'bg-gray-300'" />
                 体温計: {{ bleGw.thermometerConnected.value ? '検出' : '未検出' }}
               </span>
-              <span v-if="SHOW_BLOOD_PRESSURE" class="flex items-center gap-1">
+              <span v-if="bpEnabled" class="flex items-center gap-1">
                 <span class="w-1.5 h-1.5 rounded-full" :class="bleGw.bloodPressureConnected.value ? 'bg-green-500' : 'bg-gray-300'" />
                 血圧計: {{ bleGw.bloodPressureConnected.value ? '検出' : '未検出' }}
               </span>
@@ -873,7 +875,7 @@ async function syncFc1200Date() {
         <div class="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
           <div>
             <h3 class="text-sm font-medium text-gray-800">BLE 体温計・血圧計 (CoreS3)</h3>
-            <p class="text-xs text-gray-500">{{ SHOW_BLOOD_PRESSURE ? '体温計・血圧計接続用' : '体温計接続用' }} / 115200 baud</p>
+            <p class="text-xs text-gray-500">{{ bpEnabled ? '体温計・血圧計接続用' : '体温計接続用' }} / 115200 baud</p>
           </div>
           <button
             class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs hover:bg-blue-700 transition-colors"
@@ -916,7 +918,7 @@ async function syncFc1200Date() {
                 <span class="w-1.5 h-1.5 rounded-full" :class="bleGw.thermometerConnected.value ? 'bg-green-500' : 'bg-gray-300'" />
                 体温計
               </span>
-              <span v-if="SHOW_BLOOD_PRESSURE" class="flex items-center gap-1">
+              <span v-if="bpEnabled" class="flex items-center gap-1">
                 <span class="w-1.5 h-1.5 rounded-full" :class="bleGw.bloodPressureConnected.value ? 'bg-green-500' : 'bg-gray-300'" />
                 血圧計
               </span>

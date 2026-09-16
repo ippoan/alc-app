@@ -32,14 +32,20 @@ mockNuxtImport('useBleGateway', () => () => ({
   resetGateway: resetGatewayMock,
 }))
 
+const bpEnabled = ref(false)
+mockNuxtImport('useBloodPressureSetting', () => () => ({
+  bpEnabled: readonly(bpEnabled),
+  setBpEnabled: (v: boolean) => { bpEnabled.value = v },
+}))
+
 const AUTO_NEXT_DELAY_MS = 1500
 
-// SHOW_BLOOD_PRESSURE / MEDICAL_AUTO_NEXT_DELAY_MS は定数エクスポートなので、値ごとに
-// vi.doMock + resetModules で component を取り直す (モジュールスコープ状態のテスト分離
-// パターンに準拠)。
+// 血圧の出し分けは端末設定 (bpEnabled) の 1 系統。component 側にモジュール状態が
+// 残らないよう、値ごとに resetModules + 再 import で取り直す。
 describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #238)', () => {
   beforeEach(() => {
     vi.resetModules()
+    bpEnabled.value = false
     webSerialSupported = true
     isConnected.value = false
     thermometerConnected.value = false
@@ -54,7 +60,6 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
   })
 
   it('未接続なら CoreS3 前提の文言を出す (ATOM Lite の文言は残らない)', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     startAutoConnectMock.mockResolvedValue(false)
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
@@ -71,20 +76,21 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
     wrapper.unmount()
   })
 
-  it('SHOW_BLOOD_PRESSURE=false: 接続中でも血圧の表示が出ない', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
+  it('血圧を使わない端末: 接続中でも血圧の値が出ず、未使用と分かる', async () => {
     isConnected.value = true
     latestBloodPressure.value = { systolic: 120, diastolic: 80 }
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
 
-    expect(wrapper.text()).not.toContain('血圧')
+    expect(wrapper.text()).toContain('血圧計: この端末では未使用')
+    expect(wrapper.text()).not.toContain('120')
+    expect(wrapper.text()).not.toContain('80')
 
     wrapper.unmount()
   })
 
-  it('SHOW_BLOOD_PRESSURE=true: 接続中は従来どおり血圧を出す', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: true, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
+  it('血圧を使う端末: 接続中は血圧を出す', async () => {
+    bpEnabled.value = true
     isConnected.value = true
     latestBloodPressure.value = { systolic: 118, diastolic: 76 }
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
@@ -98,7 +104,6 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
   })
 
   it('測り直すボタンは resetGateway + clearReadings を呼ぶ', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     isConnected.value = true
     latestTemperature.value = { value: 36.5 }
     hasMedicalData.value = true
@@ -117,9 +122,10 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
   })
 })
 
-describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRESSURE=false、Refs #238)', () => {
+describe('BleStatus — 測定値がそろうと自動的に次へ進む (Refs #238 / ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
     vi.resetModules()
+    bpEnabled.value = false
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     isConnected.value = true
     thermometerConnected.value = true
@@ -135,7 +141,6 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
   })
 
   it('mount 後に体温が届くと MEDICAL_AUTO_NEXT_DELAY_MS 後に next が 1 回だけ発火する', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
 
@@ -158,7 +163,6 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
   it('mount 時点で既に値がある (前の運転者の値) なら自動で進まない', async () => {
     // clearReadings は mock なので実際には消えない = mount 前の値が残るケースを再現
     latestTemperature.value = { value: 36.2 }
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
 
@@ -169,7 +173,6 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
   })
 
   it('1500ms 経つ前に unmount したら next は飛ばない', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
 
@@ -182,7 +185,6 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
   })
 
   it('1500ms 経つ前に「次へ」を手動で押したら、その後タイマーは追加の next を出さない', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     hasMedicalData.value = true
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
@@ -202,7 +204,6 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
   })
 
   it('1500ms 経つ前に「スキップ」を押したら next は飛ばない', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     hasMedicalData.value = true
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
@@ -221,7 +222,6 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
   })
 
   it('1500ms 経つ前に測り直すと、タイマーが解除されて next は飛ばない', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
     hasMedicalData.value = true
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
@@ -241,8 +241,22 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
     wrapper.unmount()
   })
 
-  it('SHOW_BLOOD_PRESSURE=true なら体温が届いても自動で進まない (血圧を待つ運用)', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: true, MEDICAL_AUTO_NEXT_DELAY_MS: AUTO_NEXT_DELAY_MS }))
+  // ★ 最重要: 血圧計を繋いでいない端末で点呼が止まらないこと
+  it('血圧を使わない端末は体温だけで次へ進む', async () => {
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    latestTemperature.value = { value: 36.5 }
+    await wrapper.vm.$nextTick()
+
+    await vi.advanceTimersByTimeAsync(AUTO_NEXT_DELAY_MS)
+    expect(wrapper.emitted('next')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('血圧を使う端末は体温だけでは進まない', async () => {
+    bpEnabled.value = true
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
     const wrapper = await mountSuspended(BleStatus)
 
@@ -251,6 +265,24 @@ describe('BleStatus — 体温到達で自動的に次へ進む (SHOW_BLOOD_PRES
 
     await vi.advanceTimersByTimeAsync(AUTO_NEXT_DELAY_MS + 1000)
     expect(wrapper.emitted('next')).toBeFalsy()
+
+    wrapper.unmount()
+  })
+
+  it('血圧を使う端末は体温と血圧がそろえば進む', async () => {
+    bpEnabled.value = true
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    latestTemperature.value = { value: 36.5 }
+    await wrapper.vm.$nextTick()
+    await vi.advanceTimersByTimeAsync(AUTO_NEXT_DELAY_MS + 1000)
+    expect(wrapper.emitted('next')).toBeFalsy()
+
+    latestBloodPressure.value = { systolic: 118, diastolic: 76 }
+    await wrapper.vm.$nextTick()
+    await vi.advanceTimersByTimeAsync(AUTO_NEXT_DELAY_MS)
+    expect(wrapper.emitted('next')).toHaveLength(1)
 
     wrapper.unmount()
   })

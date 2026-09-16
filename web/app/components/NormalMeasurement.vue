@@ -4,7 +4,6 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
-import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 import { evtArg } from '~/composables/useCoreS3Serial'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
@@ -332,6 +331,9 @@ const {
   latestBloodPressure: bleBloodPressure,
 } = useBleGateway()
 
+// この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
+const { bpEnabled } = useBloodPressureSetting()
+
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
 watch(isDemoMode, (v) => {
@@ -589,13 +591,13 @@ function reset() {
   stopMeasuringCamera()
 }
 
-const STEP_LABEL: Record<string, string> = {
+const stepLabel = computed<Record<string, string>>(() => ({
   nfc: 'NFC',
   vehicle: '車検証',
-  medical: SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温',
+  medical: bpEnabled.value ? '体温・血圧' : '体温',
   measuring: '測定',
   result: '結果',
-}
+}))
 /**
  * 段の見出し。**車検証の段を通るのは始業点呼だけ**なので、アルコールチェックと
  * 終業点呼では見出しからも「車検証」を落とす (Refs ippoan/alc-app-s3#135)。
@@ -603,7 +605,7 @@ const STEP_LABEL: Record<string, string> = {
 const stepKeys = computed<string[]>(() => tenkoType.value === 'pre_operation'
   ? ['nfc', 'vehicle', 'medical', 'measuring', 'result']
   : ['nfc', 'medical', 'measuring', 'result'])
-const steps = computed(() => stepKeys.value.map(k => STEP_LABEL[k]!))
+const steps = computed(() => stepKeys.value.map(k => stepLabel.value[k]!))
 // choice は免許証をタッチした人がその場で種別を選ぶだけの段なので、見出しの現在地は
 // NFC のまま動かさない (CoreS3 に送る段階も `choice: 'NFC'` で揃えてある)
 const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'choice' ? 'nfc' : step.value))
@@ -864,7 +866,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       <!-- Step 3: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
       <div v-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ bpEnabled ? '体温・血圧' : '体温' }}</h2>
           <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
@@ -940,7 +942,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
         />
         <!-- 医療データ入力元バッジ -->
         <div
-          v-if="medicalInputSource && (measurementResult.temperature || (SHOW_BLOOD_PRESSURE && measurementResult.systolic))"
+          v-if="medicalInputSource && (measurementResult.temperature || (bpEnabled && measurementResult.systolic))"
           class="text-center text-xs"
         >
           <span

@@ -1,17 +1,61 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { ref, readonly } from 'vue'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import ManualMedicalInput from '~/components/ManualMedicalInput.vue'
 import type { SubmitMedicalData } from '~/types'
 
-// SHOW_BLOOD_PRESSURE は定数エクスポートなので、値ごとに vi.doMock + resetModules で
-// component を取り直す (モジュールスコープ状態のテスト分離パターンに準拠)。
-describe('ManualMedicalInput — SHOW_BLOOD_PRESSURE の出し分け (Refs #238)', () => {
+// この端末で血圧計を使うか (端末設定の 1 系統)。受け口は useBloodPressureSetting だけ。
+const bpEnabled = ref(false)
+mockNuxtImport('useBloodPressureSetting', () => () => ({
+  bpEnabled: readonly(bpEnabled),
+  setBpEnabled: (v: boolean) => { bpEnabled.value = v },
+}))
+
+describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
-    vi.resetModules()
+    bpEnabled.value = false
   })
 
-  it('SHOW_BLOOD_PRESSURE=false: 血圧欄が無く、送信データの systolic/diastolic が無い (null 送信、偽の 120/80 を防ぐ)', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: false }))
-    const { default: ManualMedicalInput } = await import('~/components/ManualMedicalInput.vue')
+  it('初期値は空で、触らなければ値を送らない', async () => {
+    bpEnabled.value = true
+    const wrapper = await mountSuspended(ManualMedicalInput)
+
+    // 欄は出るが空 (既定値 120/80 を置かない)
+    expect(wrapper.text()).toContain('収縮期血圧')
+    expect(wrapper.text()).toContain('拡張期血圧')
+    const values = wrapper.findAll('input').map(i => (i.element as HTMLInputElement).value)
+    expect(values).toContain('')
+
+    const submitBtn = wrapper.findAll('button').find(b => b.text() === '送信')
+    await submitBtn!.trigger('click')
+
+    const data = wrapper.emitted('submit')![0]![0] as SubmitMedicalData
+    // 触っていない初期値が「測れた値」として通らないこと
+    expect(data.systolic).toBeUndefined()
+    expect(data.diastolic).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  it('血圧を使う端末で入力した値はそのまま送られる', async () => {
+    bpEnabled.value = true
+    const wrapper = await mountSuspended(ManualMedicalInput)
+
+    const inputs = wrapper.findAll('input')
+    await inputs[2]!.setValue('118')
+    await inputs[3]!.setValue('76')
+
+    const submitBtn = wrapper.findAll('button').find(b => b.text() === '送信')
+    await submitBtn!.trigger('click')
+
+    const data = wrapper.emitted('submit')![0]![0] as SubmitMedicalData
+    expect(data.systolic).toBe(118)
+    expect(data.diastolic).toBe(76)
+
+    wrapper.unmount()
+  })
+
+  it('血圧を使わない端末では血圧欄が無く、systolic/diastolic を送らない', async () => {
     const wrapper = await mountSuspended(ManualMedicalInput)
 
     expect(wrapper.text()).not.toContain('収縮期血圧')
@@ -20,9 +64,7 @@ describe('ManualMedicalInput — SHOW_BLOOD_PRESSURE の出し分け (Refs #238)
     const submitBtn = wrapper.findAll('button').find(b => b.text() === '送信')
     await submitBtn!.trigger('click')
 
-    const emitted = wrapper.emitted('submit')
-    expect(emitted).toBeTruthy()
-    const data = emitted![0]![0] as SubmitMedicalData
+    const data = wrapper.emitted('submit')![0]![0] as SubmitMedicalData
     expect(data.systolic).toBeUndefined()
     expect(data.diastolic).toBeUndefined()
     // 体温・脈拍は影響を受けない
@@ -32,22 +74,11 @@ describe('ManualMedicalInput — SHOW_BLOOD_PRESSURE の出し分け (Refs #238)
     wrapper.unmount()
   })
 
-  it('SHOW_BLOOD_PRESSURE=true: 血圧欄があり、従来どおり既定値 120/80 が送られる', async () => {
-    vi.doMock('~/utils/medical-inputs', () => ({ SHOW_BLOOD_PRESSURE: true }))
-    const { default: ManualMedicalInput } = await import('~/components/ManualMedicalInput.vue')
+  it('スキップは skip を投げる', async () => {
     const wrapper = await mountSuspended(ManualMedicalInput)
-
-    expect(wrapper.text()).toContain('収縮期血圧')
-    expect(wrapper.text()).toContain('拡張期血圧')
-
-    const submitBtn = wrapper.findAll('button').find(b => b.text() === '送信')
-    await submitBtn!.trigger('click')
-
-    const emitted = wrapper.emitted('submit')
-    const data = emitted![0]![0] as SubmitMedicalData
-    expect(data.systolic).toBe(120)
-    expect(data.diastolic).toBe(80)
-
+    const skipBtn = wrapper.findAll('button').find(b => b.text() === 'スキップ')
+    await skipBtn!.trigger('click')
+    expect(wrapper.emitted('skip')).toHaveLength(1)
     wrapper.unmount()
   })
 })
