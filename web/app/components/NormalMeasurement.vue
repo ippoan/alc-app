@@ -54,8 +54,8 @@ function chooseType(type: TenkoType) {
 }
 
 // --- 免許証タッチのその場で打刻する (Refs ippoan/alc-app-s3#135) ---
-// タイムカードタブと同じ打刻の口 (`~/utils/api.ts` → alc-app の server route →
-// cf-alc-recorder) をそのまま通す。新しい API は作らない。
+// 既存の打刻の口 (`~/utils/api.ts` → alc-app の server route → cf-alc-recorder) を
+// そのまま通す。新しい API は作らない。
 // **何も選ばずに離れても打刻は残る** = 打刻だけの人はタッチして終われる。
 
 /**
