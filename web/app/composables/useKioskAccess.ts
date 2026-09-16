@@ -14,18 +14,29 @@
  * `isCheckingKioskAccess` (Refs #238): 起動時の 1 本 (`useDeviceToken().startupDeviceJwt`:
  * CoreS3 の探索 → 最初の端末 JWT の取得、上限 3 秒) が終わるまでは「まだ無い」と
  * 「このまま無い」を区別できない。その間は「未登録」の案内を出さず確認中として扱う。
+ *
+ * `reasons` (Refs ippoan/alc-app-s3#135): hasKioskAccess は 3 つの OR なので、false のとき
+ * **どれが false なのか**が画面から分からなかった。3 つの真偽をそのまま公開する
+ * (真偽だけ — access token も device JWT も値は返さない)。
  */
 export function useKioskAccess() {
   const { isAuthenticated, isDeviceActivated } = useAuth()
   const { hasDeviceJwt, isStartupJwtPending } = useDeviceToken()
 
+  /** hasKioskAccess を構成する 3 条件の真偽 (#135 の診断用)。値そのものは含めない */
+  const reasons = computed(() => ({
+    isAuthenticated: isAuthenticated.value,
+    isDeviceActivated: isDeviceActivated.value,
+    hasDeviceJwt: hasDeviceJwt.value,
+  }))
+
   const hasKioskAccess = computed(() =>
-    isAuthenticated.value || isDeviceActivated.value || hasDeviceJwt.value,
+    reasons.value.isAuthenticated || reasons.value.isDeviceActivated || reasons.value.hasDeviceJwt,
   )
 
   const isCheckingKioskAccess = computed(() =>
     !hasKioskAccess.value && isStartupJwtPending.value,
   )
 
-  return { hasKioskAccess, isCheckingKioskAccess }
+  return { hasKioskAccess, isCheckingKioskAccess, reasons }
 }
