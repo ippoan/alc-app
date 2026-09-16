@@ -10,6 +10,8 @@ export type CoreS3Stage = 'NFC' | 'CARINS' | 'TEMP' | 'ALCOHOL' | 'PC'
  */
 const STEP_TO_STAGE: Record<string, CoreS3Stage | undefined> = {
   nfc: 'NFC',
+  // 種別の選択 (免許証タッチの直後) は NFC の段の続き (Refs ippoan/alc-app-s3#135)
+  choice: 'NFC',
   interrupted: 'NFC',
   cancelled: 'NFC',
   vehicle: 'CARINS',

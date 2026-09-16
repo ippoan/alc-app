@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { MeasurementResult, TenkoType, CarInspectionLookupResponse } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection } from '~/utils/api'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection, punchTimecard } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
-import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 import { evtArg } from '~/composables/useCoreS3Serial'
 
@@ -16,7 +16,7 @@ const props = defineProps<{
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 
-const step = ref<'nfc' | 'vehicle' | 'medical' | 'measuring' | 'result'>('nfc')
+const step = ref<'nfc' | 'choice' | 'vehicle' | 'medical' | 'measuring' | 'result'>('nfc')
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
 
@@ -26,6 +26,93 @@ const tenkoType = ref<TenkoType>('normal')
 function chooseVehicleStep(type: TenkoType) {
   tenkoType.value = type
   step.value = 'medical'
+}
+
+/**
+ * 免許証タッチの直後の段 (choice)。「アルコールチェック / 始業点呼 / 終業点呼」を選ぶ
+ * (Refs ippoan/alc-app-s3#135)。
+ *
+ * **アルコールチェック = 種別なしの測定**。点呼種別の列は NULL を受けない
+ * (`migrations/140_normal_tenko_sessions.sql` の CHECK / `015` の NOT NULL) ので、
+ * スキップと同じ `'normal'` で記録し、車検証の段を飛ばして体温へ進む
+ * (保存経路は増やさない — 既存の完了 PUT / offline-queue をそのまま通る)。
+ */
+function chooseType(type: TenkoType) {
+  tenkoType.value = type
+  step.value = type === 'normal' ? 'medical' : 'vehicle'
+}
+
+// --- 免許証タッチのその場で打刻する (Refs ippoan/alc-app-s3#135) ---
+// タイムカードタブと同じ打刻の口 (`~/utils/api.ts` → alc-app の server route →
+// cf-alc-recorder) をそのまま通す。新しい API は作らない。
+// **何も選ばずに離れても打刻は残る** = 打刻だけの人はタッチして終われる。
+
+/**
+ * 同じカードの連続タップで 2 回打刻しないための窓。
+ *
+ * 値は `useNfcReader.ts` の `DEDUPE_WINDOW_MS` (3000) に揃えてある — 免許証の通り道は
+ * 既に「同じ ID を 3 秒以内に再受信したら捨てる」ので、ここだけ別の長さにすると
+ * 同じ操作が経路 (PC ブリッジ / CoreS3 直結) によって違う結果になる。
+ * `onNfcRead` は `await` を挟むため、1 回目の応答が返る前に 2 回目が段のガードを
+ * 通り抜けて届きうる — その取りこぼしをこちら側の窓で止める。
+ */
+const PUNCH_REPEAT_WINDOW_MS = 3000
+
+/** 打刻できた時刻 (choice の段の上に出す)。null = 打てていない */
+const punchedAt = ref<Date | null>(null)
+/** 打刻の失敗理由 (赤い帯で出す) */
+const punchErrorMessage = ref<string | null>(null)
+/** 打刻を見送った理由。オフライン (通信なし) と手入力 (card_id が無い) */
+const punchSkipReason = ref<'offline' | 'manual' | null>(null)
+/** 直前に打刻を試みたカードと時刻 (連続タップの除去に使う。表示しないので ref にしない) */
+let lastPunchedCardId: string | null = null
+let lastPunchedAt = 0
+
+const punchedAtLabel = computed(() => punchedAt.value
+  ? punchedAt.value.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+  : '')
+
+function clearPunchState() {
+  punchedAt.value = null
+  punchErrorMessage.value = null
+  punchSkipReason.value = null
+}
+
+/**
+ * 打刻失敗の文言。**status を握りつぶさない** — 未ペアリング (資格情報が無い) と
+ * 通信障害を同じ文言にすると、現地で「ペアリングすれば直る」と分からない
+ * (TimePunchKiosk.vue と同じ切り分け)。
+ */
+function punchFailureMessage(e: unknown): string {
+  const err = e as { punchFailure?: string, status?: number } | undefined
+  if (err?.punchFailure === 'unpaired') return deviceUnregisteredMessage
+  if (err?.punchFailure === 'forbidden') return 'この端末では打刻できません (ペアリングの種別を確認してください)'
+  return err?.status ? `打刻に失敗しました (${err.status})` : '打刻に失敗しました'
+}
+
+/**
+ * 打刻する (best-effort: 失敗しても投げない)。**点呼を打刻の失敗で止めない**。
+ * オフラインでは打たない — 打刻のキューイングはこの段では持たない
+ * (未送信の測定結果キューに打刻を混ぜると flush の経路が濁る)。
+ */
+async function tryPunch(cardId: string) {
+  if (!isOnline.value) {
+    punchSkipReason.value = 'offline'
+    return
+  }
+  const now = Date.now()
+  if (cardId === lastPunchedCardId && now - lastPunchedAt < PUNCH_REPEAT_WINDOW_MS) return
+  // **往復を待つ前に**記録する — 応答を待ってから記録すると、待っているあいだに
+  // 届いた 2 回目のタップが窓をすり抜けて打刻が 2 行入る
+  lastPunchedCardId = cardId
+  lastPunchedAt = now
+  try {
+    await punchTimecard(cardId)
+    punchedAt.value = new Date()
+  }
+  catch (e) {
+    punchErrorMessage.value = punchFailureMessage(e)
+  }
 }
 
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
@@ -127,7 +214,11 @@ async function tryStartMeasurement(empId: string) {
 const employeeName = ref('')
 const approvalError = ref<string | null>(null)
 async function onNfcRead(nfcId: string, expiryDate?: Date) {
+  // **測定中のタップで段が巻き戻らないようにする。このガードを外さない**
+  // (Refs ippoan/alc-app-s3#135)
+  if (step.value !== 'nfc') return
   approvalError.value = null
+  clearPunchState()
   if (expiryDate) {
     licenseExpiryDate.value = expiryDate
     licenseExpiryStatus.value = checkLicenseExpiry(expiryDate)
@@ -138,7 +229,9 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
     employeeName.value = emp.name
     await tryStartMeasurement(emp.id)
     await faceSync()
-    step.value = 'vehicle'
+    // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
+    await tryPunch(nfcId)
+    step.value = 'choice'
   } catch {
     const msg = employeeNotFoundByNfc(nfcId)
     console.error(msg)
@@ -153,13 +246,16 @@ async function onManualSubmit() {
   if (!input) return
   manualError.value = null
   approvalError.value = null
+  clearPunchState()
   try {
     const emp = await getEmployeeByCode(input)
     employeeId.value = emp.id
     employeeName.value = emp.name
     await tryStartMeasurement(emp.id)
     await faceSync()
-    step.value = 'vehicle'
+    // 手入力には card_id が無いので打刻しない (打刻は免許証のタッチだけ)
+    punchSkipReason.value = 'manual'
+    step.value = 'choice'
   } catch {
     manualError.value = employeeNotFoundByCode(input)
   }
@@ -415,6 +511,9 @@ function reset() {
   carinsVehicleId.value = undefined
   carinsReadError.value = false
   carinsLookup.value = null
+  clearPunchState()
+  lastPunchedCardId = null
+  lastPunchedAt = 0
   activeMeasurementId.value = null
   manualMedicalData.value = null
   medicalInputSource.value = null
@@ -424,9 +523,24 @@ function reset() {
   stopMeasuringCamera()
 }
 
-const steps = ['NFC', '車検証', SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温', '測定', '結果'] as const
-const stepKeys = ['nfc', 'vehicle', 'medical', 'measuring', 'result'] as const
-const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
+const STEP_LABEL: Record<string, string> = {
+  nfc: 'NFC',
+  vehicle: '車検証',
+  medical: SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温',
+  measuring: '測定',
+  result: '結果',
+}
+/**
+ * 段の見出し。**アルコールチェック (= 種別なしの測定) は車検証の段を通らない**ので
+ * 見出しからも落とす (Refs ippoan/alc-app-s3#135)。
+ */
+const stepKeys = computed<string[]>(() => tenkoType.value === 'normal'
+  ? ['nfc', 'medical', 'measuring', 'result']
+  : ['nfc', 'vehicle', 'medical', 'measuring', 'result'])
+const steps = computed(() => stepKeys.value.map(k => STEP_LABEL[k]!))
+// choice は免許証をタッチした人がその場で種別を選ぶだけの段なので、見出しの現在地は
+// NFC のまま動かさない (CoreS3 に送る段階も `choice: 'NFC'` で揃えてある)
+const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'choice' ? 'nfc' : step.value))
 </script>
 
 <template>
@@ -577,6 +691,62 @@ const currentStepIndex = computed(() => stepKeys.indexOf(step.value))
               @click="useManualInput = false"
             >
               NFC で読み取る
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 1.5: 種別の選択 (免許証タッチの直後。打刻はここへ来る前に済んでいる、
+           Refs ippoan/alc-app-s3#135) -->
+      <div v-if="step === 'choice'" class="flex flex-col gap-4">
+        <div class="bg-white rounded-2xl p-6 shadow-sm">
+          <!-- 打刻の結果 (何も選ばずに離れても打刻は残る) -->
+          <div
+            v-if="punchedAt"
+            data-testid="punch-done"
+            :class="['w-full border rounded-xl px-4 py-2 mb-4 text-center text-sm', EXPIRY_TONE_CLASS.banner.green]"
+          >
+            打刻しました {{ punchedAtLabel }}
+          </div>
+          <div
+            v-else-if="punchErrorMessage"
+            data-testid="punch-failed"
+            :class="['w-full border rounded-xl px-4 py-2 mb-4 text-center text-sm', EXPIRY_TONE_CLASS.banner.red]"
+          >
+            {{ punchErrorMessage }}
+          </div>
+          <div
+            v-else-if="punchSkipReason"
+            data-testid="punch-skipped"
+            :class="['w-full border rounded-xl px-4 py-2 mb-4 text-center text-sm', EXPIRY_TONE_CLASS.banner.yellow]"
+          >
+            {{ punchSkipReason === 'offline' ? 'オフライン — 打刻は記録されません' : '手入力では打刻されません' }}
+          </div>
+
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">操作を選んでください</h2>
+          <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
+
+          <div class="flex flex-col gap-3">
+            <button
+              data-testid="choice-alcohol"
+              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+              @click="chooseType('normal')"
+            >
+              アルコールチェック
+            </button>
+            <button
+              data-testid="choice-pre-operation"
+              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+              @click="chooseType('pre_operation')"
+            >
+              始業点呼
+            </button>
+            <button
+              data-testid="choice-post-operation"
+              class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+              @click="chooseType('post_operation')"
+            >
+              終業点呼
             </button>
           </div>
         </div>
