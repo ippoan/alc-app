@@ -149,7 +149,7 @@ describe('pages/index — 警告デバイスの見張り', () => {
   })
 })
 
-describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点呼のカードの下に出すのは PC だけ (Refs ippoan/alc-app#238)', () => {
+describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点呼のカードの下に出す (Refs ippoan/alc-app#238, ippoan/alc-app-s3#135)', () => {
   let wrapper: VueWrapper | null = null
   const originalUserAgent = navigator.userAgent
 
@@ -174,11 +174,11 @@ describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点
     expect(normalMeasurement.classes()).toContain('min-h-0')
   })
 
-  it('Android では本日の打刻履歴を出さない (通常点呼のみ)', async () => {
+  it('タブレット (Android UA) でも本日の打刻履歴を出す — タイムカードタブ廃止で打刻の口がここだけになるため (Refs ippoan/alc-app-s3#135)', async () => {
     Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 14)', configurable: true })
     wrapper = await mountIndex('/?role=driver')
     expect(wrapper.findComponent(NormalMeasurement).exists()).toBe(true)
-    expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(false)
+    expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(true)
   })
 
   it('通常点呼タブ以外 (点呼) では PC でも本日の打刻履歴を出さない', async () => {
