@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { ref, readonly, nextTick } from 'vue'
 import type { VueWrapper } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import IndexPage from '~/pages/index.vue'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
 import TodayPunchHistory from '~/components/TodayPunchHistory.vue'
+import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
 
 // トップ画面のうち「警告デバイスの見張りをロールタブに関わらず始める」部分だけを見る (Refs #231)。
 // useAlarmWatch は本物、その下の singleton (デバイス / 着信購読 / 設定) だけをモックして
@@ -185,5 +188,49 @@ describe('pages/index — 本日の打刻履歴 (TodayPunchHistory) を通常点
     Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', configurable: true })
     wrapper = await mountIndex('/?role=driver&tab=tenko')
     expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(false)
+  })
+})
+
+describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () => {
+  let wrapper: VueWrapper | null = null
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  /** 血圧端末の manifest。start_url を実物から読み、インストール後の起動を再現する */
+  function bpManifest() {
+    return JSON.parse(
+      readFileSync(resolve(import.meta.dirname!, '../../public/manifest-bp.webmanifest'), 'utf-8'),
+    )
+  }
+
+  it('(manifest) 血圧端末の manifest で開くと血圧測定タブが出る', async () => {
+    wrapper = await mountIndex(bpManifest().start_url)
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+    // 通常点呼のカードは出ない — 血圧しか測らない端末
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(false)
+  })
+
+  it('運行者の既定のタブ (?role=driver) では血圧測定タブは出ない', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
+  it('ハンバーガーメニューから血圧測定タブへ移れる', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    // ハンバーガー (3 本線のアイコン) を開く
+    const hamburger = wrapper.findAll('button').find(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))
+    expect(hamburger).toBeTruthy()
+    await hamburger!.trigger('click')
+    await nextTick()
+
+    const item = wrapper.findAll('button').find(b => b.text() === '血圧測定')
+    expect(item).toBeTruthy()
+    await item!.trigger('click')
+    await nextTick()
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
   })
 })
