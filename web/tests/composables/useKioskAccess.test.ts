@@ -58,6 +58,24 @@ describe('useKioskAccess', () => {
     expect(hasKioskAccess.value).toBe(true)
   })
 
+  // 3 つの理由をそのまま返す (Refs ippoan/alc-app-s3#135)
+  describe('reasons', () => {
+    it('3 条件すべて false ならすべて false を返す', async () => {
+      const { useKioskAccess } = await import('~/composables/useKioskAccess')
+      const { reasons } = useKioskAccess()
+      expect(reasons.value).toEqual({ isAuthenticated: false, isDeviceActivated: false, hasDeviceJwt: false })
+    })
+
+    it('3 つの真偽をそのまま返す (どれか 1 つだけ true でも他は false のまま)', async () => {
+      accessToken.value = 'jwt'
+      deviceTenantId.value = null
+      hasDeviceJwt.value = true
+      const { useKioskAccess } = await import('~/composables/useKioskAccess')
+      const { reasons } = useKioskAccess()
+      expect(reasons.value).toEqual({ isAuthenticated: true, isDeviceActivated: false, hasDeviceJwt: true })
+    })
+  })
+
   // isCheckingKioskAccess の真理値表 (hasKioskAccess × isStartupJwtPending, Refs #238)
   describe('isCheckingKioskAccess', () => {
     it('hasKioskAccess=false, isStartupJwtPending=false → false (確認中ではない=未登録確定)', async () => {

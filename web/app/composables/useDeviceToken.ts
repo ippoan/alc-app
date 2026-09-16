@@ -43,6 +43,17 @@
  * - 起動時の 1 本 (`startupDeviceJwt`、Refs #238): 最初の `getDeviceJwt()` を起動から 1 回だけ作って
  *   共有する (CoreS3 の探索を最大 3 秒待ち、繋がっていれば署名で取る)。`isStartupJwtPending` は
  *   その 1 本が未解決かつ起動から 3 秒以内の間だけ true — 運行者タブの「確認中」はこれだけを見る。
+ *
+ * ## 失敗が現地で読めるようにする診断 (Refs ippoan/alc-app-s3#135)
+ *
+ * 本番で「この端末はまだ使える状態になっていません」の帯が消えないとき、**どの段で落ちたのか**が
+ * 画面からもコンソールからも読めなかった。`lastError` (文字列) に加えて機械可読な
+ * `lastFailureStage` (4 段) と `lastFailureStatus` (HTTP status)、抑止の期限 `coreS3BackoffUntil` を
+ * 公開し、試行のたびにコンソールへ 1 行だけ出す。**挙動 (抑止の秒数・経路の優先順位) は変えない。**
+ *
+ * コンソールに出すのは「段 / HTTP status / サーバの error コード / 経過 ms / 抑止の残り秒」だけ。
+ * **token・nonce・署名・device_id・乗務員名は先頭数文字でも出さない** — 出す項目を
+ * `warnCoreS3Failure()` で明示的に組み立て、応答オブジェクトはそのまま渡さない。
  */
 import { ref, computed, readonly } from 'vue'
 import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
@@ -64,6 +75,15 @@ const CORE_S3_BACKOFF_MS = 60_000
  */
 const STARTUP_TIMEOUT_MS = 3000
 
+/**
+ * CoreS3 署名経路がどの段で落ちたか (Refs ippoan/alc-app-s3#135)。
+ * - `no-core-s3`: CoreS3 が USB でつながっていない (署名を頼む相手が居ない)
+ * - `nonce`: auth-worker `/device/alarm-nonce` の取得
+ * - `coreS3-sign`: CoreS3 への署名要求 (`AUTH SIGN`)
+ * - `token-exchange`: auth-worker `/device/alarm-token` の交換
+ */
+export type DeviceTokenFailureStage = 'no-core-s3' | 'nonce' | 'coreS3-sign' | 'token-exchange'
+
 const isClient = typeof window !== 'undefined'
 
 const kioskDeviceId = ref<string | null>(
@@ -82,9 +102,44 @@ let cachedExpMs = 0
 // getDeviceJwt() の single-flight。同時に何回呼ばれても実際の取得は 1 本にまとめる。
 let jwtInFlight: Promise<string | null> | null = null
 // CoreS3 署名経路の直近の失敗時刻から CORE_S3_BACKOFF_MS 経つまでは試さない (ms epoch)。
-let coreS3BackoffUntilMs = 0
+// 0 なら抑止していない。抑止の秒数も挙動も #135 では変えていない (診断で見えるようにしただけ)
+const coreS3BackoffUntil = ref(0)
 // CoreS3 署名経路の直近の失敗理由 (画面表示用)。成功 / 未試行なら null
 const lastError = ref<string | null>(null)
+// 直近の失敗がどの段か (#135)。成功 / 未試行なら null
+const lastFailureStage = ref<DeviceTokenFailureStage | null>(null)
+// 直近の失敗の HTTP status (#135)。HTTP を伴わない失敗 / 成功 / 未試行なら null
+const lastFailureStatus = ref<number | null>(null)
+
+/**
+ * 失敗を 1 行だけコンソールに出す (#135)。**引数は呼び出し側が組み立てた scalar だけ**で、
+ * 応答オブジェクト・token・nonce・署名は受け取らない (渡せないので漏れようがない)。
+ */
+function warnCoreS3Failure(
+  stage: DeviceTokenFailureStage | 'backoff',
+  status: number | null,
+  code: string,
+  elapsedMs: number,
+  backoffRemainSec: number,
+): void {
+  console.warn(
+    `[useDeviceToken] 端末の署名に失敗 stage=${stage} status=${status ?? '-'} code=${code} elapsed=${elapsedMs}ms backoff=${backoffRemainSec}s`,
+  )
+}
+
+/**
+ * 失敗応答の body から `error` の文字列だけを取り出す (#135 の診断用)。
+ * 判定には一切使わない (経路の可否は従来どおり HTTP status だけで決める)。無ければ `'-'`。
+ */
+async function readErrorCode(res: { json: () => Promise<unknown> }): Promise<string> {
+  try {
+    const data = (await res.json()) as { error?: unknown }
+    return typeof data.error === 'string' ? data.error : '-'
+  }
+  catch {
+    return '-'
+  }
+}
 // CoreS3 の再接続監視 (キャッシュ破棄) を二重登録しないためのガード (useHubClaim と同じ流儀)
 let closeListenerInstalled = false
 // 起動時の 1 本 (= 最初の getDeviceJwt()、Refs #238)。起動から 1 回だけ作り、以後は同じものを返す
@@ -187,29 +242,56 @@ export function useDeviceToken() {
    * 成功したら null に戻す。
    */
   async function tryCoreS3Jwt(nowMs: number): Promise<string | null> {
-    if (nowMs < coreS3BackoffUntilMs) return null
+    if (nowMs < coreS3BackoffUntil.value) {
+      // 抑止中は試さない (従来どおり)。空振りした事実と残り秒だけ出す —
+      // 直近の失敗の段 (lastFailureStage) は次の試行まで保持する
+      warnCoreS3Failure('backoff', lastFailureStatus.value, '-', 0, Math.ceil((coreS3BackoffUntil.value - nowMs) / 1000))
+      return null
+    }
     if (!coreS3.isConnected.value) {
       // 結果の真偽ではなく接続を見直す — 探索で繋がった後に抜かれていれば署名は頼めない
       await coreS3.startupProbe()
-      if (!coreS3.isConnected.value) return null
+      if (!coreS3.isConnected.value) {
+        // 署名を頼む相手が居ない。抑止も lastError も立てない (従来どおり) が、段だけは残す
+        lastFailureStage.value = 'no-core-s3'
+        lastFailureStatus.value = null
+        warnCoreS3Failure('no-core-s3', null, '-', Date.now() - nowMs, 0)
+        return null
+      }
     }
 
     lastError.value = null
+    lastFailureStage.value = null
+    lastFailureStatus.value = null
+    // どの段まで進んだか (#135)。throw した時点の値がそのまま失敗の段になる
+    let stage: DeviceTokenFailureStage = 'nonce'
+    let status: number | null = null
+    let code = '-'
     try {
       const nonceRes = await fetch(`${authWorkerUrl}/device/alarm-nonce`)
-      if (!nonceRes.ok) throw new Error(`alarm-nonce http ${nonceRes.status}`)
+      if (!nonceRes.ok) {
+        status = nonceRes.status
+        code = await readErrorCode(nonceRes)
+        throw new Error(`alarm-nonce http ${nonceRes.status}`)
+      }
       const nonceData = (await nonceRes.json()) as { nonce?: string }
       if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
 
+      stage = 'coreS3-sign'
       const signed = await signAlarmDeviceNonce(nonceData.nonce, coreS3.request)
       if (!signed) throw new Error('AUTH SIG の parse に失敗')
 
+      stage = 'token-exchange'
       const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nonce: nonceData.nonce, pubkey: signed.pubkey, sig: signed.sig }),
       })
-      if (!tokenRes.ok) throw new Error(`alarm-token http ${tokenRes.status}`)
+      if (!tokenRes.ok) {
+        status = tokenRes.status
+        code = await readErrorCode(tokenRes)
+        throw new Error(`alarm-token http ${tokenRes.status}`)
+      }
       const tokenData = (await tokenRes.json()) as {
         access_token?: string
         token_type?: string
@@ -219,20 +301,25 @@ export function useDeviceToken() {
       if (!tokenData.access_token) throw new Error('alarm-token: access_token 欠落')
 
       // tenant の食い違いは拒否しない (発行元 auth-worker の判断を尊重、warn のみ)
-      if (typeof tokenData.tenant_id === 'string' && tokenData.tenant_id !== deviceTenantId.value) {
+      const issuedTenantId = tokenData.tenant_id
+      if (typeof issuedTenantId === 'string' && issuedTenantId !== deviceTenantId.value) {
         console.warn(
-          `[useDeviceToken] alarm-token の tenant_id (${tokenData.tenant_id}) が deviceTenantId (${deviceTenantId.value}) と食い違います`,
+          `[useDeviceToken] alarm-token の tenant_id (${issuedTenantId}) が deviceTenantId (${deviceTenantId.value}) と食い違います`,
         )
       }
 
       const ttl = typeof tokenData.expires_in === 'number' ? tokenData.expires_in : CORE_S3_DEFAULT_TTL_SECONDS
       cachedJwt.value = tokenData.access_token
       cachedExpMs = nowMs + ttl * 1000
+      console.info(`[useDeviceToken] 端末の署名に成功 stage=ok elapsed=${Date.now() - nowMs}ms`)
       return cachedJwt.value
     }
     catch (e) {
       lastError.value = e instanceof Error ? e.message : String(e)
-      coreS3BackoffUntilMs = nowMs + CORE_S3_BACKOFF_MS
+      lastFailureStage.value = stage
+      lastFailureStatus.value = status
+      coreS3BackoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
+      warnCoreS3Failure(stage, status, code, Date.now() - nowMs, CORE_S3_BACKOFF_MS / 1000)
       return null
     }
   }
@@ -320,5 +407,11 @@ export function useDeviceToken() {
     setupAsKiosk,
     /** CoreS3 署名経路の直近の失敗理由。成功 / 未試行なら null */
     lastError: readonly(lastError),
+    /** 直近の失敗がどの段で起きたか (#135)。成功 / 未試行なら null */
+    lastFailureStage: readonly(lastFailureStage),
+    /** 直近の失敗の HTTP status (#135)。HTTP を伴わない失敗 / 成功 / 未試行なら null */
+    lastFailureStatus: readonly(lastFailureStatus),
+    /** CoreS3 署名経路を抑止している期限 (ms epoch)。0 なら抑止していない (#135) */
+    coreS3BackoffUntil: readonly(coreS3BackoffUntil),
   }
 }

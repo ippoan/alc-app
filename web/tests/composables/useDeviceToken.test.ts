@@ -53,6 +53,10 @@ beforeEach(() => {
   coreS3Mock.startupProbe.mockImplementation(async () => false)
   authMock.deviceTenantId.value = null
   signAlarmDeviceNonceMock.mockReset()
+  // #135 で失敗・成功のたびに 1 行出るようになったので、既定では捨てる
+  // (中身を見るテストは各自で spy を取り直す)
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.spyOn(console, 'info').mockImplementation(() => {})
 })
 
 describe('useDeviceToken (#434 step 3c)', () => {
@@ -635,6 +639,184 @@ describe('useDeviceToken (#434 step 3c)', () => {
 
       expect(await getDeviceJwt()).toBe('s3r-jwt')
       expect(lastError.value).toBeNull()
+    })
+
+    // 現地で「どの段で落ちたか」が読めるようにする診断 (Refs ippoan/alc-app-s3#135)。
+    // 段と HTTP status を ref に残し、同じ内容を 1 行だけコンソールに出す。挙動は変えない。
+    describe('lastFailureStage / コンソール診断 (Refs ippoan/alc-app-s3#135)', () => {
+      /** console.warn / info に出た全行を 1 本の文字列で返す */
+      function consoleSink() {
+        const lines: string[] = []
+        const push = (...args: unknown[]) => { lines.push(args.map(String).join(' ')) }
+        vi.spyOn(console, 'warn').mockImplementation(push)
+        vi.spyOn(console, 'info').mockImplementation(push)
+        vi.spyOn(console, 'log').mockImplementation(push)
+        vi.spyOn(console, 'error').mockImplementation(push)
+        return { text: () => lines.join('\n'), lines }
+      }
+
+      it('nonce の取得に失敗したら段が nonce になる', async () => {
+        coreS3Mock.isConnected.value = true
+        const sink = consoleSink()
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: false, status: 503, json: () => Promise.resolve({ error: 'nonce_unavailable' }) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, lastFailureStatus } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('nonce')
+        expect(lastFailureStatus.value).toBe(503)
+        expect(sink.text()).toContain('stage=nonce')
+        expect(sink.text()).toContain('status=503')
+        expect(sink.text()).toContain('code=nonce_unavailable')
+      })
+
+      it('CoreS3 の署名に失敗したら段が coreS3-sign になる', async () => {
+        coreS3Mock.isConnected.value = true
+        signAlarmDeviceNonceMock.mockRejectedValue(new Error('ERR AUTH: no key'))
+        const sink = consoleSink()
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, lastFailureStatus } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('coreS3-sign')
+        // HTTP を伴わない失敗なので status は無い
+        expect(lastFailureStatus.value).toBeNull()
+        expect(sink.text()).toContain('stage=coreS3-sign')
+        expect(sink.text()).toContain('status=-')
+      })
+
+      it('alarm-token の交換が 401 なら段が token-exchange になり、エラーコードが残る', async () => {
+        coreS3Mock.isConnected.value = true
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        const sink = consoleSink()
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) }),
+          '/device/alarm-token': () => ({ ok: false, status: 401, json: () => Promise.resolve({ error: 'invalid_alarm_token' }) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, lastFailureStatus, lastError } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('token-exchange')
+        expect(lastFailureStatus.value).toBe(401)
+        expect(lastError.value).toContain('alarm-token http 401')
+        expect(sink.text()).toContain('stage=token-exchange')
+        expect(sink.text()).toContain('code=invalid_alarm_token')
+      })
+
+      it('サーバが error を返さない / body が JSON でない失敗は code=- になる', async () => {
+        coreS3Mock.isConnected.value = true
+        const sink = consoleSink()
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: false, status: 502, json: () => Promise.reject(new Error('not json')) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('nonce')
+        expect(sink.text()).toContain('code=-')
+        expect(sink.text()).toContain('status=502')
+      })
+
+      it('CoreS3 がつながっていなければ段は no-core-s3 (抑止も lastError も立てない)', async () => {
+        coreS3Mock.isConnected.value = false
+        const sink = consoleSink()
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, lastError, coreS3BackoffUntil } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('no-core-s3')
+        expect(lastError.value).toBeNull()
+        expect(coreS3BackoffUntil.value).toBe(0)
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(sink.text()).toContain('stage=no-core-s3')
+      })
+
+      it('抑止中の空振りは backoff として残り秒を出し、前回の段は保持する', async () => {
+        coreS3Mock.isConnected.value = true
+        let nowMs = 1_000_000
+        vi.spyOn(Date, 'now').mockImplementation(() => nowMs)
+        const sink = consoleSink()
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: false, status: 429, json: () => Promise.resolve({}) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, coreS3BackoffUntil } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(coreS3BackoffUntil.value).toBe(nowMs + 60_000)
+
+        nowMs += 20_000 // 抑止中
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('nonce') // 前回の段は保持
+        expect(sink.text()).toContain('stage=backoff')
+        expect(sink.text()).toContain('backoff=40s')
+      })
+
+      it('成功したら段が null に戻り、console.info に経過 ms を出す', async () => {
+        coreS3Mock.isConnected.value = true
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) }),
+          '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, lastFailureStatus } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(lastFailureStage.value).toBeNull()
+        expect(lastFailureStatus.value).toBeNull()
+        expect(infoSpy).toHaveBeenCalledTimes(1)
+        expect(String(infoSpy.mock.calls[0]![0])).toMatch(/stage=ok elapsed=\d+ms/)
+      })
+
+      it('失敗の console にトークンや nonce が出ない', async () => {
+        const NONCE = 'NONCE-must-not-leak'
+        const PUBKEY = 'PUBKEY-must-not-leak'
+        const SIG = 'SIG-must-not-leak'
+        const TOKEN = 'TOKEN-must-not-leak'
+        coreS3Mock.isConnected.value = true
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: PUBKEY, sig: SIG })
+        const sink = consoleSink()
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: NONCE }) }),
+          // 失敗応答にも token を載せておく (body をそのまま出していれば漏れる)
+          '/device/alarm-token': () => ({
+            ok: false,
+            status: 401,
+            json: () => Promise.resolve({ error: 'invalid_alarm_token', access_token: TOKEN }),
+          }),
+        }))
+
+        const useDeviceToken = await load()
+        const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+        storeKioskCredential(ID, SECRET)
+
+        expect(await getDeviceJwt()).toBeNull()
+        const out = sink.text()
+        expect(out).toContain('stage=token-exchange') // 診断自体は出ている
+        for (const secret of [NONCE, PUBKEY, SIG, TOKEN, ID, SECRET]) {
+          expect(out).not.toContain(secret)
+          // 先頭 4 文字だけでも出さない
+          expect(out).not.toContain(secret.slice(0, 4))
+        }
+      })
     })
   })
 
