@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { FaceAuthResult, MeasurementResult, SubmitMedicalData } from '~/types'
+import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
@@ -28,6 +29,7 @@ const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVid
 const {
   step, employeeId, employeeName, pendingSchedules, selectedSchedule, session,
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
+  escalatedToRemote, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
   identifyEmployee, selectSchedule, onFaceAuthComplete,
   onAlcoholResult, onMedicalSubmit, onSelfDeclarationSubmit,
@@ -45,52 +47,64 @@ watch(() => step.value, (s) => {
 const { syncStep, sendResult } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
 
-// アルコール測定完了後 (instruction / report ステップ) に WebRTC 接続
-watch(
-  () => step.value,
-  async (newStep) => {
-    if (!props.remoteMode || !session.value?.id) return
-    if (newStep === 'instruction' || newStep === 'report') {
-      try {
-        await camera.start('user')
-        // カメラ映像 + マイク音声を合成して送信
-        let streamToSend = camera.stream.value
-        try {
-          audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-          if (streamToSend) {
-            streamToSend = new MediaStream([
-              ...streamToSend.getVideoTracks(),
-              ...audioStream.getAudioTracks(),
-            ])
-          }
-        }
-        catch {
-          // マイク拒否時はビデオのみで続行
-        }
-        combinedStream.value = streamToSend
-        await webRtc.connect(config.public.signalingUrl, session.value.id)
-        if (streamToSend) {
-          await webRtc.startStreaming(streamToSend)
-        }
-      }
-      catch {
-        // カメラ/WebRTC 失敗は点呼フローをブロックしない
+/**
+ * 遠隔点呼で映像を繋ぐ段 (Refs ippoan/alc-app-s3#135)。
+ *
+ * **血圧の段 (`medical`) を含めるのが肝。** 血圧が測れず遠隔へ切り替えるのはこの段で、
+ * signaling の部屋は**接続したときに登録される**ため、ここで繋がないと切り替えても
+ * 運行管理者の一覧に出てこない。
+ */
+const REMOTE_CONNECT_STEPS: TenkoStep[] = ['medical', 'instruction', 'report']
+/** 映像を繋ぐべき状態か。段だけでなく「いま遠隔か」も見るので、段の途中で切り替えても発火する */
+const shouldConnectRemote = computed(
+  () => isRemote.value && REMOTE_CONNECT_STEPS.includes(step.value),
+)
+/** 通話パネルの表示。繋ぐ段に加えて完了画面でも残す (従来どおり) */
+const showVideoCall = computed(
+  () => isRemote.value && (REMOTE_CONNECT_STEPS.includes(step.value) || step.value === 'completed'),
+)
+
+// 遠隔点呼: 繋ぐべき状態になったら WebRTC 接続
+watch(shouldConnectRemote, async (connectNow) => {
+  if (!connectNow || !session.value?.id) return
+  try {
+    await camera.start('user')
+    // カメラ映像 + マイク音声を合成して送信
+    let streamToSend = camera.stream.value
+    try {
+      audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      if (streamToSend) {
+        streamToSend = new MediaStream([
+          ...streamToSend.getVideoTracks(),
+          ...audioStream.getAudioTracks(),
+        ])
       }
     }
+    catch {
+      // マイク拒否時はビデオのみで続行
+    }
+    combinedStream.value = streamToSend
+    await webRtc.connect(config.public.signalingUrl, session.value.id)
+    if (streamToSend) {
+      await webRtc.startStreaming(streamToSend)
+    }
   }
-)
+  catch {
+    // カメラ/WebRTC 失敗は点呼フローをブロックしない
+  }
+})
 
 // 管理者が切断 → オーバーレイ表示
 const hadPeerConnected = ref(false)
 watch(
   () => webRtc.isPeerConnected.value,
   (connected) => {
-    if (!props.remoteMode) return
+    if (!isRemote.value) return
     if (connected) hadPeerConnected.value = true
   }
 )
 const isDisconnected = computed(
-  () => props.remoteMode && hadPeerConnected.value && !webRtc.isPeerConnected.value
+  () => isRemote.value && hadPeerConnected.value && !webRtc.isPeerConnected.value
 )
 
 async function reconnect() {
@@ -243,8 +257,19 @@ function onManualMedicalSubmit(data: SubmitMedicalData) {
   onMedicalSubmit(data)
 }
 
+/** 映像・音声を止める。遠隔だったときだけ呼ぶ */
+function stopRemoteStreams() {
+  webRtc.disconnect()
+  camera.stop()
+  audioStream?.getTracks().forEach(t => t.stop())
+  audioStream = null
+  combinedStream.value = null
+}
+
 // --- リセット時に手動入力もクリア ---
 function handleReset() {
+  // reset() が昇格を畳んで isRemote を false にするので、**先に**映像を止める
+  if (isRemote.value) stopRemoteStreams()
   reset()
   manualIdInput.value = ''
   manualError.value = null
@@ -253,23 +278,10 @@ function handleReset() {
   faceSkipNotice.value = null
   medicalInputSource.value = null
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
-  if (props.remoteMode) {
-    webRtc.disconnect()
-    camera.stop()
-    audioStream?.getTracks().forEach(t => t.stop())
-    audioStream = null
-    combinedStream.value = null
-  }
 }
 
 onUnmounted(() => {
-  if (props.remoteMode) {
-    webRtc.disconnect()
-    camera.stop()
-    audioStream?.getTracks().forEach(t => t.stop())
-    audioStream = null
-    combinedStream.value = null
-  }
+  if (isRemote.value) stopRemoteStreams()
 })
 </script>
 
@@ -282,7 +294,7 @@ onUnmounted(() => {
     <div :class="landscape ? 'w-2/5 flex flex-col shrink-0' : 'w-full flex flex-col items-center'">
       <!-- 遠隔点呼 ビデオ通話 -->
       <ClientOnly>
-        <div v-if="remoteMode && (step === 'instruction' || step === 'report' || step === 'completed')" :class="['w-full mb-4', landscape ? '' : 'max-w-md']">
+        <div v-if="showVideoCall" :class="['w-full mb-4', landscape ? '' : 'max-w-md']">
           <TenkoVideoCall
             :local-stream="combinedStream"
             :remote-stream="webRtc.remoteStream.value"
@@ -310,10 +322,12 @@ onUnmounted(() => {
       <!-- 遠隔点呼バナー -->
       <ClientOnly>
         <div
-          v-if="remoteMode"
+          v-if="isRemote"
           :class="['w-full bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-blue-700 font-medium', landscape ? '' : 'max-w-md']"
         >
-          遠隔点呼モード — 運行管理者がビデオ通話で確認しています
+          {{ escalatedToRemote
+            ? '血圧が測れないため遠隔点呼に切り替えました — 運行管理者がビデオ通話で確認しています'
+            : '遠隔点呼モード — 運行管理者がビデオ通話で確認しています' }}
         </div>
       </ClientOnly>
 
@@ -329,7 +343,7 @@ onUnmounted(() => {
 
       <!-- デモ用点呼予定作成 (NFCステップのみ表示) -->
       <ClientOnly>
-        <DemoScheduleCreator v-if="isDemoMode && !remoteMode && step === 'nfc'" :class="['w-full mb-4', landscape ? '' : 'max-w-md']" />
+        <DemoScheduleCreator v-if="isDemoMode && !isRemote && step === 'nfc'" :class="['w-full mb-4', landscape ? '' : 'max-w-md']" />
       </ClientOnly>
 
       <!-- 顔データ同期中 -->
@@ -341,7 +355,7 @@ onUnmounted(() => {
       </div>
 
       <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-6']">
-        <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">{{ remoteMode ? '遠隔点呼' : '自動点呼' }}</h1>
+        <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">{{ isRemote ? '遠隔点呼' : '自動点呼' }}</h1>
         <p v-if="tenkoType" class="mt-1 text-sm">
           <span
             class="px-2 py-0.5 rounded text-xs font-bold"
@@ -538,6 +552,19 @@ onUnmounted(() => {
             @submit="onManualMedicalSubmit"
             @skip="onMedicalSkip"
           />
+
+          <!--
+            血圧が測れないときの逃げ道 (Refs ippoan/alc-app-s3#135)。
+            血圧は必須なのでスキップも手入力もさせず、運行管理者が遠隔で対応する経路へ移す。
+            自動点呼で血圧を使う端末のときだけ出す (最初から遠隔なら出ない)。
+          -->
+          <button
+            v-if="bpEnabled && !isRemote"
+            class="w-full mt-4 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"
+            @click="escalateToRemote"
+          >
+            遠隔点呼に切り替える
+          </button>
         </div>
       </div>
 

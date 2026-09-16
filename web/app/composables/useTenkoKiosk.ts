@@ -8,7 +8,7 @@ import {
   getPendingSchedules, startTenkoSession,
   submitAlcohol, submitMedical, submitSelfDeclaration,
   submitDailyInspection, confirmInstruction, submitReport,
-  cancelTenkoSession, uploadFacePhoto,
+  cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
   getCarryingItems, submitCarryingItemChecks,
 } from '~/utils/api'
 import { noPendingSchedule } from '~/utils/employee-lookup-messages'
@@ -31,7 +31,22 @@ export type TenkoStep =
   | 'cancelled'
 
 export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
+  /**
+   * 最初から遠隔点呼として始めたか。**setup の 1 回だけで決まる定数**で、
+   * 途中では変わらない。段の一覧 (`stepLabels` / `stepKeys`) はこの値だけを見るので、
+   * 遠隔へ切り替えても**段の数が変わらず現在地がずれない**。
+   */
   const remoteMode = options?.remoteMode ?? false
+  /**
+   * 自動点呼の途中から遠隔点呼へ昇格したか (Refs ippoan/alc-app-s3#135)。
+   * `remoteMode` とは**混ぜない** — 混ぜると段の一覧が途中で変わる。
+   */
+  const escalatedToRemote = ref(false)
+  /**
+   * いま遠隔か。最初から遠隔 / 途中で昇格 のどちらでも true。
+   * **画面の「遠隔かどうか」の判定はすべてこれ 1 つを見る。**
+   */
+  const isRemote = computed(() => remoteMode || escalatedToRemote.value)
   const step = ref<TenkoStep>('nfc')
   const employeeId = ref('')
   const employeeName = ref('')
@@ -371,6 +386,24 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     }
   }
 
+  // --- 遠隔点呼への切り替え (血圧が測れないとき。Refs ippoan/alc-app-s3#135) ---
+  /**
+   * 同じセッションのまま遠隔へ移す。**新しいセッションは起こさない** (点呼が二重になる)。
+   *
+   * サーバへの通知より先に昇格の状態を立てるので、**口がまだ無くても遠隔の画面へ入れる**。
+   * 通知が通ればサーバの記録も更新されるが、失敗しても運行管理者との通話は始められる。
+   */
+  async function escalateToRemote() {
+    if (isRemote.value) return
+    escalatedToRemote.value = true
+    if (!session.value) return
+    try {
+      session.value = await escalateTenkoSessionToRemote(session.value.id)
+    } catch {
+      // サーバ側の口は別 PR。無くても遠隔の画面には入れる (ここで止めない)
+    }
+  }
+
   // --- リセット ---
   function reset() {
     step.value = 'nfc'
@@ -385,6 +418,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     facePhotoUrl.value = null
     faceSkipped.value = false
     safetyJudgment.value = null
+    escalatedToRemote.value = false
   }
 
   return {
@@ -402,6 +436,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     safetyJudgment,
     tenkoType,
     isPreOperation,
+    escalatedToRemote,
+    isRemote,
 
     // Step indicator
     stepLabels,
@@ -421,6 +457,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     onCarryingItemsSubmit,
     onInstructionConfirm,
     onReportSubmit,
+    escalateToRemote,
     cancel,
     reset,
   }

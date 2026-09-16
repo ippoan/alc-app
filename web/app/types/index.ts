@@ -381,6 +381,12 @@ export interface DailyInspection {
 }
 
 /** 点呼セッション */
+/**
+ * 自動点呼を遠隔点呼へ切り替えた理由 (Refs ippoan/alc-app-s3#135)。
+ * いまは血圧が測れないときだけ。増えたらここへ足す。
+ */
+export type TenkoRemoteEscalationReason = 'blood_pressure_unavailable'
+
 export interface TenkoSession {
   id: string
   tenant_id: string
@@ -429,6 +435,11 @@ export interface TenkoSession {
   carins_expires_on: string | null
   /** `cert_no` / `car_id` / `none` (carins に無い車) / null (番号を受け取っていない) */
   carins_matched_by: string | null
+  /**
+   * 自動点呼から遠隔点呼へ切り替えた時刻 (Refs ippoan/alc-app-s3#135)。
+   * null / 未定義 = 切り替えていない。**サーバ側で埋めるのは別 PR** なので optional。
+   */
+  escalated_to_remote_at?: string | null
 }
 
 export interface StartTenkoSession {

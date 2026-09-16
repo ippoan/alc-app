@@ -447,6 +447,18 @@ onUnmounted(() => {
         <span class="text-xs px-1.5 py-0.5 rounded-full" :class="statusColor(liveSession.status)">
           {{ statusLabel(liveSession.status) }}
         </span>
+        <!--
+          自動点呼から切り替わってきた点呼の印 (Refs ippoan/alc-app-s3#135)。
+          血圧が測れず遠隔へ移ってきた点呼は、最初から遠隔の点呼と扱いが違う
+          (運行管理者が血圧を口頭で確認する) ので、一目で分かるようにする。
+          値を埋めるのはサーバ側の別 PR。
+        -->
+        <span
+          v-if="liveSession.escalated_to_remote_at"
+          class="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold"
+        >
+          自動点呼から切替
+        </span>
       </div>
       <!-- データ項目 -->
       <div class="divide-y divide-gray-100">

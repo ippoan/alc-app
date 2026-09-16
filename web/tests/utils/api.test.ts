@@ -18,6 +18,7 @@ import {
   submitAlcohol, submitMedical, submitSelfDeclaration, submitDailyInspection,
   confirmInstruction, submitReport,
   cancelTenkoSession, listTenkoSessions, getTenkoDashboard,
+  escalateTenkoSessionToRemote,
   interruptTenkoSession, resumeTenkoSession,
   // Tenko records
   downloadTenkoRecordsCsv,
@@ -994,6 +995,7 @@ describe('api', () => {
       ['submitSelfDeclaration', () => submitSelfDeclaration(SEED_SESSION_ID, { illness: false, fatigue: false, sleep_deprivation: false } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/self-declaration`],
       ['submitDailyInspection', () => submitDailyInspection(SEED_SESSION_ID, { brakes: 'ok', tires: 'ok', lights: 'ok', steering: 'ok', wipers: 'ok', mirrors: 'ok', horn: 'ok', seatbelts: 'ok' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/daily-inspection`],
       ['confirmInstruction', () => confirmInstruction(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}/instruction-confirm`],
+      ['escalateTenkoSessionToRemote', () => escalateTenkoSessionToRemote(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}/escalate-remote`],
       ['submitReport', () => submitReport(SEED_SESSION_ID, { report: 'ok' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/report`],
       ['updateBaseline', () => updateBaseline(TEST_EMPLOYEE_ID, createHealthBaselineBody as any), `/api/tenko/health-baselines/${TEST_EMPLOYEE_ID}`],
       ['resolveFailure', () => resolveFailure(SEED_FAILURE_ID, { resolution: 'fixed' } as any), `/api/tenko/equipment-failures/${SEED_FAILURE_ID}`],
@@ -1098,6 +1100,17 @@ describe('api', () => {
       assertMock(() => {
         const body = JSON.parse(mockFetch.mock.calls[0][1].body)
         expect(body.checks).toEqual(checks)
+      })
+    })
+
+    // 遠隔点呼への切り替えは理由つきで送る (Refs ippoan/alc-app-s3#135)。
+    // サーバ側の口は別 PR — 形をここで固定しておく
+    it('escalateTenkoSessionToRemote sends the escalation reason', async () => {
+      stubOk({})
+      await callApi(() => escalateTenkoSessionToRemote(UUID3))
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body).toEqual({ reason: 'blood_pressure_unavailable' })
       })
     })
 
