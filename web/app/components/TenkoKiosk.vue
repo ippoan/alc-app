@@ -3,7 +3,6 @@ import type { FaceAuthResult, MeasurementResult, SubmitMedicalData } from '~/typ
 import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
-import { SHOW_BLOOD_PRESSURE } from '~/utils/medical-inputs'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -110,6 +109,9 @@ const {
   latestBloodPressure: bleBloodPressure,
 } = useBleGateway()
 
+// この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
+const { bpEnabled } = useBloodPressureSetting()
+
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
 watch(isDemoMode, (v) => {
@@ -121,11 +123,32 @@ const manualIdInput = ref('')
 const useManualInput = ref(false)
 const manualError = ref<string | null>(null)
 
+// 乗務員の点呼は、顔を登録していない人を止めない — 顔が未登録なら顔認証を飛ばせる
+// (Refs ippoan/alc-app-s3#135)。審査中・却下は登録済みなので従来どおり弾く。
+// 判定は utils/face-approval.ts の 1 か所だけで、**通すかどうかの方針をこの入口が
+// 決める** (運行管理者の入口 RoleAuthGate は未登録でも通さない)。
+const faceSkippable = ref(false)
+const faceSkipNotice = ref<string | null>(null)
+
+/** 通してよければ true。通す場合はスキップ可否も控える */
+function applyFaceApproval(emp: { name: string; face_approval_status?: string }): boolean {
+  const approval = checkFaceApproval(emp)
+  if (approval.kind === 'blocked') { error.value = approval.message; return false }
+  faceSkippable.value = approval.kind === 'unregistered'
+  faceSkipNotice.value = approval.kind === 'unregistered'
+    ? `${approval.message}。顔認証をスキップして進めます`
+    : null
+  return true
+}
+
+function skipFaceAuth() {
+  onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
+}
+
 async function onNfcRead(nfcId: string) {
   try {
     const emp = await getEmployeeByNfcId(nfcId)
-    const approvalErr = checkFaceApproval(emp)
-    if (approvalErr) { error.value = approvalErr; return }
+    if (!applyFaceApproval(emp)) return
     await identifyEmployee(emp.id, emp.name)
   } catch {
     error.value = employeeNotFoundByNfc(nfcId)
@@ -138,8 +161,7 @@ async function onManualSubmit() {
   manualError.value = null
   try {
     const emp = await getEmployeeByCode(input)
-    const approvalErr = checkFaceApproval(emp)
-    if (approvalErr) { error.value = approvalErr; return }
+    if (!applyFaceApproval(emp)) return
     await identifyEmployee(emp.id, emp.name)
   } catch {
     manualError.value = employeeNotFoundByCode(input)
@@ -227,6 +249,8 @@ function handleReset() {
   manualIdInput.value = ''
   manualError.value = null
   useManualInput.value = false
+  faceSkippable.value = false
+  faceSkipNotice.value = null
   medicalInputSource.value = null
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
   if (props.remoteMode) {
@@ -439,7 +463,20 @@ onUnmounted(() => {
       <div v-else-if="step === 'face_auth'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">顔認証</h2>
+          <!-- 顔が未登録: 顔写真なしで進める (審査中・却下はここまで来ない) -->
+          <template v-if="faceSkippable">
+            <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
+              {{ faceSkipNotice }}
+            </p>
+            <button
+              class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+              @click="skipFaceAuth"
+            >
+              顔認証をスキップして進む
+            </button>
+          </template>
           <FaceAuth
+            v-else
             :employee-id="employeeId"
             mode="verify"
             :demo-mode="isDemoMode"
@@ -471,7 +508,7 @@ onUnmounted(() => {
       <!-- Step 5: 体温・血圧 (業務前のみ) -->
       <div v-else-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ bpEnabled ? '体温・血圧' : '体温' }}</h2>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
           <div v-if="!isDemoMode" class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
@@ -562,14 +599,14 @@ onUnmounted(() => {
           />
           <!-- 医療データ入力元バッジ (業務前のみ) -->
           <div
-            v-if="medicalInputSource && isPreOperation && (session.temperature || (SHOW_BLOOD_PRESSURE && session.systolic))"
+            v-if="medicalInputSource && isPreOperation && (session.temperature || (bpEnabled && session.systolic))"
             class="mt-3 text-center text-xs"
           >
             <span
               class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
               :class="medicalInputSource === 'manual' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'"
             >
-              {{ SHOW_BLOOD_PRESSURE ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'CoreS3' }}
+              {{ bpEnabled ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'CoreS3' }}
             </span>
           </div>
         </div>

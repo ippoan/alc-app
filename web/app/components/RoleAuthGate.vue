@@ -2,6 +2,11 @@
 /**
  * 【セキュリティ要件】
  * - manager: NFC/社員番号 + 顔認証が必須。Google ログイン単独では通過不可。
+ *   **顔が未登録でもスキップは認めない** — 認めると、顔写真を一切出さないまま
+ *   管理画面へ入れてしまう。乗務員の点呼 (TenkoKiosk) は未登録なら通すが、
+ *   管理者のこの入口だけは通さない (Refs ippoan/alc-app-s3#135)。
+ *   判定そのものは utils/face-approval.ts に集約したまま、**通すかどうかの方針を
+ *   この入口が決める** (判定を 2 系統に割らない)。
  * - admin  : Google ログインで通過 (watch で即時認証)。
  *
  * 注意: Google ログインリンクは admin タブ専用。
@@ -82,8 +87,14 @@ async function onNfcRead(nfcId: string) {
       errorMessage.value = `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
       return
     }
-    const approvalErr = checkFaceApproval(emp)
-    if (approvalErr) { errorMessage.value = approvalErr; return }
+    // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
+    const approval = checkFaceApproval(emp)
+    if (approval.kind !== 'require_face') {
+      errorMessage.value = approval.kind === 'unregistered'
+        ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
+        : approval.message
+      return
+    }
     authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
     await faceSync()
     step.value = 'face_auth'
@@ -109,8 +120,14 @@ async function onManualSubmit() {
       errorMessage.value = `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
       return
     }
-    const approvalErr = checkFaceApproval(emp)
-    if (approvalErr) { errorMessage.value = approvalErr; return }
+    // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
+    const approval = checkFaceApproval(emp)
+    if (approval.kind !== 'require_face') {
+      errorMessage.value = approval.kind === 'unregistered'
+        ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
+        : approval.message
+      return
+    }
     authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
     await faceSync()
     step.value = 'face_auth'
