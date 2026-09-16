@@ -42,6 +42,7 @@ describe('useCoreS3Stage', () => {
   describe('stageForStep — 対応表 (全 step 名)', () => {
     it.each([
       ['nfc', 'NFC'],
+      ['choice', 'NFC'],
       ['interrupted', 'NFC'],
       ['cancelled', 'NFC'],
       ['vehicle', 'CARINS'],
