@@ -123,8 +123,10 @@ const manualIdInput = ref('')
 const useManualInput = ref(false)
 const manualError = ref<string | null>(null)
 
-// 顔が未登録の人は顔認証を飛ばせる (Refs ippoan/alc-app-s3#135)。審査中・却下は
-// 登録済みなので従来どおり弾かれる — 判定は utils/face-approval.ts の 1 か所だけ。
+// 乗務員の点呼は、顔を登録していない人を止めない — 顔が未登録なら顔認証を飛ばせる
+// (Refs ippoan/alc-app-s3#135)。審査中・却下は登録済みなので従来どおり弾く。
+// 判定は utils/face-approval.ts の 1 か所だけで、**通すかどうかの方針をこの入口が
+// 決める** (運行管理者の入口 RoleAuthGate は未登録でも通さない)。
 const faceSkippable = ref(false)
 const faceSkipNotice = ref<string | null>(null)
 
@@ -132,8 +134,10 @@ const faceSkipNotice = ref<string | null>(null)
 function applyFaceApproval(emp: { name: string; face_approval_status?: string }): boolean {
   const approval = checkFaceApproval(emp)
   if (approval.kind === 'blocked') { error.value = approval.message; return false }
-  faceSkippable.value = approval.kind === 'skip_face'
-  faceSkipNotice.value = approval.kind === 'skip_face' ? approval.message : null
+  faceSkippable.value = approval.kind === 'unregistered'
+  faceSkipNotice.value = approval.kind === 'unregistered'
+    ? `${approval.message}。顔認証をスキップして進めます`
+    : null
   return true
 }
 
@@ -245,6 +249,8 @@ function handleReset() {
   manualIdInput.value = ''
   manualError.value = null
   useManualInput.value = false
+  faceSkippable.value = false
+  faceSkipNotice.value = null
   medicalInputSource.value = null
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
   if (props.remoteMode) {

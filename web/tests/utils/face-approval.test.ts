@@ -2,23 +2,27 @@ import { describe, it, expect } from 'vitest'
 import { checkFaceApproval } from '~/utils/face-approval'
 
 // 乗務員名は合成値のみ (実在の名前・カード番号は書かない)
-describe('checkFaceApproval — 顔が未登録の人だけスキップ可 (Refs ippoan/alc-app-s3#135)', () => {
+describe('checkFaceApproval — 未登録だけ別扱い、スキップ可否は入口が決める (Refs ippoan/alc-app-s3#135)', () => {
   it('承認済みは従来どおり顔認証を要求する', () => {
     expect(checkFaceApproval({ name: 'テスト太郎', face_approval_status: 'approved' }))
       .toEqual({ kind: 'require_face' })
   })
 
-  it('未登録はスキップできる', () => {
+  it('未登録はスキップできる (入口が通す判断をするための unregistered)', () => {
     const d = checkFaceApproval({ name: 'テスト太郎', face_approval_status: 'none' })
-    expect(d.kind).toBe('skip_face')
-    expect(d.kind === 'skip_face' && d.message).toContain('未登録')
-    expect(d.kind === 'skip_face' && d.message).toContain('スキップ')
+    expect(d.kind).toBe('unregistered')
+    expect(d.kind === 'unregistered' && d.message).toContain('未登録')
   })
 
-  it('face_approval_status が未設定なら未登録扱いでスキップできる', () => {
+  it('未登録のメッセージは事実だけを述べる (続く案内は入口ごとに変わる)', () => {
+    const d = checkFaceApproval({ name: 'テスト太郎', face_approval_status: 'none' })
+    expect(d).toEqual({ kind: 'unregistered', message: 'テスト太郎さん: 顔データが未登録です' })
+  })
+
+  it('face_approval_status が未設定なら未登録扱い', () => {
     const d = checkFaceApproval({ name: 'テスト花子' })
-    expect(d.kind).toBe('skip_face')
-    expect(d.kind === 'skip_face' && d.message).toContain('テスト花子さん')
+    expect(d.kind).toBe('unregistered')
+    expect(d.kind === 'unregistered' && d.message).toContain('テスト花子さん')
   })
 
   it('審査中は弾く', () => {

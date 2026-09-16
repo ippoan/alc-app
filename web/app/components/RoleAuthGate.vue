@@ -2,10 +2,11 @@
 /**
  * 【セキュリティ要件】
  * - manager: NFC/社員番号 + 顔認証が必須。Google ログイン単独では通過不可。
- *   例外は**顔が未登録の人だけ** — 顔写真が無い以上、顔認証は原理的に行えないので
- *   明示のスキップ操作で通す (スキップしたことは認証バナーに残す)。審査中・却下は
- *   登録済みなので従来どおり弾く (却下された人の迂回路を作らない)。
- *   判定は utils/face-approval.ts の 1 か所だけ (Refs ippoan/alc-app-s3#135)。
+ *   **顔が未登録でもスキップは認めない** — 認めると、顔写真を一切出さないまま
+ *   管理画面へ入れてしまう。乗務員の点呼 (TenkoKiosk) は未登録なら通すが、
+ *   管理者のこの入口だけは通さない (Refs ippoan/alc-app-s3#135)。
+ *   判定そのものは utils/face-approval.ts に集約したまま、**通すかどうかの方針を
+ *   この入口が決める** (判定を 2 系統に割らない)。
  * - admin  : Google ログインで通過 (watch で即時認証)。
  *
  * 注意: Google ログインリンクは admin タブ専用。
@@ -58,17 +59,6 @@ const manualError = ref<string | null>(null)
 const isSubmitting = ref(false)
 const step = ref<'nfc' | 'face_auth'>('nfc')
 
-// 顔が未登録の人は顔認証を飛ばせる (Refs ippoan/alc-app-s3#135)。審査中・却下は
-// 登録済みなので従来どおり弾かれる — 判定は utils/face-approval.ts の 1 か所だけ。
-const faceSkippable = ref(false)
-const faceSkipNotice = ref<string | null>(null)
-/** この認証で顔認証をスキップしたか (顔写真なしで通したことの記録) */
-const faceSkipped = ref(false)
-
-function skipFaceAuth() {
-  onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
-}
-
 
 // ロール階層チェック
 function hasRole(employeeRole: string[]): boolean {
@@ -97,12 +87,16 @@ async function onNfcRead(nfcId: string) {
       errorMessage.value = `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
       return
     }
+    // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
     const approval = checkFaceApproval(emp)
-    if (approval.kind === 'blocked') { errorMessage.value = approval.message; return }
-    faceSkippable.value = approval.kind === 'skip_face'
-    faceSkipNotice.value = approval.kind === 'skip_face' ? approval.message : null
+    if (approval.kind !== 'require_face') {
+      errorMessage.value = approval.kind === 'unregistered'
+        ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
+        : approval.message
+      return
+    }
     authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
-    if (!faceSkippable.value) await faceSync()
+    await faceSync()
     step.value = 'face_auth'
   } catch {
     errorMessage.value = employeeNotFoundByNfc(nfcId)
@@ -126,12 +120,16 @@ async function onManualSubmit() {
       errorMessage.value = `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
       return
     }
+    // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
     const approval = checkFaceApproval(emp)
-    if (approval.kind === 'blocked') { errorMessage.value = approval.message; return }
-    faceSkippable.value = approval.kind === 'skip_face'
-    faceSkipNotice.value = approval.kind === 'skip_face' ? approval.message : null
+    if (approval.kind !== 'require_face') {
+      errorMessage.value = approval.kind === 'unregistered'
+        ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
+        : approval.message
+      return
+    }
     authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
-    if (!faceSkippable.value) await faceSync()
+    await faceSync()
     step.value = 'face_auth'
   } catch {
     manualError.value = employeeNotFoundByCode(input)
@@ -143,7 +141,6 @@ async function onManualSubmit() {
 // 顔認証完了
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) {
-    faceSkipped.value = result.skipped === true
     if (employeeId.value) authorizeEmployee(employeeId.value)
     authState.value = 'authenticated'
     if (props.requiredRole === 'manager' && authenticatedEmployee.value) {
@@ -203,9 +200,6 @@ function resetAuth() {
   manualError.value = null
   useManualInput.value = true
   isSubmitting.value = false
-  faceSkippable.value = false
-  faceSkipNotice.value = null
-  faceSkipped.value = false
   step.value = 'nfc'
 }
 </script>
@@ -216,7 +210,6 @@ function resetAuth() {
     <!-- 認証者バナー -->
     <div v-if="authenticatedEmployee" class="bg-green-50 border-b border-green-200 px-4 py-1.5 text-center text-xs text-green-700">
       {{ authenticatedEmployee.name }} ({{ roleLabel[requiredRole] }}) としてログイン中
-      <span v-if="faceSkipped" class="ml-1 text-amber-700">/ 顔認証スキップ (顔データ未登録)</span>
       <button class="ml-2 underline hover:text-green-900" @click="resetAuth">ログアウト</button>
     </div>
     <slot />
@@ -287,20 +280,7 @@ function resetAuth() {
         <!-- Step 2: 顔認証 -->
         <div v-else-if="step === 'face_auth'">
           <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
-          <!-- 顔が未登録: 顔写真なしで進める (審査中・却下はここまで来ない) -->
-          <template v-if="faceSkippable">
-            <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
-              {{ faceSkipNotice }}
-            </p>
-            <button
-              class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-              @click="skipFaceAuth"
-            >
-              顔認証をスキップして進む
-            </button>
-          </template>
           <FaceAuth
-            v-else
             :employee-id="employeeId"
             mode="verify"
             @result="onFaceAuthResult"
