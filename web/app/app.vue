@@ -56,13 +56,15 @@ onMounted(async () => {
    * `pagehide` と `beforeunload` は**両方**発火するが、`closeArbitratedPortsForUnload`
    * 自身が 1 回しか走らない。
    */
-  const onUnload = (): void => {
+  const onUnload = (options?: { persisted?: boolean }): void => {
     alarm.notifyIntentionalReload()
-    closeArbitratedPortsForUnload()
+    closeArbitratedPortsForUnload(options)
   }
   window.addEventListener('pagehide', (e) => {
     console.log(`[RELOAD-DETECT] pagehide persisted=${e.persisted} at ${stamp()}`)
-    onUnload()
+    // **`persisted` を渡すのが要点。** bfcache へ入るだけの pagehide で閉じると、
+    // pageshow で戻ったとき NFC が無言で死ぬ (closeArbitratedPortsForUnload の doc)
+    onUnload({ persisted: e.persisted })
   })
   window.addEventListener('beforeunload', () => {
     console.log(`[RELOAD-DETECT] beforeunload at ${stamp()}`)

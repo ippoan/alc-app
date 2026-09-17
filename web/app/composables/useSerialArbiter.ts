@@ -262,8 +262,27 @@ let unloadClosed = false
  * `pagehide` は非同期の完了を保証しない。**間に合わなくてもページを壊さない**
  * ことだけを守る (close の失敗は握り潰す — ページはどのみち消える)。
  * 間に合えば `setSignals` が 2 本先に出るので reset の条件を踏まない。
+ *
+ * # `persisted` (bfcache) では閉じない
+ *
+ * `pagehide` は**ページが bfcache へ入るときにも発火する** (`event.persisted === true`)。
+ * そのときページは**消えず、`pageshow` でそのまま戻ってくる** — module の状態も
+ * 生きたままなので、ここで閉じると `sessions` が「開いている」と思ったまま残り、
+ * **再スキャンが走らず CoreS3 も VoiceS3R も繋がらない**。
+ * 利用者から見ると**「かざしても何も起きない」= NFC が無言で死ぬ**。
+ * いま直そうとしている再起動より重い壊れ方なので、その場合は何もしない。
+ *
+ * **`pageshow` で戻す処理は要らない。** bfcache のときはそもそも閉じず
+ * `unloadClosed` も立てないので、戻す状態が無い。`persisted === false` の
+ * `pagehide` はページが捨てられる側で、戻ってこない。Chrome のメモリセーバーが
+ * タブを破棄した場合は復帰が**完全な再読み込み**になり module 状態も作り直される。
+ *
+ * `beforeunload` は bfcache へ入るときには発火しないので、引数なしでよい。
  */
-export function closeArbitratedPortsForUnload(): void {
+export function closeArbitratedPortsForUnload(options?: { persisted?: boolean }): void {
+  // **`unloadClosed` を立てる前に返すこと** — 立ててしまうと、bfcache から戻った後の
+  // 本当の unload で閉じられなくなる
+  if (options?.persisted) return
   if (unloadClosed) return
   unloadClosed = true
   for (const s of sessions) {

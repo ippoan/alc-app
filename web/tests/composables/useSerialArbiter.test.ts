@@ -1287,6 +1287,47 @@ describe('useSerialArbiter 診断ログ', () => {
       ])
     })
 
+    it('★ bfcache へ入るだけの pagehide (persisted) では閉じない', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      mod.closeArbitratedPortsForUnload({ persisted: true })
+      await vi.advanceTimersByTimeAsync(0)
+
+      // 閉じると pageshow で戻ったとき sessions が「開いている」ままになり、
+      // 再スキャンが走らず NFC が無言で死ぬ
+      expect(dev.calls).toEqual([])
+    })
+
+    it('★ bfcache で見送った後も、本当の unload では閉じる (印を立てていない)', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      mod.closeArbitratedPortsForUnload({ persisted: true })
+      mod.closeArbitratedPortsForUnload({ persisted: false })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dev.calls).toEqual([
+        'setSignals({"requestToSend":false})',
+        'setSignals({"dataTerminalReady":false})',
+        'close',
+      ])
+    })
+
     it('握っているポートが無ければ何もしない', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
