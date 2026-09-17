@@ -128,6 +128,50 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     wrapper.unmount()
   })
 
+  it('card_kind の 3 値 (license / IC / チップ無し) で表示するチップが分かれる (Refs ippoan/rust-alc-api#644)', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        { id: 'p1', employee_id: null, employee_name: '一郎', card_id: null, card_kind: 'license', punched_at: '2026-09-17T00:00:00Z' },
+        { id: 'p2', employee_id: null, employee_name: '二郎', card_id: null, card_kind: 'felica_idm', punched_at: '2026-09-17T00:01:00Z' },
+        { id: 'p3', employee_id: null, employee_name: '三郎', card_id: null, card_kind: 'nfca_uid', punched_at: '2026-09-17T00:02:00Z' },
+        { id: 'p4', employee_id: null, employee_name: '四郎', card_id: null, card_kind: null, punched_at: '2026-09-17T00:03:00Z' },
+        // card_kind フィールド自体が無い (サーバが古い場合の防御)
+        { id: 'p5', employee_id: null, employee_name: '五郎', card_id: null, punched_at: '2026-09-17T00:04:00Z' },
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+
+    const rows = wrapper.findAll('tbody tr')
+    const licenseRow = rows.find(r => r.text().includes('一郎'))!
+    const felicaRow = rows.find(r => r.text().includes('二郎'))!
+    const nfcaRow = rows.find(r => r.text().includes('三郎'))!
+    const nullRow = rows.find(r => r.text().includes('四郎'))!
+    const undefinedRow = rows.find(r => r.text().includes('五郎'))!
+
+    // license → 免許証チップのみ
+    expect(licenseRow.text()).toContain('免許証')
+    expect(licenseRow.text()).not.toContain('IC')
+
+    // felica_idm → IC チップのみ
+    expect(felicaRow.text()).toContain('IC')
+    expect(felicaRow.text()).not.toContain('免許証')
+
+    // nfca_uid → IC チップ
+    expect(nfcaRow.text()).toContain('IC')
+    expect(nfcaRow.text()).not.toContain('免許証')
+
+    // card_kind: null → どちらのチップも出ない
+    expect(nullRow.text()).not.toContain('免許証')
+    expect(nullRow.text()).not.toContain('IC')
+
+    // card_kind フィールドが無い (undefined) → どちらのチップも出ない
+    expect(undefinedRow.text()).not.toContain('免許証')
+    expect(undefinedRow.text()).not.toContain('IC')
+
+    wrapper.unmount()
+  })
+
   it('購読の onChange が呼ばれたら一覧を引き直す', async () => {
     const wrapper = await mountSuspended(TodayPunchHistory)
     listTimePunchesMock.mockClear()
