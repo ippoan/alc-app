@@ -136,6 +136,12 @@ mockNuxtImport('useCoreS3Stage', () => () => ({
   sendResult: vi.fn(),
 }))
 
+// 本人確認前のアルコール測定の通知 (Refs ippoan/rust-alc-api#644、#287)。この回帰テストの
+// 関心は IC 打刻のボタンだけなので、モーダルが出ない (latest: null) ようにしておく
+mockNuxtImport('useStrayAlcohol', () => () => ({
+  latest: ref(null),
+}))
+
 // NormalMeasurement (onEvent) と NfcStatus (isConnected/requestPort/...) の
 // 両方から呼ばれるので、両方の形を 1 つのモックにまとめる
 mockNuxtImport('useCoreS3Serial', () => () => ({
