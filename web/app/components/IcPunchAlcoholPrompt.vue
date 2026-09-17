@@ -14,6 +14,10 @@
  * (Refs ippoan/alc-app-s3#135) と隣り合わせになる。ここは表示の判定だけを持ち、
  * 測定の開始は `@start` を受けた呼び出し元が `NormalMeasurement` に頼む。
  *
+ * **`active` を emit する。** ボタンを出しているかどうかを呼び出し元 (`NfcStatus`) へ
+ * 伝え、出している間は NFC タッチ枠のアイコン/案内文をこのボタンに差し替えてもらう
+ * (見ている場所にボタンを出す。Refs ippoan/rust-alc-api#644)。
+ *
  * # 出さない条件 (どれも「別人の名前で測定に入る」事故を防ぐため)
  *
  * - **免許証 (`'license'`) と種別不明 (`'unknown'`)** — 免許証は従来どおり
@@ -37,7 +41,7 @@ const props = defineProps<{
   idle: boolean
 }>()
 
-const emit = defineEmits<{ start: [LatestPunch] }>()
+const emit = defineEmits<{ start: [LatestPunch]; active: [boolean] }>()
 
 /** 鮮度切れ。**打刻ごとに測り直す** (一覧の引き直しでは測り直さない) */
 const expired = ref(false)
@@ -76,6 +80,9 @@ const target = computed<LatestPunch | null>(() => {
   if (p.cardKind !== 'other' || !p.employeeId) return null
   return p
 })
+
+// ボタンを出しているかどうかを親へ伝える。判定は上の `target` だけを見る (2本目を作らない)
+watch(target, (t) => { emit('active', t !== null) }, { immediate: true })
 
 function start() {
   const p = target.value

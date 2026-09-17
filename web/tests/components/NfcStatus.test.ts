@@ -31,9 +31,10 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   isStartupProbing: ref(false),
 }))
 
+const deviceModelForFingerprint = ref<string | null>(null)
 mockNuxtImport('useFingerprint', () => () => ({
   isAndroidApp: ref(false),
-  deviceModel: ref<string | null>(null),
+  deviceModel: deviceModelForFingerprint,
 }))
 
 const isCheckingKioskAccess = ref(false)
@@ -125,6 +126,48 @@ describe('NfcStatus — serial ブロックの表示条件 (Refs #234)', () => {
     isCheckingKioskAccess.value = false
     await wrapper.vm.$nextTick()
     expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeTruthy()
+    wrapper.unmount()
+  })
+})
+
+// IC カードの打刻案内ボタンをタッチ枠の中に出す (Refs ippoan/rust-alc-api#644)
+describe('NfcStatus — promptActive (タッチ枠の中身の差し替え、Refs #644)', () => {
+  beforeEach(() => {
+    isConnected.value = false
+    coreS3Connected.value = false
+    webSerialSupported = true
+    isCheckingKioskAccess.value = false
+  })
+
+  it('promptActive が false なら「NFC カードをタッチしてください」を出す', async () => {
+    const wrapper = await mountSuspended(NfcStatus, {
+      props: { promptActive: false },
+      slots: { 'punch-prompt': '<div data-testid="slot-content">案内ボタン</div>' },
+    })
+    expect(wrapper.text()).toContain('NFC カードをタッチしてください')
+    expect(wrapper.find('[data-testid="slot-content"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('promptActive が true ならタッチの案内を出さず、スロットの中身を出す', async () => {
+    const wrapper = await mountSuspended(NfcStatus, {
+      props: { promptActive: true },
+      slots: { 'punch-prompt': '<div data-testid="slot-content">案内ボタン</div>' },
+    })
+    expect(wrapper.text()).not.toContain('NFC カードをタッチしてください')
+    expect(wrapper.find('[data-testid="slot-content"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('promptActive が true でも NFC 位置ガイド / 読み取り ID / 免許証有効期限は今までどおり出す', async () => {
+    deviceModelForFingerprint.value = 'KC-T305CN'
+    const wrapper = await mountSuspended(NfcStatus, {
+      props: { promptActive: true },
+      slots: { 'punch-prompt': '<div data-testid="slot-content">案内ボタン</div>' },
+    })
+    // NFC 位置ガイドボタン (Kyocera 端末判定) は promptActive に関係なく出る
+    expect(findButtonByText(wrapper, 'NFC 位置ガイド')).toBeTruthy()
+    deviceModelForFingerprint.value = null
     wrapper.unmount()
   })
 })
