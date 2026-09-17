@@ -97,11 +97,17 @@ describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', 
     wrapper.unmount()
   })
 
-  it('吹込不良 (error) — 値は出さず赤バッジのみ (value は 0.000 固定で測定値ではない)', async () => {
+  it('吹込不良 (error) — 値は出さず緑バッジ (測れなかっただけでアルコールが出たわけではない、ユーザー判断)', async () => {
     const wrapper = await mountModal(readingOf({ result: 'error', value: 0 }), 'nfc')
     expect(wrapper.find(VALUE).exists()).toBe(false)
     expect(wrapper.find(RESULT).text()).toBe('測定エラー')
-    expect(wrapper.find(RESULT).classes()).toContain('bg-red-100')
+    expect(wrapper.find(RESULT).classes()).toContain('bg-green-100')
+    wrapper.unmount()
+  })
+
+  it('背景の覆いは濃いめ (bg-black/70) — カードが浮いて見える (ユーザー指摘)', async () => {
+    const wrapper = await mountModal(readingOf(), 'nfc')
+    expect(wrapper.find(MODAL).classes()).toContain('bg-black/70')
     wrapper.unmount()
   })
 
