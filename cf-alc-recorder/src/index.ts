@@ -46,6 +46,7 @@ import {
   type ParsedMeasurement,
 } from "./measurements";
 import { runBatterySnapshotCron } from "./battery-snapshot";
+import { hubStub } from "./hub-stub";
 
 export { RecorderHub } from "./recorder-hub";
 import { WATCH_SUBPROTOCOL } from "./recorder-hub";
@@ -70,11 +71,6 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
-}
-
-/** テナント単位の DO stub を引く。 */
-function hubStub(env: Env, tenantId: string): DurableObjectStub {
-  return env.RECORDER_HUB.get(env.RECORDER_HUB.idFromName(tenantId));
 }
 
 /**

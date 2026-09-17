@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { Env } from "../src/index";
+import { hubStub } from "../src/hub-stub";
 import {
   decideRecorderAuth,
   decideWatcherAuth,
@@ -643,7 +644,7 @@ describe("hibernation 復帰 / テナント分離", () => {
     const { ws } = await connectAccepted("hub-token-2");
     openSockets.push(ws);
 
-    const stub = env.RECORDER_HUB.get(env.RECORDER_HUB.idFromName("tenant-1"));
+    const stub = hubStub(env, "tenant-1");
     await runInDurableObject(stub, (_instance, state) => {
       const sockets = state.getWebSockets("device:device-2");
       expect(sockets.length).toBe(1);
