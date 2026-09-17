@@ -43,8 +43,13 @@ import { evtArg } from '~/composables/useCoreS3Serial'
 
 /**
  * シリアル由来とサーバ由来を「同じタップ」と見なす時間差。
- * `IcPunchAlcoholPrompt` の `FRESH_WINDOW_MS` と同値 — あちらがボタンを
- * 出しておく時間より長い窓で重複を消しても意味が無い。
+ *
+ * **ボタンの寿命 (`IcPunchAlcoholPrompt` の `FRESH_WINDOW_MS` = 10 秒) より
+ * 長くしてある。** WS が切れているとサーバ由来の行は数分遅れて届くので、
+ * 短くすると**同じタップが「別のタップ」として通り、ボタンが出し直される**。
+ *
+ * 窓の外で届いたぶんは通すが、その行の `punchedAt` はタップ時刻なので
+ * `FRESH_WINDOW_MS` を既に過ぎており、**ボタンは出ない** (寿命は延びない)。
  */
 const MERGE_WINDOW_MS = 60_000
 

@@ -77,20 +77,24 @@ describe('IcPunchAlcoholPrompt — IC カードの打刻からアルコールチ
     const wrapper = await mountPrompt(punchOf(), false)
     expect(wrapper.find(BUTTON).exists()).toBe(false)
 
-    // 待機に戻れば (60 秒以内なら) 出る
+    // 待機に戻れば (10 秒以内なら) 出る
     await wrapper.setProps({ idle: true })
     expect(wrapper.find(BUTTON).exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('出したまま 60 秒が経てば消える', async () => {
+  // 寿命は 10 秒 (ユーザー決定、Refs ippoan/rust-alc-api#644)。
+  // 以前は 60 秒で、仕掛けは効いていたが**実機で「いつまでも残る」と感じられた** —
+  // かざした人はその場で押すので、60 秒は立ち去った後も出続ける長さだった。
+
+  it('★ 出したまま 10 秒が経てば消える', async () => {
     const wrapper = await mountPrompt(null)
-    // 打刻を渡した瞬間からの 60 秒を測るので、タイマーを差し替えてから渡す
+    // 打刻を渡した瞬間からの 10 秒を測るので、タイマーを差し替えてから渡す
     vi.useFakeTimers()
     await wrapper.setProps({ punch: punchOf() })
     expect(wrapper.find(BUTTON).exists()).toBe(true)
 
-    vi.advanceTimersByTime(59_000)
+    vi.advanceTimersByTime(9_000)
     await wrapper.vm.$nextTick()
     expect(wrapper.find(BUTTON).exists()).toBe(true)
 
@@ -100,13 +104,13 @@ describe('IcPunchAlcoholPrompt — IC カードの打刻からアルコールチ
     wrapper.unmount()
   })
 
-  it('一覧を引き直して同じ行が来ても 60 秒は伸びない (ポーリングで出っぱなしにしない)', async () => {
+  it('★ 一覧を引き直して同じ行が来ても 10 秒は伸びない (ポーリングで出っぱなしにしない)', async () => {
     const wrapper = await mountPrompt(null)
     vi.useFakeTimers()
     const punch = punchOf()
     await wrapper.setProps({ punch })
 
-    vi.advanceTimersByTime(59_000)
+    vi.advanceTimersByTime(9_000)
     // 同じ ID の行を渡し直す (WS の合図やポーリングでの引き直し)
     await wrapper.setProps({ punch: { ...punch } })
     vi.advanceTimersByTime(1_000)
