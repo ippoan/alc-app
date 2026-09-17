@@ -156,8 +156,8 @@ const measuredAtLabel = computed(() => {
 // 吹込不良 (error) は「測れなかった」だけでアルコールが出たわけではないので、
 // このモーダルの中だけ normal と同じ扱いにする (色の定義は alcoholResultClass に
 // 集約したまま、引数側で寄せる)。基準超過 (over) だけを赤で目立たせる (ユーザー判断)。
-// utils/alcohol.ts の alcoholResultClass 自体は HubMeasurementsViewer と共有しているので
-// 変えない (normal 以外を赤にする挙動はそちらでは正しい)。
+// alcoholResultClass は error を黄にするが、このモーダルは error を normal に
+// 読み替えて渡すので緑のまま (ユーザー判断)。
 const badgeClass = computed(() => alcoholResultClass(props.reading?.result === 'over' ? 'over' : 'normal'))
 </script>
 

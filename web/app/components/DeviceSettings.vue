@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DeviceSettingsResponse } from '~/types'
 import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
+import { alcoholResultLabel } from '~/utils/alcohol'
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
@@ -457,7 +458,7 @@ async function stopFc1200Test() {
 // 測定完了 or エラーで自動終了
 watch(fc1200.result, (val) => {
   if (val && fc1200Measuring.value) {
-    fc1200TestResult.value = `測定完了: ${val.alcoholValue} mg/L (${val.resultType === 'normal' ? '正常' : '超過'})`
+    fc1200TestResult.value = `測定完了: ${val.alcoholValue} mg/L (${alcoholResultLabel(val.resultType)})`
     fc1200Measuring.value = false
     fc1200Testing.value = false
     fc1200.disconnect()

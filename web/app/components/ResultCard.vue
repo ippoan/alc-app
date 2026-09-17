@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { MeasurementResult } from '~/types'
+import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 
 const props = defineProps<{
   result: MeasurementResult
@@ -32,21 +33,9 @@ const resultColor = computed(() => {
   }
 })
 
-const resultLabel = computed(() => {
-  switch (props.result.resultType) {
-    case 'normal': return '正常'
-    case 'over': return '基準値超過'
-    case 'error': return 'エラー'
-  }
-})
+const resultLabel = computed(() => alcoholResultLabel(props.result.resultType))
 
-const resultLabelColor = computed(() => {
-  switch (props.result.resultType) {
-    case 'normal': return 'text-green-700 bg-green-100'
-    case 'over': return 'text-red-700 bg-red-100'
-    case 'error': return 'text-yellow-700 bg-yellow-100'
-  }
-})
+const resultLabelColor = computed(() => alcoholResultClass(props.result.resultType))
 
 const alcoholDisplay = computed(() => {
   return `${props.result.alcoholValue.toFixed(2)} mg/L`

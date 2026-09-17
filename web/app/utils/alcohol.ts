@@ -50,13 +50,12 @@ export function alcoholResultLabel(result: string): string {
 }
 
 /**
- * アルコール判定の色。正常だけ緑、それ以外 (超過・吹込不良) は赤で目立たせる。
- *
- * 移してきたのは `HubMeasurementsViewer.vue` の 1 か所だけ。他の 3 本
- * (`MeasurementDetail.vue` / `MeasurementLog.vue` / `OfflineQueue.vue`) も同型だが、
- * **表示語 (基準超 vs 超過) と error の色 (yellow vs red) が違う**ため、寄せると
- * 既存 3 画面の見た目が変わる。どちらに揃えるかはユーザーの判断が要るので別タスクにした。
+ * アルコール判定のバッジ色 (`bg-*-100 text-*-800`)。正常は緑、吹込不良 (error) は黄、
+ * 超過 (over) と未知の値は赤。error だけ黄に分けるのは、一覧で超過と見分けられる
+ * ようにするため (ユーザー判断)。
  */
 export function alcoholResultClass(result: string): string {
-  return result === 'normal' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+  if (result === 'normal') return 'bg-green-100 text-green-800'
+  if (result === 'error') return 'bg-yellow-100 text-yellow-800'
+  return 'bg-red-100 text-red-800'
 }

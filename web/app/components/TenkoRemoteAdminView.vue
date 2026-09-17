@@ -3,6 +3,7 @@ import type { FaceAuthResult, TenkoSession, DriverInfo } from '~/types'
 import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { alcoholResultLabel } from '~/utils/alcohol'
 
 const props = defineProps<{
   initialRoomId?: string | null
@@ -117,8 +118,9 @@ function statusColor(s: string) {
 
 function alcoholLabel(r: string | null) {
   if (!r) return '-'
-  const map: Record<string, string> = { pass: '正常', fail: '検出', normal: '正常', over: '基準超', error: 'エラー' }
-  return map[r] || r
+  // pass / fail は遠隔点呼だけの値で helper に無いのでここに残す
+  const extra: Record<string, string> = { pass: '正常', fail: '検出' }
+  return extra[r] ?? alcoholResultLabel(r)
 }
 
 function alcoholColor(r: string | null) {
