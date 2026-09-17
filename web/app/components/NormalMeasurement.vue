@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MeasurementResult, TenkoType, CarInspectionLookupResponse } from '~/types'
+import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection, punchTimecard } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
@@ -18,7 +18,7 @@ const props = defineProps<{
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 
-const step = ref<'nfc' | 'choice' | 'vehicle' | 'medical' | 'measuring' | 'result'>('nfc')
+const step = ref<NormalMeasurementStep>('nfc')
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
 
@@ -369,6 +369,10 @@ const {
   latestBloodPressure: bleBloodPressure,
 } = useBleGateway()
 
+// 本人確認の前に届いたアルコール測定の通知 (Refs ippoan/rust-alc-api#644)。
+// wire() には触らない — StrayAlcoholModal.vue に表示・タイマーを全部持たせる
+const { latest: strayAlcohol } = useStrayAlcohol()
+
 // この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
 const { bpEnabled } = useBloodPressureSetting()
 
@@ -654,6 +658,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
     'w-full flex-1 overflow-y-auto p-4',
     landscape ? 'flex gap-4 max-w-4xl mx-auto' : 'flex flex-col items-center'
   ]">
+    <StrayAlcoholModal :reading="strayAlcohol" :step="step" />
     <!-- 左列 (横画面) / 上部 (縦画面): バナー + ステップ + フッターリンク -->
     <div :class="landscape ? 'w-2/5 flex flex-col shrink-0' : 'w-full flex flex-col items-center'">
       <!-- オフラインバナー -->
