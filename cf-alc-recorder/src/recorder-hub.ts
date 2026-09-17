@@ -103,6 +103,33 @@ const CMD_RESULT_TTL_MS = 10 * 60 * 1000;
 /** 上り 1 メッセージの上限 (これ以上は parse せず reject)。 */
 const MAX_MESSAGE_BYTES = 64 * 1024;
 
+/**
+ * `ws.close()` に**渡せない** close code。
+ *
+ * - `1005` … 相手が close frame に status を載せなかった
+ * - `1006` … close frame 無しで切れた (異常終了)
+ *
+ * どちらも「受け取る側が状況を表すための値」で、送ることはできない。
+ * workerd は `TypeError: Invalid WebSocket close code: 1005.` を投げる。
+ */
+const RESERVED_CLOSE_CODES = new Set([1005, 1006]);
+
+/**
+ * 相手の close code を、そのまま `ws.close()` へ渡せる値に丸める。
+ *
+ * **これは異常系の保険ではなく、定常的に通る経路。** ブラウザの
+ * `ws.close()` を**引数なし**で呼ぶと相手側は `1005` になる — キオスクの購読は
+ * まさにそれ (`web/app/composables/useTimecardWatch.ts` の `stop()`)。回線が
+ * 黙って切れれば `1006`。
+ *
+ * 丸めずに投げると `webSocketClose` がそこで止まり、**続きの
+ * `broadcastDevices()` に到達しない** → `/events` の「接続中デバイス一覧」が
+ * 切断後も古いまま残る (Refs ippoan/rust-alc-api#644)。
+ */
+export function closeCodeForEcho(code: number): number {
+  return RESERVED_CLOSE_CODES.has(code) ? 1000 : code;
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -299,8 +326,27 @@ export class RecorderHub extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
-    ws.close(code, reason);
+  /**
+   * 切断の後始末。**`broadcastDevices()` に必ず到達させること**が本体。
+   *
+   * 相手の close code をそのまま `ws.close()` へ渡すと `1005` / `1006` で
+   * 投げる (`closeCodeForEcho` の doc 参照)。丸めたうえで **try/catch でも
+   * 囲む** — 将来 workerd が別の code を拒むようになっても、デバイス一覧の
+   * 更新だけは落とさない。
+   *
+   * `console.log` は切断の切り分け用。**サーバが切ったのか回線が切れたのか**は
+   * この code / reason でしか分からず、端末側のログは両者を区別せず
+   * 「サーバ側から切断」と書く (alc-app-s3 `ws_uplink.rs` の
+   * `WebSocketEventType::Disconnected | Close(_) | Closed` が 1 つに潰れる)。
+   */
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    console.log(`[ws] close code=${code} clean=${wasClean} reason=${reason}`);
+    try {
+      ws.close(closeCodeForEcho(code), reason);
+    } catch (e) {
+      // 閉じ返せなくても一覧の更新は続ける (相手は既に居ない)
+      console.log(`[ws] close echo failed code=${code}`, e);
+    }
     this.broadcastDevices();
   }
 
