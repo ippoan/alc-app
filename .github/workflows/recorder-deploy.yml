@@ -98,8 +98,11 @@ jobs:
         # なり、比較が常に空振りする (= 何も変わっていない扱い)。repo root で走らせる。
         working-directory: ${{ github.workspace }}
         run: |
-          # ★ set -e を付けないこと。git の些細な失敗で step ごと落ちると job が失敗し、
-          # 意図せず fail-closed (本物の変更が黙って本番に載らない) になる。rc で分岐する。
+          set +e  # ★ GitHub Actions の run: の既定シェルは `bash -e` なので、明示的に errexit を無効化する
+          # git diff --quiet は差分ありで rc=1 を返すため、errexit のままだと 1 行目で step が
+          # 終了して rc=$? に到達せず、fail-closed (本物の変更が黙って本番に載らない) になる
+          # (実測: v0.0.167 の run で production deploy が skipped)。tags= の grep も 0 件マッチで
+          # rc=1 を返す同じ穴。git の些細な失敗で job を落とさず、rc で分岐する。
           tag="$GITHUB_REF_NAME"
           # 前タグ = 厳密 vN.N.N のタグを版の降順に並べた 1 つ下。採番側 (ippoan/ci-workflows の
           # tag-release.yml) と同じ走査規則。git describe は shallow で壊れるうえ
