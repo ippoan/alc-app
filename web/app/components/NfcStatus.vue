@@ -123,10 +123,12 @@ const showNfcGuide = ref(false)
         'border-green-400 bg-green-50': readAnimation,
       }"
     >
-      <template v-if="promptActive">
-        <slot name="punch-prompt" />
-      </template>
-      <template v-else>
+      <!-- スロットは**常に**描画する。中身 (IcPunchAlcoholPrompt) が自分で
+           「出す / 出さない」を決め、出しているあいだだけ `promptActive` が true になる。
+           ここを v-if で包むと、マウントされない → emit されない → 永久に false の
+           鶏と卵になる (Refs ippoan/rust-alc-api#644) -->
+      <slot name="punch-prompt" />
+      <template v-if="!promptActive">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z" />
         </svg>
