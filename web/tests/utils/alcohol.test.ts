@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readAlcohol } from '~/utils/alcohol'
+import { readAlcohol, toAlcoholReading } from '~/utils/alcohol'
 
 describe('readAlcohol', () => {
   it('CoreS3 の payload (正常) を読む', () => {
@@ -35,5 +35,32 @@ describe('readAlcohol', () => {
 
   it('value / result の型が違う → null 扱い (壊れた行を測定値として拾わない)', () => {
     expect(readAlcohol({ value: 'not a number', result: 123 })).toBeNull()
+  })
+})
+
+describe('toAlcoholReading', () => {
+  it('readAlcohol の戻りから AlcoholReading を組む', () => {
+    const reading = toAlcoholReading({ value: 0.15, result: 'normal', useCount: 42 })
+    expect(reading).not.toBeNull()
+    expect(reading!.value).toBe(0.15)
+    expect(reading!.unit).toBe('mg/L')
+    expect(reading!.result).toBe('normal')
+    expect(reading!.useCount).toBe(42)
+    expect(reading!.measuredAt).toBeInstanceOf(Date)
+  })
+
+  it('吹込不良 (error) — value 欠落は 0 に倒す', () => {
+    const reading = toAlcoholReading({ value: null, result: 'error', useCount: 3 })
+    expect(reading).toEqual(expect.objectContaining({ value: 0, result: 'error', useCount: 3 }))
+  })
+
+  it('use_count 欠落 (useCount: null) は 0 に倒す', () => {
+    const reading = toAlcoholReading({ value: 0.1, result: 'normal', useCount: null })
+    expect(reading!.useCount).toBe(0)
+  })
+
+  it('result が無い (null) → null', () => {
+    expect(toAlcoholReading(null)).toBeNull()
+    expect(toAlcoholReading({ value: 0.1, result: null, useCount: 1 })).toBeNull()
   })
 })
