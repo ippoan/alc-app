@@ -286,3 +286,72 @@ describe('TodayPunchHistory — 端末 JWT が取れたら一覧を引き直す 
     wrapper.unmount()
   })
 })
+
+describe('TodayPunchHistory — 最新の打刻を呼び出し元へ上げる (Refs ippoan/rust-alc-api#644)', () => {
+  beforeEach(() => {
+    listTimePunchesMock.mockClear()
+    getEmployeesMock.mockClear()
+    watchOnChange = null
+  })
+
+  /** emit された最新行 (最後の 1 回ぶん) */
+  function lastLatest(wrapper: { emitted: (name: string) => unknown[][] | undefined }) {
+    const events = wrapper.emitted('latest')
+    return events?.[events.length - 1]?.[0]
+  }
+
+  it('引き直すたびに最新の 1 行 (畳み込み済みの種別つき) を latest で上げる', async () => {
+    getEmployeesMock.mockResolvedValue([{ id: 'emp-1', name: '山田太郎' }])
+    listTimePunchesMock.mockResolvedValue({
+      punches: [
+        { id: 'p2', employee_id: 'emp-1', employee_name: null, card_id: null, card_kind: 'felica_idm', punched_at: '2026-09-17T00:01:00Z' },
+        { id: 'p1', employee_id: null, employee_name: '鈴木花子', card_id: null, card_kind: 'license', punched_at: '2026-09-17T00:00:00Z' },
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+
+    expect(lastLatest(wrapper)).toEqual({
+      id: 'p2',
+      employeeId: 'emp-1',
+      name: '山田太郎',
+      cardKind: 'other',
+      punchedAt: '2026-09-17T00:01:00Z',
+    })
+    wrapper.unmount()
+  })
+
+  it('打刻が 0 件なら null を上げる', async () => {
+    listTimePunchesMock.mockResolvedValue({ punches: [] })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    expect(lastLatest(wrapper)).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('打刻の合図 (useTimecardWatch) で引き直したぶんも上げる — 購読は 1 本のまま', async () => {
+    listTimePunchesMock.mockResolvedValue({ punches: [] })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    expect(lastLatest(wrapper)).toBeNull()
+
+    listTimePunchesMock.mockResolvedValue({
+      punches: [
+        { id: 'p9', employee_id: null, employee_name: '佐藤次郎', card_id: null, card_kind: 'nfca_uid', punched_at: '2026-09-17T00:05:00Z' },
+      ],
+    })
+    watchOnChange!()
+    await flush()
+
+    expect(lastLatest(wrapper)).toMatchObject({ id: 'p9', name: '佐藤次郎', cardKind: 'other' })
+    wrapper.unmount()
+  })
+
+  it('取得に失敗したときは上げない (古い行で操作を始めさせない)', async () => {
+    listTimePunchesMock.mockRejectedValue(new Error('network error'))
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    expect(wrapper.emitted('latest')).toBeUndefined()
+    wrapper.unmount()
+  })
+})

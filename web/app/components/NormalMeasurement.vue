@@ -277,6 +277,19 @@ async function tryStartMeasurement(empId: string) {
 // NFC 読み取り → employee UUID を解決
 const employeeName = ref('')
 const approvalError = ref<string | null>(null)
+
+/**
+ * 社員が決まったところから種別の選択 (choice) の手前までの共通部分。
+ * **打刻は含まない** — 打刻が要るかどうかは入口ごとに違う (免許証のタッチは打つ、
+ * 手入力と IC カードは打たない)。
+ */
+async function prepareMeasurementFor(emp: { id: string, name: string }) {
+  employeeId.value = emp.id
+  employeeName.value = emp.name
+  await tryStartMeasurement(emp.id)
+  await faceSync()
+}
+
 async function onNfcRead(nfcId: string, expiryDate?: Date) {
   // **測定中のタップで段が巻き戻らないようにする。このガードを外さない**
   // (Refs ippoan/alc-app-s3#135)
@@ -289,10 +302,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
   }
   try {
     const emp = await getEmployeeByNfcId(nfcId)
-    employeeId.value = emp.id
-    employeeName.value = emp.name
-    await tryStartMeasurement(emp.id)
-    await faceSync()
+    await prepareMeasurementFor(emp)
     // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
     await tryPunch(nfcId)
     step.value = 'choice'
@@ -302,6 +312,31 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
     approvalError.value = msg
   }
 }
+
+/** 待機中 (免許証のタッチ待ち) か。呼び出し元が別の導線を出してよいのはこの間だけ */
+const isIdle = computed(() => step.value === 'nfc')
+
+/**
+ * **社員を指定して**測定へ入る (Refs ippoan/rust-alc-api#644)。
+ *
+ * IC カードはハブ端末 (CoreS3) にかざされ、打刻はサーバ側で既に記録されている —
+ * `onNfcRead` は通らず、社員も打刻の行から分かっている。そこで
+ * 「照合」と「打刻」を抜いた残り (測定レコードの作成 → 顔データ同期 → choice) だけを
+ * ここから始める。**`tryPunch` は絶対に呼ばない** (同じタップで打刻が 2 行入る)。
+ *
+ * 呼び出し元が段を知らずに呼んでも巻き戻らないよう、`onNfcRead` と**同じガード**を
+ * 置く (Refs ippoan/alc-app-s3#135)。始められたかを返す。
+ */
+async function startForEmployee(id: string, name: string): Promise<boolean> {
+  if (step.value !== 'nfc') return false
+  approvalError.value = null
+  clearPunchState()
+  await prepareMeasurementFor({ id, name })
+  step.value = 'choice'
+  return true
+}
+
+defineExpose({ isIdle, startForEmployee })
 
 // 手動入力 (社員番号で検索)
 const manualError = ref<string | null>(null)
@@ -313,10 +348,7 @@ async function onManualSubmit() {
   clearPunchState()
   try {
     const emp = await getEmployeeByCode(input)
-    employeeId.value = emp.id
-    employeeName.value = emp.name
-    await tryStartMeasurement(emp.id)
-    await faceSync()
+    await prepareMeasurementFor(emp)
     // 手入力には card_id が無いので打刻しない (打刻は免許証のタッチだけ)
     punchSkipReason.value = 'manual'
     step.value = 'choice'

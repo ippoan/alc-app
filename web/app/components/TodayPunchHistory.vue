@@ -8,13 +8,22 @@
  * `useTimecardWatch` のコメントが 2 実装目を禁じているのと同じ理由で、
  * この一覧も 2 実装目を作らない。
  */
-import type { ApiEmployee, TimePunchWithDevice } from '~/types'
+import type { ApiEmployee, LatestPunch, TimePunchWithDevice } from '~/types'
 import { listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
 import { cardKindOf, type CardKind } from '~/utils/card-kind'
 
 const { accessToken } = useAuth()
 const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
+
+/**
+ * 引き直すたびに**最新の 1 行**を上げる (Refs ippoan/rust-alc-api#644)。
+ *
+ * 打刻の合図 (`useTimecardWatch`) は**この部品が既に購読している**。IC カードの
+ * 打刻から次の操作へ進む導線もその合図が要るが、**購読を 2 本張らない** —
+ * 張ると同じ合図で一覧の引き直しが二重に走る。ここから結果を上げて共有する。
+ */
+const emit = defineEmits<{ latest: [LatestPunch | null] }>()
 
 const employees = ref<ApiEmployee[]>([])
 const employeeMap = computed(() => {
@@ -57,6 +66,18 @@ function displayName(p: TimePunchWithDevice): string {
     || (p.card_id ? `未登録カード ${p.card_id}` : '不明')
 }
 
+/** 最新行を呼び出し元へ渡す形に直す (0 件なら null)。 */
+function toLatestPunch(p: TimePunchWithDevice | undefined): LatestPunch | null {
+  if (!p) return null
+  return {
+    id: p.id,
+    employeeId: p.employee_id,
+    name: displayName(p),
+    cardKind: cardKindOf(p.card_kind),
+    punchedAt: p.punched_at,
+  }
+}
+
 /**
  * 本日の打刻を引き直す。
  *
@@ -79,6 +100,7 @@ async function loadTodayPunches() {
       cardKind: cardKindOf(p.card_kind),
     }))
     loadStatus.value = 'loaded'
+    emit('latest', toLatestPunch(res.punches[0]))
   }
   catch (e) {
     console.error('[TodayPunchHistory] Failed to load today punches:', e)

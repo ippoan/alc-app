@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { LatestPunch } from '~/types'
 import { initApi } from '~/utils/api'
 
 const config = useRuntimeConfig()
@@ -214,6 +215,34 @@ function reloadPage() {
   alarmDevice.notifyIntentionalReload()
   window.location.reload()
 }
+
+/**
+ * IC カードの打刻から アルコールチェックへ進む導線 (Refs ippoan/rust-alc-api#644)。
+ *
+ * IC カードはハブ端末 (CoreS3) にかざされ、打刻はサーバ側で記録される —
+ * タブレットの NFC (`NormalMeasurement` の `onNfcRead`) は通らないので、
+ * そのままでは「操作を選んでください」の段に入れない。**打刻の合図で引き直した
+ * 最新の行**を `TodayPunchHistory` から受け取り、IC カードなら
+ * `IcPunchAlcoholPrompt` がその人ぶんのボタンを出す。
+ *
+ * **判定も測定の開始も `NormalMeasurement` の状態機械の外に置く** —
+ * `onNfcRead` の「測定中のタップで段が巻き戻らない」ガード
+ * (Refs ippoan/alc-app-s3#135) に触らないため。開始だけを `startForEmployee`
+ * (打刻を含まない入口) に頼む。
+ */
+const normalMeasurement = ref<{
+  isIdle: boolean
+  startForEmployee: (id: string, name: string) => Promise<boolean>
+} | null>(null)
+const latestPunch = ref<LatestPunch | null>(null)
+/** 通常点呼が待機中か (まだ mount されていなければ false = ボタンを出さない) */
+const measurementIdle = computed(() => normalMeasurement.value?.isIdle === true)
+
+async function startAlcoholForPunch(punch: LatestPunch) {
+  if (!punch.employeeId) return
+  await normalMeasurement.value?.startForEmployee(punch.employeeId, punch.name)
+}
+
 function onRoleTabClick(role: RoleTab) {
   if (activeRole.value === role) {
     if (role === 'manager') managerAuthKey.value++
@@ -452,9 +481,17 @@ function onRoleTabClick(role: RoleTab) {
                リンクより上 (= 画面最下部はリンクのまま) に置かれ、NormalMeasurement 自身が
                持つ flex-1 + overflow-y-auto で一緒にスクロールする。ラッパーの特別な class 分岐は
                不要 (#248 の overflow-y-auto トリックは NormalMeasurement 側に既にあるため) -->
-          <NormalMeasurement v-if="driverSubTab === 'normal'" :landscape="isAndroidLandscape" class="flex-1 min-h-0">
+          <NormalMeasurement v-if="driverSubTab === 'normal'" ref="normalMeasurement" :landscape="isAndroidLandscape" class="flex-1 min-h-0">
             <template #below-card>
-              <TodayPunchHistory class="w-full max-w-md mx-auto mt-4" />
+              <!-- IC カードでかざした人をアルコールチェックへ案内する (Refs ippoan/rust-alc-api#644)。
+                   打刻履歴より上 (= カードのすぐ下) に出す -->
+              <IcPunchAlcoholPrompt
+                class="w-full max-w-md mx-auto mt-4"
+                :punch="latestPunch"
+                :idle="measurementIdle"
+                @start="startAlcoholForPunch"
+              />
+              <TodayPunchHistory class="w-full max-w-md mx-auto mt-4" @latest="latestPunch = $event" />
             </template>
           </NormalMeasurement>
           <TenkoKiosk v-if="driverSubTab === 'tenko'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />

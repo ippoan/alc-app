@@ -3,7 +3,7 @@ import { ref, readonly, defineComponent } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
 import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
-import { updateMeasurement } from '~/utils/api'
+import { updateMeasurement, startMeasurement } from '~/utils/api'
 
 // --- API のモック (NFC → 乗務員照合だけを動かす) ---
 
@@ -1068,6 +1068,66 @@ describe('NormalMeasurement — 打刻と種別の選択 (Refs ippoan/alc-app-s3
       call => (call[1] as Record<string, unknown>).status === 'completed',
     )
     expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe('post_operation')
+    wrapper.unmount()
+  })
+})
+
+describe('NormalMeasurement — 社員を指定して測定へ入る (IC カードの打刻から、Refs ippoan/rust-alc-api#644)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    isOnlineRef.value = true
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+  })
+
+  /** defineExpose した入口 (呼び出し元は index.vue の ref から呼ぶ) */
+  function exposed(wrapper: Awaited<ReturnType<typeof mountNfcStep>>) {
+    return wrapper.vm as unknown as {
+      isIdle: boolean
+      startForEmployee: (id: string, name: string) => Promise<boolean>
+    }
+  }
+
+  it('社員を指定すると照合も打刻もせずに種別の選択へ入る', async () => {
+    const wrapper = await mountNfcStep()
+    expect(exposed(wrapper).isIdle).toBe(true)
+
+    const started = await exposed(wrapper).startForEmployee('emp-9', '佐藤花子')
+    await wrapper.vm.$nextTick()
+
+    expect(started).toBe(true)
+    // IC カードの打刻はサーバ側で済んでいる — **二重打刻になるので打たない**
+    expect(punchTimecardMock).not.toHaveBeenCalled()
+    // 社員は打刻の行から分かっているので照合もしない
+    expect(getEmployeeByNfcIdMock).not.toHaveBeenCalled()
+    // 測定レコードと顔データ同期は免許証のタッチと同じように走る
+    expect(vi.mocked(startMeasurement)).toHaveBeenCalledWith('emp-9')
+    expect(faceSyncMock).toHaveBeenCalled()
+
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('佐藤花子')
+    // 打刻の帯は出さない (この画面では打っていない)
+    expect(wrapper.find('[data-testid="punch-done"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="punch-failed"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="punch-skipped"]').exists()).toBe(false)
+    expect(exposed(wrapper).isIdle).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('待機中でないとき (測定中) に呼ばれても段は動かない — onNfcRead と同じガード', async () => {
+    const wrapper = await mountNfcStep()
+    await touch(wrapper, '2601012901010')
+    expect(wrapper.text()).toContain('山田太郎')
+    expect(exposed(wrapper).isIdle).toBe(false)
+
+    const started = await exposed(wrapper).startForEmployee('emp-9', '佐藤花子')
+    await wrapper.vm.$nextTick()
+
+    expect(started).toBe(false)
+    // 別人に差し替わらない (免許証でタッチした人のまま)
+    expect(wrapper.text()).toContain('山田太郎')
+    expect(wrapper.text()).not.toContain('佐藤花子')
+    expect(vi.mocked(startMeasurement)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(startMeasurement)).toHaveBeenCalledWith('emp-1')
     wrapper.unmount()
   })
 })
