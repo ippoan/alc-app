@@ -52,8 +52,12 @@ mockNuxtImport('useAlarmDeviceSetting', () => () => ({
   setEnabled: (v: boolean) => { enabled.value = v },
 }))
 
-// 見張りと関係の無い全タブ共通の初期化は黙らせる
-mockNuxtImport('useFaceSync', () => () => ({}))
+// 見張りと関係の無い全タブ共通の初期化は黙らせる。
+// sync/isSyncing は下の「実物を繋いだ回帰テスト」で NormalMeasurement (実物) が使う
+mockNuxtImport('useFaceSync', () => () => ({
+  isSyncing: ref(false),
+  sync: vi.fn(async () => {}),
+}))
 mockNuxtImport('useAuth', () => () => ({
   accessToken: ref(null),
   isAuthenticated: ref(false),
@@ -61,6 +65,105 @@ mockNuxtImport('useAuth', () => () => ({
   refreshAccessToken: vi.fn(async () => false),
   handleLineworksHash: vi.fn(),
   activateFromRegistration: vi.fn(),
+}))
+
+// --- 以下は NormalMeasurement / NfcStatus / IcPunchAlcoholPrompt を実物のまま繋ぐ
+// 回帰テスト用のモック (Refs ippoan/rust-alc-api#644)。他の describe は引き続き
+// shallow stub (below-card slot だけを描く手書きの stub) を使うので、実物を要求する
+// 依存だけをここでまとめてモックする (NormalMeasurement.test.ts / NfcStatus.test.ts と同じ形)
+
+// index.vue / TodayPunchHistory (自動 stub 経由でも読み込まれる) など他の実物も
+// このモジュールを import するので、`importOriginal` で残りの export はそのまま残す
+vi.mock('~/utils/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/utils/api')>()
+  return {
+    ...actual,
+    getEmployeeByNfcId: vi.fn(async () => ({ id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' })),
+    getEmployeeByCode: vi.fn(async () => ({ id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' })),
+    punchTimecard: vi.fn(async () => {}),
+    startMeasurement: vi.fn(async () => ({ id: 'measurement-1' })),
+    updateMeasurement: vi.fn(async () => ({})),
+    uploadBlowVideo: vi.fn(async () => 'https://example.com/blow.webm'),
+    lookupCarInspection: vi.fn(async () => null),
+  }
+})
+
+vi.mock('~/utils/face-approval', () => ({
+  checkFaceApproval: vi.fn(() => null),
+}))
+
+vi.mock('~/utils/video-store', () => ({
+  saveVideo: vi.fn(async () => 'video-1'),
+  markVideoUploaded: vi.fn(async () => {}),
+  getPendingVideos: vi.fn(async () => []),
+  cleanupOldVideos: vi.fn(async () => {}),
+}))
+
+// WebSerial 分岐は使わない (この回帰テストの関心はタッチ枠のスロット差し替えだけ)
+vi.mock('~/utils/webserial', () => ({
+  isWebSerialSupported: () => false,
+}))
+
+mockNuxtImport('useOfflineSync', () => () => ({
+  isOnline: ref(true),
+  pending: ref(0),
+  isSyncing: ref(false),
+  save: vi.fn(),
+  syncQueue: vi.fn(),
+}))
+
+mockNuxtImport('useCamera', () => () => ({
+  stream: ref(null),
+  videoRef: ref(null),
+  isActive: ref(false),
+  start: vi.fn(async () => {}),
+  stop: vi.fn(),
+}))
+
+mockNuxtImport('useVideoRecorder', () => () => ({
+  isRecording: ref(false),
+  startRecording: vi.fn(),
+  stopRecording: vi.fn(async () => null),
+}))
+
+mockNuxtImport('useBleGateway', () => () => ({
+  latestTemperature: ref(null),
+  latestBloodPressure: ref(null),
+}))
+
+mockNuxtImport('useCoreS3Stage', () => () => ({
+  syncStep: vi.fn(),
+  sendResult: vi.fn(),
+}))
+
+// NormalMeasurement (onEvent) と NfcStatus (isConnected/requestPort/...) の
+// 両方から呼ばれるので、両方の形を 1 つのモックにまとめる
+mockNuxtImport('useCoreS3Serial', () => () => ({
+  onEvent: vi.fn(() => vi.fn()),
+  isConnected: ref(false),
+  requestPort: vi.fn(async () => true),
+  startupProbe: vi.fn(async () => false),
+  isStartupProbing: ref(false),
+}))
+
+mockNuxtImport('useNfcReader', () => () => ({
+  isConnected: ref(false),
+  error: ref<string | null>(null),
+  readers: ref<string[]>([]),
+  bridgeVersion: ref<string | null>(null),
+  connect: vi.fn(),
+  onRead: vi.fn(),
+  onLicenseRead: vi.fn(),
+}))
+
+mockNuxtImport('useNfcBridgeUpdate', () => () => ({
+  latestVersion: ref<string | null>(null),
+  checkLatestVersion: vi.fn(async () => {}),
+  isUpdateAvailable: vi.fn(() => false),
+}))
+
+mockNuxtImport('useKioskAccess', () => () => ({
+  isCheckingKioskAccess: ref(false),
 }))
 
 // NormalMeasurement は below-card slot (本日の打刻履歴) を実際に描く必要があるため、
@@ -346,5 +449,54 @@ describe('pages/index — IC カードの打刻からアルコールチェック
   it('通常点呼タブ以外 (点呼) では導線も出さない', async () => {
     wrapper = await mountIndex('/?role=driver&tab=tenko', NormalMeasurementExposeStub)
     expect(wrapper.findComponent(IcPunchAlcoholPrompt).exists()).toBe(false)
+  })
+})
+
+describe('pages/index — IC カードの打刻でタッチ枠にボタンが実際に出る (実物を繋いだ回帰テスト、Refs ippoan/rust-alc-api#644)', () => {
+  let wrapper: VueWrapper | null = null
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  function icPunch(): LatestPunch {
+    return {
+      id: 'punch-1',
+      employeeId: 'emp-1',
+      name: '山田太郎',
+      cardKind: 'other',
+      punchedAt: new Date().toISOString(),
+    }
+  }
+
+  /**
+   * `NormalMeasurement` / `NfcStatus` / `IcPunchAlcoholPrompt` を stub に差し替えず実物のまま繋ぐ。
+   * **`promptActive` を手で立てない** — スロットの中身 (`IcPunchAlcoholPrompt`) が自分で
+   * `active` を emit し、それが `NfcStatus` の `promptActive` に届いて初めてボタンが描画される、
+   * という実際の経路をここで踏む。`NfcStatus` 側で `punch-prompt` スロットを `v-if="promptActive"`
+   * で包むと、マウントされない → emit されない → 永久に `false` のままの鶏と卵になり、
+   * 本番で実際にこの不具合が起きた (Refs ippoan/rust-alc-api#644)
+   */
+  it('IC カードの打刻があるとき、タッチ枠にボタンが出る (スロットが v-if で包まれていない)', async () => {
+    wrapper = await mountSuspended(IndexPage, {
+      route: '/?role=driver',
+      shallow: true,
+      global: {
+        stubs: {
+          ManagerAlarmBar: false,
+          ClientOnly: false,
+          NormalMeasurement: false,
+          NfcStatus: false,
+          IcPunchAlcoholPrompt: false,
+        },
+      },
+    })
+
+    wrapper.findComponent(TodayPunchHistory).vm.$emit('latest', icPunch())
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="ic-punch-alcohol"]').exists()).toBe(true)
   })
 })

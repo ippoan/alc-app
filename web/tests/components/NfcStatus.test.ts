@@ -145,7 +145,11 @@ describe('NfcStatus — promptActive (タッチ枠の中身の差し替え、Ref
       slots: { 'punch-prompt': '<div data-testid="slot-content">案内ボタン</div>' },
     })
     expect(wrapper.text()).toContain('NFC カードをタッチしてください')
-    expect(wrapper.find('[data-testid="slot-content"]').exists()).toBe(false)
+    // punch-prompt スロットは promptActive に関係なく**常に**描画する。中身
+    // (IcPunchAlcoholPrompt) が自分で出す/出さないを決め、出しているあいだだけ
+    // 呼び出し元が promptActive を true にする。ここを v-if で包むと、マウントされない
+    // → emit されない → 永久に false のままの鶏と卵になる (実機で再現、Refs #644)
+    expect(wrapper.find('[data-testid="slot-content"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
