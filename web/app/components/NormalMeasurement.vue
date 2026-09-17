@@ -285,12 +285,21 @@ const approvalError = ref<string | null>(null)
  * 社員が決まったところから種別の選択 (choice) の手前までの共通部分。
  * **打刻は含まない** — 打刻が要るかどうかは入口ごとに違う (免許証のタッチは打つ、
  * 手入力と IC カードは打たない)。
+ *
+ * **顔データの同期は待たない** (Refs ippoan/rust-alc-api#644)。待っていたころは
+ * 読み取りから `choice` が出るまで**実測 1.5〜6.2 秒**かかっていた —
+ * `getFaceData()` が承認済み**全社員ぶん**の embedding を返すため。
+ *
+ * 待たなくて成立するのは、**顔認証が走るのは体温の後**だから。`choice` を出した
+ * 時点ではまだ要らず、背景の同期はそれまでに終わる。間に合わなかった場合の
+ * 落ち方 (`verified: false`) は、同期が失敗したときと同じで新しくはない。
  */
 async function prepareMeasurementFor(emp: { id: string, name: string }) {
   employeeId.value = emp.id
   employeeName.value = emp.name
   await tryStartMeasurement(emp.id)
-  await faceSync()
+  // **await しない。** 失敗は useFaceSync が syncError に畳むので握り潰してよい
+  void faceSync()
 }
 
 async function onNfcRead(nfcId: string, expiryDate?: Date) {
