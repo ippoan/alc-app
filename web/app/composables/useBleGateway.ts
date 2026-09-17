@@ -41,6 +41,29 @@ const transport = ref<'serial' | 'websocket' | null>(null)
 /** useCoreS3Serial の受け口を繋いだか (useBleGateway は複数の component から呼ばれる) */
 let wired = false
 
+/**
+ * `EVT FC1200` の購読を繋いだか。**`wired` とは別に持つ** (Refs ippoan/rust-alc-api#644)。
+ *
+ * # なぜ `wire()` から出したか
+ *
+ * `wire()` を呼ぶのは `connect()` / `autoConnect()` だけで、`autoConnect()` の
+ * 呼び出し元は `AlcMeasurement` だけ。そして `AlcMeasurement` は
+ * `v-if="step === 'measuring'"` の中にしか描画されない。
+ * ⇒ **待機画面では `alcoholStage` が一度も立たなかった。**
+ *
+ * しかも `wire()` は `onEvent` が返す解除の口を捨てているので、**一度でも測定すると
+ * 以後は待機画面でも更新され続ける** — 「初回は届かない / 2 回目以降は届くが
+ * 誰も使っていない」という一貫しない状態だった。
+ *
+ * # なぜ `wire()` ごと前倒しにしないか
+ *
+ * `wire()` には heartbeat 監視と `onClose` → `cleanup()` が入っている。前倒しすると
+ * **30 秒無音で `coreS3.release()` が走り、NFC と共用の USB ポートを手放す**経路が
+ * 新設される。**`onEvent` はポートを開きも掴みも手放しもしない** (`useCoreS3Serial`
+ * の `eventHandlers` へ足すだけ) ので、この 1 本だけを外に出せば罠を踏まない。
+ */
+let fc1200Wired = false
+
 // WebSocket state
 let ws: WebSocket | null = null
 let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -62,6 +85,18 @@ export function useBleGateway() {
   // serial 側のポートは自前で探さない。探索・open・機種判定は useSerialArbiter に
   // 集約され、その利用側 useCoreS3Serial から JSON を受け取る (Refs #182)
   const coreS3 = useCoreS3Serial()
+
+  // firmware が USB に流す FC-1200 の状態遷移 (`EVT FC1200 <name> <args...>`)。
+  // CoreS3 の画面と連動しないので、PC 直結と同じ語彙でここから進みを出す
+  // (Refs ippoan/alc-app-s3#135)。**接続の有無と無関係に繋ぐ** — 理由は
+  // `fc1200Wired` の doc を参照 (Refs ippoan/rust-alc-api#644)
+  if (!fc1200Wired) {
+    fc1200Wired = true
+    coreS3.onEvent((name, args) => {
+      if (name !== 'FC1200') return
+      alcoholStage.value = FC1200_EVT_STATE[args[0] ?? ''] ?? null
+    })
+  }
 
   // --- WebSocket transport (Android BLE Bridge) ---
 
@@ -167,13 +202,6 @@ export function useBleGateway() {
     coreS3.onJson((msg) => {
       console.log('[BLE-GW RX]', msg)
       processMessage(msg as BleGatewayMessage)
-    })
-
-    // firmware が USB に流す FC-1200 の状態遷移 (`EVT FC1200 <name> <args...>`)。
-    // CoreS3 の画面と連動しないので、PC 直結と同じ語彙でここから進みを出す (Refs ippoan/alc-app-s3#135)
-    coreS3.onEvent((name, args) => {
-      if (name !== 'FC1200') return
-      alcoholStage.value = FC1200_EVT_STATE[args[0] ?? ''] ?? null
     })
 
     // 抜線・クラッシュでポートを失った → serial の state を畳む

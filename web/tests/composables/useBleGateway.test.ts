@@ -774,6 +774,50 @@ describe('useBleGateway', () => {
     })
 
     describe('EVT FC1200 → alcoholStage (#238)', () => {
+      // ★ 待機画面 (点呼の測定に入る前) でも段階が立つこと (Refs ippoan/rust-alc-api#644)。
+      // 購読を wire() の中に置いていたころは autoConnect() を通るまで立たなかった —
+      // autoConnect() を呼ぶのは AlcMeasurement だけで、あれは measuring 段にしか出ない。
+      it('★ autoConnect を通らなくても段階が立つ (起動時の探索だけで繋がっている待機画面)', async () => {
+        const dev = createMockPort()
+        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+        await load()
+
+        // 起動時の探索でポートは掴まれるが、BLE ゲートウェイは wire していない
+        const { useCoreS3Serial } = await import('~/composables/useCoreS3Serial')
+        const probe = useCoreS3Serial().startupProbe()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(await probe).toBe(true)
+        expect(gw.isConnected.value).toBe(false)
+
+        dev.emit('EVT FC1200 WARMING 120 5\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.alcoholStage.value).toBe('warming_up')
+
+        dev.emit('EVT FC1200 BLOW_WAITING\n')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(gw.alcoholStage.value).toBe('blow_waiting')
+
+        // **wire していないことは変わらない** — ポートの掴み直しも heartbeat も起きない
+        expect(gw.isConnected.value).toBe(false)
+      })
+
+      it('useBleGateway を 2 回呼んでも購読は 1 本 (複数の component から呼ばれる)', async () => {
+        const dev = createMockPort()
+        await connectSerial(dev)
+
+        // NormalMeasurement / BleStatus / TenkoKiosk … と複数から呼ばれる形
+        const second = useBleGateway()
+
+        dev.emit('EVT FC1200 WARMING 120 5\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        // 同じ ref を共有し、二重登録で壊れたりしない
+        expect(second.alcoholStage.value).toBe('warming_up')
+        expect(gw.alcoholStage.value).toBe('warming_up')
+      })
+
       it('BLOW_WAITING → blow_waiting', async () => {
         const dev = createMockPort()
         await connectSerial(dev)
