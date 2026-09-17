@@ -323,6 +323,28 @@ describe('useFaceSync', () => {
     expect(mockGetFaceData).toHaveBeenCalledTimes(2)
   })
 
+  it('★ 刻まれた値が未来なら同期する (負の経過時間で永久に間引かれない)', async () => {
+    // PC の時計が進んでいた / ずれて直った、で起こりうる。素通しすると
+    // Date.now() - at が負になり「下限間隔より小さい」を永久に満たす
+    localStorage.setItem('alc.faceSync.lastSyncAt', String(Date.now() + 60 * 60 * 1000))
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    await useFaceSync().sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+  })
+
+  it('刻まれた値が 0 以下なら「未同期」に倒す', async () => {
+    localStorage.setItem('alc.faceSync.lastSyncAt', '-1')
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    await useFaceSync().sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+  })
+
   it('刻まれた値が数値でなければ「未同期」に倒す (取りに行く側 = 安全側)', async () => {
     localStorage.setItem('alc.faceSync.lastSyncAt', 'broken')
     mockGetFaceData.mockResolvedValue([])

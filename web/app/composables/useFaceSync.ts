@@ -43,7 +43,12 @@ function readLastSyncAt(): number {
   try {
     const raw = localStorage.getItem(LAST_SYNC_KEY)
     const at = raw === null ? Number.NaN : Number(raw)
-    return Number.isFinite(at) ? at : 0
+    // **未来の時刻も壊れた値として扱う。** 素通しすると `Date.now() - at` が負になり、
+    // 「下限間隔より小さい」を永久に満たして**二度と同期しなくなる** — しかも
+    // 画面には何も出ないので気づけない。PC の時計が進んでいた / ずれて直った、で起こる
+    // (この案件は端末側の時計ずれを実際に踏んでいる)。0 以下も同様に壊れた値
+    if (!Number.isFinite(at) || at <= 0 || at > Date.now()) return 0
+    return at
   }
   catch {
     return 0
