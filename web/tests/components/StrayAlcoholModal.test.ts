@@ -53,17 +53,17 @@ describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', 
     wrapper.unmount()
   })
 
-  it('段が vehicle のときに届いても出さない', async () => {
+  it('段が vehicle のときに届けば出す', async () => {
     const wrapper = await mountModal(null, 'vehicle')
     await wrapper.setProps({ reading: readingOf() })
-    expect(wrapper.find(MODAL).exists()).toBe(false)
+    expect(wrapper.find(MODAL).exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('段が medical のときに届いても出さない', async () => {
+  it('段が medical のときに届けば出す', async () => {
     const wrapper = await mountModal(null, 'medical')
     await wrapper.setProps({ reading: readingOf() })
-    expect(wrapper.find(MODAL).exists()).toBe(false)
+    expect(wrapper.find(MODAL).exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -149,10 +149,46 @@ describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', 
     wrapper.unmount()
   })
 
-  it('段が動くと消える (nfc → choice)', async () => {
-    const wrapper = await mountModal(readingOf(), 'nfc')
+  // -------------------------------------------------------------------------
+  // 段が進んでも出し続ける (ユーザー要望:「アルコールチェックのボタン押した段階で
+  // 表示し始めて」)。**段が動いたら無条件に消す**ままだと、ボタンを押した瞬間
+  // (choice → vehicle/medical) に消えて要望が成立しない。
+  // -------------------------------------------------------------------------
+
+  it('★ choice で出したあと medical へ進んでも消えない (要望の本体)', async () => {
+    const wrapper = await mountModal(readingOf(), 'choice')
     expect(wrapper.find(MODAL).exists()).toBe(true)
+    await wrapper.setProps({ step: 'medical' })
+    expect(wrapper.find(MODAL).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ nfc → choice → vehicle と進んでも消えない', async () => {
+    const wrapper = await mountModal(readingOf(), 'nfc')
     await wrapper.setProps({ step: 'choice' })
+    expect(wrapper.find(MODAL).exists()).toBe(true)
+    await wrapper.setProps({ step: 'vehicle' })
+    expect(wrapper.find(MODAL).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ measuring に入ったら消える (点呼の測定画面に「点呼には含まれません」を被せない)', async () => {
+    const wrapper = await mountModal(readingOf(), 'medical')
+    expect(wrapper.find(MODAL).exists()).toBe(true)
+    await wrapper.setProps({ step: 'measuring' })
+    expect(wrapper.find(MODAL).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('60 秒の寿命は段をまたいでも変わらない (medical へ進んでも 60 秒で消える)', async () => {
+    const wrapper = await mountModal(null, 'choice')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await wrapper.setProps({ reading: readingOf() })
+    await wrapper.setProps({ step: 'medical' })
+    expect(wrapper.find(MODAL).exists()).toBe(true)
+
+    vi.advanceTimersByTime(60_000)
+    await wrapper.vm.$nextTick()
     expect(wrapper.find(MODAL).exists()).toBe(false)
     wrapper.unmount()
   })
