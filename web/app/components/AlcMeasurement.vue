@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MeasurementResult, Fc1200State } from '~/types'
+import type { MeasurementResult } from '~/types'
 
 const props = defineProps<{
   employeeId: string
@@ -107,31 +107,6 @@ watch(error, (val) => {
   }
 })
 
-function stateConfigFor(s: Fc1200State): { text: string; color: string; animate: boolean } {
-  switch (s) {
-    case 'idle':
-      return { text: 'FC-1200 未接続', color: 'text-gray-500', animate: false }
-    case 'waiting_connection':
-      return { text: '接続待機中...', color: 'text-yellow-600', animate: true }
-    case 'connected':
-      return { text: 'デバイス接続済み', color: 'text-blue-600', animate: false }
-    case 'warming_up':
-      return { text: 'ウォームアップ中...', color: 'text-yellow-600', animate: true }
-    case 'blow_waiting':
-      return { text: '息を吹きかけてください', color: 'text-blue-700', animate: true }
-    case 'measuring':
-      return { text: '測定中...', color: 'text-blue-600', animate: true }
-    case 'result_received':
-      return { text: '測定完了', color: 'text-green-600', animate: false }
-    default:
-      return { text: '不明な状態', color: 'text-gray-500', animate: false }
-  }
-}
-
-const stateConfig = computed(() => stateConfigFor(state.value))
-
-// CoreS3 につないだ FC-1200 の進み。PC 直結と同じ表示を出すため同じ関数を使う
-const coreStateConfig = computed(() => ble.alcoholStage.value ? stateConfigFor(ble.alcoholStage.value) : null)
 
 function handleRetry() {
   resetSession()
@@ -216,33 +191,8 @@ function emitDemoResult() {
         <p class="text-blue-800 font-medium">CoreS3 につないだアルコールチェッカーで測定してください</p>
       </div>
 
-      <!-- 状態インジケーター (PC 直結と同じ表示) -->
-      <div v-if="coreStateConfig" class="flex items-center gap-3">
-        <span
-          v-if="coreStateConfig.animate"
-          class="w-3 h-3 rounded-full bg-blue-500 animate-pulse"
-        />
-        <span
-          v-else
-          class="w-3 h-3 rounded-full"
-          :class="{
-            'bg-green-500': ble.alcoholStage.value === 'result_received',
-            'bg-gray-400': ble.alcoholStage.value === 'idle' || ble.alcoholStage.value === 'connected',
-          }"
-        />
-        <span :class="['text-lg font-medium', coreStateConfig.color]">
-          {{ coreStateConfig.text }}
-        </span>
-      </div>
-
-      <!-- 吹きかけプロンプト -->
-      <div
-        v-if="ble.alcoholStage.value === 'blow_waiting'"
-        class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-8 text-center w-full"
-      >
-        <p class="text-blue-800 text-xl font-bold">息を吹きかけてください</p>
-        <p class="text-blue-600 text-sm mt-2">FC-1200 のセンサー部に向かって約5秒間</p>
-      </div>
+      <!-- 状態インジケーター + 吹きかけプロンプト (PC 直結と同じ部品) -->
+      <AlcoholStageIndicator :state="ble.alcoholStage.value" />
     </div>
 
     <!-- 通常モード (FC-1200 PC 直結) -->
@@ -279,33 +229,8 @@ function emitDemoResult() {
 
       <!-- 測定状態表示 -->
       <div v-else class="flex flex-col items-center gap-4 w-full">
-        <!-- 状態インジケーター -->
-        <div class="flex items-center gap-3">
-          <span
-            v-if="stateConfig.animate"
-            class="w-3 h-3 rounded-full bg-blue-500 animate-pulse"
-          />
-          <span
-            v-else
-            class="w-3 h-3 rounded-full"
-            :class="{
-              'bg-green-500': state === 'result_received',
-              'bg-gray-400': state === 'idle' || state === 'connected',
-            }"
-          />
-          <span :class="['text-lg font-medium', stateConfig.color]">
-            {{ stateConfig.text }}
-          </span>
-        </div>
-
-        <!-- 吹きかけプロンプト -->
-        <div
-          v-if="state === 'blow_waiting'"
-          class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-8 text-center w-full"
-        >
-          <p class="text-blue-800 text-xl font-bold">息を吹きかけてください</p>
-          <p class="text-blue-600 text-sm mt-2">FC-1200 のセンサー部に向かって約5秒間</p>
-        </div>
+        <!-- 状態インジケーター + 吹きかけプロンプト (CoreS3 経由と同じ部品) -->
+        <AlcoholStageIndicator :state="state" />
 
         <!-- エラー表示 + 再測定 -->
         <div v-if="error" class="bg-red-50 border border-red-200 rounded-xl p-4 text-center w-full">

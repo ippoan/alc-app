@@ -270,4 +270,86 @@ describe('AlcMeasurement', () => {
       wrapper.unmount()
     })
   })
+
+  // =============================================
+  // 状態インジケーターの見た目 (Refs ippoan/rust-alc-api#644)
+  //
+  // **CoreS3 経由と PC 直結で同じ markup が 2 回複製されている。**
+  // 部品へ切り出す前に「文言・色・ドットが 1 つも変わらない」ことを固定する。
+  // ここが崩れたら切り出しが失敗しているということ。
+  // =============================================
+
+  describe('状態インジケーターの見た目 (切り出しの回帰固定)', () => {
+    /** インジケーターの文言 span (v-else-if の連鎖なので同時に 1 つしか出ない) */
+    function indicator(wrapper: { find: (s: string) => { exists: () => boolean, text: () => string, classes: () => string[] } }) {
+      return wrapper.find('.text-lg.font-medium')
+    }
+    /** インジケーターのドット */
+    function dot(wrapper: { find: (s: string) => { exists: () => boolean, classes: () => string[] } }) {
+      return wrapper.find('.w-3.h-3.rounded-full')
+    }
+
+    const CASES: Array<[Fc1200State, string, string, boolean, string | null]> = [
+      // 状態, 文言, 文字色, animate するか, animate しないときのドットの色
+      ['idle', 'FC-1200 未接続', 'text-gray-500', false, 'bg-gray-400'],
+      ['waiting_connection', '接続待機中...', 'text-yellow-600', true, null],
+      ['connected', 'デバイス接続済み', 'text-blue-600', false, 'bg-gray-400'],
+      ['warming_up', 'ウォームアップ中...', 'text-yellow-600', true, null],
+      ['blow_waiting', '息を吹きかけてください', 'text-blue-700', true, null],
+      ['measuring', '測定中...', 'text-blue-600', true, null],
+      ['result_received', '測定完了', 'text-green-600', false, 'bg-green-500'],
+    ]
+
+    it.each(CASES)('CoreS3 経由: %s → 文言・色・ドットが変わらない', async (state, text, color, animate, dotColor) => {
+      coreS3Connected.value = true
+      alcoholStage.value = state
+      const wrapper = await mountAlc()
+
+      expect(indicator(wrapper).text()).toBe(text)
+      expect(indicator(wrapper).classes()).toContain(color)
+      expect(dot(wrapper).classes().includes('animate-pulse')).toBe(animate)
+      if (dotColor) expect(dot(wrapper).classes()).toContain(dotColor)
+      wrapper.unmount()
+    })
+
+    it.each(CASES)('PC 直結: %s → 文言・色・ドットが変わらない', async (state, text, color, animate, dotColor) => {
+      coreS3Connected.value = false
+      fc1200IsConnected.value = true
+      fc1200State.value = state
+      const wrapper = await mountAlc()
+
+      expect(indicator(wrapper).text()).toBe(text)
+      expect(indicator(wrapper).classes()).toContain(color)
+      expect(dot(wrapper).classes().includes('animate-pulse')).toBe(animate)
+      if (dotColor) expect(dot(wrapper).classes()).toContain(dotColor)
+      wrapper.unmount()
+    })
+
+    it('CoreS3 経由: blow_waiting のときだけ吹きかけプロンプトを出す', async () => {
+      coreS3Connected.value = true
+      alcoholStage.value = 'blow_waiting'
+      const wrapper = await mountAlc()
+      expect(wrapper.text()).toContain('FC-1200 のセンサー部に向かって約5秒間')
+      wrapper.unmount()
+
+      alcoholStage.value = 'measuring'
+      const other = await mountAlc()
+      expect(other.text()).not.toContain('FC-1200 のセンサー部に向かって約5秒間')
+      other.unmount()
+    })
+
+    it('PC 直結: blow_waiting のときだけ吹きかけプロンプトを出す', async () => {
+      coreS3Connected.value = false
+      fc1200IsConnected.value = true
+      fc1200State.value = 'blow_waiting'
+      const wrapper = await mountAlc()
+      expect(wrapper.text()).toContain('FC-1200 のセンサー部に向かって約5秒間')
+      wrapper.unmount()
+
+      fc1200State.value = 'measuring'
+      const other = await mountAlc()
+      expect(other.text()).not.toContain('FC-1200 のセンサー部に向かって約5秒間')
+      other.unmount()
+    })
+  })
 })
