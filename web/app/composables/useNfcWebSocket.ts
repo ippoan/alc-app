@@ -49,7 +49,8 @@ export function useNfcWebSocket(url: string = DEFAULT_URL) {
 
         switch (data.type) {
           case 'nfc_read':
-            readCallbacks.forEach(cb => cb(data))
+            // **source はここで立てる。** ブリッジから来た JSON に名乗らせない
+            readCallbacks.forEach(cb => cb({ ...data, source: 'bridge' }))
             break
           case 'nfc_license_read':
             console.log('[NFC] License read:', data)
@@ -61,7 +62,7 @@ export function useNfcWebSocket(url: string = DEFAULT_URL) {
               const employeeId = data.card_type === 'driver_license' && data.card_id.length >= 26
                 ? data.card_id.substring(10, 26)
                 : data.card_id
-              readCallbacks.forEach(cb => cb({ type: 'nfc_read', employee_id: employeeId }))
+              readCallbacks.forEach(cb => cb({ type: 'nfc_read', employee_id: employeeId, source: 'bridge' }))
             }
             break
           case 'nfc_debug':

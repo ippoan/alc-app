@@ -15,7 +15,7 @@
  * 2 つ進めてしまう。
  */
 
-import type { NfcReadEvent, NfcLicenseReadEvent, NfcErrorEvent } from '~/types'
+import type { NfcReadEvent, NfcLicenseReadEvent, NfcErrorEvent, NfcReadSource } from '~/types'
 import { isWebSerialSupported } from '~/utils/webserial'
 import { evtArg as argValue } from '~/composables/useCoreS3Serial'
 
@@ -71,12 +71,17 @@ export function useNfcReader() {
   let lastEmployeeId: string | null = null
   let lastEmittedAt = 0
 
-  function emitRead(employeeId: string): void {
+  /**
+   * 読み取りを配る。**`source` は呼び出し元が名乗る** — 束ねたあとでは
+   * CoreS3 が読んだのかブリッジが読んだのか判別できないため
+   * (Refs ippoan/rust-alc-api#644)。打刻を二重にするか消すかがこれで決まる。
+   */
+  function emitRead(employeeId: string, source: NfcReadSource): void {
     const now = Date.now()
     if (employeeId === lastEmployeeId && now - lastEmittedAt < DEDUPE_WINDOW_MS) return
     lastEmployeeId = employeeId
     lastEmittedAt = now
-    for (const cb of [...readCallbacks]) cb({ type: 'nfc_read', employee_id: employeeId })
+    for (const cb of [...readCallbacks]) cb({ type: 'nfc_read', employee_id: employeeId, source })
   }
 
   function emitLicenseRead(event: NfcLicenseReadEvent): void {
@@ -108,7 +113,7 @@ export function useNfcReader() {
         // ATR は USB CDC の行に乗らない (ブリッジ経由でのみ得られる)
         atr: '',
       })
-      emitRead(issue + expiry)
+      emitRead(issue + expiry, 'cores3')
       return
     }
 
@@ -130,7 +135,8 @@ export function useNfcReader() {
   // --- NFC ブリッジ (9876) ---
 
   ws.onLicenseRead(event => emitLicenseRead(event))
-  ws.onRead(event => emitRead(event.employee_id))
+  // ブリッジの先に CoreS3 は居ない = 誰も打刻していない。source をそのまま運ぶ
+  ws.onRead(event => emitRead(event.employee_id, event.source))
   ws.onError(event => emitError(event))
 
   // --- 状態 ---

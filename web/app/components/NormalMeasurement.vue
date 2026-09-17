@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep } from '~/types'
+import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadSource } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection, punchTimecard } from '~/utils/api'
 import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
@@ -302,7 +302,25 @@ async function prepareMeasurementFor(emp: { id: string, name: string }) {
   void faceSync()
 }
 
-async function onNfcRead(nfcId: string, expiryDate?: Date) {
+/**
+ * NFC の読み取り。`source` は**誰が読んだか** (Refs ippoan/rust-alc-api#644)。
+ *
+ * # なぜ `source` で打刻を出し分けるのか
+ *
+ * **`'cores3'` = ハブ端末が読んだ。その時点でサーバ側に打刻が既に入っている** —
+ * CoreS3 は読めたタッチを全部 uplink へ積む (alc-app-s3 `timecard::punch_record`)。
+ * ここで重ねて打つと**同じ 1 タップが 2 行**になる (免許証のチップ付き + チップ無し)。
+ * IC カードの導線が `startMeasurementFor` で「`tryPunch` は絶対に呼ばない」としているのと
+ * 同じ理由で、免許証のタッチもハブ経由なら打たない。
+ *
+ * **`'bridge'` = NFC ブリッジ (9876) が読んだ。その先に CoreS3 は居ない** ので、
+ * **ここで打たないと打刻が丸ごと消える**。WebSerial の無い環境 (Android WebView) は
+ * こちらしか無く、**Android 版が入ったときの唯一の打刻口**になる。
+ *
+ * **`source` が無いときは打つ。** 判断材料が無いなら「打刻が消える」より
+ * 「2 行になる」方が軽い (消えた打刻は後から作れないが、重複は消せる)。
+ */
+async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSource) {
   // **測定中のタップで段が巻き戻らないようにする。このガードを外さない**
   // (Refs ippoan/alc-app-s3#135)
   if (step.value !== 'nfc') return
@@ -316,7 +334,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date) {
     const emp = await getEmployeeByNfcId(nfcId)
     await prepareMeasurementFor(emp)
     // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
-    await tryPunch(nfcId)
+    if (source !== 'cores3') await tryPunch(nfcId)
     step.value = 'choice'
   } catch {
     const msg = employeeNotFoundByNfc(nfcId)

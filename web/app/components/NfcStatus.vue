@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { NfcReadEvent, NfcLicenseReadEvent } from '~/types'
+import type { NfcReadEvent, NfcLicenseReadEvent, NfcReadSource } from '~/types'
 import { parseLicenseExpiryDate, checkLicenseExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
 import { isWebSerialSupported } from '~/utils/webserial'
 
@@ -10,7 +10,11 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  read: [employeeId: string, expiryDate?: Date]
+  /**
+   * `source` は「誰が読んだか」(Refs ippoan/rust-alc-api#644)。
+   * `'cores3'` ならサーバ側で打刻が既に記録されているので、受け手は重ねて打たない。
+   */
+  read: [employeeId: string, expiryDate?: Date, source?: NfcReadSource]
 }>()
 
 const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRead } = useNfcReader()
@@ -86,7 +90,7 @@ onLicenseRead((event: NfcLicenseReadEvent) => {
 onRead((event: NfcReadEvent) => {
   lastReadId.value = event.employee_id
   readAnimation.value = true
-  emit('read', event.employee_id, licenseExpiryDate.value ?? undefined)
+  emit('read', event.employee_id, licenseExpiryDate.value ?? undefined, event.source)
 
   setTimeout(() => {
     readAnimation.value = false

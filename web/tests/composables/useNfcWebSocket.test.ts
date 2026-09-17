@@ -163,8 +163,10 @@ describe('useNfcWebSocket', () => {
       nfc.connect()
       await vi.advanceTimersByTimeAsync(10)
 
-      lastWs().simulateMessage(JSON.stringify({ type: 'nfc_read', employee_id: 'EMP001' }))
-      expect(cb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'EMP001' })
+      // ブリッジが source を名乗ってきても無視して 'bridge' を立てることまで見る
+      lastWs().simulateMessage(JSON.stringify({ type: 'nfc_read', employee_id: 'EMP001', source: 'cores3' }))
+      // **ブリッジ経路は必ず source: 'bridge'。** 打刻を打つ側かどうかがこれで決まる
+      expect(cb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'EMP001', source: 'bridge' })
     })
   })
 
@@ -189,7 +191,7 @@ describe('useNfcWebSocket', () => {
       }))
 
       expect(licenseCb).toHaveBeenCalledWith(expect.objectContaining({ type: 'nfc_license_read', card_id: cardId }))
-      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'ABCDEFGHIJKLMNOP' })
+      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'ABCDEFGHIJKLMNOP', source: 'bridge' })
       consoleSpy.mockRestore()
     })
 
@@ -208,7 +210,7 @@ describe('useNfcWebSocket', () => {
         atr: 'XX',
       }))
 
-      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'SHORT' })
+      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'SHORT', source: 'bridge' })
       consoleSpy.mockRestore()
     })
 
@@ -227,7 +229,7 @@ describe('useNfcWebSocket', () => {
         atr: 'XX',
       }))
 
-      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: '0123456789' })
+      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: '0123456789', source: 'bridge' })
       consoleSpy.mockRestore()
     })
   })
