@@ -25,11 +25,36 @@
  * `AlcMeasurement` は `v-if="step === 'measuring'"` の中にしか描画されないので、
  * 「点呼として消費された」⟺「`measuring` に届いた」が厳密に成立する。
  *
- * # 消える条件 (3 つとも close() を通る)
+ * # 進み (`stage`) でも出す (Refs ippoan/rust-alc-api#644)
+ *
+ * **結果が出てから初めて出すのでは遅い。** ユーザーの要望は「チェッカーが動き出した
+ * 時点から状態を見せる」こと。firmware の `EVT FC1200` 由来の進みを受けて、
+ * ウォームアップの時点から開く。
+ *
+ * | `stage` | 扱い |
+ * |---|---|
+ * | `connected` / `warming_up` / `blow_waiting` / `measuring` | **開く + 60 秒を引き直す** |
+ * | `idle` / `waiting_connection` | **閉じる** (用が済んだ / 居なくなった) |
+ * | **`null` (`BLOW_TIMEOUT`)** | **閉じない。引き直しもしない** |
+ * | `result_received` | 何もしない — 値は `reading` 側の watch が出す (そこから 60 秒) |
+ *
+ * **`null` で閉じないのが要点。** `BLOW_TIMEOUT` は firmware が計測待ちへ戻すだけで、
+ * 「用が済んだ」でも「居なくなった」でもない。ここで閉じると**吹くのが遅れただけで
+ * モーダルが消える**。かといって引き直すと、新しく知らせることが無いのに居座り続ける
+ * ので、**走っている 60 秒はそのまま満了させる**。
+ *
+ * # 進みを出している間は前回の測定値を出さない
+ *
+ * `reading` は前の測定が残ったままなので、**ウォームアップで開いたときに
+ * そのまま出すと「前の人の値」を見せてしまう**。`showValue` で切り分け、
+ * 値は `reading` の watch で開いたときだけ出す。
+ *
+ * # 消える条件 (4 つとも close() を通る)
  *
  * - 「閉じる」/ 背景のタップ
  * - 60 秒 (AUTO_CLOSE_MS。IcPunchAlcoholPrompt の FRESH_WINDOW_MS と同値)
- * - **`measuring` に入った**
+ * - **`measuring` に入った** (段の話。`stage` の `measuring` とは別物)
+ * - **`stage` が `idle` / `waiting_connection` になった**
  *
  * **段が動いただけでは消さない。** 以前は無条件に消していたが、それだと
  * **ボタンを押した瞬間 (`choice` → `vehicle`/`medical`) に消えて**
@@ -37,7 +62,7 @@
  *
  * `NormalMeasurement` の状態機械 (段の代入) には一切触らない。
  */
-import type { StrayAlcoholReading, NormalMeasurementStep } from '~/types'
+import type { StrayAlcoholReading, NormalMeasurementStep, Fc1200State } from '~/types'
 import { alcoholResultLabel, alcoholResultClass } from '~/utils/alcohol'
 
 /** 出しておく時間。これを過ぎたら黙って消える (IcPunchAlcoholPrompt と同値) */
@@ -49,14 +74,24 @@ const AUTO_CLOSE_MS = 60_000
  */
 const SHOW_STEPS: readonly NormalMeasurementStep[] = ['nfc', 'choice', 'vehicle', 'medical']
 
+/** この進みが届いたら開く (+ 60 秒を引き直す)。`result_received` は入れない — 上の doc 参照 */
+const OPENING_STAGES: readonly Fc1200State[] = ['connected', 'warming_up', 'blow_waiting', 'measuring']
+
+/** この進みが届いたら閉じる。チェッカーの用が済んだ / 居なくなった */
+const CLOSING_STAGES: readonly Fc1200State[] = ['idle', 'waiting_connection']
+
 const props = defineProps<{
   /** 直近に届いた本人確認前のアルコール測定 (null = まだ 1 件も無い) */
   reading: StrayAlcoholReading | null
   /** NormalMeasurement の今の段 */
   step: NormalMeasurementStep
+  /** FC-1200 の進み (firmware の `EVT FC1200` 由来)。`null` = 分かっていない */
+  stage: Fc1200State | null
 }>()
 
 const shown = ref(false)
+/** いま測定値を出してよいか。進みで開いたときは前回の値を出さない (上の doc) */
+const showValue = ref(false)
 let closeTimer: ReturnType<typeof setTimeout> | null = null
 
 function clearCloseTimer() {
@@ -70,14 +105,32 @@ function close() {
   shown.value = false
 }
 
+/** 出して 60 秒を張り直す。**張る場所はここ 1 か所** */
+function open() {
+  clearCloseTimer()
+  shown.value = true
+  closeTimer = setTimeout(close, AUTO_CLOSE_MS)
+}
+
 // 新しい測定が届くたびに一度評価する。前の測定が表示中でも close() で必ず畳む
 // (張る場所 1 か所・消す場所 1 か所・閉じる道 1 本)。
 watch(() => props.reading?.seq, (seq) => {
   close()
   if (seq === undefined) return
   if (!SHOW_STEPS.includes(props.step)) return
-  shown.value = true
-  closeTimer = setTimeout(close, AUTO_CLOSE_MS)
+  showValue.value = true
+  open()
+}, { immediate: true })
+
+// 進みが変わるたびに評価する。**同じ進みが 2 回続けて届いても 1 回しか効かない**
+// (watch は値が変わったときだけ走る) — firmware は CONNECTED/WARMING を繰り返し流す
+watch(() => props.stage, (stage) => {
+  if (stage == null) return                     // BLOW_TIMEOUT (null)。閉じない・引き直さない
+  if (CLOSING_STAGES.includes(stage)) { close(); return }
+  if (!OPENING_STAGES.includes(stage)) return   // result_received は reading 側に任せる
+  if (!SHOW_STEPS.includes(props.step)) return
+  showValue.value = false
+  open()
 }, { immediate: true })
 
 // **点呼の測定が始まったら引っ込める。** それ以外の段の動きでは消さない —
@@ -104,7 +157,7 @@ const badgeClass = computed(() => alcoholResultClass(props.reading?.result === '
 
 <template>
   <div
-    v-if="shown && reading"
+    v-if="shown"
     data-testid="stray-alcohol-modal"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
     @click.self="close"
@@ -114,21 +167,31 @@ const badgeClass = computed(() => alcoholResultClass(props.reading?.result === '
         アルコールチェッカーが測定しました
       </h3>
       <p class="text-sm text-gray-500 mb-4">本人確認なしの測定です</p>
-      <div class="mb-2">
-        <span
-          v-if="reading.result !== 'error'"
-          data-testid="stray-alcohol-modal-value"
-          class="text-2xl font-bold text-gray-800"
-        >{{ reading.value.toFixed(3) }} mg/L</span>
-        <span
-          data-testid="stray-alcohol-modal-result"
-          class="ml-2 px-2 py-0.5 rounded text-xs font-medium"
-          :class="badgeClass"
-        >{{ alcoholResultLabel(reading.result) }}</span>
+
+      <!-- 進み (ウォームアップ中 / 息を吹きかけてください / 測定中…)。
+           点呼の測定画面と**同じ部品**を使う (2 実装目を作らない) -->
+      <div v-if="!showValue" class="flex flex-col items-center gap-4 mb-4">
+        <AlcoholStageIndicator :state="stage" />
       </div>
-      <p class="text-xs text-gray-500 mb-4">
-        {{ measuredAtLabel }} に記録しました — この記録は点呼には含まれません
-      </p>
+
+      <template v-if="showValue && reading">
+        <div class="mb-2">
+          <span
+            v-if="reading.result !== 'error'"
+            data-testid="stray-alcohol-modal-value"
+            class="text-2xl font-bold text-gray-800"
+          >{{ reading.value.toFixed(3) }} mg/L</span>
+          <span
+            data-testid="stray-alcohol-modal-result"
+            class="ml-2 px-2 py-0.5 rounded text-xs font-medium"
+            :class="badgeClass"
+          >{{ alcoholResultLabel(reading.result) }}</span>
+        </div>
+        <p class="text-xs text-gray-500 mb-4">
+          {{ measuredAtLabel }} に記録しました — この記録は点呼には含まれません
+        </p>
+      </template>
+      <p v-else class="text-xs text-gray-500 mb-4">この記録は点呼には含まれません</p>
       <button
         data-testid="stray-alcohol-modal-close"
         class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300"

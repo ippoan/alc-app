@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import StrayAlcoholModal from '~/components/StrayAlcoholModal.vue'
-import type { StrayAlcoholReading, NormalMeasurementStep } from '~/types'
+import type { StrayAlcoholReading, NormalMeasurementStep, Fc1200State } from '~/types'
 
 // 本人確認の前に届いたアルコール測定を知らせるモーダル (Refs ippoan/rust-alc-api#644)。
 // 「出す条件 (段が nfc/choice)」「消える条件 (手動/60 秒/段の変化)」「保存・紐付けをしない」
@@ -24,9 +24,16 @@ const VALUE = '[data-testid="stray-alcohol-modal-value"]'
 const RESULT = '[data-testid="stray-alcohol-modal-result"]'
 const CLOSE = '[data-testid="stray-alcohol-modal-close"]'
 
-function mountModal(reading: StrayAlcoholReading | null, step: NormalMeasurementStep = 'nfc') {
-  return mountSuspended(StrayAlcoholModal, { props: { reading, step } })
+function mountModal(
+  reading: StrayAlcoholReading | null,
+  step: NormalMeasurementStep = 'nfc',
+  stage: Fc1200State | null = null,
+) {
+  return mountSuspended(StrayAlcoholModal, { props: { reading, step, stage } })
 }
+
+const STAGE_TEXT = '[data-testid="stray-alcohol-modal"] .text-lg.font-medium'
+
 
 describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', () => {
   afterEach(() => {
@@ -219,5 +226,161 @@ describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', 
     expect(vi.getTimerCount()).toBe(1)
     wrapper.unmount()
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // -------------------------------------------------------------------------
+  // 進み (stage) でも出す (Refs ippoan/rust-alc-api#644)
+  //
+  // 「結果が出てから」では遅い。**チェッカーが動き出した時点から**見せる、
+  // というユーザーの要望。firmware の EVT FC1200 由来の進みで開く。
+  // -------------------------------------------------------------------------
+
+  describe('進み (stage) で開く / 閉じる', () => {
+    it.each(['connected', 'warming_up', 'blow_waiting', 'measuring'] as Fc1200State[])(
+      '★ %s が届いたら開く',
+      async (stage) => {
+        const wrapper = await mountModal(null, 'nfc')
+        expect(wrapper.find(MODAL).exists()).toBe(false)
+        await wrapper.setProps({ stage })
+        expect(wrapper.find(MODAL).exists()).toBe(true)
+        wrapper.unmount()
+      },
+    )
+
+    it('★ ウォームアップ中は「ウォームアップ中...」を出す (点呼の測定画面と同じ部品)', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      await wrapper.setProps({ stage: 'warming_up' })
+      expect(wrapper.find(STAGE_TEXT).text()).toBe('ウォームアップ中...')
+      wrapper.unmount()
+    })
+
+    it('★ blow_waiting では吹きかけプロンプトも出す', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      await wrapper.setProps({ stage: 'blow_waiting' })
+      expect(wrapper.text()).toContain('FC-1200 のセンサー部に向かって約5秒間')
+      wrapper.unmount()
+    })
+
+    it.each(['idle', 'waiting_connection'] as Fc1200State[])(
+      '★ %s が届いたら閉じる (用が済んだ / 居なくなった)',
+      async (stage) => {
+        const wrapper = await mountModal(null, 'nfc')
+        await wrapper.setProps({ stage: 'warming_up' })
+        expect(wrapper.find(MODAL).exists()).toBe(true)
+        await wrapper.setProps({ stage })
+        expect(wrapper.find(MODAL).exists()).toBe(false)
+        wrapper.unmount()
+      },
+    )
+
+    it('★★ null (BLOW_TIMEOUT) では閉じない — 吹くのが遅れただけでモーダルを消さない', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      await wrapper.setProps({ stage: 'blow_waiting' })
+      expect(wrapper.find(MODAL).exists()).toBe(true)
+
+      // firmware は BLOW_TIMEOUT を段階なし (null) で流す。計測待ちへ戻るだけ
+      await wrapper.setProps({ stage: null })
+
+      expect(wrapper.find(MODAL).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('★★ null (BLOW_TIMEOUT) では 60 秒を引き直さない — 知らせることが増えていないので居座らせない', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      await wrapper.setProps({ stage: 'blow_waiting' })
+
+      vi.advanceTimersByTime(50_000)
+      await wrapper.setProps({ stage: null })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find(MODAL).exists()).toBe(true)
+
+      // 引き直していれば、ここではまだ出ているはず
+      vi.advanceTimersByTime(10_000)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find(MODAL).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('★ 進みが変わるたびに 60 秒を引き直す', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      await wrapper.setProps({ stage: 'warming_up' })
+
+      vi.advanceTimersByTime(50_000)
+      await wrapper.setProps({ stage: 'blow_waiting' })
+      await wrapper.vm.$nextTick()
+
+      // 引き直していなければ、あと 10 秒で消えるはず
+      vi.advanceTimersByTime(20_000)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find(MODAL).exists()).toBe(true)
+
+      vi.advanceTimersByTime(40_000)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find(MODAL).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('★ 進みで開いている間は前回の測定値を出さない (前の人の値を見せない)', async () => {
+      // 前の測定が reading に残っている状態で、新しいウォームアップが始まる
+      const wrapper = await mountModal(readingOf({ value: 0.42 }), 'nfc')
+      expect(wrapper.find(VALUE).text()).toBe('0.420 mg/L')
+
+      await wrapper.setProps({ stage: 'warming_up' })
+
+      expect(wrapper.find(MODAL).exists()).toBe(true)
+      expect(wrapper.find(VALUE).exists()).toBe(false)
+      expect(wrapper.find(STAGE_TEXT).text()).toBe('ウォームアップ中...')
+      wrapper.unmount()
+    })
+
+    it('★ 結果が届いたら値の表示へ切り替わる (進みの表示は引っ込む)', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      await wrapper.setProps({ stage: 'measuring' })
+      expect(wrapper.find(VALUE).exists()).toBe(false)
+
+      // result_received と reading はほぼ同時に届く
+      await wrapper.setProps({ stage: 'result_received', reading: readingOf({ value: 0.05 }) })
+
+      expect(wrapper.find(VALUE).text()).toBe('0.050 mg/L')
+      expect(wrapper.find(STAGE_TEXT).exists()).toBe(false)
+      expect(wrapper.text()).toContain('この記録は点呼には含まれません')
+      wrapper.unmount()
+    })
+
+    it('result_received だけでは開かない (値は reading 側が出す)', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      await wrapper.setProps({ stage: 'result_received' })
+      expect(wrapper.find(MODAL).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it.each(['measuring', 'result'] as NormalMeasurementStep[])(
+      '★ 段が %s のときは進みが届いても開かない (点呼の測定と混ざらない)',
+      async (step) => {
+        const wrapper = await mountModal(null, step)
+        await wrapper.setProps({ stage: 'warming_up' })
+        expect(wrapper.find(MODAL).exists()).toBe(false)
+        wrapper.unmount()
+      },
+    )
+
+    it('進みで開いた後、段が measuring に入れば閉じる', async () => {
+      const wrapper = await mountModal(null, 'medical')
+      await wrapper.setProps({ stage: 'warming_up' })
+      expect(wrapper.find(MODAL).exists()).toBe(true)
+      await wrapper.setProps({ step: 'measuring' })
+      expect(wrapper.find(MODAL).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('進みで開いたモーダルも手で閉じられる', async () => {
+      const wrapper = await mountModal(null, 'nfc')
+      await wrapper.setProps({ stage: 'warming_up' })
+      await wrapper.find(CLOSE).trigger('click')
+      expect(wrapper.find(MODAL).exists()).toBe(false)
+      wrapper.unmount()
+    })
   })
 })

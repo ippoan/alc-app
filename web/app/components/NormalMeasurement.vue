@@ -394,6 +394,8 @@ async function onManualSubmit() {
 const {
   latestTemperature: bleTemperature,
   latestBloodPressure: bleBloodPressure,
+  // FC-1200 の進み。**待機画面からでも立つ** (#295 で購読を wire() の外へ出した)
+  alcoholStage,
 } = useBleGateway()
 
 // 本人確認の前に届いたアルコール測定の通知 (Refs ippoan/rust-alc-api#644)。
@@ -685,7 +687,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
     'w-full flex-1 overflow-y-auto p-4',
     landscape ? 'flex gap-4 max-w-4xl mx-auto' : 'flex flex-col items-center'
   ]">
-    <StrayAlcoholModal :reading="strayAlcohol" :step="step" />
+    <StrayAlcoholModal :reading="strayAlcohol" :step="step" :stage="alcoholStage" />
     <!-- 左列 (横画面) / 上部 (縦画面): バナー + ステップ + フッターリンク -->
     <div :class="landscape ? 'w-2/5 flex flex-col shrink-0' : 'w-full flex flex-col items-center'">
       <!-- オフラインバナー -->
