@@ -113,11 +113,44 @@ export function decideWatcherAuth(
   return { status: 101, tenantId: result.tenant_id };
 }
 
-/** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
+/**
+ * Secrets Store binding の `.get()` 結果を isolate 内で使い回す cache。
+ *
+ * **key は binding そのもの** (`WeakMap`) — env をまたいで混ざらず、isolate が
+ * 死ねば一緒に消える。`INTERNAL_SHARED_SECRET` は全テナント共通の 1 値なので、
+ * テナント間で値が漏れる形にはならない。
+ *
+ * **解決中の Promise を入れる** (解決後の値ではない) — 同時に走った呼び出しが
+ * 別々に `.get()` を撃たないようにするため。
+ */
+const secretCache = new WeakMap<object, Promise<string | null>>();
+
+/**
+ * Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。
+ *
+ * binding の場合は **isolate 内で 1 回だけ `.get()` を撃ち、以後は使い回す**。
+ * ここは打刻 1 件ごとに通る (`recorder-hub.ts` の `handleMeasurement` /
+ * `handleTimecardPunch`、`index.ts` の `requireInternalAuth` /
+ * `authenticateDevice`) ので、毎回 Secrets Store を叩く必要が無い。
+ *
+ * **これは遅延の対策ではない** — 打刻が DB に入るまでの実測は 96〜100ms で、
+ * その中でここが占める割合は測っていない。単に無駄な往復を消すだけ。
+ *
+ * 失敗した Promise は cache に残さない (次の呼び出しでやり直せるようにする)。
+ * 例外はそのまま呼び出し側へ投げる — 従来の挙動と同じ。
+ */
 export async function resolveSecret(binding: unknown): Promise<string | null> {
   if (typeof binding === "string") return binding;
   if (binding && typeof (binding as { get?: unknown }).get === "function") {
-    return (await (binding as { get(): Promise<string> }).get()) ?? null;
+    const key = binding as object;
+    const cached = secretCache.get(key);
+    if (cached) return cached;
+    const pending = (async () =>
+      (await (key as { get(): Promise<string> }).get()) ?? null)();
+    secretCache.set(key, pending);
+    // catch を付けておかないと、呼び出し側が受ける前に unhandled rejection になる
+    pending.catch(() => secretCache.delete(key));
+    return pending;
   }
   return null;
 }

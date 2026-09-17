@@ -6,7 +6,9 @@ import {
   decideWatcherAuth,
   RECORDER_DEVICE_ROLES,
   DEVICE_ROLE_KIOSK,
+  resolveSecret,
 } from "../src/auth";
+import { closeCodeForEcho } from "../src/recorder-hub";
 
 const BASE = "https://alc-recorder.test";
 const SHARED_SECRET = "test-shared-secret";
@@ -980,5 +982,134 @@ describe("/watch-timecard の振る舞い", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { devices: string[] };
     expect(body.devices).not.toContain("device-kiosk-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 切断の後始末 (webSocketClose、Refs ippoan/rust-alc-api#644)
+//
+// **相手の close code をそのまま `ws.close()` へ渡すと 1005 / 1006 で投げる。**
+// 投げると `broadcastDevices()` に到達せず、`/events` の接続中デバイス一覧が
+// 切断後も古いまま残る。ブラウザの `ws.close()` (引数なし) は 1005 になるので、
+// これは異常系ではなく**定常的に通る経路**。
+// ---------------------------------------------------------------------------
+
+describe("closeCodeForEcho", () => {
+  it("1005 / 1006 は ws.close() へ渡せないので 1000 に丸める", () => {
+    expect(closeCodeForEcho(1005)).toBe(1000);
+    expect(closeCodeForEcho(1006)).toBe(1000);
+  });
+
+  it("それ以外はそのまま返す (相手が名乗った理由を潰さない)", () => {
+    expect(closeCodeForEcho(1000)).toBe(1000);
+    expect(closeCodeForEcho(1001)).toBe(1001);
+    expect(closeCodeForEcho(1012)).toBe(1012);
+    expect(closeCodeForEcho(4000)).toBe(4000);
+  });
+});
+
+describe("webSocketClose", () => {
+  it("code なしで閉じられても SSE の接続中デバイス一覧が更新される (broadcastDevices まで到達する)", async () => {
+    // **専用テナント** — isolatedStorage: false なので他の test の socket が
+    // 一覧に混ざると「消えたこと」を判定できない
+    const { ws } = await connectAccepted("hub-token-tenant-close");
+
+    const res = await SELF.fetch(`${BASE}/tenants/tenant-close/events`, {
+      headers: { Authorization: SHARED_SECRET },
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+
+    // 接続直後のスナップショット
+    const first = decoder.decode((await reader.read()).value);
+    expect(JSON.parse(first.split("data: ")[1]!)).toEqual({ devices: ["device-close"] });
+
+    // **引数なしの close** = 相手側に 1005 が届く (キオスクの useTimecardWatch.stop() と同じ)
+    ws.close();
+
+    // 丸めていなければここで `Invalid WebSocket close code: 1005.` が投げ、
+    // broadcastDevices が呼ばれず、この read は永久に返らない
+    const second = decoder.decode((await reader.read()).value);
+    expect(second).toContain("event: devices");
+    expect(JSON.parse(second.split("data: ")[1]!)).toEqual({ devices: [] });
+
+    await reader.cancel();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secrets Store binding の解決 (resolveSecret)
+//
+// 打刻 1 件ごとに通る (handleMeasurement / handleTimecardPunch /
+// requireInternalAuth / authenticateDevice) ので、isolate 内で使い回す。
+// ---------------------------------------------------------------------------
+
+describe("resolveSecret", () => {
+  it("文字列 binding はそのまま返す (テスト注入の形)", async () => {
+    expect(await resolveSecret("plain")).toBe("plain");
+  });
+
+  it("get を持たない binding は null (未設定扱い)", async () => {
+    expect(await resolveSecret(undefined)).toBeNull();
+    expect(await resolveSecret(null)).toBeNull();
+    expect(await resolveSecret({})).toBeNull();
+  });
+
+  it("Secrets Store binding は isolate 内で 1 回しか .get() を撃たない", async () => {
+    let calls = 0;
+    const binding = {
+      async get() {
+        calls++;
+        return "s3cret";
+      },
+    };
+    expect(await resolveSecret(binding)).toBe("s3cret");
+    expect(await resolveSecret(binding)).toBe("s3cret");
+    expect(calls).toBe(1);
+  });
+
+  it("同時に呼んでも .get() は 1 回 (解決中の Promise を使い回す)", async () => {
+    let calls = 0;
+    const binding = {
+      async get() {
+        calls++;
+        return "concurrent";
+      },
+    };
+    const all = await Promise.all([
+      resolveSecret(binding),
+      resolveSecret(binding),
+      resolveSecret(binding),
+    ]);
+    expect(all).toEqual(["concurrent", "concurrent", "concurrent"]);
+    expect(calls).toBe(1);
+  });
+
+  it("binding ごとに別の値を返す (env をまたいで混ざらない)", async () => {
+    const a = { async get() { return "a"; } };
+    const b = { async get() { return "b"; } };
+    expect(await resolveSecret(a)).toBe("a");
+    expect(await resolveSecret(b)).toBe("b");
+    expect(await resolveSecret(a)).toBe("a");
+  });
+
+  it("★ 失敗は cache に残さない (次の呼び出しでやり直せる)", async () => {
+    let calls = 0;
+    const binding = {
+      async get() {
+        calls++;
+        if (calls === 1) throw new Error("store unavailable");
+        return "recovered";
+      },
+    };
+    await expect(resolveSecret(binding)).rejects.toThrow("store unavailable");
+    expect(await resolveSecret(binding)).toBe("recovered");
+    expect(calls).toBe(2);
+  });
+
+  it("undefined を返す binding は null に倒す (未設定と同じ扱い)", async () => {
+    const binding = { async get() { return undefined as unknown as string; } };
+    expect(await resolveSecret(binding)).toBeNull();
   });
 });

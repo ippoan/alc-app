@@ -47,6 +47,17 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  // 切断の後始末 (webSocketClose) 専用。**他の test とテナントを分ける** —
+  // isolatedStorage: false なので DO の state が test 間で残り、SSE の
+  // 「接続中デバイス一覧」が他の test の socket に汚染される
+  "hub-token-tenant-close": {
+    active: true,
+    tenant_id: "tenant-close",
+    role: "device-hub",
+    sub: "device-close",
+    email: "",
+    exp: 9999999999,
+  },
   "kiosk-token": {
     active: true,
     tenant_id: "tenant-1",
