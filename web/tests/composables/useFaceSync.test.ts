@@ -40,6 +40,9 @@ describe('useFaceSync', () => {
     mockUpdateEmployeeFace.mockReset()
     mockGetAllDescriptorsWithTimestamp.mockReset()
     mockBulkSaveFaceDescriptors.mockReset()
+    // **同期の間引きは localStorage に刻まれる。** 消さないと 2 件目以降の
+    // test が「さっき同期したばかり」と判断されて何もしない
+    localStorage.clear()
 
     // Re-import to reset globalSyncing module state
     vi.resetModules()
@@ -241,5 +244,120 @@ describe('useFaceSync', () => {
     expect(photo).toBeUndefined()
     expect(desc[0]).toBeCloseTo(0.3)
     expect(desc[1]).toBeCloseTo(0.4)
+  })
+
+  // -------------------------------------------------------------------------
+  // 全件ダウンロードの間引き (Refs ippoan/rust-alc-api#644)
+  //
+  // getFaceData() は承認済み**全社員ぶん**の embedding を返す。カードをかざす
+  // たびに待っていたため、読み取りから choice まで実測 1.5〜6.2 秒かかっていた。
+  // -------------------------------------------------------------------------
+
+  it('★ 直前に同期していれば何も取りに行かない (全件ダウンロードの間引き)', async () => {
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    const { sync } = useFaceSync()
+    await sync()
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+
+    // 2 回目は間引かれる
+    await sync()
+    await sync()
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ force を付けた呼び出しは間引かれない (管理者の入口はここを使う)', async () => {
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    const { sync } = useFaceSync()
+    await sync()
+    await sync({ force: true })
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(2)
+  })
+
+  it('★ 間引きはリロードを跨ぐ (localStorage に刻む)', async () => {
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    const first = useFaceSync()
+    await first.sync()
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+
+    // module 状態を捨てる = リロード相当。localStorage は残る
+    vi.resetModules()
+    const mod = await import('~/composables/useFaceSync')
+    await mod.useFaceSync().sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ 間引く間隔を過ぎれば取りに行く', async () => {
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    const { sync } = useFaceSync()
+    await sync()
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+
+    // 6 分前に同期したことにする (下限は 5 分)
+    localStorage.setItem('alc.faceSync.lastSyncAt', String(Date.now() - 6 * 60 * 1000))
+    await sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(2)
+  })
+
+  it('★ 失敗した同期は刻まない (次の呼び出しでやり直せる)', async () => {
+    mockGetFaceData.mockRejectedValueOnce(new Error('offline'))
+    const { sync, syncError } = useFaceSync()
+    await sync()
+    expect(syncError.value).toBe('offline')
+
+    // 失敗を刻んでいたらここが間引かれて 1 回のままになる
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+    await sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(2)
+  })
+
+  it('刻まれた値が数値でなければ「未同期」に倒す (取りに行く側 = 安全側)', async () => {
+    localStorage.setItem('alc.faceSync.lastSyncAt', 'broken')
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    await useFaceSync().sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+  })
+
+  it('localStorage が読めない環境でも同期できる (private window 等)', async () => {
+    const getItem = vi.spyOn(localStorage, 'getItem').mockImplementation(() => {
+      throw new Error('denied')
+    })
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    await useFaceSync().sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+    getItem.mockRestore()
+  })
+
+  it('localStorage が書けない環境でも同期は成立する (握り潰す)', async () => {
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+    mockGetFaceData.mockResolvedValue([])
+    mockGetAllDescriptorsWithTimestamp.mockResolvedValue([])
+
+    const { sync, syncError } = useFaceSync()
+    await sync()
+
+    expect(mockGetFaceData).toHaveBeenCalledTimes(1)
+    expect(syncError.value).toBeNull()
+    setItem.mockRestore()
   })
 })

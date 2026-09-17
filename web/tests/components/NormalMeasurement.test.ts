@@ -1256,3 +1256,40 @@ describe('NormalMeasurement — 本人確認前のアルコール測定通知 (R
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// かざしてから choice が出るまで (Refs ippoan/rust-alc-api#644)
+//
+// 顔データの同期 (`getFaceData()` は承認済み全社員ぶんの embedding を返す) を
+// `await` していたころ、読み取りから choice まで**実測 1.5〜6.2 秒**かかっていた。
+// **この段は顔データを要らない** (顔認証は体温の後) ので待たない。
+// ---------------------------------------------------------------------------
+
+describe('NormalMeasurement — 顔データの同期を待たない', () => {
+  it('★ 顔データの同期が終わらなくても choice が出る', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    // **解決しない Promise** = 同期が延々と終わらない状況。await していれば
+    // ここで段が進まず、この test は落ちる
+    faceSyncMock.mockClear()
+    faceSyncMock.mockImplementationOnce(() => new Promise<void>(() => {}))
+
+    await touch(wrapper, '2601012901010')
+
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    expect(faceSyncMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('同期が失敗しても choice は出る (打刻や点呼を同期の失敗で止めない)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    faceSyncMock.mockClear()
+    faceSyncMock.mockRejectedValueOnce(new Error('offline'))
+
+    await touch(wrapper, '2601012901010')
+
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})

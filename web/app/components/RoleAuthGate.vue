@@ -96,7 +96,10 @@ async function onNfcRead(nfcId: string) {
       return
     }
     authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
-    await faceSync()
+    // **ここだけは待つし、間引きもしない** (Refs ippoan/rust-alc-api#644)。
+    // 管理者の入口の顔認証は必須でスキップの逃げ道が無く、古い顔データで落とすと
+    // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
+    await faceSync({ force: true })
     step.value = 'face_auth'
   } catch {
     errorMessage.value = employeeNotFoundByNfc(nfcId)
@@ -129,7 +132,10 @@ async function onManualSubmit() {
       return
     }
     authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
-    await faceSync()
+    // **ここだけは待つし、間引きもしない** (Refs ippoan/rust-alc-api#644)。
+    // 管理者の入口の顔認証は必須でスキップの逃げ道が無く、古い顔データで落とすと
+    // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
+    await faceSync({ force: true })
     step.value = 'face_auth'
   } catch {
     manualError.value = employeeNotFoundByCode(input)
