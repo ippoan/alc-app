@@ -830,7 +830,7 @@ describe('NormalMeasurement — vehicle 段の NFC_CARINS 受け口 (番号を�
     wrapper.unmount()
   })
 
-  it('「最初からやり直す」(reset) で番号・表示が消える', async () => {
+  it('「キャンセル」(reset) で番号・表示が消える', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountWithStubs()
 
@@ -841,7 +841,7 @@ describe('NormalMeasurement — vehicle 段の NFC_CARINS 受け口 (番号を�
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('車検証: 読取済み')
 
-    const resetButton = wrapper.findAll('button').find(b => b.text() === '最初からやり直す')
+    const resetButton = wrapper.findAll('button').find(b => b.text() === 'キャンセル')
     await resetButton!.trigger('click')
     await wrapper.vm.$nextTick()
 
@@ -1350,6 +1350,119 @@ describe('NormalMeasurement — 読み取り経路による打刻の出し分け
     await touchFrom(wrapper, '2601012901010')
 
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 体温の段のキャンセル (Refs ippoan/rust-alc-api#644)
+//
+// ユーザーの要望「ここに キャンセルもいれて」。**新しい経路は作らない** —
+// 既にある `reset()`（待機画面へ戻る / 打刻は取り消さない）を、
+// 次へ・スキップ と同じ場所から押せるようにするだけ。
+// ---------------------------------------------------------------------------
+
+describe('NormalMeasurement — 体温の段のキャンセル', () => {
+  const CANCEL = '[data-testid="medical-cancel"]'
+
+  /** 測定の段まで進める必要があるものだけ、BleStatus / AlcMeasurement も stub する */
+  async function mountWithStubs() {
+    return await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: {
+          NfcStatus: NfcStatusStub,
+          BleStatus: BleStatusStub,
+          AlcMeasurement: AlcMeasurementStub,
+          ClientOnly: false,
+          Teleport: true,
+        },
+      },
+    })
+  }
+
+  /** 体温 (medical) の段まで進める */
+  async function toMedical(wrapper: Awaited<ReturnType<typeof mountNfcStep>>) {
+    await touchToVehicle(wrapper, '2601012901010')
+    await wrapper.find('[data-testid="vehicle-skip"]').trigger('click')
+    await wrapper.vm.$nextTick()
+  }
+
+  it('★ 体温の段にキャンセルが出る (BLE タブ)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    await toMedical(wrapper)
+
+    expect(wrapper.find(CANCEL).exists()).toBe(true)
+    expect(wrapper.find(CANCEL).text()).toBe('キャンセル')
+    wrapper.unmount()
+  })
+
+  it('★ 手動入力タブでも同じ位置に出る (タブの外に置いてある)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    await toMedical(wrapper)
+
+    const manualTab = wrapper.findAll('button').find(b => b.text() === '手動入力')
+    await manualTab!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find(CANCEL).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ 押すと待機画面へ戻る', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    await toMedical(wrapper)
+
+    await wrapper.find(CANCEL).trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // NFC のタッチ待ちに戻っている
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★★ 押しても打刻は取り消さない (NFC の段は通過済み = 打刻は事実として起きている)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    punchTimecardMock.mockClear()
+    await toMedical(wrapper)
+    // 免許証のタッチで 1 回打っている
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+
+    await wrapper.find(CANCEL).trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // **打刻を取り消す API は存在せず、呼んでもいない**
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(updateMeasurement)).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('★★ 結果の段ではキャンセルを出さない (もう保存済みで「取り消せる」と読めてしまう)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountWithStubs()
+
+    await touchToVehicle(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, 'vehicle-skip')
+    // 体温の段: キャンセルが出ている
+    expect(wrapper.findAll('button').some(b => b.text() === 'キャンセル')).toBe(true)
+
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', {
+      employeeId: 'emp-1',
+      alcoholValue: 0.1,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-01-01'),
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    // 結果の段: **キャンセルは消える**。退路は ResultCard の「次の測定へ」が持つ
+    expect(wrapper.findAll('button').some(b => b.text() === 'キャンセル')).toBe(false)
     wrapper.unmount()
   })
 })
