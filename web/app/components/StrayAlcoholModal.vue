@@ -69,13 +69,20 @@ const measuredAtLabel = computed(() => {
   if (!d) return ''
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 })
+
+// 吹込不良 (error) は「測れなかった」だけでアルコールが出たわけではないので、
+// このモーダルの中だけ normal と同じ扱いにする (色の定義は alcoholResultClass に
+// 集約したまま、引数側で寄せる)。基準超過 (over) だけを赤で目立たせる (ユーザー判断)。
+// utils/alcohol.ts の alcoholResultClass 自体は HubMeasurementsViewer と共有しているので
+// 変えない (normal 以外を赤にする挙動はそちらでは正しい)。
+const badgeClass = computed(() => alcoholResultClass(props.reading?.result === 'over' ? 'over' : 'normal'))
 </script>
 
 <template>
   <div
     v-if="shown && reading"
     data-testid="stray-alcohol-modal"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
     @click.self="close"
   >
     <div class="bg-white rounded-2xl shadow-xl p-8 text-center max-w-sm">
@@ -92,7 +99,7 @@ const measuredAtLabel = computed(() => {
         <span
           data-testid="stray-alcohol-modal-result"
           class="ml-2 px-2 py-0.5 rounded text-xs font-medium"
-          :class="alcoholResultClass(reading.result)"
+          :class="badgeClass"
         >{{ alcoholResultLabel(reading.result) }}</span>
       </div>
       <p class="text-xs text-gray-500 mb-4">
