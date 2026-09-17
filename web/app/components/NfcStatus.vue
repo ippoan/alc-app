@@ -57,6 +57,18 @@ onMounted(() => {
   connect()
 })
 
+/**
+ * **空のままにする。ここでポートを手放さないこと** (Refs ippoan/rust-alc-api#644)。
+ *
+ * この component の unmount は「画面が切り替わった」だけで、アプリは生きている。
+ * ここで `coreS3.release()` すると arbiter が 10 秒後に開き直し
+ * (`useSerialArbiter` の `RESCAN_INTERVAL`)、**その open が ESP32-S3 を
+ * 再起動させうる**。ポートを BLE ゲートウェイと共有しているので手放さない、という
+ * `useCoreS3Serial` の方針とも揃う。
+ *
+ * ページ自体を閉じる / 読み込み直すときの後始末は
+ * `closeArbitratedPortsForUnload()` が `app.vue` の pagehide/beforeunload で行う。
+ */
 onBeforeUnmount(() => {
 })
 

@@ -227,6 +227,73 @@ async function closePortQuietly(port: SerialPort): Promise<void> {
   await port.close()
 }
 
+/**
+ * unload の後始末を 1 回だけ走らせるための印。
+ * `pagehide` と `beforeunload` は**両方**発火する (app.vue は既に両方張っている)。
+ */
+let unloadClosed = false
+
+/**
+ * ページを閉じる / 読み込み直すときに、arbiter が握っているポートを
+ * **`closePortQuietly` と同じ順序 (RTS → DTR) で**閉じる
+ * (Refs ippoan/rust-alc-api#644)。
+ *
+ * # なぜ要るか
+ *
+ * ESP32-S3 の USB-Serial-JTAG は「DTR=0 かつ RTS=1」で chip reset がかかる
+ * (`closePortQuietly` の doc、Refs ippoan/alc-app#199)。**リロード時の close は
+ * ブラウザ任せ**でこの順序を守らないため、**ページを読み込み直すたびに CoreS3 が
+ * 再起動する** — 実機で画面の点滅を目視、`boot_history` が 8/8 `reset=usb`。
+ * 再起動すると WS が切れ、NFC が初期化し直され、時計も引き直される。
+ *
+ * つまり `#199` の対策は既に在るのに、**一番起きる場面 (リロード) だけ
+ * その経路を通っていなかった**。
+ *
+ * # 何を閉じ、何を閉じないか
+ *
+ * `sessions` は arbiter が握っているポートだけ = **VID 0x303A (ESP32-S3)**。
+ * CoreS3 も警告デバイス (Atom VoiceS3R) も同じ経路で、**どちらも同じ reset 条件を
+ * 持つ**ので両方まとめて落として構わない。FC-1200 (アルコール検知器) は
+ * `useFc1200Serial` が `!isArbitratedPort(p)` で別に開いており `sessions` に
+ * 入らないので触らない。
+ *
+ * # 待てないことを前提にする
+ *
+ * `pagehide` は非同期の完了を保証しない。**間に合わなくてもページを壊さない**
+ * ことだけを守る (close の失敗は握り潰す — ページはどのみち消える)。
+ * 間に合えば `setSignals` が 2 本先に出るので reset の条件を踏まない。
+ *
+ * # `persisted` (bfcache) では閉じない
+ *
+ * `pagehide` は**ページが bfcache へ入るときにも発火する** (`event.persisted === true`)。
+ * そのときページは**消えず、`pageshow` でそのまま戻ってくる** — module の状態も
+ * 生きたままなので、ここで閉じると `sessions` が「開いている」と思ったまま残り、
+ * **再スキャンが走らず CoreS3 も VoiceS3R も繋がらない**。
+ * 利用者から見ると**「かざしても何も起きない」= NFC が無言で死ぬ**。
+ * いま直そうとしている再起動より重い壊れ方なので、その場合は何もしない。
+ *
+ * **`pageshow` で戻す処理は要らない。** bfcache のときはそもそも閉じず
+ * `unloadClosed` も立てないので、戻す状態が無い。`persisted === false` の
+ * `pagehide` はページが捨てられる側で、戻ってこない。Chrome のメモリセーバーが
+ * タブを破棄した場合は復帰が**完全な再読み込み**になり module 状態も作り直される。
+ *
+ * `beforeunload` は bfcache へ入るときには発火しないので、引数なしでよい。
+ */
+export function closeArbitratedPortsForUnload(options?: { persisted?: boolean }): void {
+  // **`unloadClosed` を立てる前に返すこと** — 立ててしまうと、bfcache から戻った後の
+  // 本当の unload で閉じられなくなる
+  if (options?.persisted) return
+  if (unloadClosed) return
+  unloadClosed = true
+  for (const s of sessions) {
+    // 受信ループを止める (pump の while が次の read を待たない)
+    s.active = false
+    // **await しない。** reader が lock を持ったままなので port.close() は
+    // 失敗しうるが、**その前の setSignals 2 本が本体**なので構わない
+    void closePortQuietly(s.port).catch(() => { /* ページが消えるので何もできない */ })
+  }
+}
+
 export function useSerialArbiter() {
   const { ports, refreshPorts, requestNewPort } = useSerialDeviceManager()
 

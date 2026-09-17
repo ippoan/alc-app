@@ -1215,4 +1215,124 @@ describe('useSerialArbiter 診断ログ', () => {
       expect(serialLogs()).toContain('close port of alarm: release(alarm) reason=write_failed')
     })
   })
+
+  // ---------- ページを閉じる / 読み込み直すとき ----------
+  //
+  // リロード時の close は**ブラウザ任せ**で RTS → DTR の順序を守らないため、
+  // 「DTR=0 かつ RTS=1」の瞬間ができて ESP32-S3 が chip reset する。
+  // 実機で「更新すると CoreS3 の画面が点滅する」= 再起動を目視しており、
+  // boot_history も 8/8 が reset=usb だった (Refs ippoan/rust-alc-api#644)。
+
+  describe('closeArbitratedPortsForUnload', () => {
+    it('★ 握っているポートを RTS → DTR の順で落としてから閉じる', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      mod.closeArbitratedPortsForUnload()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // **順序が本体。** DTR を先に落とすと reset 条件を踏む
+      expect(dev.calls).toEqual([
+        'setSignals({"requestToSend":false})',
+        'setSignals({"dataTerminalReady":false})',
+        'close',
+      ])
+    })
+
+    it('★ pagehide と beforeunload の両方から呼ばれても 1 回しか閉じない', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      mod.closeArbitratedPortsForUnload()
+      mod.closeArbitratedPortsForUnload()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dev.calls.filter(c => c === 'close')).toHaveLength(1)
+      expect(dev.port.setSignals).toHaveBeenCalledTimes(2)
+    })
+
+    it('close に失敗しても投げない (ページはどのみち閉じる)', async () => {
+      const dev = createMockPort()
+      dev.port.close = vi.fn(async () => { throw new Error('locked') })
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      expect(() => mod.closeArbitratedPortsForUnload()).not.toThrow()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // close が失敗しても **setSignals 2 本は出ている** (そこが reset 回避の本体)
+      expect(dev.calls).toEqual([
+        'setSignals({"requestToSend":false})',
+        'setSignals({"dataTerminalReady":false})',
+      ])
+    })
+
+    it('★ bfcache へ入るだけの pagehide (persisted) では閉じない', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      mod.closeArbitratedPortsForUnload({ persisted: true })
+      await vi.advanceTimersByTimeAsync(0)
+
+      // 閉じると pageshow で戻ったとき sessions が「開いている」ままになり、
+      // 再スキャンが走らず NFC が無言で死ぬ
+      expect(dev.calls).toEqual([])
+    })
+
+    it('★ bfcache で見送った後も、本当の unload では閉じる (印を立てていない)', async () => {
+      const dev = createMockPort()
+      dev.emit('ALARM state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant('ALARM', 'CORE')
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.calls.length = 0
+
+      mod.closeArbitratedPortsForUnload({ persisted: true })
+      mod.closeArbitratedPortsForUnload({ persisted: false })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dev.calls).toEqual([
+        'setSignals({"requestToSend":false})',
+        'setSignals({"dataTerminalReady":false})',
+        'close',
+      ])
+    })
+
+    it('握っているポートが無ければ何もしない', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+
+      expect(() => mod.closeArbitratedPortsForUnload()).not.toThrow()
+    })
+  })
 })
