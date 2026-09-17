@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { ref, readonly, nextTick } from 'vue'
+import { ref, readonly, nextTick, defineComponent } from 'vue'
 import type { VueWrapper } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import IndexPage from '~/pages/index.vue'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
 import TodayPunchHistory from '~/components/TodayPunchHistory.vue'
 import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
+import IcPunchAlcoholPrompt from '~/components/IcPunchAlcoholPrompt.vue'
+import type { LatestPunch } from '~/types'
 
 // トップ画面のうち「警告デバイスの見張りをロールタブに関わらず始める」部分だけを見る (Refs #231)。
 // useAlarmWatch は本物、その下の singleton (デバイス / 着信購読 / 設定) だけをモックして
@@ -69,11 +71,11 @@ const NormalMeasurementStub = {
   template: '<div class="normal-measurement-stub"><slot name="below-card" /></div>',
 }
 
-function mountIndex(route: string) {
+function mountIndex(route: string, normalMeasurementStub: unknown = NormalMeasurementStub) {
   return mountSuspended(IndexPage, {
     route,
     shallow: true,
-    global: { stubs: { ManagerAlarmBar: false, ClientOnly: false, NormalMeasurement: NormalMeasurementStub } },
+    global: { stubs: { ManagerAlarmBar: false, ClientOnly: false, NormalMeasurement: normalMeasurementStub } },
   })
 }
 
@@ -232,5 +234,97 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     await item!.trigger('click')
     await nextTick()
     expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+  })
+})
+
+describe('pages/index — IC カードの打刻からアルコールチェックへ (Refs ippoan/rust-alc-api#644)', () => {
+  let wrapper: VueWrapper | null = null
+
+  // NormalMeasurement は「待機中か」と「社員を指定して始める入口」を defineExpose する。
+  // index はその 2 つだけを使うので、stub も同じ 2 つを expose する
+  const startForEmployeeMock = vi.fn(async () => true)
+  const stubIsIdle = ref(true)
+  const NormalMeasurementExposeStub = defineComponent({
+    name: 'NormalMeasurement',
+    setup(_props, { expose }) {
+      expose({ isIdle: stubIsIdle, startForEmployee: startForEmployeeMock })
+    },
+    template: '<div class="normal-measurement-stub"><slot name="below-card" /></div>',
+  })
+
+  function punchOf(over: Partial<LatestPunch> = {}): LatestPunch {
+    return {
+      id: 'punch-1',
+      employeeId: 'emp-1',
+      name: '山田太郎',
+      cardKind: 'other',
+      punchedAt: new Date().toISOString(),
+      ...over,
+    }
+  }
+
+  /** TodayPunchHistory (自動 stub) が引き直しで上げてくる最新行を流す */
+  async function emitLatest(w: VueWrapper, punch: LatestPunch | null) {
+    w.findComponent(TodayPunchHistory).vm.$emit('latest', punch)
+    await nextTick()
+  }
+
+  beforeEach(() => {
+    startForEmployeeMock.mockClear()
+    stubIsIdle.value = true
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('打刻履歴と同じ below-card slot に導線を出し、最新の打刻をそのまま渡す', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+    const normalMeasurement = wrapper.find('.normal-measurement-stub')
+    const prompt = wrapper.findComponent(IcPunchAlcoholPrompt)
+    // NormalMeasurement の状態機械の中ではなく、打刻履歴と同じ slot に置く
+    expect(normalMeasurement.findComponent(IcPunchAlcoholPrompt).exists()).toBe(true)
+    expect(prompt.props('punch')).toBeNull()
+
+    const punch = punchOf()
+    await emitLatest(wrapper, punch)
+    expect(wrapper.findComponent(IcPunchAlcoholPrompt).props('punch')).toEqual(punch)
+  })
+
+  it('通常点呼が待機中かどうかをそのまま渡す (測定中は出させない)', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+    expect(wrapper.findComponent(IcPunchAlcoholPrompt).props('idle')).toBe(true)
+
+    stubIsIdle.value = false
+    await nextTick()
+    expect(wrapper.findComponent(IcPunchAlcoholPrompt).props('idle')).toBe(false)
+  })
+
+  it('押されたら (start) その社員で測定を始める — 打刻はしない入口を使う', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+    await emitLatest(wrapper, punchOf())
+
+    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punchOf())
+    await nextTick()
+
+    expect(startForEmployeeMock).toHaveBeenCalledTimes(1)
+    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎')
+  })
+
+  it('社員が解決できていない打刻では測定を始めない', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+    const punch = punchOf({ employeeId: null, name: '未登録カード 0123' })
+    await emitLatest(wrapper, punch)
+
+    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punch)
+    await nextTick()
+
+    expect(startForEmployeeMock).not.toHaveBeenCalled()
+  })
+
+  it('通常点呼タブ以外 (点呼) では導線も出さない', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=tenko', NormalMeasurementExposeStub)
+    expect(wrapper.findComponent(IcPunchAlcoholPrompt).exists()).toBe(false)
   })
 })

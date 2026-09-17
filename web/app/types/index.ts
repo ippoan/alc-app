@@ -1,3 +1,5 @@
+import type { CardKind } from '~/utils/card-kind'
+
 /** 顔認証結果 */
 export interface FaceAuthResult {
   verified: boolean
@@ -780,6 +782,29 @@ export interface TimePunchesResponse {
   total: number
   page: number
   per_page: number
+}
+
+/**
+ * 打刻一覧の**最新の 1 行**を「次の操作」へ渡すための最小形
+ * (Refs ippoan/rust-alc-api#644)。
+ *
+ * IC カードはハブ端末 (CoreS3) にかざされ、サーバ側で打刻が記録される —
+ * タブレットの NFC (`onNfcRead`) は通らない。タブレットに届くのは
+ * `useTimecardWatch` の合図だけなので、**誰がかざしたか**は一覧を引き直して
+ * 最新行から知る。`card_kind` の畳み込みは `~/utils/card-kind` の 1 箇所で
+ * 済ませてから渡す (2 実装目を作らない)。
+ */
+export interface LatestPunch {
+  /** 打刻 ID。**行が入れ替わったか**の判定に使う */
+  id: string
+  /** 解決済みの社員。未登録カードのタップでは null (測定は始められない) */
+  employeeId: string | null
+  /** 画面に出す名前 (社員名 / 未登録カードの表示) */
+  name: string
+  /** 畳み込み済みのカード種別 */
+  cardKind: CardKind
+  /** 打刻時刻 (ISO8601)。**古い打刻で操作を始めない**ための鮮度判定に使う */
+  punchedAt: string
 }
 
 // --- 車両分類 ---
