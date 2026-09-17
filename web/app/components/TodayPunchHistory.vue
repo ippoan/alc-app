@@ -23,7 +23,17 @@ const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
  * 打刻から次の操作へ進む導線もその合図が要るが、**購読を 2 本張らない** —
  * 張ると同じ合図で一覧の引き直しが二重に走る。ここから結果を上げて共有する。
  */
-const emit = defineEmits<{ latest: [LatestPunch | null] }>()
+const emit = defineEmits<{
+  latest: [LatestPunch | null]
+  /**
+   * 社員 ID → 表示名 (Refs ippoan/rust-alc-api#644)。
+   *
+   * **この部品が社員一覧の唯一の取得元**なので、`latest` と同じ理由で**ここから上げて共有する** —
+   * 呼び出し元が `getEmployees()` を 2 本目として叩かないため。
+   * シリアル由来の IC 打刻 (`useHubTimecardPunch`) がボタンに出す氏名に使う。
+   */
+  employees: [Record<string, string>]
+}>()
 
 const employees = ref<ApiEmployee[]>([])
 const employeeMap = computed(() => {
@@ -111,6 +121,7 @@ async function loadTodayPunches() {
 async function loadEmployees() {
   try {
     employees.value = await getEmployees()
+    emit('employees', employeeMap.value)
   }
   catch (e) { console.error('[TodayPunchHistory] Failed to load employees:', e) }
 }

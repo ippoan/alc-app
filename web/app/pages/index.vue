@@ -234,7 +234,18 @@ const normalMeasurement = ref<{
   isIdle: boolean
   startForEmployee: (id: string, name: string) => Promise<boolean>
 } | null>(null)
-const latestPunch = ref<LatestPunch | null>(null)
+/**
+ * 社員 ID → 表示名。`TodayPunchHistory` が取った一覧を受け取る
+ * (2 本目の `getEmployees()` を叩かない)。
+ */
+const employeeNames = ref<Record<string, string>>({})
+/**
+ * IC 打刻の最新行。**シリアル由来を優先し、サーバ由来はそこへ合流させる**
+ * (Refs ippoan/rust-alc-api#644、`useHubTimecardPunch` の doc)。
+ */
+const { latest: latestPunch, setFromServer: setLatestPunchFromServer } = useHubTimecardPunch(
+  id => employeeNames.value[id] ?? null,
+)
 /** 通常点呼が待機中か (まだ mount されていなければ false = ボタンを出さない) */
 const measurementIdle = computed(() => normalMeasurement.value?.isIdle === true)
 /** IC 打刻の案内ボタンが表示中か (`NfcStatus` のタッチ枠をボタンに差し替える) */
@@ -496,7 +507,11 @@ function onRoleTabClick(role: RoleTab) {
               />
             </template>
             <template #below-card>
-              <TodayPunchHistory class="w-full max-w-md mx-auto mt-4" @latest="latestPunch = $event" />
+              <TodayPunchHistory
+                class="w-full max-w-md mx-auto mt-4"
+                @latest="setLatestPunchFromServer"
+                @employees="employeeNames = $event"
+              />
             </template>
           </NormalMeasurement>
           <TenkoKiosk v-if="driverSubTab === 'tenko'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
