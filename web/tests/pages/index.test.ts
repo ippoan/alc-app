@@ -241,15 +241,18 @@ describe('pages/index — IC カードの打刻からアルコールチェック
   let wrapper: VueWrapper | null = null
 
   // NormalMeasurement は「待機中か」と「社員を指定して始める入口」を defineExpose する。
-  // index はその 2 つだけを使うので、stub も同じ 2 つを expose する
+  // index はその 2 つだけを使うので、stub も同じ 2 つを expose する。
+  // below-card slot と nfc-punch-prompt slot (NFC のタッチ枠の中) を見分けられるよう、
+  // それぞれ別の要素に描く
   const startForEmployeeMock = vi.fn(async () => true)
   const stubIsIdle = ref(true)
   const NormalMeasurementExposeStub = defineComponent({
     name: 'NormalMeasurement',
+    props: { icPromptActive: { type: Boolean, default: false } },
     setup(_props, { expose }) {
       expose({ isIdle: stubIsIdle, startForEmployee: startForEmployeeMock })
     },
-    template: '<div class="normal-measurement-stub"><slot name="below-card" /></div>',
+    template: '<div class="normal-measurement-stub"><div class="nfc-touch-area"><slot name="nfc-punch-prompt" /></div><div class="below-card-area"><slot name="below-card" /></div></div>',
   })
 
   function punchOf(over: Partial<LatestPunch> = {}): LatestPunch {
@@ -279,17 +282,34 @@ describe('pages/index — IC カードの打刻からアルコールチェック
     wrapper = null
   })
 
-  it('打刻履歴と同じ below-card slot に導線を出し、最新の打刻をそのまま渡す', async () => {
+  it('IcPunchAlcoholPrompt は NFC のタッチ枠の中に出る（below-card ではない）', async () => {
     wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
-    const normalMeasurement = wrapper.find('.normal-measurement-stub')
+    const touchArea = wrapper.find('.nfc-touch-area')
+    const belowCard = wrapper.find('.below-card-area')
     const prompt = wrapper.findComponent(IcPunchAlcoholPrompt)
-    // NormalMeasurement の状態機械の中ではなく、打刻履歴と同じ slot に置く
-    expect(normalMeasurement.findComponent(IcPunchAlcoholPrompt).exists()).toBe(true)
+    // NormalMeasurement の状態機械の中ではなく、NFC のタッチ枠 (nfc-punch-prompt slot) に置く。
+    // below-card (打刻履歴) には出ない
+    expect(touchArea.findComponent(IcPunchAlcoholPrompt).exists()).toBe(true)
+    expect(belowCard.findComponent(IcPunchAlcoholPrompt).exists()).toBe(false)
     expect(prompt.props('punch')).toBeNull()
 
     const punch = punchOf()
     await emitLatest(wrapper, punch)
     expect(wrapper.findComponent(IcPunchAlcoholPrompt).props('punch')).toEqual(punch)
+  })
+
+  it('IcPunchAlcoholPrompt の active emit を icPromptActive として NormalMeasurement へ渡す', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+    const normalMeasurement = wrapper.findComponent(NormalMeasurementExposeStub)
+    expect(normalMeasurement.props('icPromptActive')).toBe(false)
+
+    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('active', true)
+    await nextTick()
+    expect(wrapper.findComponent(NormalMeasurementExposeStub).props('icPromptActive')).toBe(true)
+
+    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('active', false)
+    await nextTick()
+    expect(wrapper.findComponent(NormalMeasurementExposeStub).props('icPromptActive')).toBe(false)
   })
 
   it('通常点呼が待機中かどうかをそのまま渡す (測定中は出させない)', async () => {

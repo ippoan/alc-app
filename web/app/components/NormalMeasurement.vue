@@ -11,6 +11,9 @@ const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
 const props = defineProps<{
   demoMode?: boolean
   landscape?: boolean
+  /** IC カード打刻のアルコールチェック案内ボタンが表示中か。`NfcStatus` へ素通しする
+   * だけで、ここで判定は持たない (Refs ippoan/rust-alc-api#644) */
+  icPromptActive?: boolean
 }>()
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
@@ -321,7 +324,7 @@ const isIdle = computed(() => step.value === 'nfc')
  *
  * IC カードはハブ端末 (CoreS3) にかざされ、打刻はサーバ側で既に記録されている —
  * `onNfcRead` は通らず、社員も打刻の行から分かっている。そこで
- * 「照合」と「打刻」を抜いた残り (測定レコードの作成 → 顔データ同期 → choice) だけを
+ * 「照合」と「打刻」を抜いた残り (測定レコードの作成 → 顔データ同期 → 体温) だけを
  * ここから始める。**`tryPunch` は絶対に呼ばない** (同じタップで打刻が 2 行入る)。
  *
  * 呼び出し元が段を知らずに呼んでも巻き戻らないよう、`onNfcRead` と**同じガード**を
@@ -332,7 +335,10 @@ async function startForEmployee(id: string, name: string): Promise<boolean> {
   approvalError.value = null
   clearPunchState()
   await prepareMeasurementFor({ id, name })
-  step.value = 'choice'
+  // IC カードの打刻は免許証の確認を経ていないので、点呼 (始業/終業) には入れない。
+  // 「〈名前〉さんのアルコールチェックへ」の文言どおり、種別なしの測定へ直行する
+  // (Refs ippoan/rust-alc-api#644)
+  chooseType('normal')
   return true
 }
 
@@ -756,7 +762,11 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
 
           <!-- NFC モード -->
           <div v-if="!useManualInput && !isDemoMode">
-            <NfcStatus @read="onNfcRead" />
+            <NfcStatus :prompt-active="icPromptActive" @read="onNfcRead">
+              <template #punch-prompt>
+                <slot name="nfc-punch-prompt" />
+              </template>
+            </NfcStatus>
             <button
               class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
               @click="useManualInput = true"

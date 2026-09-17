@@ -1087,7 +1087,10 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
     }
   }
 
-  it('社員を指定すると照合も打刻もせずに種別の選択へ入る', async () => {
+  // IC カードの打刻は免許証の確認を経ていないので、点呼 (始業/終業) には入れない。
+  // 選択画面 (choice) を飛ばし、種別なし ('normal') の測定として体温の段へ直行する
+  // (Refs ippoan/rust-alc-api#644)
+  it('IC カードで始めると選択画面を飛ばして体温の段へ進む', async () => {
     const wrapper = await mountNfcStep()
     expect(exposed(wrapper).isIdle).toBe(true)
 
@@ -1103,13 +1106,55 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
     expect(vi.mocked(startMeasurement)).toHaveBeenCalledWith('emp-9')
     expect(faceSyncMock).toHaveBeenCalled()
 
-    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    // 選択画面 (choice) を飛ばして体温 (medical) へ直行する — 始業/終業のボタンは出ない
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="choice-pre-operation"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="choice-post-operation"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('体温')
     expect(wrapper.text()).toContain('佐藤花子')
     // 打刻の帯は出さない (この画面では打っていない)
     expect(wrapper.find('[data-testid="punch-done"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="punch-failed"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="punch-skipped"]').exists()).toBe(false)
     expect(exposed(wrapper).isIdle).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('IC カードで始めると点呼の種別は normal になる (完了の PUT に載る)', async () => {
+    const wrapper = await mountSuspended(NormalMeasurement, {
+      global: {
+        stubs: {
+          NfcStatus: NfcStatusStub,
+          BleStatus: BleStatusStub,
+          AlcMeasurement: AlcMeasurementStub,
+          ClientOnly: false,
+          Teleport: true,
+        },
+      },
+    })
+
+    await exposed(wrapper).startForEmployee('emp-9', '佐藤花子')
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+
+    const result = {
+      employeeId: 'emp-9',
+      alcoholValue: 0.1,
+      resultType: 'normal',
+      deviceUseCount: 1,
+      measuredAt: new Date('2026-01-01'),
+    }
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', result)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    const completedCall = vi.mocked(updateMeasurement).mock.calls.find(
+      call => (call[1] as Record<string, unknown>).status === 'completed',
+    )
+    expect(completedCall).toBeDefined()
+    expect((completedCall![1] as Record<string, unknown>).record_as_tenko).toBe(true)
+    expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe('normal')
     wrapper.unmount()
   })
 

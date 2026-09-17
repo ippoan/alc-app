@@ -147,4 +147,29 @@ describe('IcPunchAlcoholPrompt — IC カードの打刻からアルコールチ
     expect(wrapper.find(BUTTON).exists()).toBe(false)
     wrapper.unmount()
   })
+
+  // `active` emit — 表示中かどうかを呼び出し元 (NfcStatus) へ伝える (Refs #644)
+  it('表示になったら active を true で emit する', async () => {
+    const wrapper = await mountPrompt(punchOf())
+    expect(wrapper.emitted('active')).toBeTruthy()
+    expect(wrapper.emitted('active')!.at(-1)).toEqual([true])
+    wrapper.unmount()
+  })
+
+  it('消えたら active を false で emit する', async () => {
+    const wrapper = await mountPrompt(punchOf())
+    expect(wrapper.emitted('active')!.at(-1)).toEqual([true])
+
+    // 免許証の打刻に入れ替わる = target が null になる = 消える
+    await wrapper.setProps({ punch: punchOf({ id: 'punch-2', cardKind: 'license' }) })
+    expect(wrapper.emitted('active')!.at(-1)).toEqual([false])
+    wrapper.unmount()
+  })
+
+  it('初期値を 1 回流す (打刻が無い = false)', async () => {
+    const wrapper = await mountPrompt(null)
+    expect(wrapper.emitted('active')).toHaveLength(1)
+    expect(wrapper.emitted('active')![0]).toEqual([false])
+    wrapper.unmount()
+  })
 })
