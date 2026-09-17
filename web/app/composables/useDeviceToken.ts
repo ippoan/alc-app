@@ -39,7 +39,13 @@
  *   試さず credential 経路へ落ちる。再接続での解除はしない (次に呼ばれたとき抑止期間が
  *   過ぎていれば自然に再試行する)。失敗理由は `lastError` に残し、成功したら null に戻す。
  * - `/device/alarm-token` の応答に載る `tenant_id` が `deviceTenantId` と食い違っても
- *   拒否しない (`console.warn` のみ — 発行元 auth-worker 側の判断を尊重する)。
+ *   **拒否しない** (発行元 auth-worker 側の判断を尊重する)。ただし**出し方は 2 つに分ける**:
+ *   - `deviceTenantId` が**未設定** … `console.debug`。**平常運転**であって異常ではない —
+ *     上に書いたとおり**運行管理者の PC には credential を発行・保存しない**設計なので、
+ *     CoreS3 に紐づく共用 PC では**必ず**食い違う。ここで警告を出すと常時鳴り続け、
+ *     **読み飛ばす習慣がついて下の本物の異常を隠す**
+ *   - `deviceTenantId` が**設定済みで食い違う** … `console.warn`。テナント A に登録した
+ *     端末が B のトークンを受け取っている。**明らかに異常**
  * - 起動時の 1 本 (`startupDeviceJwt`、Refs #238): 最初の `getDeviceJwt()` を起動から 1 回だけ作って
  *   共有する (CoreS3 の探索を最大 3 秒待ち、繋がっていれば署名で取る)。`isStartupJwtPending` は
  *   その 1 本が未解決かつ起動から 3 秒以内の間だけ true — 運行者タブの「確認中」はこれだけを見る。
@@ -333,12 +339,23 @@ export function useDeviceToken() {
       }
       if (!tokenData.access_token) throw new Error('alarm-token: access_token 欠落')
 
-      // tenant の食い違いは拒否しない (発行元 auth-worker の判断を尊重、warn のみ)
+      // tenant の食い違いは拒否しない (発行元 auth-worker の判断を尊重)。
+      // **出し分けるのは、2 つがまったく別の事象だから** (冒頭 doc の #552 の項)。
+      // 未設定を warn にすると常時鳴り、**下の本物の異常を隠す**
       const issuedTenantId = tokenData.tenant_id
-      if (typeof issuedTenantId === 'string' && issuedTenantId !== deviceTenantId.value) {
-        console.warn(
-          `[useDeviceToken] alarm-token の tenant_id (${issuedTenantId}) が deviceTenantId (${deviceTenantId.value}) と食い違います`,
-        )
+      const registeredTenantId = deviceTenantId.value
+      if (typeof issuedTenantId === 'string' && issuedTenantId !== registeredTenantId) {
+        if (registeredTenantId) {
+          console.warn(
+            `[useDeviceToken] 端末の登録先と発行元が食い違っています — この端末は tenant ${registeredTenantId} に登録されていますが、alarm-token は tenant ${issuedTenantId} で発行されました (拒否はしません)`,
+          )
+        }
+        else {
+          // 平常運転。CoreS3 に紐づく共用 PC はブラウザ側の端末登録を通らない
+          console.debug(
+            `[useDeviceToken] ブラウザ側の端末登録なしで alarm-token を受けました (tenant ${issuedTenantId})`,
+          )
+        }
       }
 
       const ttl = typeof tokenData.expires_in === 'number' ? tokenData.expires_in : CORE_S3_DEFAULT_TTL_SECONDS
