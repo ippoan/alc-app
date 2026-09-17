@@ -630,6 +630,18 @@ async function onMeasurementResult(result: MeasurementResult) {
   sendResult(result)
 }
 
+/**
+ * フッタに「キャンセル」を出すか (Refs ippoan/rust-alc-api#644)。
+ *
+ * **`result` では出さない。** あの段では測定が**もう保存されている**ので、
+ * 「キャンセル」と書くと**記録を取り消せるように読める** (実際は待機画面へ戻るだけ)。
+ * しかも `ResultCard` が同じ `reset()` を**「次の測定へ」**として既に出しているので、
+ * 退路も失われない。
+ *
+ * `nfc` で出さないのは従来どおり (やめる対象の流れがまだ無い)。
+ */
+const showCancel = computed(() => step.value !== 'nfc' && step.value !== 'result')
+
 // リセット
 function reset() {
   step.value = 'nfc'
@@ -766,11 +778,12 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       <div v-if="landscape" class="mt-auto pt-2">
         <div class="flex flex-wrap justify-center gap-4">
           <button
-            v-if="step !== 'nfc'"
+            v-if="showCancel"
+            data-testid="footer-cancel-landscape"
             class="text-gray-500 hover:text-gray-700 text-sm"
             @click="reset"
           >
-            最初からやり直す
+            キャンセル
           </button>
           <NuxtLink to="/register" class="text-blue-600 hover:underline text-sm">
             顔登録
@@ -973,6 +986,20 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             @submit="onManualMedicalSubmit"
             @skip="onMedicalSkip"
           />
+
+          <!-- 点呼そのものをやめて待機画面へ戻る (Refs ippoan/rust-alc-api#644)。
+               **タブの外に置く** — BLE タブ / 手動入力タブのどちらでも同じ位置に出す
+               (「次へ」「スキップ」は BleStatus / ManualMedicalInput の中にあり、
+               片方に足すともう片方で出ない)。
+               **押すのは既存の `reset()`。新しい経路を作らない** —
+               打刻は取り消さない (NFC の段は通過済みで、打刻は事実として起きている) -->
+          <button
+            data-testid="medical-cancel"
+            class="w-full mt-4 px-4 py-3 text-gray-500 hover:text-gray-700 text-sm"
+            @click="reset"
+          >
+            キャンセル
+          </button>
         </div>
       </div>
 
@@ -1075,11 +1102,12 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
     <footer v-if="!landscape" class="w-full max-w-md py-4">
       <div class="flex justify-center gap-4">
         <button
-          v-if="step !== 'nfc'"
+          v-if="showCancel"
+          data-testid="footer-cancel"
           class="text-gray-500 hover:text-gray-700 text-sm"
           @click="reset"
         >
-          最初からやり直す
+          キャンセル
         </button>
         <NuxtLink to="/register" class="text-blue-600 hover:underline text-sm">
           顔登録
