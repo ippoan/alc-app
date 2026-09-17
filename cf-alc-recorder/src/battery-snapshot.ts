@@ -15,6 +15,7 @@
  * 未接続 device・command_result timeout は best-effort で silent skip する
  * (crash_log のような loud fail は不要 — 診断値の欠測は次周期で埋まる)。
  */
+import { hubStub } from "./hub-stub";
 
 /** auth-worker `/internal/hub-devices` が返す最小限の device 参照。 */
 export interface HubDeviceRef {
@@ -134,7 +135,7 @@ async function snapshotOneDevice(
   deviceId: string,
   nowMs: number,
 ): Promise<void> {
-  const stub = env.RECORDER_HUB.get(env.RECORDER_HUB.idFromName(tenantId));
+  const stub = hubStub(env, tenantId);
 
   let commandRes: Response;
   try {
