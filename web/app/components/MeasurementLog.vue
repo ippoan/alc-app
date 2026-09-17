@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { getEmployees } from '~/utils/api'
 import { getVideo, type VideoRecord } from '~/utils/video-store'
+import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 
 const props = defineProps<{
   sidebar?: boolean
@@ -85,24 +86,6 @@ function statusColor(status: string) {
     case 'synced': return 'bg-green-100 text-green-800'
     case 'pending': return 'bg-yellow-100 text-yellow-800'
     case 'failed': return 'bg-red-100 text-red-800'
-    default: return 'bg-gray-100 text-gray-800'
-  }
-}
-
-function resultLabel(type: string) {
-  switch (type) {
-    case 'normal': return '正常'
-    case 'over': return '基準超'
-    case 'error': return 'エラー'
-    default: return type
-  }
-}
-
-function resultColor(type: string) {
-  switch (type) {
-    case 'normal': return 'bg-green-100 text-green-800'
-    case 'over': return 'bg-red-100 text-red-800'
-    case 'error': return 'bg-yellow-100 text-yellow-800'
     default: return 'bg-gray-100 text-gray-800'
   }
 }
@@ -242,8 +225,8 @@ onMounted(() => {
                         <td class="px-2 py-1.5 text-gray-700">{{ employeeName(item.result.employeeId) }}</td>
                         <td class="px-2 py-1.5 text-right text-gray-700 tabular-nums">{{ item.result.alcoholValue.toFixed(3) }}</td>
                         <td class="px-2 py-1.5 text-center">
-                          <span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium" :class="resultColor(item.result.resultType)">
-                            {{ resultLabel(item.result.resultType) }}
+                          <span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium" :class="alcoholResultClass(item.result.resultType)">
+                            {{ alcoholResultLabel(item.result.resultType) }}
                           </span>
                         </td>
                         <td class="px-2 py-1.5 text-center">
@@ -375,9 +358,9 @@ onMounted(() => {
                     <td class="px-2 py-1.5 text-center">
                       <span
                         class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                        :class="resultColor(item.result.resultType)"
+                        :class="alcoholResultClass(item.result.resultType)"
                       >
-                        {{ resultLabel(item.result.resultType) }}
+                        {{ alcoholResultLabel(item.result.resultType) }}
                       </span>
                     </td>
                     <td class="px-2 py-1.5 text-right text-gray-700 tabular-nums">

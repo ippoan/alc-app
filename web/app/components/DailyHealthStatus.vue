@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DailyHealthRow, DailyHealthResponse } from '~/types'
 import { getDailyHealthStatus } from '~/utils/api'
+import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 
 const data = ref<DailyHealthResponse | null>(null)
 const loading = ref(false)
@@ -26,6 +27,16 @@ onMounted(() => {
   refreshTimer = setInterval(load, 60_000)
 })
 onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
+
+// pass / fail は遠隔点呼だけの値で helper に無いのでここに残す
+function alcoholLabel(r: string) {
+  const extra: Record<string, string> = { pass: '正常', fail: '検出' }
+  return extra[r] ?? alcoholResultLabel(r)
+}
+
+function alcoholClass(r: string) {
+  return alcoholResultClass(r === 'pass' ? 'normal' : r)
+}
 
 function formatTime(d: string | null) {
   if (!d) return '-'
@@ -205,12 +216,10 @@ function rowBg(row: DailyHealthRow): string {
               <template v-if="row.alcohol_result">
                 <span
                   class="px-1.5 py-0.5 rounded text-xs font-medium"
-                  :class="row.alcohol_result === 'pass' || row.alcohol_result === 'normal'
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-red-100 text-red-700'"
+                  :class="alcoholClass(row.alcohol_result)"
                 >
                   {{ row.alcohol_value != null ? row.alcohol_value.toFixed(2) : '' }}
-                  {{ row.alcohol_result === 'pass' || row.alcohol_result === 'normal' ? '正常' : '超過' }}
+                  {{ alcoholLabel(row.alcohol_result) }}
                 </span>
               </template>
               <span v-else class="text-gray-300">-</span>

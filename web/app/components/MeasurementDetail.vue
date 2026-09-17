@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ApiMeasurement } from '~/types'
+import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 
 defineProps<{
   measurement: ApiMeasurement
@@ -31,24 +32,6 @@ function formatDate(iso: string) {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
-}
-
-function resultLabel(type: string) {
-  switch (type) {
-    case 'normal': return '正常'
-    case 'over': return '基準超'
-    case 'error': return 'エラー'
-    default: return type
-  }
-}
-
-function resultColor(type: string) {
-  switch (type) {
-    case 'normal': return 'bg-green-100 text-green-800'
-    case 'over': return 'bg-red-100 text-red-800'
-    case 'error': return 'bg-yellow-100 text-yellow-800'
-    default: return 'bg-gray-100 text-gray-800'
-  }
 }
 
 function statusLabel(m: ApiMeasurement) {
@@ -125,9 +108,9 @@ function statusColor(m: ApiMeasurement) {
             <span
               v-if="measurement.result_type"
               class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-              :class="resultColor(measurement.result_type)"
+              :class="alcoholResultClass(measurement.result_type)"
             >
-              {{ resultLabel(measurement.result_type) }}
+              {{ alcoholResultLabel(measurement.result_type) }}
             </span>
             <span v-else class="text-gray-400 text-xs">-</span>
           </div>

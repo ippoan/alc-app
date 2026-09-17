@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readAlcohol, toAlcoholReading } from '~/utils/alcohol'
+import { readAlcohol, toAlcoholReading, alcoholResultLabel, alcoholResultClass } from '~/utils/alcohol'
 
 describe('readAlcohol', () => {
   it('CoreS3 の payload (正常) を読む', () => {
@@ -62,5 +62,29 @@ describe('toAlcoholReading', () => {
   it('result が無い (null) → null', () => {
     expect(toAlcoholReading(null)).toBeNull()
     expect(toAlcoholReading({ value: 0.1, result: null, useCount: 1 })).toBeNull()
+  })
+})
+
+describe('alcoholResultLabel', () => {
+  it('normal / over / error の表示語', () => {
+    expect(alcoholResultLabel('normal')).toBe('正常')
+    expect(alcoholResultLabel('over')).toBe('超過')
+    expect(alcoholResultLabel('error')).toBe('測定エラー')
+  })
+
+  it('未知の値はそのまま出す', () => {
+    expect(alcoholResultLabel('pass')).toBe('pass')
+  })
+})
+
+describe('alcoholResultClass', () => {
+  it('正常は緑、吹込不良 (error) は黄、超過は赤 (一覧で over と error を見分ける)', () => {
+    expect(alcoholResultClass('normal')).toBe('bg-green-100 text-green-800')
+    expect(alcoholResultClass('error')).toBe('bg-yellow-100 text-yellow-800')
+    expect(alcoholResultClass('over')).toBe('bg-red-100 text-red-800')
+  })
+
+  it('未知の値は赤に倒す (見落とすより目立たせる)', () => {
+    expect(alcoholResultClass('pass')).toBe('bg-red-100 text-red-800')
   })
 })

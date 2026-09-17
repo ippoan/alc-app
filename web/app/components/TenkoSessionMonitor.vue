@@ -2,6 +2,7 @@
 import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
 import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 import { expiryTone, EXPIRY_TONE_CLASS, checkLicenseExpiryFromString, type ExpiryTone } from '~/utils/license'
 
 const emit = defineEmits<{ changed: [] }>()
@@ -249,8 +250,9 @@ function isActive(s: TenkoSession) {
 
 function alcoholLabel(r: string | null) {
   if (!r) return '-'
-  const map: Record<string, string> = { pass: '正常', fail: '検出', normal: '正常', over: '基準超', error: 'エラー' }
-  return map[r] || r
+  // pass / fail は遠隔点呼だけの値で helper に無いのでここに残す
+  const extra: Record<string, string> = { pass: '正常', fail: '検出' }
+  return extra[r] ?? alcoholResultLabel(r)
 }
 
 /**
@@ -399,7 +401,7 @@ onMounted(() => { loadEmployees(); fetchData() })
               <td class="px-4 py-3 text-center">
                 <span v-if="s.alcohol_result"
                   class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-                  :class="s.alcohol_result === 'pass' || s.alcohol_result === 'normal' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                  :class="alcoholResultClass(s.alcohol_result === 'pass' ? 'normal' : s.alcohol_result)">
                   {{ alcoholLabel(s.alcohol_result) }}
                 </span>
                 <span v-else class="text-gray-400 text-xs">-</span>

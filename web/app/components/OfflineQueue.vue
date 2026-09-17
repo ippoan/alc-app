@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { getEmployees } from '~/utils/api'
 import { estimateDbSize } from '~/utils/offline-queue'
+import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 
 const {
   queueItems,
@@ -71,24 +72,6 @@ function formatDate(iso: string) {
   })
 }
 
-function resultLabel(type: string) {
-  switch (type) {
-    case 'normal': return '正常'
-    case 'over': return '基準超'
-    case 'error': return 'エラー'
-    default: return type
-  }
-}
-
-function resultColor(type: string) {
-  switch (type) {
-    case 'normal': return 'bg-green-100 text-green-800'
-    case 'over': return 'bg-red-100 text-red-800'
-    case 'error': return 'bg-yellow-100 text-yellow-800'
-    default: return 'bg-gray-100 text-gray-800'
-  }
-}
-
 onMounted(() => {
   loadEmployees()
   refreshQueue()
@@ -156,9 +139,9 @@ onMounted(() => {
               <td class="px-4 py-3 text-center">
                 <span
                   class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-                  :class="resultColor(item.result.resultType)"
+                  :class="alcoholResultClass(item.result.resultType)"
                 >
-                  {{ resultLabel(item.result.resultType) }}
+                  {{ alcoholResultLabel(item.result.resultType) }}
                 </span>
               </td>
               <td class="px-4 py-3 text-center">
