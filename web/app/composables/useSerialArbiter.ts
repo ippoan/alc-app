@@ -227,6 +227,54 @@ async function closePortQuietly(port: SerialPort): Promise<void> {
   await port.close()
 }
 
+/**
+ * unload の後始末を 1 回だけ走らせるための印。
+ * `pagehide` と `beforeunload` は**両方**発火する (app.vue は既に両方張っている)。
+ */
+let unloadClosed = false
+
+/**
+ * ページを閉じる / 読み込み直すときに、arbiter が握っているポートを
+ * **`closePortQuietly` と同じ順序 (RTS → DTR) で**閉じる
+ * (Refs ippoan/rust-alc-api#644)。
+ *
+ * # なぜ要るか
+ *
+ * ESP32-S3 の USB-Serial-JTAG は「DTR=0 かつ RTS=1」で chip reset がかかる
+ * (`closePortQuietly` の doc、Refs ippoan/alc-app#199)。**リロード時の close は
+ * ブラウザ任せ**でこの順序を守らないため、**ページを読み込み直すたびに CoreS3 が
+ * 再起動する** — 実機で画面の点滅を目視、`boot_history` が 8/8 `reset=usb`。
+ * 再起動すると WS が切れ、NFC が初期化し直され、時計も引き直される。
+ *
+ * つまり `#199` の対策は既に在るのに、**一番起きる場面 (リロード) だけ
+ * その経路を通っていなかった**。
+ *
+ * # 何を閉じ、何を閉じないか
+ *
+ * `sessions` は arbiter が握っているポートだけ = **VID 0x303A (ESP32-S3)**。
+ * CoreS3 も警告デバイス (Atom VoiceS3R) も同じ経路で、**どちらも同じ reset 条件を
+ * 持つ**ので両方まとめて落として構わない。FC-1200 (アルコール検知器) は
+ * `useFc1200Serial` が `!isArbitratedPort(p)` で別に開いており `sessions` に
+ * 入らないので触らない。
+ *
+ * # 待てないことを前提にする
+ *
+ * `pagehide` は非同期の完了を保証しない。**間に合わなくてもページを壊さない**
+ * ことだけを守る (close の失敗は握り潰す — ページはどのみち消える)。
+ * 間に合えば `setSignals` が 2 本先に出るので reset の条件を踏まない。
+ */
+export function closeArbitratedPortsForUnload(): void {
+  if (unloadClosed) return
+  unloadClosed = true
+  for (const s of sessions) {
+    // 受信ループを止める (pump の while が次の read を待たない)
+    s.active = false
+    // **await しない。** reader が lock を持ったままなので port.close() は
+    // 失敗しうるが、**その前の setSignals 2 本が本体**なので構わない
+    void closePortQuietly(s.port).catch(() => { /* ページが消えるので何もできない */ })
+  }
+}
+
 export function useSerialArbiter() {
   const { ports, refreshPorts, requestNewPort } = useSerialDeviceManager()
 

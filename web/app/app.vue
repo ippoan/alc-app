@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { StagingFooter, VersionBadge } from '@ippoan/auth-client'
 import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
+import { closeArbitratedPortsForUnload } from '~/composables/useSerialArbiter'
 
 const { init, isLoading } = useAuth()
 const { isAndroidApp } = useFingerprint()
@@ -44,13 +45,28 @@ onMounted(async () => {
   // 利用者の F5 / タブ閉じでも、握っている警告デバイス / CoreS3 へ grace を送っておく (best-effort。
   // 書き込みが reload に間に合わないこともあるが、間に合えば 45 秒は鳴らない。Refs ippoan/alc-app-s3#192)
   const alarm = useAlarmDevice()
+  /**
+   * unload の後始末。**grace を送ってから**ポートを閉じる — 順序が逆だと
+   * 閉じたポートへ書こうとして grace が届かない。
+   *
+   * ポートを閉じるのは ESP32-S3 の chip reset を避けるため。ブラウザ任せの close は
+   * 「DTR=0 かつ RTS=1」の瞬間を作り、**読み込み直すたびに CoreS3 を再起動させる**
+   * (Refs ippoan/rust-alc-api#644、`closeArbitratedPortsForUnload` の doc)。
+   *
+   * `pagehide` と `beforeunload` は**両方**発火するが、`closeArbitratedPortsForUnload`
+   * 自身が 1 回しか走らない。
+   */
+  const onUnload = (): void => {
+    alarm.notifyIntentionalReload()
+    closeArbitratedPortsForUnload()
+  }
   window.addEventListener('pagehide', (e) => {
     console.log(`[RELOAD-DETECT] pagehide persisted=${e.persisted} at ${stamp()}`)
-    alarm.notifyIntentionalReload()
+    onUnload()
   })
   window.addEventListener('beforeunload', () => {
     console.log(`[RELOAD-DETECT] beforeunload at ${stamp()}`)
-    alarm.notifyIntentionalReload()
+    onUnload()
   })
 
   await init()
