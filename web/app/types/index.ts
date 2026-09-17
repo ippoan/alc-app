@@ -36,7 +36,25 @@ export interface MeasurementResult {
 export interface NfcReadEvent {
   type: 'nfc_read'
   employee_id: string
+  /**
+   * どの経路が読んだか (Refs ippoan/rust-alc-api#644)。
+   *
+   * **`'cores3'` はハブ端末 (CoreS3) が読んだ = サーバ側で打刻が既に記録されている。**
+   * CoreS3 は読めたタッチを全部 uplink へ積む (alc-app-s3 `timecard::punch_record`) ので、
+   * ブラウザが重ねて打刻すると**同じ 1 タップが 2 行**になる。
+   *
+   * **`'bridge'` は NFC ブリッジ (WebSocket 9876) が読んだ = 誰も打刻していない。**
+   * ブリッジの先に CoreS3 は居ないので、**ブラウザが打たないと打刻が消える**。
+   * WebSerial の無い環境 (Android WebView) はこちらしか無い。
+   *
+   * **必須にしてある。** optional にすると新しい発火元が黙って打刻を落とす /
+   * 二重にする側へ倒れる。
+   */
+  source: NfcReadSource
 }
+
+/** [`NfcReadEvent.source`] の値。 */
+export type NfcReadSource = 'cores3' | 'bridge'
 
 /** NFC 免許証読み取りイベント */
 export interface NfcLicenseReadEvent {

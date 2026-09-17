@@ -1293,3 +1293,62 @@ describe('NormalMeasurement — 顔データの同期を待たない', () => {
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// 誰が読んだかで打刻を出し分ける (Refs ippoan/rust-alc-api#644)
+//
+// CoreS3 は読めたタッチを全部 uplink へ積む (alc-app-s3 timecard::punch_record) ので、
+// ハブが読んだタッチをブラウザが重ねて打つと**同じ 1 タップが 2 行**になる。
+// 逆に NFC ブリッジ (9876) の先に CoreS3 は居ないので、**ブラウザが打たないと消える** —
+// WebSerial の無い Android 版が入ったとき、ここが唯一の打刻口になる。
+// ---------------------------------------------------------------------------
+
+describe('NormalMeasurement — 読み取り経路による打刻の出し分け', () => {
+  /** source 付きで read を発火させる */
+  async function touchFrom(
+    wrapper: Awaited<ReturnType<typeof mountNfcStep>>,
+    nfcId: string,
+    source?: 'cores3' | 'bridge',
+  ) {
+    wrapper.findComponent(NfcStatusStub).vm.$emit('read', nfcId, undefined, source)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+  }
+
+  it("★ source: 'bridge' の読み取りでは打刻する (ブリッジの先に CoreS3 が居ない)", async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    punchTimecardMock.mockClear()
+
+    await touchFrom(wrapper, '2601012901010', 'bridge')
+
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it("★ source: 'cores3' の読み取りでは打刻しない (ハブが既に記録している)", async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    punchTimecardMock.mockClear()
+
+    await touchFrom(wrapper, '2601012901010', 'cores3')
+
+    expect(punchTimecardMock).not.toHaveBeenCalled()
+    // **段は従来どおり進む** — 打たないだけで導線は変えない
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('source が無い読み取りでは打刻する (判断材料が無いなら消さない側へ倒す)', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    punchTimecardMock.mockClear()
+
+    await touchFrom(wrapper, '2601012901010')
+
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})

@@ -89,7 +89,7 @@ function emitBridgeLicense(cardId: string) {
     cb({ type: 'nfc_license_read', card_type: 'driver_license', card_id: cardId, atr: '', expiry_date: cardId })
   }
   for (const cb of [...wsCallbacks.read]) {
-    cb({ type: 'nfc_read', employee_id: cardId.substring(10, 26) })
+    cb({ type: 'nfc_read', employee_id: cardId.substring(10, 26), source: 'bridge' })
   }
 }
 
@@ -203,7 +203,8 @@ describe('useNfcReader', () => {
       expiry_date: CARD_ID,
       atr: '',
     })
-    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY })
+    // **CoreS3 直結の読み取りは source: 'cores3'** = サーバ側で打刻が既に入っている
+    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'cores3' })
   })
 
   it('組み立てた 26 桁は utils/license.ts の桁の契約を満たす', async () => {
