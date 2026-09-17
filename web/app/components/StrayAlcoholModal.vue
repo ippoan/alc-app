@@ -52,7 +52,7 @@
  * # 消える条件 (4 つとも close() を通る)
  *
  * - 「閉じる」/ 背景のタップ
- * - 60 秒 (AUTO_CLOSE_MS。IcPunchAlcoholPrompt の FRESH_WINDOW_MS と同値)
+ * - 60 秒 (AUTO_CLOSE_MS)
  * - **`measuring` に入った** (段の話。`stage` の `measuring` とは別物)
  * - **`stage` が `idle` / `waiting_connection` になった**
  *
@@ -65,7 +65,13 @@
 import type { StrayAlcoholReading, NormalMeasurementStep, Fc1200State } from '~/types'
 import { alcoholResultLabel, alcoholResultClass } from '~/utils/alcohol'
 
-/** 出しておく時間。これを過ぎたら黙って消える (IcPunchAlcoholPrompt と同値) */
+/**
+ * 出しておく時間。これを過ぎたら黙って消える (ユーザー決定)。
+ *
+ * **`IcPunchAlcoholPrompt` の `FRESH_WINDOW_MS` (10 秒) とは別物。**
+ * あちらは**押させるボタン**なので、立ち去った人のぶんが残らないよう短い。
+ * こちらは**知らせるだけ**なので長くてよい。揃える理由は無い。
+ */
 const AUTO_CLOSE_MS = 60_000
 
 /**
