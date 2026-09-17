@@ -21,10 +21,14 @@ mockNuxtImport('useCoreS3Serial', () => () => ({ onEvent: onEventMock }))
 // --- useTimecardCardIndex のモック (台帳の引き当てだけ) ---
 const resolveMock = vi.fn<(cardId: string) => string | null>()
 const restoreMock = vi.fn(async () => {})
+const startPeriodicRefreshMock = vi.fn()
+const stopPeriodicRefreshMock = vi.fn()
 mockNuxtImport('useTimecardCardIndex', () => () => ({
   resolve: resolveMock,
   restore: restoreMock,
   refresh: vi.fn(async () => {}),
+  startPeriodicRefresh: startPeriodicRefreshMock,
+  stopPeriodicRefresh: stopPeriodicRefreshMock,
 }))
 
 import { useHubTimecardPunch } from '~/composables/useHubTimecardPunch'
@@ -51,6 +55,8 @@ describe('useHubTimecardPunch', () => {
     onEventMock.mockClear()
     unsubscribeMock.mockClear()
     restoreMock.mockClear()
+    startPeriodicRefreshMock.mockClear()
+    stopPeriodicRefreshMock.mockClear()
     resolveMock.mockReset()
     resolveMock.mockReturnValue('emp-1')
   })
@@ -123,6 +129,14 @@ describe('useHubTimecardPunch', () => {
     expect(onEventMock).toHaveBeenCalledTimes(1)
     app.unmount()
     expect(unsubscribeMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ 定期同期を start / stop する (取り消されたカードを消す経路)', () => {
+    const [, app] = withSetup(() => useHubTimecardPunch(resolveName))
+    expect(startPeriodicRefreshMock).toHaveBeenCalledTimes(1)
+    expect(stopPeriodicRefreshMock).not.toHaveBeenCalled()
+    app.unmount()
+    expect(stopPeriodicRefreshMock).toHaveBeenCalledTimes(1)
   })
 
   // -------------------------------------------------------------------------

@@ -97,9 +97,13 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
 
   onMounted(() => {
     void cards.restore()
+    // 経過時間での定期同期。**取り消されたカードを手元から消す唯一の経路**
+    // (`useTimecardCardIndex` の doc 参照)
+    cards.startPeriodicRefresh()
     unsubscribe = coreS3.onEvent(onEvent)
   })
   onUnmounted(() => {
+    cards.stopPeriodicRefresh()
     unsubscribe?.()
     unsubscribe = null
   })
