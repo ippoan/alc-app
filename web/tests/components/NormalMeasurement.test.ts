@@ -1233,13 +1233,14 @@ describe('NormalMeasurement — 本人確認前のアルコール測定通知 (R
     wrapper.unmount()
   })
 
-  it('医療ステップ (measuring 前) まで進んだ後に届いても、その段のまま状態機械は動かない', async () => {
+  it('★ 医療ステップ (measuring 前) で届けば出す。それでも状態機械は動かない', async () => {
     getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
     const wrapper = await mountNfcStep()
     await touchToVehicle(wrapper, '2601012901010')
     await wrapper.find('[data-testid="vehicle-skip"]').trigger('click')
     await wrapper.vm.$nextTick()
-    // medical 段にいる (StrayAlcoholModal は nfc/choice でしか出ない)
+    // medical 段にいる。**「アルコールチェックのボタンを押した後」も出す**のが
+    // ユーザー要望 (Refs ippoan/rust-alc-api#644)
     strayAlcoholRef.value = {
       seq: 1,
       value: 0.1,
@@ -1250,8 +1251,8 @@ describe('NormalMeasurement — 本人確認前のアルコール測定通知 (R
     }
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('[data-testid="stray-alcohol-modal"]').exists()).toBe(false)
-    // 段は medical のまま — 通知が届いたことで測定が新たに始まったりはしない
+    expect(wrapper.find('[data-testid="stray-alcohol-modal"]').exists()).toBe(true)
+    // **出しても段は medical のまま** — 通知が届いたことで測定が新たに始まったりはしない
     expect(vi.mocked(startMeasurement)).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })

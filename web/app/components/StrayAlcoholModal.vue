@@ -10,15 +10,30 @@
  *
  * # 出す条件
  *
- * 届いたその瞬間の段が `nfc` (待機画面) か `choice` (打刻直後・種別の選択画面)
- * のときだけ。`measuring` で届いた値は点呼の測定そのものであり `AlcMeasurement`
- * が扱う (= 前の運転者の残留値とも自動的に区別される)。
+ * 届いたその瞬間の段が **`nfc` / `choice` / `vehicle` / `medical`** のとき
+ * (ユーザー要望:「アルコールチェックのボタン押した段階で表示し始めて」)。
+ *
+ * **`measuring` と `result` では出さない。**`measuring` に届いた値は
+ * **点呼の測定そのもの**で `AlcMeasurement` が扱う — そこで出すと
+ * 「1 回の測定が 2 か所に出る」うえ、**点呼の測定を「点呼には含まれません」と
+ * 表示してしまう**。`result` も、FC-1200 が同じ結果を重ねて送った場合に
+ * 同じ誤りが起きうるので外してある。
+ *
+ * **この段の判定が唯一の見分け方。** CoreS3 が送る JSON は点呼でもそうでなくても
+ * 同一で、ハブ側の `hub_measurements` は**どちらも `session_id: null`** —
+ * 点呼への紐付けはタブレットが自分の `measurements` レコードで行う。
+ * `AlcMeasurement` は `v-if="step === 'measuring'"` の中にしか描画されないので、
+ * 「点呼として消費された」⟺「`measuring` に届いた」が厳密に成立する。
  *
  * # 消える条件 (3 つとも close() を通る)
  *
  * - 「閉じる」/ 背景のタップ
  * - 60 秒 (AUTO_CLOSE_MS。IcPunchAlcoholPrompt の FRESH_WINDOW_MS と同値)
- * - 段が動いた (nfc → choice、choice → medical 等)
+ * - **`measuring` に入った**
+ *
+ * **段が動いただけでは消さない。** 以前は無条件に消していたが、それだと
+ * **ボタンを押した瞬間 (`choice` → `vehicle`/`medical`) に消えて**
+ * 「押した段階から出し続ける」という要望が成立しない。
  *
  * `NormalMeasurement` の状態機械 (段の代入) には一切触らない。
  */
@@ -27,6 +42,12 @@ import { alcoholResultLabel, alcoholResultClass } from '~/utils/alcohol'
 
 /** 出しておく時間。これを過ぎたら黙って消える (IcPunchAlcoholPrompt と同値) */
 const AUTO_CLOSE_MS = 60_000
+
+/**
+ * 届いたときに出してよい段。**`measuring` / `result` を入れないこと** —
+ * 上の doc のとおり、点呼の測定を「点呼には含まれません」と表示してしまう。
+ */
+const SHOW_STEPS: readonly NormalMeasurementStep[] = ['nfc', 'choice', 'vehicle', 'medical']
 
 const props = defineProps<{
   /** 直近に届いた本人確認前のアルコール測定 (null = まだ 1 件も無い) */
@@ -54,13 +75,16 @@ function close() {
 watch(() => props.reading?.seq, (seq) => {
   close()
   if (seq === undefined) return
-  if (props.step !== 'nfc' && props.step !== 'choice') return
+  if (!SHOW_STEPS.includes(props.step)) return
   shown.value = true
   closeTimer = setTimeout(close, AUTO_CLOSE_MS)
 }, { immediate: true })
 
-// 段が動いたら消す (nfc → choice、choice → medical 等)
-watch(() => props.step, close)
+// **点呼の測定が始まったら引っ込める。** それ以外の段の動きでは消さない —
+// 消すと「ボタンを押した段階から出し続ける」が成立しない (上の doc)
+watch(() => props.step, (step) => {
+  if (step === 'measuring') close()
+})
 
 onUnmounted(clearCloseTimer)
 
