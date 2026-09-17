@@ -11,7 +11,7 @@
 // 並びは backend 固定で `created_at DESC`。総件数は返らない (ingest テーブルが
 // 伸び続けるため) ので、ページャは has_more と offset だけで組む。
 import { getEmployees, getMeasurements, listHubMeasurements } from '~/utils/api'
-import { readAlcohol, type AlcoholPayload } from '~/utils/alcohol'
+import { readAlcohol, alcoholResultLabel, alcoholResultClass, type AlcoholPayload } from '~/utils/alcohol'
 import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type ApiMeasurement, type HubMeasurement } from '~/types'
 
 const PAGE_SIZE = 50
@@ -244,19 +244,6 @@ function kindClass(k: string): string {
   if (k === 'fc1200_raw') return 'bg-gray-100 text-gray-600'
   if (k === 'license') return 'bg-green-100 text-green-800'
   return 'bg-blue-100 text-blue-800'
-}
-
-/** アルコール判定 (FC-1200 の result) の表示名。未知の値はそのまま出す。 */
-function alcoholResultLabel(result: string): string {
-  if (result === 'normal') return '正常'
-  if (result === 'over') return '超過'
-  if (result === 'error') return '測定エラー'
-  return result
-}
-
-/** アルコール判定の色。正常だけ緑、それ以外 (超過・吹込不良) は赤で目立たせる。 */
-function alcoholResultClass(result: string): string {
-  return result === 'normal' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
 }
 
 /** 免許証の nfc_id で引ける乗務員。引けなければ null (= alc に未登録)。 */

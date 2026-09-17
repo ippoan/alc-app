@@ -266,6 +266,21 @@ export interface AlcoholReading {
   measuredAt: Date
 }
 
+/**
+ * 本人確認の前 (待機画面 / 種別の選択画面) に届いたアルコール測定。
+ * 点呼の測定ではない。保存は CoreS3 ハブ側が既に行っている
+ * (`hub_measurements` に `session_id: null` で入る) ので、タブレットは
+ * 「測りましたよ」と知らせるだけ。紐付けも保存もしない。
+ */
+export interface StrayAlcoholReading extends AlcoholReading {
+  /** 届いた順の通し番号。同じ値が続けて届いても別物として扱うため */
+  seq: number
+}
+
+/** 通常点呼の段 (NormalMeasurement の状態機械) */
+export type NormalMeasurementStep
+  = 'nfc' | 'choice' | 'vehicle' | 'medical' | 'measuring' | 'result'
+
 /** BLE Gateway から受信する JSON メッセージ */
 export type BleGatewayMessage =
   | { type: 'ready'; device: string; version: string }

@@ -223,3 +223,7 @@ branches = true
 [[files]]
 path = "app/utils/card-kind.ts"
 branches = true
+
+[[files]]
+path = "app/composables/useStrayAlcohol.ts"
+branches = true

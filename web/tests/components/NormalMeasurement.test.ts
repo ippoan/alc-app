@@ -80,6 +80,13 @@ mockNuxtImport('useBleGateway', () => () => ({
   latestBloodPressure: readonly(ref(null)),
 }))
 
+// 本人確認前のアルコール測定の通知 (Refs ippoan/rust-alc-api#644)。値を差し替えられる
+// ref にして、モーダルが出ても状態機械 (step) が進まないことを確かめる
+const strayAlcoholRef = ref<import('~/types').StrayAlcoholReading | null>(null)
+mockNuxtImport('useStrayAlcohol', () => () => ({
+  latest: readonly(strayAlcoholRef),
+}))
+
 // PC の段を CoreS3 に送る口 (Refs #238)。ここでは呼ばれたかだけを見る
 const syncStepMock = vi.fn()
 const sendResultMock = vi.fn()
@@ -1128,6 +1135,79 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
     expect(wrapper.text()).not.toContain('佐藤花子')
     expect(vi.mocked(startMeasurement)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(startMeasurement)).toHaveBeenCalledWith('emp-1')
+    wrapper.unmount()
+  })
+})
+
+describe('NormalMeasurement — 本人確認前のアルコール測定通知 (Refs ippoan/rust-alc-api#644)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    strayAlcoholRef.value = null
+    isOnlineRef.value = true
+  })
+
+  it('待機画面 (nfc) で届くとモーダルを出す — 状態機械には触らない', async () => {
+    const wrapper = await mountNfcStep()
+    strayAlcoholRef.value = {
+      seq: 1,
+      value: 0.12,
+      unit: 'mg/L',
+      result: 'normal',
+      useCount: 3,
+      measuredAt: new Date(),
+    }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="stray-alcohol-modal"]').exists()).toBe(true)
+    // モーダルが出ても NFC ステップのまま — startMeasurement は呼ばれない
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(vi.mocked(startMeasurement)).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('種別の選択画面 (choice) で届いてもモーダルを出す', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    await touch(wrapper, '2601012901010')
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+
+    strayAlcoholRef.value = {
+      seq: 1,
+      value: 0.5,
+      unit: 'mg/L',
+      result: 'over',
+      useCount: 1,
+      measuredAt: new Date(),
+    }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="stray-alcohol-modal"]').exists()).toBe(true)
+    // NFC タッチによる 1 回だけ — 通知が届いたことで測定が新たに始まったりはしない
+    expect(vi.mocked(startMeasurement)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(updateMeasurement)).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('医療ステップ (measuring 前) まで進んだ後に届いても、その段のまま状態機械は動かない', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    await touchToVehicle(wrapper, '2601012901010')
+    await wrapper.find('[data-testid="vehicle-skip"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    // medical 段にいる (StrayAlcoholModal は nfc/choice でしか出ない)
+    strayAlcoholRef.value = {
+      seq: 1,
+      value: 0.1,
+      unit: 'mg/L',
+      result: 'normal',
+      useCount: 1,
+      measuredAt: new Date(),
+    }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="stray-alcohol-modal"]').exists()).toBe(false)
+    // 段は medical のまま — 通知が届いたことで測定が新たに始まったりはしない
+    expect(vi.mocked(startMeasurement)).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })
