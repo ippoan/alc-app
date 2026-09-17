@@ -57,6 +57,8 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
   - attr_list
   - md_in_html
   - tables
@@ -72,4 +74,5 @@ nav:
   - 運行管理者: admin/index.md
   - システム管理者: admin/sysadmin.md
   - 遠隔点呼: admin/remote-tenko.md
+  - 遠隔点呼 要件チェックリスト: admin/remote-tenko-checklist.md
   - ダウンロード: downloads.md
