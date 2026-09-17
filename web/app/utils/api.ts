@@ -259,9 +259,18 @@ export async function getEmployees(): Promise<ApiEmployee[]> {
   return request<ApiEmployee[]>('/api/employees')
 }
 
-/** NFC IDで乗務員を検索 */
+/**
+ * NFC ID で乗務員を検索する (Refs ippoan/rust-alc-api#644)。**NFC ID を URL
+ * (request log) に載せないよう POST** — 免許証 IC 由来の 16 桁が Worker / auth-worker /
+ * API / Cloud Run の各層のアクセスログと devtools に平文で残るのを避ける
+ * (`lookupCarInspection` と同じ判断)。NFC ID は console に出さない
+ * (simplify-reviewer の検査点)
+ */
 export async function getEmployeeByNfcId(nfcId: string): Promise<ApiEmployee> {
-  return request<ApiEmployee>(`/api/employees/by-nfc/${encodeURIComponent(nfcId)}`)
+  return request<ApiEmployee>('/api/employees/lookup', {
+    method: 'POST',
+    body: JSON.stringify({ nfc_id: nfcId }),
+  })
 }
 
 /** 社員番号で乗務員を検索 */
@@ -722,10 +731,6 @@ export async function listTimecardCards(employeeId?: string): Promise<TimecardCa
 
 export async function deleteTimecardCard(id: string): Promise<void> {
   await request<void>(`/api/timecard/cards/${id}`, { method: 'DELETE' })
-}
-
-export async function getTimecardCardByCardId(cardId: string): Promise<TimecardCard> {
-  return request<TimecardCard>(`/api/timecard/cards/by-card/${encodeURIComponent(cardId)}`)
 }
 
 /**

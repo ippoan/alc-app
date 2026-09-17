@@ -11,11 +11,10 @@
  *
  * # なぜ `card_id` を URL に載せないのか
  *
- * `GET /api/timecard/cards/by-card/{card_id}` は**カード ID を URL に載せる**ため、
- * アクセスログに IDm が恒久的に残る (既知の残件)。そもそも
- * `device-kiosk` role の allowlist に入っていないのでキオスクからは 403 になる
- * (`auth-worker/src/handlers/device-data-proxy.ts` の `KIOSK_ROUTES`)。
- * **台帳をまとめて 1 回引き、突き合わせはブラウザの中だけで行う。**
+ * カード 1 枚ずつを引く口は**カード ID を URL に載せる**ため、アクセスログに IDm が
+ * 恒久的に残っていた。**その口そのものが消えた** (client / server とも削除済み、
+ * Refs ippoan/rust-alc-api#644)。**台帳をまとめて 1 回引き、突き合わせはブラウザの
+ * 中だけで行う。**
  *
  * # なぜ IndexedDB なのか (メモリだけにしない)
  *

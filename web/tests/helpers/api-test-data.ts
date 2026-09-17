@@ -26,7 +26,6 @@ export const SEED_COMM_ITEM_ID = 'aaaaaaaa-000a-000a-000a-aaaaaaaaaaaa'
 export const SEED_GUIDANCE_ID = 'aaaaaaaa-000b-000b-000b-aaaaaaaaaaaa'
 export const SEED_REG_CODE = 'SEED-CODE'
 export const SEED_NFC_ID = 'NFC-SEED-001'
-export const SEED_CARD_NFC = 'NFC-SEED-CARD'
 
 // Disposable IDs for DELETE tests (seed.sql dddddddd-* prefix)
 export const DEL_EMPLOYEE_ID = 'dddddddd-0001-0001-0001-dddddddddddd'
