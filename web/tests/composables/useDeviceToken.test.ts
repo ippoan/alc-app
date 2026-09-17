@@ -589,6 +589,59 @@ describe('useDeviceToken (#434 step 3c)', () => {
       expect(nonceMock).toHaveBeenCalledTimes(2)
     })
 
+    // 食い違いの出し分け (Refs ippoan/rust-alc-api#644)。
+    // **未設定との食い違いは平常運転**なので警告にしない — 常時鳴ると読み飛ばす習慣がつき、
+    // 本物の異常 (テナントをまたいだトークン) が埋もれる。
+
+    it('★ 端末未登録 (deviceTenantId が未設定) なら warn を出さない — 共用 PC の平常運転', async () => {
+      coreS3Mock.isConnected.value = true
+      authMock.deviceTenantId.value = null
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({
+          ok: true,
+          json: () => Promise.resolve({ access_token: 's3r-jwt', token_type: 'Bearer', expires_in: 900, tenant_id: 'tenant-X' }),
+        }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      // **拒否はしない** (発行元の判断を尊重する既存の設計は変えていない)
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(warnSpy).not.toHaveBeenCalled()
+      expect(debugSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('★ 登録先と発行元が食い違うときだけ warn を出す (テナントをまたいだトークン = 異常)', async () => {
+      coreS3Mock.isConnected.value = true
+      authMock.deviceTenantId.value = 'tenant-A'
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+
+      const fetchMock = routeFetch({
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({
+          ok: true,
+          json: () => Promise.resolve({ access_token: 's3r-jwt', token_type: 'Bearer', expires_in: 900, tenant_id: 'tenant-B' }),
+        }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('s3r-jwt')
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      // 「どちらがどちら」が読み取れる文面にしておく
+      expect(String(warnSpy.mock.calls[0]![0])).toContain('登録先と発行元が食い違っています')
+    })
+
     it('alarm-token 応答の tenant_id が deviceTenantId と食い違っても拒否せず warn だけ (#552)', async () => {
       coreS3Mock.isConnected.value = true
       authMock.deviceTenantId.value = 'tenant-A'
