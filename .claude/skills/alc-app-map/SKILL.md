@@ -115,7 +115,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
   - URL: https://alc-signaling.ippoan.org (custom domain) / alc-signaling.m-tama-ramu.workers.dev
   - シークレット不要 (STUN P2P のみ。TURN は後日対応予定)。cam-room admin 接続の JWT 検証用に
     AUTH_WORKER service binding + INTERNAL_SHARED_SECRET (既存 Secrets Store 共有) を追加済み
-- **cf-alc-recorder (Cloudflare Workers)**: CI 経由 (`recorder-deploy.yml`: `npx vitest run` → staging / release deploy)。手動 fallback: `cd cf-alc-recorder && wrangler deploy`
+- **cf-alc-recorder (Cloudflare Workers)**: CI 経由 (`recorder-deploy.yml`: `npx vitest run` → staging / release deploy)。手動 fallback: **タグを checkout してから** `cd cf-alc-recorder && wrangler deploy` (本番 tree がタグとずれると、次のタグが前タグとの tree 比較で skip され本番に載らない)
 - **rust-alc-api (GCP Cloud Run)**: 別リポジトリで管理
 - **rust-nfc-bridge**: `v*` タグ push で GitHub Actions が自動リリース (Windows ビルド + MSI 作成 + GitHub Release にアップロード)
   - 手順: `Cargo.toml` の version を上げる → commit & push → `gh release create v0.x.x` → Actions が MSI を追加
