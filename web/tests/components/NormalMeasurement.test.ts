@@ -192,7 +192,7 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
   // 同じ画面に 2 本出ないよう、ここ (NormalMeasurement 内) の帯は削除済み — 表示条件の
   // テストは tests/components/DeviceUnregisteredBanner.test.ts へ移した。
 
-  it('免許証が乗務員に未登録 (by-nfc が失敗) なら赤枠に理由と次の操作を出す', async () => {
+  it('免許証が乗務員に未登録 (NFC 照会が失敗) なら赤枠に理由と次の操作を出す', async () => {
     getEmployeeByNfcIdMock.mockRejectedValue(new Error('404'))
     const wrapper = await mountNfcStep()
 

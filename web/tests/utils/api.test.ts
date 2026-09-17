@@ -29,7 +29,7 @@ import {
   // Equipment failures
   createFailure, listFailures, getFailure, resolveFailure, downloadFailuresCsv,
   // Timecard
-  createTimecardCard, listTimecardCards, deleteTimecardCard, getTimecardCardByCardId, punchTimecard,
+  createTimecardCard, listTimecardCards, deleteTimecardCard, punchTimecard,
   listTimePunches, downloadTimePunchesCsv,
   // Devices
   createDeviceRegistrationRequest, checkDeviceRegistrationStatus, claimDeviceRegistration,
@@ -73,7 +73,7 @@ import {
   SEED_MEASUREMENT_ID, SEED_SCHEDULE_ID, SEED_SESSION_ID,
   SEED_WEBHOOK_ID, SEED_FAILURE_ID, SEED_DEVICE_ID, SEED_TIMECARD_CARD_ID,
   SEED_CARRYING_ITEM_ID, SEED_COMM_ITEM_ID, SEED_GUIDANCE_ID,
-  SEED_REG_CODE, SEED_NFC_ID, SEED_CARD_NFC,
+  SEED_REG_CODE, SEED_NFC_ID,
   DEL_EMPLOYEE_ID, DEL_SCHEDULE_ID, DEL_WEBHOOK_ID, DEL_TIMECARD_ID,
   DEL_DEVICE_ID, DEL_CARRYING_ID, DEL_GUIDANCE_ID, DEL_COMM_ID,
   createScheduleBody, createEquipmentFailureBody, createWebhookBody,
@@ -659,13 +659,31 @@ describe('api', () => {
   })
 
   // ============================================================
+  // getEmployeeByNfcId (Refs ippoan/rust-alc-api#644)
+  // ============================================================
+
+  describe('getEmployeeByNfcId', () => {
+    it('POST /api/employees/lookup、NFC ID を body に JSON で載せる (URL には載せない)', async () => {
+      stubOk({})
+      await callApi(() => getEmployeeByNfcId(SEED_NFC_ID))
+
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/api/employees/lookup`)
+        expect(mockFetch.mock.calls[0][0]).not.toContain(SEED_NFC_ID)
+        expect(mockFetch.mock.calls[0][1].method).toBe('POST')
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body.nfc_id).toBe(SEED_NFC_ID)
+      })
+    })
+  })
+
+  // ============================================================
   // Simple GET functions (it.each)
   // ============================================================
 
   describe('simple GET functions', () => {
     it.each([
       ['getEmployees', () => getEmployees(), '/api/employees'],
-      ['getEmployeeByNfcId', () => getEmployeeByNfcId(SEED_NFC_ID), `/api/employees/by-nfc/${SEED_NFC_ID}`],
       ['getEmployeeByCode', () => getEmployeeByCode('E001'), '/api/employees/by-code/E001'],
       ['getEmployeeById', () => getEmployeeById(TEST_EMPLOYEE_ID), `/api/employees/${TEST_EMPLOYEE_ID}`],
       ['getFaceData', () => getFaceData(), '/api/employees/face-data'],
@@ -680,7 +698,6 @@ describe('api', () => {
       ['listBaselines', () => listBaselines(), '/api/tenko/health-baselines'],
       ['getBaseline', () => getBaseline(TEST_EMPLOYEE_ID), `/api/tenko/health-baselines/${TEST_EMPLOYEE_ID}`],
       ['getFailure', () => getFailure(SEED_FAILURE_ID), `/api/tenko/equipment-failures/${SEED_FAILURE_ID}`],
-      ['getTimecardCardByCardId', () => getTimecardCardByCardId(SEED_CARD_NFC), `/api/timecard/cards/by-card/${SEED_CARD_NFC}`],
       ['listDevices', () => listDevices(), '/api/devices'],
       ['listPendingDeviceRegistrations', () => listPendingDeviceRegistrations(), '/api/devices/pending'],
       ['getDeviceSettings', () => getDeviceSettings(SEED_DEVICE_ID), `/api/devices/settings/${SEED_DEVICE_ID}`],
