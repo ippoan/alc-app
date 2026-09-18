@@ -1188,6 +1188,137 @@ describe('useDeviceToken (#434 step 3c)', () => {
         expect(lastFailureDetail.value).toBe('no key')
       })
     })
+
+    // 画面 (自動点呼の入口) が「この端末で血圧が必須になるか」を先に知るための公開
+    // (Refs ippoan/alc-app#336)。3 状態を潰さない。
+    describe('signedBpBonded / refreshSignedBpBonded (#336)', () => {
+      const tokenRoutes = {
+        '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+        '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+      }
+
+      it('未試行なら null (不明)', async () => {
+        const useDeviceToken = await load()
+        expect(useDeviceToken().signedBpBonded.value).toBeNull()
+      })
+
+      it('BP=1 → true (ボンドあり)', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=1')
+        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signedBpBonded.value).toBe(true)
+      })
+
+      it('★ BP=0 → false (血圧計が無いと確認できた)。null (不明) と混ぜない', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=0')
+        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signedBpBonded.value).toBe(false)
+      })
+
+      it('★ 古いファーム (AUTH SIGN へフォールバック) → null (不明)。JWT は取れている', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async () => { throw new Error('ERR AUTH: unknown command') })
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signedBpBonded.value).toBeNull()
+      })
+
+      it('CoreS3 が繋がっていない → null (不明)', async () => {
+        coreS3Mock.isConnected.value = false
+        vi.stubGlobal('fetch', vi.fn())
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded, lastFailureStage } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('no-core-s3')
+        expect(signedBpBonded.value).toBeNull()
+      })
+
+      it('署名できても token 交換に失敗したら null (サーバにボンド状態が渡っていない)', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=0')
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) }),
+          '/device/alarm-token': () => ({ ok: false, status: 401, json: () => Promise.resolve({ error: 'invalid_alarm_token' }) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded, lastFailureStage } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('token-exchange')
+        expect(signedBpBonded.value).toBeNull()
+      })
+
+      it('★ refreshSignedBpBonded: cache が生きていても署名からやり直して確定させる', async () => {
+        // 1 回目は古いファーム扱い (不明) で JWT だけ取れる
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async () => { throw new Error('ERR AUTH: unknown command') })
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded, refreshSignedBpBonded } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signedBpBonded.value).toBeNull()
+
+        // CoreS3 が繋がり直し、今度は SIGNBP に答えた
+        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=0')
+        expect(await refreshSignedBpBonded()).toBe(false)
+        expect(signedBpBonded.value).toBe(false)
+      })
+
+      it('★ refreshSignedBpBonded: 抑止 (backoff) 中でも試し直す — 行き止まりを作らない', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=0')
+        // 1 回目は nonce で失敗させて backoff を立てる
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: false, status: 500, json: () => Promise.resolve({}) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, signedBpBonded, refreshSignedBpBonded, coreS3BackoffUntil } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(coreS3BackoffUntil.value).toBeGreaterThan(0)
+        expect(signedBpBonded.value).toBeNull()
+
+        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
+        expect(await refreshSignedBpBonded()).toBe(false)
+        expect(signedBpBonded.value).toBe(false)
+      })
+
+      it('refreshSignedBpBonded: やり直しても駄目なら null のまま (同じ画面に戻るだけ)', async () => {
+        coreS3Mock.isConnected.value = false
+        vi.stubGlobal('fetch', vi.fn())
+
+        const useDeviceToken = await load()
+        const { refreshSignedBpBonded, signedBpBonded } = useDeviceToken()
+
+        expect(await refreshSignedBpBonded()).toBeNull()
+        expect(signedBpBonded.value).toBeNull()
+        // CoreS3 の再探索まで含めてやり直している
+        expect(coreS3Mock.startupProbe).toHaveBeenCalled()
+      })
+    })
   })
 
 

@@ -33,6 +33,7 @@ const {
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
+  bpRequirementUnknown, retryBpRequirement,
   identifyEmployee, selectSchedule, proceedWithoutSchedule, onFaceAuthComplete,
   onAlcoholResult, onMedicalSubmit, onSelfDeclarationSubmit,
   onDailyInspectionSubmit, carryingItems, loadCarryingItems, onCarryingItemsSubmit,
@@ -504,7 +505,21 @@ onUnmounted(() => {
 
       <!-- Step 3: 顔認証 -->
       <div v-else-if="step === 'face_auth'" class="flex flex-col gap-4">
-        <div class="bg-white rounded-2xl p-4 shadow-sm">
+        <!--
+          血圧の要否が確定できない端末は、体温・血圧まで歩かせずここで止める (Refs #336)。
+          理由は上のグローバルエラーに出る (BP_REQUIREMENT_UNKNOWN_MESSAGE)。
+          「不明」は一時的なこともあるので、リロードなしでやり直せる導線を必ず残す。
+        -->
+        <div v-if="bpRequirementUnknown" class="bg-white rounded-2xl p-4 shadow-sm">
+          <h2 class="text-lg font-semibold text-gray-700 mb-4">血圧計: 未確認</h2>
+          <button
+            class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+            @click="retryBpRequirement"
+          >
+            もう一度試す
+          </button>
+        </div>
+        <div v-else class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">顔認証</h2>
           <!-- 顔が未登録: 顔写真なしで進める (審査中・却下はここまで来ない) -->
           <template v-if="faceSkippable">

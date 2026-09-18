@@ -11,6 +11,9 @@ import type { TenkoStep } from '~/composables/useTenkoKiosk'
 
 const step = ref<TenkoStep>('nfc')
 const proceedWithoutScheduleMock = vi.fn()
+// 血圧の要否が確定できず入口で止めているか (Refs ippoan/alc-app#336)
+const bpRequirementUnknown = ref(false)
+const retryBpRequirementMock = vi.fn()
 
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
@@ -33,6 +36,8 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   identifyEmployee: vi.fn(async () => {}),
   selectSchedule: vi.fn(async () => {}),
   proceedWithoutSchedule: proceedWithoutScheduleMock,
+  bpRequirementUnknown,
+  retryBpRequirement: retryBpRequirementMock,
   onFaceAuthComplete: vi.fn(),
   onAlcoholResult: vi.fn(),
   onMedicalSubmit: vi.fn(),
@@ -181,6 +186,37 @@ describe('TenkoKiosk — 体温・血圧ステップでスキップを出さな�
 })
 
 // 業務後は予定なしでも進められる (Refs ippoan/alc-app#322)
+describe('TenkoKiosk — 血圧の要否が確定できないときの顔認証画面 (Refs ippoan/alc-app#336)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'face_auth'
+    bpRequirementUnknown.value = false
+  })
+
+  it('確定していれば従来どおり顔認証を出す', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.text() === 'もう一度試す')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 不明なら顔認証を出さず、「もう一度試す」を出す (行き止まりを作らない)', async () => {
+    bpRequirementUnknown.value = true
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
+    const retry = wrapper.findAll('button').find(b => b.text() === 'もう一度試す')
+    expect(retry).toBeTruthy()
+
+    await retry!.trigger('click')
+    expect(retryBpRequirementMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})
+
 describe('TenkoKiosk — TenkoScheduleSelect の no-schedule を proceedWithoutSchedule へ配線する', () => {
   beforeEach(() => {
     vi.clearAllMocks()

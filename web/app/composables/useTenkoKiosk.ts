@@ -30,6 +30,15 @@ export type TenkoStep =
   | 'interrupted'
   | 'cancelled'
 
+/**
+ * 業務前の自動点呼を入口で止めたときの文言 (Refs ippoan/alc-app#336)。
+ * `BleStatus.vue` の「血圧計: 未確認 (…)」と同じ語を使い、言い回しを増やさない。
+ * **次の行動 (もう一度試す / 運行管理者に連絡) を必ず書く。**
+ */
+export const BP_REQUIREMENT_UNKNOWN_MESSAGE
+  = 'この端末では自動点呼の業務前を実施できません (血圧計: 未確認)。'
+    + '「もう一度試す」を押して確認し直すか、運行管理者に連絡してください。'
+
 export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
   /**
    * 最初から遠隔点呼として始めたか。**setup の 1 回だけで決まる定数**で、
@@ -49,6 +58,16 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
    * **画面の「遠隔かどうか」の判定はすべてこれ 1 つを見る。**
    */
   const isRemote = computed(() => remoteMode || escalatedToRemote.value)
+  /**
+   * サーバが `devices.bp_enabled` を引くための端末識別子 (Refs ippoan/alc-app#322)。
+   * CoreS3 端末では `devices` に行が無いので**構造的に常に空**。
+   */
+  const { deviceId } = useAuth()
+  /** 署名つきで auth-worker へ渡したボンド状態 (#336)。null = 不明 */
+  const { signedBpBonded, refreshSignedBpBonded } = useDeviceToken()
+  /** この端末で血圧を出せる見込みがあるか (BleStatus の `showBpUi` と同じ 2 つ、#336) */
+  const { bpEnabled } = useBloodPressureSetting()
+  const { hasBpHardware } = useBleGateway()
   const step = ref<TenkoStep>('nfc')
   const employeeId = ref('')
   const employeeName = ref('')
@@ -164,12 +183,71 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     step.value = 'face_auth'
   }
 
+  /**
+   * 業務前の自動点呼で、血圧の要否が確定できないか (Refs ippoan/alc-app#336)。
+   *
+   * サーバは「不明」を安全側 (血圧必須) に倒すので、このまま進めると体温を送った
+   * 時点で必ず 400 (`bp_required`) になる。**体温を測る意味が無いのに測らせない。**
+   *
+   * - **遠隔点呼・業務後は対象外** — 既定を今までどおりに保つ (止めるのは業務前の自動点呼だけ)
+   * - **`signedBpBonded === false` は通す** — 血圧計が無いと**確認できた**端末を
+   *   締め出さない (混ぜると #322 で踏んだ形になる)
+   * - **`deviceId` があれば止めない** — サーバが `devices.bp_enabled` を引けるので
+   *   行き止まりにならない
+   * - **血圧を出せる見込みがある端末は止めない** — 「不明」は「血圧必須」であって
+   *   「進めない」ではない。血圧を測れる端末は測って通れるので行き止まりではなく、
+   *   ここで締め出すと**古いファーム + 血圧計**の端末が今日できていることを失う。
+   *   条件は `BleStatus.vue` の `showBpUi` (= 血圧の入力欄が出るか) と同じ 2 つ —
+   *   **入力欄すら出ないまま血圧必須になる端末だけ**が行き止まり (issue の症状そのもの)。
+   *   測れるはずが測れなかったときは、体温・血圧の段の「遠隔点呼へ切り替え」が受け皿になる。
+   */
+  function isBpRequirementUnknown(): boolean {
+    if (remoteMode || tenkoType.value === 'post_operation') return false
+    if (deviceId.value) return false
+    if (signedBpBonded.value !== null) return false
+    return !bpEnabled.value && !hasBpHardware.value
+  }
+
+  /**
+   * 入口で止めたときの顔認証結果。「もう一度試す」で**続きから**再開するために持つ
+   * (非 null = いま入口で止まっている)。
+   */
+  const blockedFaceAuthResult = ref<FaceAuthResult | null>(null)
+  /** 血圧の要否が確定できず、業務前の自動点呼を入口で止めているか (#336) */
+  const bpRequirementUnknown = computed(() => blockedFaceAuthResult.value !== null)
+
+  /**
+   * ボンド状態を取り直して、確定したら止めた所から再開する (#336)。
+   * 「不明」は一時的なこともある (CoreS3 がその瞬間つながっていなかった等) ので、
+   * **リロードなしで復帰できる導線**を必ず残す。取り直しても不明なら同じ画面に戻るだけ。
+   */
+  async function retryBpRequirement() {
+    const pending = blockedFaceAuthResult.value
+    if (!pending) return
+    error.value = null
+    isLoading.value = true
+    try {
+      await refreshSignedBpBonded()
+    } finally {
+      isLoading.value = false
+    }
+    await onFaceAuthComplete(pending)
+  }
+
   // --- 顔認証完了 → セッション開始 + アルコール測定 ---
   async function onFaceAuthComplete(result: FaceAuthResult) {
     if (!result.verified) return
     // 業務後は予定が無くても進められる (selectedTenkoType='post_operation' が
     // proceedWithoutSchedule でセットされる)。業務前は引き続き予定必須
     if (!remoteMode && !selectedSchedule.value && tenkoType.value !== 'post_operation') return
+    // 血圧の要否が確定できない端末は、体温・血圧まで歩かせずここで止める (#336)。
+    // 無言では止めない — 理由と次の行動 (もう一度試す) を必ず出す
+    if (isBpRequirementUnknown()) {
+      blockedFaceAuthResult.value = result
+      error.value = BP_REQUIREMENT_UNKNOWN_MESSAGE
+      return
+    }
+    blockedFaceAuthResult.value = null
     error.value = null
     isLoading.value = true
 
@@ -239,7 +317,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     try {
       // 端末の血圧計有無 (devices.bp_enabled) をサーバが判定するための端末識別子。
       // bp_enabled 自体は送らない (フェイルクローズ設計、Refs ippoan/alc-app#322)
-      const { deviceId } = useAuth()
       const body: SubmitMedicalData = deviceId.value ? { ...data, device_id: deviceId.value } : data
       const s = await submitMedical(session.value.id, body)
       session.value = s
@@ -458,6 +535,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     safetyJudgment.value = null
     escalatedToRemote.value = false
     escalationReason.value = null
+    blockedFaceAuthResult.value = null
   }
 
   return {
@@ -479,6 +557,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     escalatedToRemote,
     escalationReason,
     isRemote,
+    bpRequirementUnknown,
 
     // Step indicator
     stepLabels,
@@ -490,6 +569,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     selectSchedule,
     proceedWithoutSchedule,
     onFaceAuthComplete,
+    retryBpRequirement,
     onAlcoholResult,
     onMedicalSubmit,
     onSelfDeclarationSubmit,
