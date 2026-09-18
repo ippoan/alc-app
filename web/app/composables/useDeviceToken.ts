@@ -30,9 +30,17 @@
  * 警告デバイス (VoiceS3R) は運行管理者の機器で LAN が無く、認証には使わない
  * (ユーザー決定。Refs ippoan/alc-app#234)。
  *
- * - 署名の取り方 (`AUTH SIGN <nonce>` → `AUTH SIG <pubkey> <sig>` parse) は
- *   `useDeviceLogin.ts` の `signAlarmDeviceNonce` を共有する (#214 と同じ firmware I/F。
- *   送り先は `useCoreS3Serial().request` を渡す)。
+ * - 署名の取り方は 2 段構え (#322-2、Refs ippoan/alc-app-s3#249)。まず
+ *   `AUTH SIGNBP <nonce>` → `AUTH SIGBP <pubkey> <sig> <bp>` (`bp` は血圧計が
+ *   ボンド済みなら `1`、未ボンドなら `0`) を試す (`signKioskNonce` がこのモジュールに
+ *   閉じて持つ — 管理者ログインと共有する `AUTH SIGN` とは別コマンドの独立した経路)。
+ *   古いファーム (`SIGNBP` 未対応) は未知コマンドとして reject するので、その場合は
+ *   **今までどおり** `AUTH SIGN <nonce>` → `AUTH SIG <pubkey> <sig>` parse
+ *   (`useDeviceLogin.ts` の `signAlarmDeviceNonce`、#214 と同じ firmware I/F。
+ *   送り先は `useCoreS3Serial().request` を渡す) にフォールバックし、この場合は
+ *   ボンド状態が「不明」であって「未ボンド」ではない — `/device/alarm-token` に
+ *   `bp_bonded` を送らない (`SIGNBP` が成功した場合だけ送る)。ボンド状態は CoreS3 の
+ *   署名対象に含まれる値をそのまま素通しするだけで、ブラウザ側では作らない・書き換えない。
  * - 同時呼び出しは 1 本にまとめる (`jwtInFlight`)。
  * - 失敗 (ERR / 401 `{error:"invalid_alarm_token"}` / 429 / タイムアウト / 通信エラー、
  *   いずれも HTTP status だけで判定する) したら `CORE_S3_BACKOFF_MS` の間 CoreS3 署名経路を
@@ -100,6 +108,18 @@ const STARTUP_TIMEOUT_MS = 3000
  * - `token-exchange`: auth-worker `/device/alarm-token` の交換
  */
 export type DeviceTokenFailureStage = 'no-core-s3' | 'nonce' | 'coreS3-sign' | 'token-exchange'
+
+/** キオスク用ボンド状態つき署名 (`AUTH SIGNBP`) の parse 結果 (#322-2)。 */
+interface KioskBondedSignature {
+  pubkey: string
+  sig: string
+  /** 血圧計がボンド済みか。`AUTH SIGNBP` が成功したときだけ得られる。 */
+  bpBonded: boolean
+}
+
+/** `AUTH SIGN` 系コマンドと同じ 10 秒 (useDeviceLogin.ts の AUTH_SIGN_TIMEOUT_MS と同値)。 */
+const AUTH_SIGNBP_TIMEOUT_MS = 10_000
+const AUTH_SIGNBP_MATCH_PREFIX = 'AUTH SIGBP '
 
 const isClient = typeof window !== 'undefined'
 
@@ -177,6 +197,59 @@ async function readErrorCode(res: { json: () => Promise<unknown> }): Promise<str
     return '-'
   }
 }
+
+/**
+ * `AUTH SIGBP <pubkey> <sig> <bp>` を space で分割して parse (#322-2)。`bp` は
+ * `1` (ボンド済み) / `0` (未ボンド) のみを受け付ける。形式が合わなければ null
+ * (呼び出し側は `AUTH SIGN` へフォールバックする — parseAuthSigLine と同じ流儀)。
+ */
+function parseAuthSigBpLine(line: string): KioskBondedSignature | null {
+  const parts = line.split(' ')
+  if (parts.length !== 5 || parts[0] !== 'AUTH' || parts[1] !== 'SIGBP') return null
+  const bp = parts[4]
+  if (bp !== '0' && bp !== '1') return null
+  return { pubkey: parts[2]!, sig: parts[3]!, bpBonded: bp === '1' }
+}
+
+/**
+ * `AUTH SIGNBP <nonce>` を送り、応答 `AUTH SIGBP <pubkey> <sig> <bp>` を parse する
+ * (#322-2)。管理者ログインと共有する `signAlarmDeviceNonce` (useDeviceLogin.ts) とは
+ * 別コマンドの独立した経路 — このモジュールに閉じる (キオスク専用)。firmware が
+ * `SIGNBP` を未知コマンドとして `ERR AUTH: ...` を返せば request がそのまま reject する
+ * ので、ここでは投げっぱなしにする (呼び出し側の signKioskNonce でフォールバックする)。
+ * parse に失敗したときだけ null を返す。
+ */
+async function signKioskBondedNonce(
+  nonce: string,
+  request: (line: string, matchPrefix: string, timeoutMs: number) => Promise<string>,
+): Promise<KioskBondedSignature | null> {
+  const line = await request(`AUTH SIGNBP ${nonce}`, AUTH_SIGNBP_MATCH_PREFIX, AUTH_SIGNBP_TIMEOUT_MS)
+  return parseAuthSigBpLine(line)
+}
+
+/**
+ * キオスク用の署名取得 (#322-2)。まずボンド状態つき `AUTH SIGNBP` を試し、古いファーム
+ * (未知コマンドとして reject) や parse 失敗なら**今までどおり** `AUTH SIGN`
+ * (signAlarmDeviceNonce、useDeviceLogin.ts と共有 — 管理者ログインの挙動には触れない) に
+ * フォールバックする。フォールバック時は `bpBonded` を持たない (= ボンド状態は「不明」)。
+ * `AUTH SIGN` 側の失敗 (no key 等) はここでは捕まえず、そのまま呼び出し側 (tryCoreS3Jwt) へ
+ * 伝える — 診断 (#135 lastFailureDetail 等) の挙動を変えないため。
+ */
+async function signKioskNonce(
+  nonce: string,
+  request: (line: string, matchPrefix: string, timeoutMs: number) => Promise<string>,
+): Promise<{ pubkey: string, sig: string, bpBonded?: boolean } | null> {
+  try {
+    const bonded = await signKioskBondedNonce(nonce, request)
+    if (bonded) return bonded
+  }
+  catch {
+    // AUTH SIGNBP 未対応の古いファーム (未知コマンドとして ERR AUTH) はここで飲み込み、
+    // 下の AUTH SIGN フォールバックへ進む (古いファームの端末を締め出さない)。
+  }
+  return signAlarmDeviceNonce(nonce, request)
+}
+
 // CoreS3 の再接続監視 (キャッシュ破棄) を二重登録しないためのガード (useHubClaim と同じ流儀)
 let closeListenerInstalled = false
 // 起動時の 1 本 (= 最初の getDeviceJwt()、Refs #238)。起動から 1 回だけ作り、以後は同じものを返す
@@ -317,14 +390,22 @@ export function useDeviceToken() {
       if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
 
       stage = 'coreS3-sign'
-      const signed = await signAlarmDeviceNonce(nonceData.nonce, coreS3.request)
+      const signed = await signKioskNonce(nonceData.nonce, coreS3.request)
       if (!signed) throw new Error('AUTH SIG の parse に失敗')
 
       stage = 'token-exchange'
       const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nonce: nonceData.nonce, pubkey: signed.pubkey, sig: signed.sig }),
+        body: JSON.stringify({
+          nonce: nonceData.nonce,
+          pubkey: signed.pubkey,
+          sig: signed.sig,
+          // AUTH SIGNBP が成功したときだけ送る (#322-2)。フォールバック (AUTH SIGN) 時は
+          // ボンド状態が「不明」であって「未ボンド」ではないため、フィールド自体を省く
+          // (auth-worker 側は欠落を「不明」として扱う)。
+          ...(signed.bpBonded !== undefined ? { bp_bonded: signed.bpBonded } : {}),
+        }),
       })
       if (!tokenRes.ok) {
         status = tokenRes.status

@@ -1051,6 +1051,121 @@ describe('useDeviceToken (#434 step 3c)', () => {
         }
       })
     })
+
+    // AUTH SIGNBP でボンド状態を素通しする (#322-2、Refs ippoan/alc-app-s3#249)。
+    // coreS3Mock.request は AUTH SIGN 系の実際の送信先 (signAlarmDeviceNonce はここでは
+    // モックされているので呼ばれない)。SIGNBP は useDeviceToken.ts がこのモジュールに
+    // 閉じて直接叩く経路なので、coreS3Mock.request を直接 mock する。
+    describe('AUTH SIGNBP でボンド状態を渡す (#322-2)', () => {
+      it('AUTH SIGNBP が成功したら bp_bonded (true) を alarm-token に足し、AUTH SIGN にはフォールバックしない', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async (line: string) => {
+          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp 1'
+          throw new Error(`unexpected request: ${line}`)
+        })
+        const fetchMock = routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+          '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
+        expect(coreS3Mock.request).toHaveBeenCalledWith('AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+
+        const tokenCall = fetchMock.mock.calls.find(([u]) => (u as string).endsWith('/device/alarm-token'))!
+        const body = JSON.parse(tokenCall[1].body)
+        expect(body).toEqual({ nonce: 'n1', pubkey: 'pub-bp', sig: 'sig-bp', bp_bonded: true })
+      })
+
+      it('AUTH SIGNBP が成功して bp=0 なら bp_bonded: false を送る', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async (line: string) => {
+          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp 0'
+          throw new Error(`unexpected request: ${line}`)
+        })
+        const fetchMock = routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+          '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        const tokenCall = fetchMock.mock.calls.find(([u]) => (u as string).endsWith('/device/alarm-token'))!
+        const body = JSON.parse(tokenCall[1].body)
+        expect(body).toEqual({ nonce: 'n1', pubkey: 'pub-bp', sig: 'sig-bp', bp_bonded: false })
+      })
+
+      it('AUTH SIGNBP が未知コマンドとして ERR AUTH で失敗したら AUTH SIGN にフォールバックし、bp_bonded を送らない (古いファーム)', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async (line: string) => {
+          if (line.startsWith('AUTH SIGNBP ')) throw new Error('ERR AUTH: unknown command')
+          throw new Error(`unexpected direct request: ${line}`)
+        })
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        const fetchMock = routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+          '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', coreS3Mock.request)
+
+        const tokenCall = fetchMock.mock.calls.find(([u]) => (u as string).endsWith('/device/alarm-token'))!
+        const body = JSON.parse(tokenCall[1].body)
+        expect(body).toEqual({ nonce: 'n1', pubkey: 'pub-1', sig: 'sig-1' })
+        expect(body).not.toHaveProperty('bp_bonded')
+      })
+
+      it('AUTH SIGNBP の応答が壊れていて parse に失敗しても AUTH SIGN にフォールバックする', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async (line: string) => {
+          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP not-enough-parts'
+          throw new Error(`unexpected direct request: ${line}`)
+        })
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        const fetchMock = routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+          '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', coreS3Mock.request)
+      })
+
+      it('AUTH SIGN へのフォールバックが失敗 (no key 等) したら従来どおり coreS3-sign 段の失敗として扱う', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async (line: string) => {
+          if (line.startsWith('AUTH SIGNBP ')) throw new Error('ERR AUTH: unknown command')
+          throw new Error(`unexpected direct request: ${line}`)
+        })
+        signAlarmDeviceNonceMock.mockRejectedValue(new Error('ERR AUTH: no key'))
+        vi.stubGlobal('fetch', routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) }),
+        }))
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, lastFailureStage, lastFailureDetail } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBeNull()
+        expect(lastFailureStage.value).toBe('coreS3-sign')
+        expect(lastFailureDetail.value).toBe('no key')
+      })
+    })
   })
 
 
