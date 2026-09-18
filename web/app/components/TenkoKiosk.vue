@@ -369,9 +369,9 @@ onUnmounted(() => {
       <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-6']">
         <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">{{ isRemote ? '遠隔点呼' : '自動点呼' }}</h1>
         <!-- 点呼種別 (遠隔点呼かつ乗務員未特定のみトグル。予定に依存せず画面で選ぶ。Refs #310) -->
-        <div v-if="remoteMode && step === 'nfc'" class="flex justify-center gap-2 mt-2">
+        <div v-if="remoteMode && step === 'nfc'" class="flex gap-3 mt-3 w-full max-w-md mx-auto">
           <button
-            class="px-3 py-1 rounded-full text-xs font-bold border transition-colors"
+            class="flex-1 py-4 rounded-xl text-xl font-bold border-2 transition-colors"
             :class="tenkoType === 'pre_operation'
               ? 'bg-blue-600 text-white border-blue-600'
               : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'"
@@ -380,7 +380,7 @@ onUnmounted(() => {
             {{ tenkoTypeLabel('pre_operation') }}
           </button>
           <button
-            class="px-3 py-1 rounded-full text-xs font-bold border transition-colors"
+            class="flex-1 py-4 rounded-xl text-xl font-bold border-2 transition-colors"
             :class="tenkoType === 'post_operation'
               ? 'bg-orange-500 text-white border-orange-500'
               : 'bg-white text-orange-500 border-orange-300 hover:bg-orange-50'"
