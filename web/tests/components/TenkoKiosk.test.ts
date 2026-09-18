@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
+import type { TenkoSession } from '~/types'
 
 // TenkoKiosk.vue は多くの composable (WebRTC・カメラ・指紋認証等) に依存するため、
 // ここでは「PC の段 (step) が変わると CoreS3 に STAGE / RESULT を送る」配線だけを見る。
@@ -11,6 +12,9 @@ import type { TenkoStep } from '~/composables/useTenkoKiosk'
 
 const step = ref<TenkoStep>('nfc')
 const proceedWithoutScheduleMock = vi.fn()
+// 途中で止まった点呼の再開 (Refs ippoan/alc-app#343)
+const resumableSessions = ref<TenkoSession[]>([])
+const resumeSessionMock = vi.fn()
 // 血圧の要否が確定できず入口で止めているか (Refs ippoan/alc-app#336)
 const bpRequirementUnknown = ref(false)
 const retryBpRequirementMock = vi.fn()
@@ -20,6 +24,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   employeeId: ref(''),
   employeeName: ref(''),
   pendingSchedules: ref([]),
+  resumableSessions,
   selectedSchedule: ref(null),
   session: ref(null),
   error: ref(null),
@@ -35,6 +40,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   currentStepIndex: ref(0),
   identifyEmployee: vi.fn(async () => {}),
   selectSchedule: vi.fn(async () => {}),
+  resumeSession: resumeSessionMock,
   proceedWithoutSchedule: proceedWithoutScheduleMock,
   bpRequirementUnknown,
   retryBpRequirement: retryBpRequirementMock,
@@ -229,6 +235,59 @@ describe('TenkoKiosk — TenkoScheduleSelect の no-schedule を proceedWithoutS
     await wrapper.vm.$nextTick()
 
     expect(proceedWithoutScheduleMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})
+// 途中で止まった点呼を、本人特定後の選択画面から再開する (Refs ippoan/alc-app#343)
+describe('TenkoKiosk — schedule_select の再開の導線', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'schedule_select'
+    bpRequirementUnknown.value = false
+    resumableSessions.value = []
+  })
+
+  it('拾った未完了セッションを TenkoScheduleSelect へそのまま渡す', async () => {
+    const stuck = { id: 'sess-stuck', status: 'medical_pending' } as TenkoSession
+    resumableSessions.value = [stuck]
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'TenkoScheduleSelect' }).props('resumableSessions')).toEqual([stuck])
+    wrapper.unmount()
+  })
+
+  it('resume を発火すると resumeSession がそのセッションで呼ばれる', async () => {
+    const stuck = { id: 'sess-stuck', status: 'medical_pending' } as TenkoSession
+    resumableSessions.value = [stuck]
+    const wrapper = await mountKiosk()
+    wrapper.findComponent({ name: 'TenkoScheduleSelect' }).vm.$emit('resume', stuck)
+    await wrapper.vm.$nextTick()
+
+    expect(resumeSessionMock).toHaveBeenCalledWith(stuck)
+    wrapper.unmount()
+  })
+
+  it('血圧の要否が確定していれば、この画面に「もう一度試す」は出ない', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="retry-bp-from-schedule-select"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 再開が入口で止められたら、この画面にも「もう一度試す」を出す (#336 の行き止まりを作らない)', async () => {
+    bpRequirementUnknown.value = true
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    const retry = wrapper.find('[data-testid="retry-bp-from-schedule-select"]')
+    expect(retry.exists()).toBe(true)
+    // 予定一覧は消さない — 別の予定を選ぶ道を残す
+    expect(wrapper.findComponent({ name: 'TenkoScheduleSelect' }).exists()).toBe(true)
+
+    await retry.trigger('click')
+    expect(retryBpRequirementMock).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

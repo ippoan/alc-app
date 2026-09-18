@@ -1,20 +1,45 @@
 <script setup lang="ts">
-import type { TenkoSchedule } from '~/types'
+import type { TenkoSchedule, TenkoSession } from '~/types'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { noPendingSchedule } from '~/utils/employee-lookup-messages'
 
-defineProps<{
+withDefaults(defineProps<{
   schedules: TenkoSchedule[]
   employeeName: string
-}>()
+  /**
+   * 途中で止まったまま残っている、アルコール未測定のセッション (Refs ippoan/alc-app#343)。
+   * **既定は空 = 今までどおり** — 再開の導線を出す側 (`TenkoKiosk.vue`) が明示的に渡す。
+   */
+  resumableSessions?: TenkoSession[]
+}>(), {
+  resumableSessions: () => [],
+})
 
 const emit = defineEmits<{
   select: [schedule: TenkoSchedule]
+  /** 止まっているセッションを続きから再開する (Refs ippoan/alc-app#343) */
+  resume: [session: TenkoSession]
   /** 予定を選ばず業務後として進む (Refs ippoan/alc-app#322)。業務後は法令上「設定することが
    * できる」= 任意なので、予定が無い/この場に無い場合でも進められる。業務前のセッションには
    * ならない (呼び出し側が selectedTenkoType='post_operation' を立てるため) */
   'no-schedule': []
 }>()
+
+/**
+ * 「どこまで済んでいるか」を出す (Refs ippoan/alc-app#343)。
+ * **「再開できます」だけで中身を見せない**のは、確認できていないことを確認済みのように
+ * 見せるのと同じなので、種別・状態・開始時刻を必ず並べる。
+ */
+function resumeSummary(s: TenkoSession): string {
+  return `${tenkoTypeLabel(s.tenko_type)} / ${tenkoStatusLabel(s.status)} / ${formatStartedAt(s.started_at)}`
+}
+
+/** 開始時刻。サーバが `started_at` を持たない行を「不明」と正直に出す */
+function formatStartedAt(iso: string | null): string {
+  if (!iso) return '開始時刻 不明'
+  return `開始 ${formatScheduledAt(iso)}`
+}
 
 function formatScheduledAt(iso: string): string {
   const d = new Date(iso)
@@ -30,6 +55,33 @@ function formatScheduledAt(iso: string): string {
 
 <template>
   <div class="flex flex-col gap-3">
+    <!--
+      途中で止まった点呼の再開 (Refs ippoan/alc-app#343)。**予定より先に出す** —
+      顔認証の直後にフロントがハングして作られたセッションが溜まっており (#340 / #341 で
+      ハング自体は手当て済み)、拾い直す手段が現場に無かった。
+      出すのはアルコール未測定のものだけ (呼び出し側が絞る)。
+    -->
+    <template v-if="resumableSessions.length > 0">
+      <p class="text-sm text-gray-500">{{ employeeName }} さんの途中で止まっている点呼</p>
+      <button
+        v-for="s in resumableSessions"
+        :key="s.id"
+        data-testid="resume-session"
+        class="w-full text-left p-4 rounded-xl border border-blue-300 bg-blue-50 hover:border-blue-500 hover:bg-blue-100 transition-colors"
+        @click="emit('resume', s)"
+      >
+        <div class="flex items-center justify-between">
+          <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-700">
+            続きから再開
+          </span>
+          <span class="text-sm text-gray-500">{{ resumeSummary(s) }}</span>
+        </div>
+        <p class="mt-2 text-xs text-gray-500">
+          アルコールはまだ測っていません。ここから続きを実施します。
+        </p>
+      </button>
+    </template>
+
     <p class="text-sm text-gray-500">{{ employeeName }} さんの未実施予定</p>
 
     <button

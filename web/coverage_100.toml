@@ -229,6 +229,10 @@ path = "app/utils/tenko-type.ts"
 branches = true
 
 [[files]]
+path = "app/utils/tenko-status.ts"
+branches = true
+
+[[files]]
 path = "app/utils/card-kind.ts"
 branches = true
 

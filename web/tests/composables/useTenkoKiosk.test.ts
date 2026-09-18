@@ -37,9 +37,10 @@ vi.mock('~/utils/api', () => ({
   uploadFacePhoto: vi.fn(),
   getCarryingItems: vi.fn(),
   submitCarryingItemChecks: vi.fn(),
+  listTenkoSessions: vi.fn(),
 }))
 
-import { useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE } from '~/composables/useTenkoKiosk'
+import { useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE, RESUMABLE_TENKO_STATUSES } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
   startTenkoSession,
@@ -54,6 +55,7 @@ import {
   uploadFacePhoto,
   getCarryingItems,
   submitCarryingItemChecks,
+  listTenkoSessions,
 } from '~/utils/api'
 
 // --- helpers ---
@@ -1518,6 +1520,276 @@ describe('useTenkoKiosk', () => {
       expect(k.escalatedToRemote.value).toBe(false)
       expect(k.escalationReason.value).toBeNull()
       expect(k.isRemote.value).toBe(false)
+    })
+  })
+  // ---------- 途中で止まった点呼の再開 (Refs ippoan/alc-app#343) ----------
+
+  describe('未完了セッションの再開', () => {
+    /** listTenkoSessions の 1 回ぶんの応答 */
+    function page(sessions: TenkoSession[]) {
+      return { sessions, total: sessions.length, page: 1, per_page: 50 }
+    }
+
+    /** status ごとの問い合わせに、その status の行だけを返させる */
+    function serveByStatus(rows: TenkoSession[]) {
+      vi.mocked(listTenkoSessions).mockImplementation(async (filter) => {
+        return page(rows.filter(r => r.status === filter?.status))
+      })
+    }
+
+    beforeEach(() => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([])
+      vi.mocked(listTenkoSessions).mockResolvedValue(page([]))
+    })
+
+    it('allowResume を渡さないと 1 回も引かない (既定は今までどおり)', async () => {
+      const k = useTenkoKiosk()
+      await k.identifyEmployee('emp-1', '田中')
+      expect(listTenkoSessions).not.toHaveBeenCalled()
+      expect(k.resumableSessions.value).toEqual([])
+      expect(k.step.value).toBe('schedule_select')
+    })
+
+    it('★ 未完了が無い乗務員では、いままでどおり予定一覧だけが出る', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([makeSchedule()])
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.step.value).toBe('schedule_select')
+      expect(k.pendingSchedules.value).toHaveLength(1)
+      expect(k.resumableSessions.value).toEqual([])
+    })
+
+    it('★ アルコール未測定の status だけを、status ごとに 1 回ずつ引く', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending', started_at: '2026-03-31T22:52:00Z' })
+      serveByStatus([stuck])
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(listTenkoSessions).toHaveBeenCalledTimes(RESUMABLE_TENKO_STATUSES.length)
+      for (const status of RESUMABLE_TENKO_STATUSES) {
+        expect(listTenkoSessions).toHaveBeenCalledWith({ employee_id: 'emp-1', status })
+      }
+      expect(k.resumableSessions.value).toEqual([stuck])
+    })
+
+    it('★ interrupted / completed / cancelled は再開候補に出ない', async () => {
+      // サーバが返し得る全 status を用意しても、問い合わせる status に無いものは出ない
+      const rows = [
+        makeSession({ id: 'a', status: 'interrupted' }),
+        makeSession({ id: 'b', status: 'completed' }),
+        makeSession({ id: 'c', status: 'cancelled' }),
+        makeSession({ id: 'd', status: 'medical_pending' }),
+      ]
+      serveByStatus(rows)
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(RESUMABLE_TENKO_STATUSES).not.toContain('interrupted')
+      expect(RESUMABLE_TENKO_STATUSES).not.toContain('completed')
+      expect(RESUMABLE_TENKO_STATUSES).not.toContain('cancelled')
+      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['d'])
+    })
+
+    it('★ アルコール測定済み (instruction_pending / report_pending) も候補に出ない', async () => {
+      expect(RESUMABLE_TENKO_STATUSES).not.toContain('instruction_pending')
+      expect(RESUMABLE_TENKO_STATUSES).not.toContain('report_pending')
+    })
+
+    it('status は合っていても alcohol_tested_at が入っている行は落とす', async () => {
+      serveByStatus([
+        makeSession({ id: 'measured', status: 'medical_pending', alcohol_tested_at: '2026-03-31T22:00:00Z' }),
+        makeSession({ id: 'clean', status: 'medical_pending' }),
+      ])
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['clean'])
+    })
+
+    it('新しいものから並ぶ (started_at が無い行は最後)', async () => {
+      serveByStatus([
+        makeSession({ id: 'old', status: 'medical_pending', started_at: '2026-03-30T08:00:00Z' }),
+        makeSession({ id: 'none', status: 'self_declaration_pending', started_at: null }),
+        makeSession({ id: 'new', status: 'daily_inspection_pending', started_at: '2026-03-31T22:52:00Z' }),
+      ])
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['new', 'old', 'none'])
+    })
+
+    it('★ 照会が全部落ちても本人特定は止めず、予定一覧は今までどおり出る', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([makeSchedule()])
+      vi.mocked(listTenkoSessions).mockRejectedValue(new Error('network'))
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(k.error.value).toBeNull()
+      expect(k.step.value).toBe('schedule_select')
+      expect(k.pendingSchedules.value).toHaveLength(1)
+      expect(k.resumableSessions.value).toEqual([])
+    })
+
+    it('一部の status だけ落ちたら、取れた分だけ出す', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      vi.mocked(listTenkoSessions).mockImplementation(async (filter) => {
+        if (filter?.status === 'medical_pending') return page([stuck])
+        throw new Error('network')
+      })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(k.error.value).toBeNull()
+      expect(k.resumableSessions.value).toEqual([stuck])
+    })
+
+    it('予定取得が落ちたときは今までどおり error を出す (再開の照会は道連れにしない)', async () => {
+      vi.mocked(getPendingSchedules).mockRejectedValue(new Error('network'))
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.error.value).toBe('network')
+      expect(k.step.value).not.toBe('schedule_select')
+      expect(k.resumableSessions.value).toEqual([])
+    })
+
+    it('次の乗務員に前の候補を引きずらない', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      serveByStatus([stuck])
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.resumableSessions.value).toHaveLength(1)
+
+      k.reset()
+      expect(k.resumableSessions.value).toEqual([])
+    })
+
+    // ----- resumeSession: 拾った status から正しい step へ -----
+
+    it.each([
+      ['identity_verified', 'alcohol'],
+      ['medical_pending', 'medical'],
+      ['self_declaration_pending', 'self_declaration'],
+      ['daily_inspection_pending', 'daily_inspection'],
+      ['carrying_items_pending', 'carrying_items'],
+    ] as const)('★ %s のセッションを選ぶと %s から続く', async (status, expected) => {
+      const stuck = makeSession({ id: 'sess-stuck', status })
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+
+      expect(k.session.value).toStrictEqual(stuck)
+      expect(k.step.value).toBe(expected)
+      expect(k.error.value).toBeNull()
+      expect(k.isLoading.value).toBe(false)
+      // 新しいセッションは起こさない
+      expect(startTenkoSession).not.toHaveBeenCalled()
+    })
+
+    it('まだ未実施として残っている予定を拾って指示事項に繋ぐ', async () => {
+      const sched = makeSchedule({ id: 'sched-1', instruction: '安全運転で' })
+      vi.mocked(getPendingSchedules).mockResolvedValue([sched])
+      const stuck = makeSession({ status: 'medical_pending', schedule_id: 'sched-1' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      await k.resumeSession(stuck)
+
+      expect(k.selectedSchedule.value).toStrictEqual(sched)
+    })
+
+    it('予定が消費済みで拾えなくても続きへ進む (指示は出ないだけ)', async () => {
+      const stuck = makeSession({ status: 'medical_pending', schedule_id: 'sched-gone' })
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+
+      expect(k.selectedSchedule.value).toBeNull()
+      expect(k.step.value).toBe('medical')
+    })
+
+    it('★ 再開の経路も #336 の入口ガードを通る — 血圧の要否が不明な端末の業務前は止める', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = true
+      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+
+      expect(k.step.value).not.toBe('medical')
+      expect(k.bpRequirementUnknown.value).toBe(true)
+      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('要否が不明でも業務後の再開は止めない (既定を今までどおりに保つ)', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = true
+      const stuck = makeSession({ status: 'identity_verified', tenko_type: 'post_operation' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+
+      expect(k.bpRequirementUnknown.value).toBe(false)
+      expect(k.step.value).toBe('alcohol')
+    })
+
+    it('★ 止めた再開も「もう一度試す」で続きから戻れる (リロードなし)', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = true
+      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+      expect(k.bpRequirementUnknown.value).toBe(true)
+
+      refreshSignedBpBonded.mockImplementationOnce(async () => {
+        signedBpBonded.value = false
+        return false
+      })
+      await k.retryBpRequirement()
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(k.bpRequirementUnknown.value).toBe(false)
+      expect(k.error.value).toBeNull()
+      expect(k.step.value).toBe('medical')
+      // 顔認証の経路を巻き込まない
+      expect(startTenkoSession).not.toHaveBeenCalled()
+    })
+
+    it('もう一度試してもなお不明なら、同じ画面に戻るだけ', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = true
+      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+      await k.retryBpRequirement()
+
+      expect(k.bpRequirementUnknown.value).toBe(true)
+      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
+      expect(k.step.value).not.toBe('medical')
+    })
+
+    it('reset() で止めた再開が残らない', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = true
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' }))
+      expect(k.bpRequirementUnknown.value).toBe(true)
+
+      k.reset()
+
+      expect(k.bpRequirementUnknown.value).toBe(false)
+      expect(k.session.value).toBeNull()
     })
   })
 })
