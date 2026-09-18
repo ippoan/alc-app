@@ -64,7 +64,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
    */
   const { deviceId } = useAuth()
   /** 署名つきで auth-worker へ渡したボンド状態 (#336)。null = 不明 */
-  const { signedBpBonded, refreshSignedBpBonded } = useDeviceToken()
+  const { signedBpBonded, hasProbedBpBond, refreshSignedBpBonded } = useDeviceToken()
   /** この端末で血圧を出せる見込みがあるか (BleStatus の `showBpUi` と同じ 2 つ、#336) */
   const { bpEnabled } = useBloodPressureSetting()
   const { hasBpHardware } = useBleGateway()
@@ -200,12 +200,18 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
    *   条件は `BleStatus.vue` の `showBpUi` (= 血圧の入力欄が出るか) と同じ 2 つ —
    *   **入力欄すら出ないまま血圧必須になる端末だけ**が行き止まり (issue の症状そのもの)。
    *   測れるはずが測れなかったときは、体温・血圧の段の「遠隔点呼へ切り替え」が受け皿になる。
+   * - **試す前には止めない** — `signedBpBonded` の `null` には「まだ署名を試していない」
+   *   (起動直後・探索中) も乗る。そこで止めると**署名を試す前に端末を締め出す**ので、
+   *   まだ試していなければ**ここで 1 度試してから**判定する (`hasProbedBpBond`)。
+   *   止めるのは**試した結果、ボンド状態が分からなかったとき**だけ。
    */
-  function isBpRequirementUnknown(): boolean {
+  async function isBpRequirementUnknown(): Promise<boolean> {
     if (remoteMode || tenkoType.value === 'post_operation') return false
     if (deviceId.value) return false
     if (signedBpBonded.value !== null) return false
-    return !bpEnabled.value && !hasBpHardware.value
+    if (bpEnabled.value || hasBpHardware.value) return false
+    if (!hasProbedBpBond.value) await refreshSignedBpBonded()
+    return signedBpBonded.value === null
   }
 
   /**
@@ -240,16 +246,19 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     // 業務後は予定が無くても進められる (selectedTenkoType='post_operation' が
     // proceedWithoutSchedule でセットされる)。業務前は引き続き予定必須
     if (!remoteMode && !selectedSchedule.value && tenkoType.value !== 'post_operation') return
+    error.value = null
+    isLoading.value = true
+
     // 血圧の要否が確定できない端末は、体温・血圧まで歩かせずここで止める (#336)。
+    // 判定は署名の取得を待つことがあるので isLoading の中で回す。
     // 無言では止めない — 理由と次の行動 (もう一度試す) を必ず出す
-    if (isBpRequirementUnknown()) {
+    if (await isBpRequirementUnknown()) {
       blockedFaceAuthResult.value = result
       error.value = BP_REQUIREMENT_UNKNOWN_MESSAGE
+      isLoading.value = false
       return
     }
     blockedFaceAuthResult.value = null
-    error.value = null
-    isLoading.value = true
 
     faceSnapshot.value = result.snapshot ?? null
     faceSkipped.value = result.skipped === true

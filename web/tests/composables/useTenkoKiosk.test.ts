@@ -8,8 +8,13 @@ mockNuxtImport('useAuth', () => () => ({ deviceId }))
 
 // 署名つきボンド状態 (Refs ippoan/alc-app#336)。null = 不明
 const signedBpBonded = ref<boolean | null>(false)
-const refreshSignedBpBonded = vi.fn(async () => signedBpBonded.value)
-mockNuxtImport('useDeviceToken', () => () => ({ signedBpBonded, refreshSignedBpBonded }))
+// ボンド状態を一度でも取りに行ったか。false = 「未取得」であって「不明」ではない
+const hasProbedBpBond = ref(true)
+const refreshSignedBpBonded = vi.fn(async () => {
+  hasProbedBpBond.value = true
+  return signedBpBonded.value
+})
+mockNuxtImport('useDeviceToken', () => () => ({ signedBpBonded, hasProbedBpBond, refreshSignedBpBonded }))
 
 // 血圧を出せる見込み (BleStatus の showBpUi と同じ 2 つ)。既定は「出せない端末」
 const bpEnabled = ref(false)
@@ -120,6 +125,7 @@ describe('useTenkoKiosk', () => {
     vi.clearAllMocks()
     deviceId.value = 'device-1'
     signedBpBonded.value = false
+    hasProbedBpBond.value = true
     bpEnabled.value = false
     hasBpHardware.value = false
   })
@@ -442,6 +448,8 @@ describe('useTenkoKiosk', () => {
     function unknownDevice() {
       deviceId.value = null
       signedBpBonded.value = null
+      // 「試した結果、分からなかった」端末。「まだ試していない」とは区別する
+      hasProbedBpBond.value = true
     }
 
     function startedSession() {
@@ -532,6 +540,56 @@ describe('useTenkoKiosk', () => {
 
       expect(startTenkoSession).toHaveBeenCalled()
       expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('★ まだ署名を試していない端末は止めない — その場で 1 度取りに行ってから判定する', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = false
+      // 取りに行ったら「血圧計は無い」と確認できた
+      refreshSignedBpBonded.mockImplementationOnce(async () => {
+        hasProbedBpBond.value = true
+        signedBpBonded.value = false
+        return false
+      })
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('★ 未取得のまま取りに行っても分からなければ止める (試した結果が不明なときだけ止まる)', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = false
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(true)
+    })
+
+    it('取得済みなら入口で取りに行かない (毎回署名しなおさない)', async () => {
+      unknownDevice()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(refreshSignedBpBonded).not.toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(true)
     })
 
     it('業務後は対象外 — 不明でも進める', async () => {

@@ -1197,9 +1197,25 @@ describe('useDeviceToken (#434 step 3c)', () => {
         '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
       }
 
-      it('未試行なら null (不明)', async () => {
+      it('★ 未試行なら null だが hasProbedBpBond は false (「未取得」と「不明」を分ける)', async () => {
         const useDeviceToken = await load()
-        expect(useDeviceToken().signedBpBonded.value).toBeNull()
+        const { signedBpBonded, hasProbedBpBond } = useDeviceToken()
+        expect(signedBpBonded.value).toBeNull()
+        expect(hasProbedBpBond.value).toBe(false)
+      })
+
+      it('★ 試し終えたら hasProbedBpBond が true になる (CoreS3 が居なくても)', async () => {
+        coreS3Mock.isConnected.value = false
+        vi.stubGlobal('fetch', vi.fn())
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt, hasProbedBpBond, signedBpBonded } = useDeviceToken()
+
+        expect(hasProbedBpBond.value).toBe(false)
+        expect(await getDeviceJwt()).toBeNull()
+        // 探索まではした = 判定してよい。結果は「不明」
+        expect(hasProbedBpBond.value).toBe(true)
+        expect(signedBpBonded.value).toBeNull()
       })
 
       it('BP=1 → true (ボンドあり)', async () => {
@@ -1212,6 +1228,7 @@ describe('useDeviceToken (#434 step 3c)', () => {
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signedBpBonded.value).toBe(true)
+        expect(useDeviceToken().hasProbedBpBond.value).toBe(true)
       })
 
       it('★ BP=0 → false (血圧計が無いと確認できた)。null (不明) と混ぜない', async () => {
@@ -1237,6 +1254,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signedBpBonded.value).toBeNull()
+        // 「古いファームに聞いた結果、分からなかった」= 試し終えている
+        expect(useDeviceToken().hasProbedBpBond.value).toBe(true)
       })
 
       it('CoreS3 が繋がっていない → null (不明)', async () => {
@@ -1265,6 +1284,7 @@ describe('useDeviceToken (#434 step 3c)', () => {
         expect(await getDeviceJwt()).toBeNull()
         expect(lastFailureStage.value).toBe('token-exchange')
         expect(signedBpBonded.value).toBeNull()
+        expect(useDeviceToken().hasProbedBpBond.value).toBe(true)
       })
 
       it('★ refreshSignedBpBonded: cache が生きていても署名からやり直して確定させる', async () => {
