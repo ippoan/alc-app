@@ -16,11 +16,12 @@ const emit = defineEmits<{
   skip: []
 }>()
 
-const { bpEnabled } = useBloodPressureSetting()
-const { hasBpHardware } = useBleGateway()
-
-/** 手入力欄を出すか。未登録端末でも血圧計が在れば出す (Refs #322) */
-const showBpUi = computed(() => bpEnabled.value || hasBpHardware.value)
+/**
+ * 手入力欄を出すか。判定は `useBpUiEnabled()` 1 か所に寄せてある
+ * (Refs ippoan/alc-app#347) — ここで `bpEnabled || hasBpHardware` を写していたため、
+ * CoreS3 キオスクではボンド済みの血圧計があっても入力欄が出なかった。
+ */
+const { showBpUi } = useBpUiEnabled()
 
 const temperature = ref<number | null>(36.5)
 // 血圧は空で始める。既定値 (120/80) を置くと、触っていない値が「測れた値」として

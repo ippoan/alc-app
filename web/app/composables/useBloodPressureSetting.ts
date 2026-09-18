@@ -65,3 +65,64 @@ export function useBloodPressureSetting() {
     setBpEnabled,
   }
 }
+
+/**
+ * 「この端末で血圧を使うか」の表示判定 (Refs ippoan/alc-app#347)。
+ *
+ * 点呼の経路 (`BleStatus` / `ManualMedicalInput` / `TenkoKiosk`) は**ここだけ**を見る。
+ * 以前は `bpEnabled || hasBpHardware` を各画面が写していたが、その 2 つは
+ * **CoreS3 キオスクでは両方 false になりうる**:
+ *
+ * - `bpEnabled` はサーバの `devices.bp_enabled` を `deviceId` で引く。CoreS3 端末は
+ *   `devices` に行が無く `deviceId` が構造的に空なので、永久に false
+ * - `hasBpHardware` の元になる gateway の `bp_bond` 通知は**値が変わった瞬間に 1 行**
+ *   しか出ない。画面が後から読み込み直すと取りこぼす (pull で問い合わせる口が無い)
+ *
+ * そこで**署名つきでサーバへ渡した値** `signedBpBonded` (`useDeviceToken`) を 3 本目の
+ * 材料に足す — サーバの判断と一致するのはこれだけ。`hasProbedBpBond` で
+ * 「まだ取りに行っていない」を分け、**試す前に「未使用」と断じない**
+ * (`useDeviceToken.ts` の `hasProbedBpBond` の doc と同じ流儀)。
+ *
+ * **`refreshSignedBpBonded()` はここから呼ばない (読むだけ)** — あれは backoff を
+ * 解くので、自動点呼の入口ガード (`useTenkoKiosk.isBpRequirementUnknown`) の
+ * 「試す前に止めない」判定と競合する。
+ *
+ * `useBloodPressureSetting()` の戻り値には足していない。中で `useDeviceToken()` /
+ * `useBleGateway()` を呼ぶと、血圧の段を持たない画面 (端末設定・通常点呼・血圧測定)
+ * にも CoreS3 の副作用が広がるため、**必要な画面だけが呼ぶ 2 本目の口**にした。
+ */
+export type BpUiState =
+  /** 血圧を使う (入力欄・測定値カードを出す) */
+  | 'show'
+  /** この端末では未使用と確認できた */
+  | 'unused'
+  /** まだ確認できていない (署名をまだ取りに行っていない) — 判定しない */
+  | 'checking'
+  /** 試したが分からなかった。ブラウザ側の端末登録も無い */
+  | 'unregistered'
+  /** 試したが分からなかった。端末登録はあるがサーバ設定が取れていない */
+  | 'unavailable'
+
+export function useBpUiEnabled() {
+  const { bpEnabled, bpConfirmed } = useBloodPressureSetting()
+  const { hasBpHardware } = useBleGateway()
+  const { signedBpBonded, hasProbedBpBond } = useDeviceToken()
+  const { deviceId } = useAuth()
+
+  const bpUiState = computed<BpUiState>(() => {
+    // 1 つでも「使う」と言っていれば出す (未登録端末でも血圧計が在れば出す、Refs #322)
+    if (bpEnabled.value || hasBpHardware.value || signedBpBonded.value === true) return 'show'
+    // サーバが false と答えた / 署名で「血圧計は無い」と確認できた
+    if (bpConfirmed.value || (hasProbedBpBond.value && signedBpBonded.value === false)) return 'unused'
+    // まだ一度も取りに行っていない — ここで「未使用」に倒さない
+    if (!hasProbedBpBond.value) return 'checking'
+    return deviceId.value ? 'unavailable' : 'unregistered'
+  })
+
+  return {
+    /** 血圧の「使う / 未使用 / 未確認」の描き分け用 */
+    bpUiState,
+    /** true = 血圧 UI (状態表示・測定値カード・手入力欄) を出し、血圧の到着を待つ */
+    showBpUi: computed(() => bpUiState.value === 'show'),
+  }
+}

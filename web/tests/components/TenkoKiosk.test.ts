@@ -89,6 +89,10 @@ mockNuxtImport('useBleGateway', () => () => ({
   latestBloodPressure: ref(null),
 }))
 
+// この端末で血圧を使うか (Refs ippoan/alc-app#347)。判定の中身は
+// useBloodPressureSetting.test.ts が見る
+mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBpUi: ref(false) }))
+
 mockNuxtImport('useFingerprint', () => () => ({
   isFingerprintAvailable: ref(false),
   isEmployeeAuthorized: vi.fn(() => false),

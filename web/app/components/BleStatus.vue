@@ -24,7 +24,6 @@ const {
   error,
   thermometerConnected,
   bloodPressureConnected,
-  hasBpHardware,
   latestTemperature,
   latestBloodPressure,
   hasMedicalData,
@@ -35,11 +34,13 @@ const {
   resetGateway,
 } = useBleGateway()
 
-const { bpEnabled, bpConfirmed } = useBloodPressureSetting()
-const { deviceId } = useAuth()
-
-/** 血圧 UI (状態表示・測定値カード) を出すか。未登録端末でも血圧計が在れば出す (Refs #322) */
-const showBpUi = computed(() => bpEnabled.value || hasBpHardware.value)
+/**
+ * 血圧 UI を出すか / 出さないときの理由 (Refs ippoan/alc-app#347)。
+ * 判定は `useBpUiEnabled()` 1 か所に寄せてある — 以前ここで書いていた
+ * `bpEnabled || hasBpHardware` は CoreS3 キオスクで両方 false になり、
+ * ボンド済みの血圧計が「未確認」と出ていた。
+ */
+const { bpUiState, showBpUi } = useBpUiEnabled()
 
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
@@ -63,10 +64,13 @@ onMounted(async () => {
 // 「必要な値」は端末によって変わる — 血圧計を使わない端末は体温だけ、使う端末は
 // 血圧が後から届くので両方そろうまで待つ。watcher を 1 本に保つ (分けると、血圧計を
 // 繋いでいない端末で自動遷移が丸ごと消えて点呼がそこで止まる)。
+// 待つかどうかは**表示と同じ `showBpUi`** で決める (Refs ippoan/alc-app#347) —
+// `bpEnabled` だけを見ていたため、CoreS3 キオスクでは血圧の入力欄を出しても
+// 体温が届いた瞬間に次の段へ飛び、血圧の到着を待たなかった。
 // immediate にしない — 前の運転者の値や mount 前の古い値では発火させず、mount 後の
 // clearReadings() を経て新しく届いた値だけを見る。
 const autoNextReady = computed(() =>
-  Boolean(latestTemperature.value) && (!bpEnabled.value || Boolean(latestBloodPressure.value)),
+  Boolean(latestTemperature.value) && (!showBpUi.value || Boolean(latestBloodPressure.value)),
 )
 let autoNextTimer: ReturnType<typeof setTimeout> | null = null
 function clearAutoNextTimer() {
@@ -154,10 +158,13 @@ function handleRescan() {
             />
             血圧計
           </span>
-          <span v-else-if="bpConfirmed" class="text-gray-400">
+          <span v-else-if="bpUiState === 'unused'" class="text-gray-400">
             血圧計: この端末では未使用
           </span>
-          <span v-else-if="!deviceId" class="text-amber-600">
+          <span v-else-if="bpUiState === 'checking'" class="text-gray-400">
+            血圧計: まだ確認できていません
+          </span>
+          <span v-else-if="bpUiState === 'unregistered'" class="text-amber-600">
             血圧計: 未確認 (この端末は端末登録されていません)
           </span>
           <span v-else class="text-amber-600">
