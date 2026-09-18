@@ -212,13 +212,33 @@ describe('useTenkoKiosk', () => {
   // ---------- identifyEmployee ----------
 
   describe('identifyEmployee', () => {
-    it('remoteMode → face_auth に直接遷移', async () => {
+    it('remoteMode: 予定なし → schedule_select は出さず face_auth に直接遷移', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([])
       const k = useTenkoKiosk({ remoteMode: true })
       await k.identifyEmployee('emp-1', '田中')
       expect(k.step.value).toBe('face_auth')
       expect(k.employeeId.value).toBe('emp-1')
       expect(k.employeeName.value).toBe('田中')
-      expect(getPendingSchedules).not.toHaveBeenCalled()
+      expect(getPendingSchedules).toHaveBeenCalledWith('emp-1')
+      expect(k.selectedSchedule.value).toBeNull()
+    })
+
+    it('remoteMode: 予定あり(業務後) → selectedSchedule に自動セットされ tenkoType に反映される', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([makeSchedule({ tenko_type: 'post_operation' })])
+      const k = useTenkoKiosk({ remoteMode: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.step.value).toBe('face_auth')
+      expect(k.selectedSchedule.value?.tenko_type).toBe('post_operation')
+      expect(k.tenkoType.value).toBe('post_operation')
+    })
+
+    it('remoteMode: 予定取得エラーでもブロックせず face_auth へ進む', async () => {
+      vi.mocked(getPendingSchedules).mockRejectedValue(new Error('network'))
+      const k = useTenkoKiosk({ remoteMode: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.step.value).toBe('face_auth')
+      expect(k.error.value).toBeNull()
+      expect(k.selectedSchedule.value).toBeNull()
     })
 
     it('スケジュールあり → schedule_select に遷移', async () => {

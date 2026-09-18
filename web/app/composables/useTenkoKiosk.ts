@@ -110,8 +110,18 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     employeeId.value = empId
     employeeName.value = empName
 
-    // 遠隔点呼: スケジュール不要 → 直接顔認証へ
+    // 遠隔点呼: 予定選択の UI は出さないが、予定があれば種別 (業務前/業務後) を
+    // 自動で引き継ぐ (Refs: 遠隔点呼が常に業務前固定になっていたバグ修正)。
+    // 予定が取れない/無い場合は selectedSchedule なしのまま続行し、
+    // onFaceAuthComplete が業務前として開始する (従来のフォールバック)。
     if (remoteMode) {
+      try {
+        const schedules = await getPendingSchedules(empId)
+        pendingSchedules.value = schedules
+        selectedSchedule.value = schedules[0] ?? null
+      } catch {
+        selectedSchedule.value = null
+      }
       step.value = 'face_auth'
       return
     }
