@@ -188,6 +188,18 @@ describe('useSingleInstance', () => {
     app.unmount()
   })
 
+  it('血圧測定端末 (bp) も CoreS3 のシリアルを使うため driver と同様に自動で close される (Refs #314)', async () => {
+    installDisplayMode(true)
+    installHistoryLength(1)
+    installLocks(() => false)
+    const [result, app] = withSetup(() => useSingleInstance('bp'))
+    await flush()
+    await exhaustRetries()
+    expect(result.duplicate.value).toBe(true)
+    expect(close).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
   it('3 回目で取れる → duplicate=false (reload で旧ページの解放が遅れる競合に耐える)', async () => {
     let calls = 0
     const { request } = installLocks(() => ++calls >= 3)
