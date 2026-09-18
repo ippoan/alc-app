@@ -192,7 +192,9 @@ describe('TenkoSessionMonitor — 行クリックのセッション詳細に動�
 
   it('種別フィルタに「通常」がある', async () => {
     const wrapper = await mountMonitor()
-    const options = wrapper.findAll('select')[2]!.findAll('option')
+    // 乗務員フィルタは <select> から EmployeeSearchSelect へ移したので、残る select は
+    // ステータス (0) と種別 (1) の 2 つ (Refs #333)
+    const options = wrapper.findAll('select')[1]!.findAll('option')
     expect(options.some(o => o.attributes('value') === 'normal' && o.text() === '通常')).toBe(true)
     wrapper.unmount()
   })
