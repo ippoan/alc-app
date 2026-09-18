@@ -55,6 +55,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
   const employeeName = ref('')
   const pendingSchedules = ref<TenkoSchedule[]>([])
   const selectedSchedule = ref<TenkoSchedule | null>(null)
+  /** 画面で選んだ点呼種別 (遠隔点呼で使う)。未選択は null で、既定 (業務前) に委ねる */
+  const selectedTenkoType = ref<TenkoType | null>(null)
   const session = ref<TenkoSession | null>(null)
   const carryingItems = ref<CarryingItem[]>([])
   const error = ref<string | null>(null)
@@ -75,7 +77,10 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
 
   // --- 現在の点呼タイプ ---
   const tenkoType = computed<TenkoType | null>(() =>
-    session.value?.tenko_type ?? selectedSchedule.value?.tenko_type ?? (remoteMode ? 'pre_operation' : null),
+    session.value?.tenko_type
+      ?? selectedTenkoType.value
+      ?? selectedSchedule.value?.tenko_type
+      ?? (remoteMode ? 'pre_operation' : null),
   )
   const isPreOperation = computed(() => tenkoType.value === 'pre_operation')
 
@@ -114,6 +119,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     // 自動で引き継ぐ (Refs: 遠隔点呼が常に業務前固定になっていたバグ修正)。
     // 予定が取れない/無い場合は selectedSchedule なしのまま続行し、
     // onFaceAuthComplete が業務前として開始する (従来のフォールバック)。
+    // 本番では予定を持つ社員が 0 件のためこの照会は常に空を返すだけだが、
+    // 将来 予定を使う運用になれば自動で効くのでそのまま残す (Refs #310)。
     if (remoteMode) {
       try {
         const schedules = await getPendingSchedules(empId)
@@ -170,7 +177,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
       // セッション開始
       const body: StartTenkoSession = selectedSchedule.value
         ? { schedule_id: selectedSchedule.value.id, employee_id: employeeId.value, identity_face_photo_url: photoUrl }
-        : { tenko_type: 'pre_operation', employee_id: employeeId.value, identity_face_photo_url: photoUrl }
+        : { tenko_type: selectedTenkoType.value ?? 'pre_operation', employee_id: employeeId.value, identity_face_photo_url: photoUrl }
       const s = await startTenkoSession(body)
       session.value = s
       _advanceByStatus(s.status)
@@ -427,6 +434,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     employeeName.value = ''
     pendingSchedules.value = []
     selectedSchedule.value = null
+    selectedTenkoType.value = null
     session.value = null
     error.value = null
     isLoading.value = false
@@ -445,6 +453,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     employeeName,
     pendingSchedules,
     selectedSchedule,
+    selectedTenkoType,
     session,
     error,
     isLoading,
