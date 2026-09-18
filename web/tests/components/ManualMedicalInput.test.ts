@@ -81,14 +81,6 @@ describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Ref
     wrapper.unmount()
   })
 
-  it('スキップは skip を投げる', async () => {
-    const wrapper = await mountSuspended(ManualMedicalInput)
-    const skipBtn = wrapper.findAll('button').find(b => b.text() === 'スキップ')
-    await skipBtn!.trigger('click')
-    expect(wrapper.emitted('skip')).toHaveLength(1)
-    wrapper.unmount()
-  })
-
   it('bpEnabled=false でも hasBpHardware=true なら血圧欄を出す (未登録端末でも値を出せる、Refs #322)', async () => {
     hasBpHardware.value = true
     const wrapper = await mountSuspended(ManualMedicalInput)
@@ -96,6 +88,34 @@ describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Ref
     expect(wrapper.text()).toContain('収縮期血圧')
     expect(wrapper.text()).toContain('拡張期血圧')
 
+    wrapper.unmount()
+  })
+
+  it('スキップは skip を投げる', async () => {
+    const wrapper = await mountSuspended(ManualMedicalInput)
+    const skipBtn = wrapper.findAll('button').find(b => b.text() === 'スキップ')
+    await skipBtn!.trigger('click')
+    expect(wrapper.emitted('skip')).toHaveLength(1)
+    wrapper.unmount()
+  })
+})
+
+describe('ManualMedicalInput — allowSkip prop (既定 true。自動点呼の体温・血圧ステップだけ false、Refs ippoan/alc-app#322)', () => {
+  beforeEach(() => {
+    bpEnabled.value = false
+    hasBpHardware.value = false
+  })
+
+  it('未指定 (既定 true): スキップボタンを出す', async () => {
+    const wrapper = await mountSuspended(ManualMedicalInput)
+    expect(wrapper.findAll('button').find(b => b.text() === 'スキップ')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('allowSkip=false: スキップボタンを出さない (送信だけ)', async () => {
+    const wrapper = await mountSuspended(ManualMedicalInput, { props: { allowSkip: false } })
+    expect(wrapper.findAll('button').find(b => b.text() === 'スキップ')).toBeFalsy()
+    expect(wrapper.findAll('button').find(b => b.text() === '送信')).toBeTruthy()
     wrapper.unmount()
   })
 })

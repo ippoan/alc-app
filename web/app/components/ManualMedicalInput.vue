@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import type { SubmitMedicalData } from '~/types'
 
+/**
+ * スキップの口を出すか。既定 true (従来どおり)。BleStatus.vue と同じ理由・同じ既定
+ * (Refs #322)。`TenkoKiosk.vue` からだけ `false` を渡す。
+ */
+withDefaults(defineProps<{
+  allowSkip?: boolean
+}>(), {
+  allowSkip: true,
+})
+
 const emit = defineEmits<{
   submit: [data: SubmitMedicalData]
   skip: []
@@ -102,6 +112,7 @@ function handleSkip() {
 
     <div class="flex gap-3 pt-1">
       <button
+        v-if="allowSkip"
         class="flex-1 px-4 py-3 border border-gray-300 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
         @click="handleSkip"
       >

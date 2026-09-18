@@ -151,6 +151,35 @@ describe('TenkoKiosk — PC の段を CoreS3 に送る (useCoreS3Stage、Refs #2
   })
 })
 
+// 自動点呼の体温・血圧ステップは「押すと必ず 400」だったスキップを出さない (Refs #322)。
+// BleStatus / ManualMedicalInput の既定 (allowSkip: true) を TenkoKiosk だけが false で上書きする
+describe('TenkoKiosk — 体温・血圧ステップでスキップを出さない (allowSkip=false、Refs ippoan/alc-app#322)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'medical'
+  })
+
+  it('BleStatus タブに allowSkip=false を渡す', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'BleStatus' }).props('allowSkip')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('手動入力タブの ManualMedicalInput にも allowSkip=false を渡す', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    const manualTab = wrapper.findAll('button').find(b => b.text() === '手動入力')
+    await manualTab!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'ManualMedicalInput' }).props('allowSkip')).toBe(false)
+    wrapper.unmount()
+  })
+})
+
 // 業務後は予定なしでも進められる (Refs ippoan/alc-app#322)
 describe('TenkoKiosk — TenkoScheduleSelect の no-schedule を proceedWithoutSchedule へ配線する', () => {
   beforeEach(() => {

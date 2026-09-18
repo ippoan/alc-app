@@ -245,11 +245,6 @@ function onMedicalNext() {
   onMedicalSubmit(data)
 }
 
-function onMedicalSkip() {
-  medicalInputSource.value = null
-  onMedicalSubmit({})
-}
-
 // 医療データ入力元トラッキング
 const medicalInputSource = ref<'ble' | 'manual' | null>(null)
 
@@ -578,13 +573,13 @@ onUnmounted(() => {
 
           <BleStatus
             v-if="medicalInputTab === 'ble'"
+            :allow-skip="false"
             @next="onMedicalNext"
-            @skip="onMedicalSkip"
           />
           <ManualMedicalInput
             v-else
+            :allow-skip="false"
             @submit="onManualMedicalSubmit"
-            @skip="onMedicalSkip"
           />
 
           <!--

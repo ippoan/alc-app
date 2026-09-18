@@ -135,6 +135,66 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
   })
 })
 
+describe('BleStatus — allowSkip prop (既定 true。自動点呼の体温・血圧ステップだけ false、Refs ippoan/alc-app#322)', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    bpEnabled.value = false
+    bpConfirmed.value = true
+    deviceId.value = 'device-1'
+    webSerialSupported = true
+    isConnected.value = false
+    thermometerConnected.value = false
+    bloodPressureConnected.value = false
+    hasBpHardware.value = false
+    latestTemperature.value = null
+    latestBloodPressure.value = null
+    hasMedicalData.value = false
+    startAutoConnectMock.mockReset()
+    startAutoConnectMock.mockResolvedValue(true)
+    clearReadingsMock.mockReset()
+    resetGatewayMock.mockReset()
+  })
+
+  it('未指定 (既定 true): 未接続でも接続中でもスキップボタンを出す', async () => {
+    startAutoConnectMock.mockResolvedValue(false)
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('button').find(b => b.text() === 'スキップ')).toBeTruthy()
+
+    wrapper.unmount()
+  })
+
+  it('allowSkip=false: 未接続でスキップボタンを出さない (USB デバイスを選択 / 再接続だけ)', async () => {
+    startAutoConnectMock.mockResolvedValue(false)
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus, { props: { allowSkip: false } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('CoreS3 が見つかりません')
+    expect(wrapper.findAll('button').find(b => b.text() === 'スキップ')).toBeFalsy()
+
+    wrapper.unmount()
+  })
+
+  it('allowSkip=false: 接続中もスキップボタンを出さない (次へだけ)', async () => {
+    isConnected.value = true
+    hasMedicalData.value = true
+    latestTemperature.value = { value: 36.5 }
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus, { props: { allowSkip: false } })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('button').find(b => b.text() === '次へ')).toBeTruthy()
+    expect(wrapper.findAll('button').find(b => b.text() === 'スキップ')).toBeFalsy()
+
+    wrapper.unmount()
+  })
+})
+
 describe('BleStatus — 血圧「未確認」の 4 分岐 + hasBpHardware での表示 (Refs ippoan/alc-app#322)', () => {
   beforeEach(() => {
     vi.resetModules()
