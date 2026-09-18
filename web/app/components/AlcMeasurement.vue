@@ -32,6 +32,17 @@ const {
 const coreS3 = useCoreS3Serial()
 const ble = useBleGateway()
 
+// 業務後は `medical` ステップを通らないため、`useBleGateway.wire()` が一度も呼ばれず
+// `ble.latestAlcohol` に alcohol JSON が届かない (#320)。`useStrayAlcohol` は
+// `wire()` を経由せず `coreS3.onJson` を直接購読しているので、`wire()` の有無に
+// 関わらず値が届く。`wire()` には一切触らない — 前倒しすると heartbeat 監視も
+// 前倒しになり、30 秒無音で `coreS3.release()` が走る経路を新設してしまう
+// (useStrayAlcohol.ts のコメント参照)。
+const { latest: strayAlcohol } = useStrayAlcohol()
+// `useStrayAlcohol.latest` は clear されない (前の点呼や本人確認前の値が残ったまま)。
+// mount 時点の seq を基準にし、それより新しい seq だけをこの点呼の測定として採用する。
+const strayBaselineSeq = ref(0)
+
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
 
@@ -67,6 +78,8 @@ onMounted(async () => {
   resultEmitted.value = false
   // 前の運転者の結果を引き継がない (latestAlcohol はシングルトンの composable 状態)
   ble.clearAlcoholReading()
+  // strayAlcohol は clear できないので、基準の seq をここで控える (上のコメント参照)
+  strayBaselineSeq.value = strayAlcohol.value?.seq ?? 0
 
   if (!isSupported() || isConnected.value) return
   autoConnecting.value = true
@@ -90,6 +103,19 @@ watch(result, (val) => {
 // 結果を親に通知 (CoreS3 につないだ FC-1200)
 watch(() => ble.latestAlcohol.value, (val) => {
   if (val) {
+    emitResult({
+      employeeId: props.employeeId,
+      alcoholValue: val.value,
+      resultType: val.result,
+      deviceUseCount: val.useCount,
+      measuredAt: val.measuredAt,
+    })
+  }
+})
+
+// 結果を親に通知 (業務後などで wire() されていない CoreS3 経路。#320)
+watch(() => strayAlcohol.value, (val) => {
+  if (val && val.seq > strayBaselineSeq.value) {
     emitResult({
       employeeId: props.employeeId,
       alcoholValue: val.value,

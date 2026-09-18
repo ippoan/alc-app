@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import AlcMeasurement from '~/components/AlcMeasurement.vue'
-import type { AlcoholReading, Fc1200State } from '~/types'
+import type { AlcoholReading, Fc1200State, StrayAlcoholReading } from '~/types'
 
 // --- useFc1200Serial (PC 直結) のモック ---
 
@@ -49,6 +49,13 @@ mockNuxtImport('useBleGateway', () => () => ({
   clearAlcoholReading: clearAlcoholReadingMock,
 }))
 
+// --- useStrayAlcohol のモック (業務後など wire() されていない経路。#320) ---
+
+const strayAlcohol = ref<StrayAlcoholReading | null>(null)
+mockNuxtImport('useStrayAlcohol', () => () => ({
+  latest: readonly(strayAlcohol),
+}))
+
 async function mountAlc() {
   return await mountSuspended(AlcMeasurement, {
     props: { employeeId: 'emp-1' },
@@ -67,6 +74,7 @@ describe('AlcMeasurement', () => {
     coreS3Connected.value = false
     latestAlcohol.value = null
     alcoholStage.value = null
+    strayAlcohol.value = null
   })
 
   it('CoreS3 未接続なら PC 直結 (useFc1200Serial) に自動接続する', async () => {
@@ -267,6 +275,88 @@ describe('AlcMeasurement', () => {
       const emitted = wrapper.emitted('result')
       expect(emitted).toHaveLength(1)
       expect(emitted![0]![0]).toMatchObject({ alcoholValue: 0.12, resultType: 'normal' })
+      wrapper.unmount()
+    })
+  })
+
+  // =============================================
+  // useStrayAlcohol 経由 (業務後など wire() されていない経路。#320)
+  // =============================================
+
+  describe('useStrayAlcohol 経由 (wire() されていない経路)', () => {
+    it('業務後など wire() されていない状態でも、届いた alcohol JSON で次へ進む', async () => {
+      const wrapper = await mountAlc()
+
+      strayAlcohol.value = {
+        value: 0.05,
+        unit: 'mg/L',
+        result: 'normal',
+        useCount: 4,
+        measuredAt: new Date('2026-01-05T00:00:00Z'),
+        seq: 1,
+      }
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('result')
+      expect(emitted).toHaveLength(1)
+      expect(emitted![0]![0]).toEqual({
+        employeeId: 'emp-1',
+        alcoholValue: 0.05,
+        resultType: 'normal',
+        deviceUseCount: 4,
+        measuredAt: new Date('2026-01-05T00:00:00Z'),
+      })
+      wrapper.unmount()
+    })
+
+    it('mount 前に届いていた古い測定 (本人確認前の値) は拾わない', async () => {
+      // 待機画面で誰かが吹いた値が、mount 前から latest に残っている想定
+      strayAlcohol.value = {
+        value: 0.9,
+        unit: 'mg/L',
+        result: 'over',
+        useCount: 1,
+        measuredAt: new Date('2026-01-05T00:00:00Z'),
+        seq: 1,
+      }
+      const wrapper = await mountAlc()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.emitted('result')).toBeUndefined()
+
+      // mount 後に新しく届いた値 (seq が進む) は採用する
+      strayAlcohol.value = {
+        value: 0.05,
+        unit: 'mg/L',
+        result: 'normal',
+        useCount: 2,
+        measuredAt: new Date('2026-01-05T00:00:01Z'),
+        seq: 2,
+      }
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('result')
+      expect(emitted).toHaveLength(1)
+      expect(emitted![0]![0]).toMatchObject({ alcoholValue: 0.05, resultType: 'normal' })
+      wrapper.unmount()
+    })
+
+    it('業務前 (wire() 済み) は従来どおり ble.latestAlcohol 経由で進む — strayAlcohol は無視される', async () => {
+      coreS3Connected.value = true
+      const wrapper = await mountAlc()
+
+      latestAlcohol.value = {
+        value: 0.15,
+        unit: 'mg/L',
+        result: 'normal',
+        useCount: 3,
+        measuredAt: new Date('2026-01-05T00:00:00Z'),
+      }
+      await wrapper.vm.$nextTick()
+
+      const emitted = wrapper.emitted('result')
+      expect(emitted).toHaveLength(1)
+      expect(emitted![0]![0]).toMatchObject({ alcoholValue: 0.15, resultType: 'normal' })
       wrapper.unmount()
     })
   })
