@@ -59,6 +59,7 @@ const totalPages = computed(() => Math.ceil(total.value / perPage))
 const showForm = ref(false)
 const isSaving = ref(false)
 const newRows = ref<{ employee_id: string; tenko_type: TenkoType; scheduled_at: string; responsible_manager_name: string; instruction: string }[]>([])
+const instructionError = ref<string | null>(null)
 
 function addRow() {
   newRows.value.push({ employee_id: '', tenko_type: 'pre_operation', scheduled_at: '', responsible_manager_name: '', instruction: '' })
@@ -68,9 +69,28 @@ function removeRow(i: number) {
   newRows.value.splice(i, 1)
 }
 
+// 業務前は指示事項が必須 (rust-alc-api の validate_schedule() と揃える)
+function instructionLabel(type: TenkoType) {
+  return type === 'pre_operation' ? '指示事項 (必須)' : '指示事項 (任意)'
+}
+
+function missingInstructionRows(rows: typeof newRows.value) {
+  return rows.filter(r => r.tenko_type === 'pre_operation' && !r.instruction.trim())
+}
+
+const hasMissingRequiredInstruction = computed(() => {
+  const candidates = newRows.value.filter(r => r.employee_id && r.scheduled_at && r.responsible_manager_name)
+  return candidates.length > 0 && missingInstructionRows(candidates).length > 0
+})
+
 async function handleCreate() {
+  instructionError.value = null
   const valid = newRows.value.filter(r => r.employee_id && r.scheduled_at && r.responsible_manager_name)
   if (valid.length === 0) return
+  if (missingInstructionRows(valid).length > 0) {
+    instructionError.value = '業務前は指示事項の入力が必須です'
+    return
+  }
   isSaving.value = true
   error.value = null
   try {
@@ -204,19 +224,20 @@ onMounted(() => { loadEmployees(); fetchData() })
         </select>
         <input v-model="row.scheduled_at" type="datetime-local" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input v-model="row.responsible_manager_name" type="text" placeholder="管理者名" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <input v-model="row.instruction" type="text" placeholder="指示事項 (任意)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <input v-model="row.instruction" type="text" :placeholder="instructionLabel(row.tenko_type)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button class="px-2 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm" @click="removeRow(i)">削除</button>
       </div>
       <div class="flex gap-2 mt-2">
         <button class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50" @click="addRow">+ 行追加</button>
         <button
-          :disabled="isSaving || newRows.every(r => !r.employee_id || !r.scheduled_at || !r.responsible_manager_name)"
+          :disabled="isSaving || newRows.every(r => !r.employee_id || !r.scheduled_at || !r.responsible_manager_name) || hasMissingRequiredInstruction"
           class="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
           @click="handleCreate"
         >
           {{ isSaving ? '作成中...' : '作成' }}
         </button>
       </div>
+      <p v-if="instructionError" class="text-red-600 text-xs mt-2">{{ instructionError }}</p>
     </div>
 
     <!-- エラー -->
