@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ref } from 'vue'
+import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
+
+const deviceId = ref<string | null>('device-1')
+mockNuxtImport('useAuth', () => () => ({ deviceId }))
 
 vi.mock('~/utils/api', () => ({
   getPendingSchedules: vi.fn(),
@@ -103,6 +108,7 @@ function makeSession(overrides?: Partial<TenkoSession>): TenkoSession {
 describe('useTenkoKiosk', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    deviceId.value = 'device-1'
   })
 
   // ---------- 初期状態 ----------
@@ -550,6 +556,30 @@ describe('useTenkoKiosk', () => {
       await k.onMedicalSubmit({ temperature: 36.5 })
       expect(k.step.value).toBe('self_declaration')
       expect(k.isLoading.value).toBe(false)
+    })
+
+    it('device_id が取れる端末 → device_id を付けて送信 (Refs ippoan/alc-app#322)', async () => {
+      const sess = makeSession({ status: 'self_declaration_pending' })
+      vi.mocked(submitMedical).mockResolvedValue(sess)
+      deviceId.value = 'device-1'
+
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5, device_id: 'device-1' })
+    })
+
+    it('device_id が取れない端末 → device_id を付けずに送信 (サーバはフェイルクローズ)', async () => {
+      const sess = makeSession({ status: 'self_declaration_pending' })
+      vi.mocked(submitMedical).mockResolvedValue(sess)
+      deviceId.value = null
+
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5 })
     })
 
     it('API エラー', async () => {
