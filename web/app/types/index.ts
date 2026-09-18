@@ -468,6 +468,16 @@ export interface TenkoSession {
   completed_at: string | null
   created_at: string
   updated_at: string
+  /**
+   * 運行管理者の判定 ('ok' | 'ng')。null = 未判定 (Refs ippoan/alc-app#315)。
+   * `safety_judgment` (サーバが自動計算する安全判定) とは別物 — 混同しないこと。
+   * NG でも `status` は変わらない (点呼は完了扱いのまま)。
+   */
+  manager_judgment: string | null
+  /** NG の理由 (任意入力) */
+  manager_judgment_reason: string | null
+  /** 判定した運行管理者の employee UUID */
+  manager_judgment_by: string | null
   /** 電子車検証の管理番号 (Refs ippoan/alc-app-s3#110) */
   carins_cert_no: string | null
   /** 電子車検証の車両 ID */
@@ -533,6 +543,13 @@ export interface SubmitOperationReport {
 
 export interface CancelTenkoSession {
   reason: string
+}
+
+/** 運行管理者による点呼 OK/NG 判定 (Refs ippoan/alc-app#315)。`judgment` 以外は任意 */
+export interface SubmitManagerJudgment {
+  judgment: 'ok' | 'ng'
+  reason?: string
+  judged_by_employee_id: string
 }
 
 export interface InterruptSession {

@@ -531,6 +531,15 @@ onUnmounted(() => {
           <span class="text-sm text-gray-800">{{ liveSession.responsible_manager_name || '-' }}</span>
         </div>
       </div>
+
+      <!-- 運行管理者の判定 (Refs ippoan/alc-app#315。safety_judgment とは別物) -->
+      <div class="px-3 py-2 border-t border-gray-100">
+        <TenkoManagerJudgmentPanel
+          :session="liveSession"
+          :manager-id="authenticatedManagerId"
+          @judged="s => { liveSession = s }"
+        />
+      </div>
     </div>
   </div>
 

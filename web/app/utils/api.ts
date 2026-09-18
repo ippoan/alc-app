@@ -4,6 +4,7 @@ import type {
   TenkoSchedule, CreateTenkoSchedule, UpdateTenkoSchedule, TenkoScheduleFilter, TenkoSchedulesResponse,
   TenkoSession, StartTenkoSession, SubmitAlcoholResult, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
+  SubmitManagerJudgment,
   TenkoRemoteEscalationReason,
   TenkoSessionFilter, TenkoSessionsResponse,
   TenkoRecordFilter,
@@ -599,6 +600,17 @@ export async function escalateTenkoSessionToRemote(
 
 export async function cancelTenkoSession(sessionId: string, data: CancelTenkoSession): Promise<TenkoSession> {
   return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+/**
+ * 運行管理者が点呼の OK/NG を判定して記録する (Refs ippoan/alc-app#315)。
+ * NG でも `status` は変えない (点呼は完了扱いのまま、判定だけ記録する)。
+ */
+export async function submitManagerJudgment(sessionId: string, data: SubmitManagerJudgment): Promise<TenkoSession> {
+  return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/judgment`, {
     method: 'POST',
     body: JSON.stringify(data),
   })
