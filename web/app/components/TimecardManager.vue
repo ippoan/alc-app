@@ -242,12 +242,7 @@ async function exportCsv() {
         <div class="flex flex-wrap gap-3 items-end">
           <div>
             <label class="block text-xs text-gray-500 mb-1">社員</label>
-            <select v-model="selectedEmployeeId" class="border rounded px-3 py-2 text-sm">
-              <option value="">選択してください</option>
-              <option v-for="e in employees" :key="e.id" :value="e.id">
-                {{ e.name }} {{ e.code ? `(${e.code})` : '' }}
-              </option>
-            </select>
+            <EmployeeSearchSelect v-model="selectedEmployeeId" :employees="employees" placeholder="乗務員を選択 (名前・社員番号で検索)" />
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">カードID</label>
@@ -332,10 +327,7 @@ async function exportCsv() {
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">社員</label>
-          <select v-model="filterEmployeeId" class="border rounded px-3 py-2 text-sm">
-            <option value="">全員</option>
-            <option v-for="e in employees" :key="e.id" :value="e.id">{{ e.name }}</option>
-          </select>
+          <EmployeeSearchSelect v-model="filterEmployeeId" :employees="employees" />
         </div>
         <button
           class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"

@@ -94,3 +94,25 @@ describe('TenkoScheduleManager — #321 業務前の指示事項', () => {
     wrapper.unmount()
   })
 })
+
+// #333: 乗務員フィルタは EmployeeSearchSelect (検索できる部品) へ差し替え済みだが、
+// 新規作成フォームの v-for 行 (newRows) は配列要素への v-model なので、
+// defineModel の bind が効くかを別途確かめる (壊れやすい箇所)。
+describe('TenkoScheduleManager — #333 新規作成行の乗務員セレクト', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('行の乗務員セレクトで候補を選ぶとその行の employee_id に id が入る', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+
+    // フィルタ欄 (index 0) と新規行 (index 1) の 2 つの EmployeeSearchSelect が並ぶ
+    const rowSelect = wrapper.findAllComponents({ name: 'EmployeeSearchSelect' })[1]!
+    await rowSelect.find('[data-testid="employee-search-input"]').trigger('focus')
+    const option = rowSelect.findAll('[data-testid="employee-search-option"]')[0]!
+    await option.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect((wrapper.vm as any).newRows[0].employee_id).toBe('emp-1')
+    wrapper.unmount()
+  })
+})

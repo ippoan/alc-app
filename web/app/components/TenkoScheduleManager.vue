@@ -185,10 +185,7 @@ onMounted(() => { loadEmployees(); fetchData() })
     <!-- フィルタ -->
     <div class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-        <select v-model="filterEmployeeId" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">全乗務員</option>
-          <option v-for="emp in employees" :key="emp.id" :value="emp.id">{{ emp.name }}</option>
-        </select>
+        <EmployeeSearchSelect v-model="filterEmployeeId" :employees="employees" />
         <select v-model="filterTenkoType" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="">全種別</option>
           <option value="pre_operation">{{ tenkoTypeLabel('pre_operation') }}</option>
@@ -214,10 +211,7 @@ onMounted(() => { loadEmployees(); fetchData() })
     <div v-if="showForm" class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <h3 class="text-sm font-medium text-gray-700 mb-3">スケジュール作成</h3>
       <div v-for="(row, i) in newRows" :key="i" class="grid grid-cols-1 sm:grid-cols-6 gap-2 mb-2">
-        <select v-model="row.employee_id" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">乗務員</option>
-          <option v-for="emp in employees" :key="emp.id" :value="emp.id">{{ emp.name }}</option>
-        </select>
+        <EmployeeSearchSelect v-model="row.employee_id" :employees="employees" placeholder="乗務員を選択 (名前・社員番号で検索)" />
         <select v-model="row.tenko_type" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="pre_operation">{{ tenkoTypeLabel('pre_operation') }}</option>
           <option value="post_operation">{{ tenkoTypeLabel('post_operation') }}</option>
