@@ -99,12 +99,27 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     wrapper.unmount()
   })
 
-  it('判定済みのセッションでは OK/NG ボタンを出さず、結果 (値 + 理由) を表示する', async () => {
+  it('判定済みのセッションでは結果 (値 + 理由) を表示する', async () => {
     const judged = { ...SESSION_UNJUDGED, manager_judgment: 'ng', manager_judgment_reason: '体調不良' }
     const wrapper = await mountPanel(judged)
     expect(wrapper.text()).toContain('NG')
     expect(wrapper.text()).toContain('体調不良')
-    expect(wrapper.findAll('button').find(b => b.text() === 'OK')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  // 押し間違いは実運用で起きるので、判定済みでも押し直せる (確認ダイアログ無し。親の判断)
+  it('判定済みのセッションでも OK/NG ボタンで押し直せる (再判定)', async () => {
+    const judged = { ...SESSION_UNJUDGED, manager_judgment: 'ok', manager_judgment_reason: null }
+    const wrapper = await mountPanel(judged)
+    const ngButton = wrapper.findAll('button').find(b => b.text() === 'NG')
+    expect(ngButton).toBeTruthy()
+    await ngButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+    const confirmButton = wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))
+    await confirmButton!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock).toHaveBeenCalledTimes(1)
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ng' })
     wrapper.unmount()
   })
 
