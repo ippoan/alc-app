@@ -12,7 +12,6 @@ import {
   cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
   getCarryingItems, submitCarryingItemChecks,
 } from '~/utils/api'
-import { noPendingSchedule } from '~/utils/employee-lookup-messages'
 
 /** UI ステップ (バックエンド status とは別) */
 export type TenkoStep =
@@ -137,10 +136,10 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     try {
       const schedules = await getPendingSchedules(empId)
       pendingSchedules.value = schedules
-      if (schedules.length === 0) {
-        error.value = noPendingSchedule()
-        return
-      }
+      // 予定が 0 件でもエラーで止めず schedule_select へ進む。業務前は予定必須のまま
+      // (指示事項が予定に載る) だが、業務後は予定が無くても進められる (Refs
+      // ippoan/alc-app#322、法令上「設定することができる」= 任意)。画面が
+      // 「予定なしで業務後として進む」導線を出す
       step.value = 'schedule_select'
     } catch (e) {
       error.value = e instanceof Error ? e.message : '予定取得に失敗しました'
@@ -156,10 +155,21 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     step.value = 'face_auth'
   }
 
+  // --- 予定を選ばず業務後として進む (Refs ippoan/alc-app#322) ---
+  // 業務前のセッションには絶対にならない — selectedTenkoType を必ず post_operation に
+  // 固定するため。業務前は下の onFaceAuthComplete のガードで引き続き予定必須
+  function proceedWithoutSchedule() {
+    error.value = null
+    selectedTenkoType.value = 'post_operation'
+    step.value = 'face_auth'
+  }
+
   // --- 顔認証完了 → セッション開始 + アルコール測定 ---
   async function onFaceAuthComplete(result: FaceAuthResult) {
     if (!result.verified) return
-    if (!remoteMode && !selectedSchedule.value) return
+    // 業務後は予定が無くても進められる (selectedTenkoType='post_operation' が
+    // proceedWithoutSchedule でセットされる)。業務前は引き続き予定必須
+    if (!remoteMode && !selectedSchedule.value && tenkoType.value !== 'post_operation') return
     error.value = null
     isLoading.value = true
 
@@ -478,6 +488,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     // Actions
     identifyEmployee,
     selectSchedule,
+    proceedWithoutSchedule,
     onFaceAuthComplete,
     onAlcoholResult,
     onMedicalSubmit,

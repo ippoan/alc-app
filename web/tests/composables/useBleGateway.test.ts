@@ -201,6 +201,7 @@ describe('useBleGateway', () => {
     expect(gw.error.value).toBeNull()
     expect(gw.thermometerConnected.value).toBe(false)
     expect(gw.bloodPressureConnected.value).toBe(false)
+    expect(gw.bpBonded.value).toBe(false)
     expect(gw.latestTemperature.value).toBeNull()
     expect(gw.latestBloodPressure.value).toBeNull()
     expect(gw.latestAlcohol.value).toBeNull()
@@ -208,6 +209,48 @@ describe('useBleGateway', () => {
     expect(gw.gatewayVersion.value).toBeNull()
     expect(gw.transport.value).toBeNull()
     expect(gw.hasMedicalData.value).toBe(false)
+    expect(gw.hasBpHardware.value).toBe(false)
+  })
+
+  // =============================================
+  // bp_bond / hasBpHardware (Refs ippoan/alc-app#322、ippoan/alc-app-s3#249)
+  // =============================================
+
+  describe('bp_bond → hasBpHardware', () => {
+    async function connectWs(): Promise<MockWebSocket> {
+      await gw.connect()
+      const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]!
+      ws.simulateOpen()
+      return ws
+    }
+
+    it('bp_bond bonded=true → bpBonded が立ち、接続していなくても hasBpHardware=true (スリープ中の血圧計)', async () => {
+      const ws = await connectWs()
+      ws.simulateMessage({ type: 'bp_bond', bonded: true })
+      expect(gw.bpBonded.value).toBe(true)
+      expect(gw.bloodPressureConnected.value).toBe(false)
+      expect(gw.hasBpHardware.value).toBe(true)
+    })
+
+    it('bp_bond bonded=false → bpBonded は立たず hasBpHardware=false', async () => {
+      const ws = await connectWs()
+      ws.simulateMessage({ type: 'bp_bond', bonded: false })
+      expect(gw.bpBonded.value).toBe(false)
+      expect(gw.hasBpHardware.value).toBe(false)
+    })
+
+    it('旧ファーム (bp_bond を送らない) でも bloodPressureConnected=true なら hasBpHardware=true (後方互換フォールバック)', async () => {
+      const ws = await connectWs()
+      ws.simulateMessage({ type: 'connected', device: 'blood_pressure' })
+      expect(gw.bpBonded.value).toBe(false)
+      expect(gw.bloodPressureConnected.value).toBe(true)
+      expect(gw.hasBpHardware.value).toBe(true)
+    })
+
+    it('bond も接続も無ければ hasBpHardware=false', async () => {
+      await connectWs()
+      expect(gw.hasBpHardware.value).toBe(false)
+    })
   })
 
   // =============================================
@@ -1022,17 +1065,19 @@ describe('useBleGateway', () => {
     })
 
     describe('公開 API', () => {
-      it('返すキーは #182 の前後で変わらない (呼び出し元は触らない)', () => {
+      it('返すキーは #182 の前後で変わらない (呼び出し元は触らない、#322 で bpBonded/hasBpHardware を追加)', () => {
         expect(Object.keys(gw).sort()).toEqual([
           'alcoholStage',
           'autoConnect',
           'bloodPressureConnected',
+          'bpBonded',
           'clearAlcoholReading',
           'clearReadings',
           'connect',
           'disconnect',
           'error',
           'gatewayVersion',
+          'hasBpHardware',
           'hasMedicalData',
           'isConnected',
           'latestAlcohol',

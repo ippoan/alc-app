@@ -19,11 +19,16 @@ const bpEnabled = ref(BP_ENABLED_DEFAULT)
 /** 端末設定からの唯一の受け口 */
 function setBpEnabled(v: boolean) {
   bpEnabled.value = v
-  applied = true
+  applied.value = true
 }
 
-/** サーバの設定が決まったか (初回読み込みが遅れて届いても上書きしないための印) */
-let applied = false
+/**
+ * サーバの設定が決まったか (初回読み込みが遅れて届いても上書きしないための印)。
+ * `bpEnabled` が false のとき、「サーバが false と答えた (この端末では未使用)」と
+ * 「まだサーバに聞けていない (未登録・取得失敗)」を画面が区別するために公開する
+ * (Refs ippoan/alc-app#322)。
+ */
+const applied = ref(false)
 /** サーバへ読みに行ったか。アプリの生存期間で 1 回だけ */
 let loadStarted = false
 
@@ -42,7 +47,7 @@ function loadFromServerOnce() {
       if (!deviceId.value) return
       const settings = await getDeviceSettings(deviceId.value, deviceSettingsToken.value)
       // 待っている間に端末設定の画面から決まっていたら、そちらが新しい
-      if (!applied) setBpEnabled(settings.bp_enabled)
+      if (!applied.value) setBpEnabled(settings.bp_enabled)
     } catch {
       // 取得できなければ既定のまま (画面は体温だけで進む)
     }
@@ -55,6 +60,8 @@ export function useBloodPressureSetting() {
   return {
     /** true = この端末で血圧計を使う */
     bpEnabled: readonly(bpEnabled),
+    /** true = サーバの設定が決まった (false でも「未使用と確認できた」ことを表す) */
+    bpConfirmed: readonly(applied),
     setBpEnabled,
   }
 }

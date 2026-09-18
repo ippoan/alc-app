@@ -33,7 +33,7 @@ const {
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
-  identifyEmployee, selectSchedule, onFaceAuthComplete,
+  identifyEmployee, selectSchedule, proceedWithoutSchedule, onFaceAuthComplete,
   onAlcoholResult, onMedicalSubmit, onSelfDeclarationSubmit,
   onDailyInspectionSubmit, carryingItems, loadCarryingItems, onCarryingItemsSubmit,
   onInstructionConfirm, onReportSubmit,
@@ -502,6 +502,7 @@ onUnmounted(() => {
             :schedules="pendingSchedules"
             :employee-name="employeeName"
             @select="selectSchedule"
+            @no-schedule="proceedWithoutSchedule"
           />
         </div>
       </div>

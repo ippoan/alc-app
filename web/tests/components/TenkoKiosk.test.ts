@@ -10,6 +10,7 @@ import type { TenkoStep } from '~/composables/useTenkoKiosk'
 // (自動点呼のフロー自体は tests/composables/useTenkoKiosk.test.ts が担当)。
 
 const step = ref<TenkoStep>('nfc')
+const proceedWithoutScheduleMock = vi.fn()
 
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
@@ -31,6 +32,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   currentStepIndex: ref(0),
   identifyEmployee: vi.fn(async () => {}),
   selectSchedule: vi.fn(async () => {}),
+  proceedWithoutSchedule: proceedWithoutScheduleMock,
   onFaceAuthComplete: vi.fn(),
   onAlcoholResult: vi.fn(),
   onMedicalSubmit: vi.fn(),
@@ -145,6 +147,23 @@ describe('TenkoKiosk — PC の段を CoreS3 に送る (useCoreS3Stage、Refs #2
 
     expect(sendResultMock).toHaveBeenCalledTimes(1)
     expect(sendResultMock.mock.calls[0]![0]).toMatchObject({ alcoholValue: 0.1, resultType: 'normal' })
+    wrapper.unmount()
+  })
+})
+
+// 業務後は予定なしでも進められる (Refs ippoan/alc-app#322)
+describe('TenkoKiosk — TenkoScheduleSelect の no-schedule を proceedWithoutSchedule へ配線する', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'schedule_select'
+  })
+
+  it('TenkoScheduleSelect が no-schedule を発火すると proceedWithoutSchedule が呼ばれる', async () => {
+    const wrapper = await mountKiosk()
+    wrapper.findComponent({ name: 'TenkoScheduleSelect' }).vm.$emit('no-schedule')
+    await wrapper.vm.$nextTick()
+
+    expect(proceedWithoutScheduleMock).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

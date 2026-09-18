@@ -12,6 +12,7 @@ const {
   error,
   thermometerConnected,
   bloodPressureConnected,
+  hasBpHardware,
   latestTemperature,
   latestBloodPressure,
   hasMedicalData,
@@ -22,7 +23,11 @@ const {
   resetGateway,
 } = useBleGateway()
 
-const { bpEnabled } = useBloodPressureSetting()
+const { bpEnabled, bpConfirmed } = useBloodPressureSetting()
+const { deviceId } = useAuth()
+
+/** 血圧 UI (状態表示・測定値カード) を出すか。未登録端末でも血圧計が在れば出す (Refs #322) */
+const showBpUi = computed(() => bpEnabled.value || hasBpHardware.value)
 
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
@@ -129,20 +134,26 @@ function handleRescan() {
             />
             体温計
           </span>
-          <span v-if="bpEnabled" class="flex items-center gap-2">
+          <span v-if="showBpUi" class="flex items-center gap-2">
             <span
               class="w-2.5 h-2.5 rounded-full"
               :class="bloodPressureConnected ? 'bg-green-500' : 'bg-gray-300'"
             />
             血圧計
           </span>
-          <span v-else class="text-gray-400">
+          <span v-else-if="bpConfirmed" class="text-gray-400">
             血圧計: この端末では未使用
+          </span>
+          <span v-else-if="!deviceId" class="text-amber-600">
+            血圧計: 未確認 (この端末は端末登録されていません)
+          </span>
+          <span v-else class="text-amber-600">
+            血圧計: 未確認 (設定を取得できませんでした)
           </span>
         </div>
 
         <!-- 測定値カード -->
-        <div class="grid gap-3" :class="bpEnabled ? 'grid-cols-2' : 'grid-cols-1'">
+        <div class="grid gap-3" :class="showBpUi ? 'grid-cols-2' : 'grid-cols-1'">
           <!-- 体温 -->
           <div
             class="rounded-xl p-4 text-center"
@@ -158,7 +169,7 @@ function handleRescan() {
 
           <!-- 血圧 -->
           <div
-            v-if="bpEnabled"
+            v-if="showBpUi"
             class="rounded-xl p-4 text-center"
             :class="latestBloodPressure ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 border border-gray-200'"
           >

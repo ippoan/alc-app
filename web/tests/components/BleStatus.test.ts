@@ -10,6 +10,7 @@ vi.mock('~/utils/webserial', () => ({
 const isConnected = ref(false)
 const thermometerConnected = ref(false)
 const bloodPressureConnected = ref(false)
+const hasBpHardware = ref(false)
 const latestTemperature = ref<{ value: number } | null>(null)
 const latestBloodPressure = ref<{ systolic: number, diastolic: number, pulse?: number } | null>(null)
 const hasMedicalData = ref(false)
@@ -22,6 +23,7 @@ mockNuxtImport('useBleGateway', () => () => ({
   error: ref<string | null>(null),
   thermometerConnected: readonly(thermometerConnected),
   bloodPressureConnected: readonly(bloodPressureConnected),
+  hasBpHardware: readonly(hasBpHardware),
   latestTemperature: readonly(latestTemperature),
   latestBloodPressure: readonly(latestBloodPressure),
   hasMedicalData: readonly(hasMedicalData),
@@ -33,9 +35,17 @@ mockNuxtImport('useBleGateway', () => () => ({
 }))
 
 const bpEnabled = ref(false)
+/** サーバ設定が決まったか (既定 true = 従来の「登録済み端末」テストをそのまま通す) */
+const bpConfirmed = ref(true)
 mockNuxtImport('useBloodPressureSetting', () => () => ({
   bpEnabled: readonly(bpEnabled),
+  bpConfirmed: readonly(bpConfirmed),
   setBpEnabled: (v: boolean) => { bpEnabled.value = v },
+}))
+
+const deviceId = ref<string | null>('device-1')
+mockNuxtImport('useAuth', () => () => ({
+  deviceId: readonly(deviceId),
 }))
 
 const AUTO_NEXT_DELAY_MS = 1500
@@ -46,10 +56,13 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
   beforeEach(() => {
     vi.resetModules()
     bpEnabled.value = false
+    bpConfirmed.value = true
+    deviceId.value = 'device-1'
     webSerialSupported = true
     isConnected.value = false
     thermometerConnected.value = false
     bloodPressureConnected.value = false
+    hasBpHardware.value = false
     latestTemperature.value = null
     latestBloodPressure.value = null
     hasMedicalData.value = false
@@ -122,10 +135,105 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
   })
 })
 
+describe('BleStatus — 血圧「未確認」の 4 分岐 + hasBpHardware での表示 (Refs ippoan/alc-app#322)', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    bpEnabled.value = false
+    bpConfirmed.value = true
+    deviceId.value = 'device-1'
+    webSerialSupported = true
+    isConnected.value = true
+    thermometerConnected.value = false
+    bloodPressureConnected.value = false
+    hasBpHardware.value = false
+    latestTemperature.value = null
+    latestBloodPressure.value = null
+    hasMedicalData.value = false
+    startAutoConnectMock.mockReset()
+    startAutoConnectMock.mockResolvedValue(true)
+    clearReadingsMock.mockReset()
+    resetGatewayMock.mockReset()
+  })
+
+  it('bpEnabled=false, bpConfirmed=true → 「この端末では未使用」(従来どおり)', async () => {
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    expect(wrapper.text()).toContain('血圧計: この端末では未使用')
+    expect(wrapper.text()).not.toContain('未確認')
+
+    wrapper.unmount()
+  })
+
+  it('bpEnabled=false, bpConfirmed=false, deviceId 無し → 「未登録」の未確認表示', async () => {
+    bpConfirmed.value = false
+    deviceId.value = null
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    expect(wrapper.text()).toContain('血圧計: 未確認 (この端末は端末登録されていません)')
+
+    wrapper.unmount()
+  })
+
+  it('bpEnabled=false, bpConfirmed=false, deviceId 有り → 「取得できませんでした」の未確認表示', async () => {
+    bpConfirmed.value = false
+    deviceId.value = 'device-1'
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    expect(wrapper.text()).toContain('血圧計: 未確認 (設定を取得できませんでした)')
+
+    wrapper.unmount()
+  })
+
+  it('bpEnabled=true なら bpConfirmed/deviceId に関わらず今までどおりの血圧 UI', async () => {
+    bpEnabled.value = true
+    bpConfirmed.value = false
+    deviceId.value = null
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    expect(wrapper.text()).not.toContain('未確認')
+    expect(wrapper.text()).not.toContain('この端末では未使用')
+
+    wrapper.unmount()
+  })
+
+  it('bpEnabled=false でも hasBpHardware=true なら血圧 UI (接続状態・測定値カード) を出す (Refs #322)', async () => {
+    hasBpHardware.value = true
+    bpConfirmed.value = false
+    deviceId.value = null
+    latestBloodPressure.value = { systolic: 118, diastolic: 76 }
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    // 未確認の文言は出ず、血圧の測定値カードが出る (未登録端末でも値を出せる)
+    expect(wrapper.text()).not.toContain('未確認')
+    expect(wrapper.text()).toContain('118')
+    expect(wrapper.text()).toContain('76')
+
+    wrapper.unmount()
+  })
+
+  it('bpEnabled=false かつ hasBpHardware=false なら血圧の測定値カードは出ない', async () => {
+    latestBloodPressure.value = { systolic: 118, diastolic: 76 }
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    expect(wrapper.text()).not.toContain('118')
+
+    wrapper.unmount()
+  })
+})
+
 describe('BleStatus — 測定値がそろうと自動的に次へ進む (Refs #238 / ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
     vi.resetModules()
     bpEnabled.value = false
+    bpConfirmed.value = true
+    deviceId.value = 'device-1'
+    hasBpHardware.value = false
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     isConnected.value = true
     thermometerConnected.value = true

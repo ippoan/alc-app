@@ -78,6 +78,7 @@ const bleTemperatureRef = ref<{ value: number; unit: 'celsius'; measuredAt: Date
 mockNuxtImport('useBleGateway', () => () => ({
   latestTemperature: readonly(bleTemperatureRef),
   latestBloodPressure: readonly(ref(null)),
+  hasBpHardware: readonly(ref(false)),
 }))
 
 // 本人確認前のアルコール測定の通知 (Refs ippoan/rust-alc-api#644)。値を差し替えられる
