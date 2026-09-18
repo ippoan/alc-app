@@ -106,7 +106,8 @@ function minutesToHM(m: number | null) {
         <div v-if="info.recent_measurements.length === 0" class="text-xs text-gray-400">測定履歴なし</div>
       </div>
 
-      <!-- ロ 労働時間 -->
+      <!-- ロ 労働時間: alc_api.dtako_daily_work_hours (デジタコ連携) 由来。
+           テナントでデジタコ連携が稼働していない場合は空表示になる -->
       <div v-else-if="activeTab === 'hours'" class="space-y-3">
         <h4 class="font-bold text-sm">直近7日の労働時間</h4>
         <table class="w-full text-xs">
@@ -174,7 +175,8 @@ function minutesToHM(m: number | null) {
         <div v-if="info.past_tenko_records.length === 0" class="text-xs text-gray-400">点呼記録なし</div>
       </div>
 
-      <!-- ト 車両整備 -->
+      <!-- ト 車両整備: 日常点検結果 + 未解決の機器故障のみ。
+           車検証等の正式な整備記録ではない (国交省要件の「整備状況」を部分的にしか満たさない) -->
       <div v-else-if="activeTab === 'vehicle'" class="space-y-3">
         <h4 class="font-bold text-sm">直近の日常点検</h4>
         <div v-for="insp in info.recent_daily_inspections" :key="insp.session_id" class="border rounded p-2 text-xs">

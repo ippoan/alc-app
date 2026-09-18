@@ -271,7 +271,9 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
 
     // 予定選択を挟まない段の一覧 (従来どおり)
     expect(stepLabelsOf(wrapper)).not.toContain('予定選択')
-    expect(getPendingSchedules).not.toHaveBeenCalled()
+    // 遠隔点呼が業務前に固定されるバグの修正後は、画面には出さないが
+    // 種別 (業務前/業務後) を引き継ぐために予定を裏で取得する
+    expect(getPendingSchedules).toHaveBeenCalledWith(EMPLOYEE.id)
     // 従来の遠隔点呼バナー (切替の文言ではない)
     expect(wrapper.text()).toContain('遠隔点呼モード — 運行管理者がビデオ通話で確認しています')
     // 切り替えボタンは出ない
