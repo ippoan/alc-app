@@ -2,6 +2,18 @@
 import { isWebSerialSupported } from '~/utils/webserial'
 import { MEDICAL_AUTO_NEXT_DELAY_MS } from '~/utils/medical-inputs'
 
+/**
+ * スキップの口を出すか。既定 true (従来どおり)。
+ * 自動点呼の体温・血圧ステップだけは「押しても必ず 400 になる」選択肢だったため、
+ * `TenkoKiosk.vue` から `false` を渡して隠す (Refs #322)。他の利用箇所
+ * (通常点呼・血圧測定端末) はサーバへ何も送らない生きた導線なので既定のまま出す。
+ */
+withDefaults(defineProps<{
+  allowSkip?: boolean
+}>(), {
+  allowSkip: true,
+})
+
 const emit = defineEmits<{
   skip: []
   next: []
@@ -115,6 +127,7 @@ function handleRescan() {
           {{ isWebSerialSupported() ? 'USB デバイスを選択' : '再接続' }}
         </button>
         <button
+          v-if="allowSkip"
           class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition-colors"
           @click="handleSkip"
         >
@@ -218,6 +231,7 @@ function handleRescan() {
             次へ
           </button>
           <button
+            v-if="allowSkip"
             class="px-4 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm hover:bg-gray-200 transition-colors"
             @click="handleSkip"
           >
