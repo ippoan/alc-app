@@ -293,10 +293,7 @@ onMounted(() => { loadEmployees(); fetchData() })
     <!-- フィルタ -->
     <div class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-        <select v-model="filterEmployeeId" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="">全乗務員</option>
-          <option v-for="emp in employees" :key="emp.id" :value="emp.id">{{ emp.name }}</option>
-        </select>
+        <EmployeeSearchSelect v-model="filterEmployeeId" :employees="employees" />
         <select v-model="filterStatus" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="">全ステータス</option>
           <option value="identity_verified">本人確認済</option>
