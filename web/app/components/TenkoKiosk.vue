@@ -368,7 +368,28 @@ onUnmounted(() => {
 
       <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-6']">
         <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">{{ isRemote ? '遠隔点呼' : '自動点呼' }}</h1>
-        <p v-if="tenkoType" class="mt-1 text-sm">
+        <!-- 点呼種別 (遠隔点呼かつ乗務員未特定のみトグル。予定に依存せず画面で選ぶ。Refs #310) -->
+        <div v-if="remoteMode && step === 'nfc'" class="flex justify-center gap-2 mt-2">
+          <button
+            class="px-3 py-1 rounded-full text-xs font-bold border transition-colors"
+            :class="tenkoType === 'pre_operation'
+              ? 'bg-blue-600 text-white border-blue-600'
+              : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'"
+            @click="selectedTenkoType = 'pre_operation'"
+          >
+            {{ tenkoTypeLabel('pre_operation') }}
+          </button>
+          <button
+            class="px-3 py-1 rounded-full text-xs font-bold border transition-colors"
+            :class="tenkoType === 'post_operation'
+              ? 'bg-orange-500 text-white border-orange-500'
+              : 'bg-white text-orange-500 border-orange-300 hover:bg-orange-50'"
+            @click="selectedTenkoType = 'post_operation'"
+          >
+            {{ tenkoTypeLabel('post_operation') }}
+          </button>
+        </div>
+        <p v-else-if="tenkoType" class="mt-1 text-sm">
           <span
             class="px-2 py-0.5 rounded text-xs font-bold"
             :class="isPreOperation ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'"
@@ -468,28 +489,6 @@ onUnmounted(() => {
               @click="useManualInput = false"
             >
               NFC で読み取る
-            </button>
-          </div>
-
-          <!-- 点呼種別 (遠隔点呼のみ。予定に依存せず画面で選ぶ。Refs #310) -->
-          <div v-if="remoteMode" class="flex gap-2 mt-4">
-            <button
-              class="flex-1 py-1.5 rounded-lg text-sm font-medium border transition-colors"
-              :class="tenkoType === 'pre_operation'
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'"
-              @click="selectedTenkoType = 'pre_operation'"
-            >
-              {{ tenkoTypeLabel('pre_operation') }}
-            </button>
-            <button
-              class="flex-1 py-1.5 rounded-lg text-sm font-medium border transition-colors"
-              :class="tenkoType === 'post_operation'
-                ? 'bg-orange-500 text-white border-orange-500'
-                : 'bg-white text-orange-500 border-orange-300 hover:bg-orange-50'"
-              @click="selectedTenkoType = 'post_operation'"
-            >
-              {{ tenkoTypeLabel('post_operation') }}
             </button>
           </div>
         </div>
