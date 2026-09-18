@@ -6,6 +6,22 @@ import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
 const deviceId = ref<string | null>('device-1')
 mockNuxtImport('useAuth', () => () => ({ deviceId }))
 
+// 署名つきボンド状態 (Refs ippoan/alc-app#336)。null = 不明
+const signedBpBonded = ref<boolean | null>(false)
+// ボンド状態を一度でも取りに行ったか。false = 「未取得」であって「不明」ではない
+const hasProbedBpBond = ref(true)
+const refreshSignedBpBonded = vi.fn(async () => {
+  hasProbedBpBond.value = true
+  return signedBpBonded.value
+})
+mockNuxtImport('useDeviceToken', () => () => ({ signedBpBonded, hasProbedBpBond, refreshSignedBpBonded }))
+
+// 血圧を出せる見込み (BleStatus の showBpUi と同じ 2 つ)。既定は「出せない端末」
+const bpEnabled = ref(false)
+const hasBpHardware = ref(false)
+mockNuxtImport('useBloodPressureSetting', () => () => ({ bpEnabled, setBpEnabled: vi.fn() }))
+mockNuxtImport('useBleGateway', () => () => ({ hasBpHardware }))
+
 vi.mock('~/utils/api', () => ({
   getPendingSchedules: vi.fn(),
   startTenkoSession: vi.fn(),
@@ -22,7 +38,7 @@ vi.mock('~/utils/api', () => ({
   submitCarryingItemChecks: vi.fn(),
 }))
 
-import { useTenkoKiosk } from '~/composables/useTenkoKiosk'
+import { useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
   startTenkoSession,
@@ -108,6 +124,10 @@ describe('useTenkoKiosk', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     deviceId.value = 'device-1'
+    signedBpBonded.value = false
+    hasProbedBpBond.value = true
+    bpEnabled.value = false
+    hasBpHardware.value = false
   })
 
   // ---------- 初期状態 ----------
@@ -414,6 +434,257 @@ describe('useTenkoKiosk', () => {
 
       await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
       expect(k.error.value).toBe('セッション開始に失敗しました')
+    })
+  })
+
+  // ---------- 血圧の要否が確定できない端末を入口で止める (Refs ippoan/alc-app#336) ----------
+
+  describe('業務前の自動点呼: 血圧の要否が確定できない端末は入口で止める (Refs #336)', () => {
+    /**
+     * 「不明」の端末 = 署名でボンド状態を得られず (`signedBpBonded === null`)、
+     * device_id も無い (CoreS3 端末は devices に行が無く構造的にこうなる)。
+     * この端末で進むと、体温を送った時点で必ず 400 (`bp_required`) になる。
+     */
+    function unknownDevice() {
+      deviceId.value = null
+      signedBpBonded.value = null
+      // 「試した結果、分からなかった」端末。「まだ試していない」とは区別する
+      hasProbedBpBond.value = true
+    }
+
+    function startedSession() {
+      const sess = makeSession({ status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValue(sess)
+      return sess
+    }
+
+    it('★ 不明 → セッションを開始せず、理由を出して止まる (体温まで歩かせない)', async () => {
+      unknownDevice()
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(true)
+      // 無言で止めない — 理由と次の行動が出ている
+      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('★ 未ボンド (false = 血圧計が無いと確認できた) は通す — 「不明」と混ぜない (#322 の踏み方)', async () => {
+      unknownDevice()
+      signedBpBonded.value = false
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('ボンドあり (true) は通す (血圧を測って進む端末)', async () => {
+      unknownDevice()
+      signedBpBonded.value = true
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+    })
+
+    it('device_id がある端末は止めない (サーバが devices.bp_enabled を引ける)', async () => {
+      signedBpBonded.value = null
+      deviceId.value = 'device-1'
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+    })
+
+    it('★ 血圧計の設定が入っている端末は止めない — 不明 (= 血圧必須) でも測って通れる', async () => {
+      unknownDevice()
+      bpEnabled.value = true
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('★ 血圧計が繋がっている端末は止めない (古いファーム + 血圧計を締め出さない)', async () => {
+      unknownDevice()
+      hasBpHardware.value = true
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('★ まだ署名を試していない端末は止めない — その場で 1 度取りに行ってから判定する', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = false
+      // 取りに行ったら「血圧計は無い」と確認できた
+      refreshSignedBpBonded.mockImplementationOnce(async () => {
+        hasProbedBpBond.value = true
+        signedBpBonded.value = false
+        return false
+      })
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('★ 未取得のまま取りに行っても分からなければ止める (試した結果が不明なときだけ止まる)', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = false
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(true)
+    })
+
+    it('取得済みなら入口で取りに行かない (毎回署名しなおさない)', async () => {
+      unknownDevice()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(refreshSignedBpBonded).not.toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(true)
+    })
+
+    it('業務後は対象外 — 不明でも進める', async () => {
+      unknownDevice()
+      vi.mocked(startTenkoSession).mockResolvedValue(
+        makeSession({ tenko_type: 'post_operation', status: 'identity_verified' }),
+      )
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.proceedWithoutSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('遠隔点呼は対象外 — 不明でも進める (自動点呼だけを止める)', async () => {
+      unknownDevice()
+      startedSession()
+
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.employeeId.value = 'emp-1'
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('★ もう一度試す → 取得しなおして確定したら、止めた所から再開する', async () => {
+      unknownDevice()
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(k.bpRequirementUnknown.value).toBe(true)
+
+      // CoreS3 が繋がり直し、「この端末に血圧計は無い」と確認できた
+      refreshSignedBpBonded.mockImplementationOnce(async () => {
+        signedBpBonded.value = false
+        return false
+      })
+      await k.retryBpRequirement()
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(k.bpRequirementUnknown.value).toBe(false)
+      expect(k.error.value).toBeNull()
+      expect(startTenkoSession).toHaveBeenCalledWith({
+        schedule_id: 'sched-1',
+        employee_id: 'emp-1',
+        identity_face_photo_url: undefined,
+      })
+      expect(k.step.value).toBe('alcohol')
+    })
+
+    it('★ もう一度試してもなお不明 → 同じ画面に戻るだけ (リロードなしで再試行できる)', async () => {
+      unknownDevice()
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      await k.retryBpRequirement()
+
+      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
+      expect(k.bpRequirementUnknown.value).toBe(true)
+      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('止まっていないときの もう一度試す は何もしない', async () => {
+      const k = useTenkoKiosk()
+      await k.retryBpRequirement()
+
+      expect(refreshSignedBpBonded).not.toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
+    it('reset() で止めた状態が残らない (次の乗務員に引きずらない)', async () => {
+      unknownDevice()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(k.bpRequirementUnknown.value).toBe(true)
+
+      k.reset()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+      expect(k.error.value).toBeNull()
     })
   })
 
