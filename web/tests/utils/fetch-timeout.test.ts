@@ -76,10 +76,14 @@ describe('timeoutMessageFor', () => {
     expect(timeoutMessageFor(method)).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
   })
 
-  it('書き込みの文言には「もう一度お試しください」が入らず、確認の導線が入る', () => {
-    expect(FETCH_TIMEOUT_MESSAGE_WRITE).not.toContain('もう一度お試しください')
+  it('書き込みの文言には「もう一度」が入らず、次の行動 2 つが入る', () => {
+    // 押し直させない — サーバ側では成功していることがある
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).not.toContain('もう一度')
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('同じ操作を繰り返さず')
+    // 何が起きたか + 次にやること
     expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('完了している可能性があります')
-    expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('確認してください')
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('画面を確認する')
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('運行管理者に連絡してください')
   })
 })
 

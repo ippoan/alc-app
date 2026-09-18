@@ -2578,7 +2578,7 @@ describe.skipIf(isLive)('fetch の上限 (Refs ippoan/alc-app#338)', () => {
     mockFetch.mockRejectedValueOnce(makeTimeoutError())
     const err = await startTenkoSession(startTenkoSessionBody).catch((e: Error) => e)
     expect((err as Error).message).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
-    expect((err as Error).message).not.toContain('もう一度お試しください')
+    expect((err as Error).message).not.toContain('もう一度')
   })
 
   it('アップロード (POST) が timeout → 再試行を促さない', async () => {

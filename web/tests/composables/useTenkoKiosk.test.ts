@@ -451,7 +451,7 @@ describe('useTenkoKiosk', () => {
 
       // サーバ側では点呼が始まっている可能性があるので、押し直させない
       expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
-      expect(k.error.value).not.toContain('もう一度お試しください')
+      expect(k.error.value).not.toContain('もう一度')
       expect(k.isLoading.value).toBe(false)
       expect(k.step.value).not.toBe('alcohol')
     })

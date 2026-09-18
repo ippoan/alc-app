@@ -51,7 +51,7 @@ export const FETCH_TIMEOUT_MESSAGE_READ = '通信が応答しません。もう�
  * 押し直すと同じ登録が二重に積み上がる。
  */
 export const FETCH_TIMEOUT_MESSAGE_WRITE
-  = '通信が応答しませんでした。操作は完了している可能性があります。同じ操作を繰り返さず、運行管理者に確認してください'
+  = '通信が応答しませんでした。処理は完了している可能性があります。同じ操作を繰り返さず、画面を確認するか運行管理者に連絡してください'
 
 /** その要求を押し直してよいかで文言を選ぶ。 */
 export function timeoutMessageFor(method?: string): string {
