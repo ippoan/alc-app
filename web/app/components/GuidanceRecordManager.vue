@@ -345,12 +345,7 @@ onMounted(() => { load(); loadEmployees() })
 
     <!-- フィルタ -->
     <div class="flex items-center gap-3 flex-wrap">
-      <select v-model="filterEmployee" class="border rounded px-2 py-1 text-sm">
-        <option value="">全員</option>
-        <option v-for="emp in employees" :key="emp.id" :value="emp.id">
-          {{ emp.code ? `${emp.code} - ` : '' }}{{ emp.name }}
-        </option>
-      </select>
+      <EmployeeSearchSelect v-model="filterEmployee" :employees="employees" />
       <select v-model="filterType" class="border rounded px-2 py-1 text-sm">
         <option value="">全種別</option>
         <option v-for="t in GUIDANCE_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>

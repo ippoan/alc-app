@@ -138,12 +138,7 @@ onMounted(() => { load(); loadEmployees() })
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">対象者 (空=全員)</label>
-          <select v-model="newTargetId" class="w-full border rounded px-3 py-1.5 text-sm">
-            <option value="">全員</option>
-            <option v-for="emp in employees" :key="emp.id" :value="emp.id">
-              {{ emp.code ? `${emp.code} - ` : '' }}{{ emp.name }}
-            </option>
-          </select>
+          <EmployeeSearchSelect v-model="newTargetId" :employees="employees" placeholder="対象者 (空=全員、名前・社員番号で検索)" />
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">有効開始</label>

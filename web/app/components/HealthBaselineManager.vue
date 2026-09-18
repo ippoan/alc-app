@@ -162,10 +162,7 @@ onMounted(() => { loadEmployees(); fetchData() })
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div>
           <label class="block text-xs text-gray-500 mb-1">乗務員</label>
-          <select v-model="newForm.employee_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <option value="">選択</option>
-            <option v-for="emp in unregisteredEmployees" :key="emp.id" :value="emp.id">{{ emp.name }}</option>
-          </select>
+          <EmployeeSearchSelect v-model="newForm.employee_id" :employees="unregisteredEmployees" placeholder="乗務員を選択 (名前・社員番号で検索)" />
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">収縮期 (mmHg)</label>
