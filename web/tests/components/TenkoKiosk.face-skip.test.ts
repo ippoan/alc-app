@@ -85,6 +85,7 @@ mockNuxtImport('useFingerprint', () => () => ({
 mockNuxtImport('useBloodPressureSetting', () => () => ({
   bpEnabled: ref(false), setBpEnabled: vi.fn(),
 }))
+mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBpUi: ref(false) }))
 mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
 
 /** 社員番号を入れて「次へ」を押す */

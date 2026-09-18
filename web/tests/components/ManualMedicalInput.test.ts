@@ -1,30 +1,26 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ref, readonly } from 'vue'
+import { ref, readonly, computed } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import ManualMedicalInput from '~/components/ManualMedicalInput.vue'
 import type { SubmitMedicalData } from '~/types'
 
-// この端末で血圧計を使うか (端末設定の 1 系統)。受け口は useBloodPressureSetting だけ。
-const bpEnabled = ref(false)
-mockNuxtImport('useBloodPressureSetting', () => () => ({
-  bpEnabled: readonly(bpEnabled),
-  setBpEnabled: (v: boolean) => { bpEnabled.value = v },
-}))
-
-// 未登録端末でも血圧計が在れば手入力欄を出す (Refs ippoan/alc-app#322)
-const hasBpHardware = ref(false)
-mockNuxtImport('useBleGateway', () => () => ({
-  hasBpHardware: readonly(hasBpHardware),
+/**
+ * この端末で血圧を使うか (Refs ippoan/alc-app#347)。判定の中身は
+ * `useBloodPressureSetting.test.ts` が見る — ここは**出るか / 出ないか**だけ。
+ */
+const showBpUi = ref(false)
+mockNuxtImport('useBpUiEnabled', () => () => ({
+  bpUiState: computed(() => (showBpUi.value ? 'show' : 'unused')),
+  showBpUi: readonly(showBpUi),
 }))
 
 describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
-    bpEnabled.value = false
-    hasBpHardware.value = false
+    showBpUi.value = false
   })
 
   it('初期値は空で、触らなければ値を送らない', async () => {
-    bpEnabled.value = true
+    showBpUi.value = true
     const wrapper = await mountSuspended(ManualMedicalInput)
 
     // 欄は出るが空 (既定値 120/80 を置かない)
@@ -45,7 +41,7 @@ describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Ref
   })
 
   it('血圧を使う端末で入力した値はそのまま送られる', async () => {
-    bpEnabled.value = true
+    showBpUi.value = true
     const wrapper = await mountSuspended(ManualMedicalInput)
 
     const inputs = wrapper.findAll('input')
@@ -81,8 +77,8 @@ describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Ref
     wrapper.unmount()
   })
 
-  it('bpEnabled=false でも hasBpHardware=true なら血圧欄を出す (未登録端末でも値を出せる、Refs #322)', async () => {
-    hasBpHardware.value = true
+  it('★ 署名でボンド済みと分かった端末 (showBpUi=true) なら血圧欄を出す (Refs #322 / #347)', async () => {
+    showBpUi.value = true
     const wrapper = await mountSuspended(ManualMedicalInput)
 
     expect(wrapper.text()).toContain('収縮期血圧')
@@ -102,8 +98,7 @@ describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Ref
 
 describe('ManualMedicalInput — allowSkip prop (既定 true。自動点呼の体温・血圧ステップだけ false、Refs ippoan/alc-app#322)', () => {
   beforeEach(() => {
-    bpEnabled.value = false
-    hasBpHardware.value = false
+    showBpUi.value = false
   })
 
   it('未指定 (既定 true): スキップボタンを出す', async () => {

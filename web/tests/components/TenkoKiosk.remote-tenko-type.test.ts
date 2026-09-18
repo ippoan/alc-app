@@ -61,6 +61,7 @@ mockNuxtImport('useFingerprint', () => () => ({
   requestFingerprint: vi.fn(),
 }))
 mockNuxtImport('useBloodPressureSetting', () => () => ({ bpEnabled: ref(true), setBpEnabled: vi.fn() }))
+mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('show'), showBpUi: ref(true) }))
 mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
 
 // 合成データ (実在の乗務員 ID ではない)

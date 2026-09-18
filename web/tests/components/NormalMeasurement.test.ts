@@ -81,6 +81,9 @@ mockNuxtImport('useBleGateway', () => () => ({
   hasBpHardware: readonly(ref(false)),
 }))
 
+// 通常点呼に埋まっている BleStatus の血圧の出し分け (Refs ippoan/alc-app#347)
+mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBpUi: ref(false) }))
+
 // 本人確認前のアルコール測定の通知 (Refs ippoan/rust-alc-api#644)。値を差し替えられる
 // ref にして、モーダルが出ても状態機械 (step) が進まないことを確かめる
 const strayAlcoholRef = ref<import('~/types').StrayAlcoholReading | null>(null)

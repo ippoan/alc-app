@@ -1,10 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { ref } from 'vue'
+import { ref, readonly } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 const deviceId = ref<string | null>('device-1')
 const deviceSettingsToken = ref<string | null>('tok-1')
 mockNuxtImport('useAuth', () => () => ({ deviceId, deviceSettingsToken }))
+
+// 端末の血圧計のヒント (gateway の bp_bond 通知 or 実接続)
+const hasBpHardware = ref(false)
+mockNuxtImport('useBleGateway', () => () => ({ hasBpHardware: readonly(hasBpHardware) }))
+
+// 署名つきでサーバへ渡したボンド状態 (Refs ippoan/alc-app#336 / #347)
+const signedBpBonded = ref<boolean | null>(null)
+const hasProbedBpBond = ref(false)
+mockNuxtImport('useDeviceToken', () => () => ({
+  signedBpBonded: readonly(signedBpBonded),
+  hasProbedBpBond: readonly(hasProbedBpBond),
+}))
 
 // 端末設定 (サーバ) — 血圧計を使うかの正本は `devices.bp_enabled`
 const api = vi.hoisted(() => ({ getDeviceSettings: vi.fn() }))
@@ -21,10 +33,12 @@ const deviceSettingsResponse = (bp: boolean) => ({
 })
 
 /** 「初回に 1 回だけ」は module スコープで数えるので、毎回まっさらに読み直す */
-async function freshComposable() {
+async function freshModule() {
   vi.resetModules()
-  const mod = await import('~/composables/useBloodPressureSetting')
-  return mod.useBloodPressureSetting
+  return await import('~/composables/useBloodPressureSetting')
+}
+async function freshComposable() {
+  return (await freshModule()).useBloodPressureSetting
 }
 
 /** 初回読み込み (await しない async) を流し切る */
@@ -162,5 +176,114 @@ describe('useBloodPressureSetting — 血圧計を使うかの受け口は 1 本
 
       expect(bp.bpConfirmed.value).toBe(false)
     })
+  })
+})
+
+// ---------- useBpUiEnabled (Refs ippoan/alc-app#347) ----------
+// 「この端末で血圧を使うか」を 1 か所で決める。CoreS3 キオスクは deviceId が構造的に
+// 空で bpEnabled が永久に false、bp_bond 通知も取りこぼすので、署名済みの値を足す。
+
+describe('useBpUiEnabled — 血圧を使うかの判定 1 か所 (Refs ippoan/alc-app#347)', () => {
+  beforeEach(() => {
+    deviceId.value = 'device-1'
+    deviceSettingsToken.value = 'tok-1'
+    hasBpHardware.value = false
+    signedBpBonded.value = null
+    hasProbedBpBond.value = false
+    api.getDeviceSettings.mockReset()
+    api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(false))
+  })
+
+  /** サーバ読み込みを走らせないまま (= bpConfirmed false) 判定を取る */
+  async function unconfirmed() {
+    deviceId.value = null
+    const mod = await freshModule()
+    return mod.useBpUiEnabled()
+  }
+
+  it('サーバが bp_enabled=true と答えたら show', async () => {
+    api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(true))
+    const mod = await freshModule()
+    const bp = mod.useBpUiEnabled()
+    await flush()
+
+    expect(bp.bpUiState.value).toBe('show')
+    expect(bp.showBpUi.value).toBe(true)
+  })
+
+  it('血圧計のヒント (hasBpHardware) だけでも show (未登録端末を締め出さない、Refs #322)', async () => {
+    hasBpHardware.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('show')
+    expect(bp.showBpUi.value).toBe(true)
+  })
+
+  it('★ 署名済みのボンド状態が true なら show (CoreS3 キオスクの症状そのもの、Refs #347)', async () => {
+    signedBpBonded.value = true
+    hasProbedBpBond.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('show')
+    expect(bp.showBpUi.value).toBe(true)
+  })
+
+  it('サーバが bp_enabled=false と答えたら unused', async () => {
+    const mod = await freshModule()
+    const bp = mod.useBpUiEnabled()
+    await flush()
+
+    expect(bp.bpUiState.value).toBe('unused')
+    expect(bp.showBpUi.value).toBe(false)
+  })
+
+  it('署名で「血圧計は無い」と確認できたら unused (取りに行った後の false)', async () => {
+    signedBpBonded.value = false
+    hasProbedBpBond.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('unused')
+  })
+
+  it('★ まだ取りに行っていないあいだは checking — 未使用に倒さない (Refs #347)', async () => {
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('checking')
+    expect(bp.showBpUi.value).toBe(false)
+  })
+
+  it('★ 取りに行く前の false は unused にしない (hasProbedBpBond=false なら checking)', async () => {
+    signedBpBonded.value = false
+    hasProbedBpBond.value = false
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('checking')
+  })
+
+  it('取りに行っても分からず、ブラウザ側の端末登録も無い → unregistered', async () => {
+    hasProbedBpBond.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('unregistered')
+  })
+
+  it('取りに行っても分からず、端末登録はあるがサーバ設定が取れない → unavailable', async () => {
+    api.getDeviceSettings.mockRejectedValue(new Error('offline'))
+    hasProbedBpBond.value = true
+    const mod = await freshModule()
+    const bp = mod.useBpUiEnabled()
+    await flush()
+
+    expect(bp.bpUiState.value).toBe('unavailable')
+  })
+
+  it('後から署名が届いたら show に変わる (computed なので画面が読み直さなくても入れ替わる)', async () => {
+    hasProbedBpBond.value = true
+    const bp = await unconfirmed()
+    expect(bp.bpUiState.value).toBe('unregistered')
+
+    signedBpBonded.value = true
+    expect(bp.bpUiState.value).toBe('show')
+    expect(bp.showBpUi.value).toBe(true)
   })
 })

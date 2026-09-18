@@ -95,7 +95,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
   const { deviceId } = useAuth()
   /** 署名つきで auth-worker へ渡したボンド状態 (#336)。null = 不明 */
   const { signedBpBonded, hasProbedBpBond, refreshSignedBpBonded } = useDeviceToken()
-  /** この端末で血圧を出せる見込みがあるか (BleStatus の `showBpUi` と同じ 2 つ、#336) */
+  /**
+   * この端末で血圧を出せる見込みがあるか。**入口ガード専用の 2 材料**で、
+   * `BleStatus` の表示判定 (`useBpUiEnabled`) とは**意図的に別**
+   * (Refs ippoan/alc-app#347)。表示側は `signedBpBonded` も足して 3 材料で判定するが、
+   * ここは `signedBpBonded` を**その上の行で先に見て**いる (`!== null` なら通す) ため、
+   * 同じ値を混ぜると `signedBpBonded === null` 以外に到達しない条件になり、
+   * fail-closed のゲートが意味を失う。表示用の値とゲート用の判定は混ぜない。
+   */
   const { bpEnabled } = useBloodPressureSetting()
   const { hasBpHardware } = useBleGateway()
   const step = ref<TenkoStep>('nfc')
@@ -297,9 +304,13 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    * - **血圧を出せる見込みがある端末は止めない** — 「不明」は「血圧必須」であって
    *   「進めない」ではない。血圧を測れる端末は測って通れるので行き止まりではなく、
    *   ここで締め出すと**古いファーム + 血圧計**の端末が今日できていることを失う。
-   *   条件は `BleStatus.vue` の `showBpUi` (= 血圧の入力欄が出るか) と同じ 2 つ —
-   *   **入力欄すら出ないまま血圧必須になる端末だけ**が行き止まり (issue の症状そのもの)。
-   *   測れるはずが測れなかったときは、体温・血圧の段の「遠隔点呼へ切り替え」が受け皿になる。
+   *   条件は `bpEnabled` / `hasBpHardware` の 2 つ — **入力欄すら出ないまま血圧必須に
+   *   なる端末だけ**が行き止まり (issue の症状そのもの)。測れるはずが測れなかった
+   *   ときは、体温・血圧の段の「遠隔点呼へ切り替え」が受け皿になる。
+   *   **表示側 (`useBpUiEnabled` の `showBpUi`) は `signedBpBonded === true` も
+   *   足した 3 材料だが、ここには足さない** (Refs ippoan/alc-app#347) — 1 つ上の
+   *   `signedBpBonded.value !== null` で既に通しているので、足しても判定は変わらず、
+   *   表示側の都合でゲートを緩める経路を作るだけになる。据え置きは意図的。
    * - **試す前には止めない** — `signedBpBonded` の `null` には「まだ署名を試していない」
    *   (起動直後・探索中) も乗る。そこで止めると**署名を試す前に端末を締め出す**ので、
    *   まだ試していなければ**ここで 1 度試してから**判定する (`hasProbedBpBond`)。

@@ -135,8 +135,13 @@ const {
   latestBloodPressure: bleBloodPressure,
 } = useBleGateway()
 
-// この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
-const { bpEnabled } = useBloodPressureSetting()
+/**
+ * この端末で血圧を使うか (Refs ippoan/alc-app-s3#135 / ippoan/alc-app#347)。
+ * `BleStatus` / `ManualMedicalInput` と同じ `useBpUiEnabled()` を見る — 以前の
+ * `bpEnabled` 単独では、CoreS3 キオスクで血圧が必須なのに「遠隔点呼に切り替える」の
+ * 逃げ道が出なかった。
+ */
+const { showBpUi } = useBpUiEnabled()
 
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
@@ -592,7 +597,7 @@ onUnmounted(() => {
       <!-- Step 5: 体温・血圧 (業務前のみ) -->
       <div v-else-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ bpEnabled ? '体温・血圧' : '体温' }}</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showBpUi ? '体温・血圧' : '体温' }}</h2>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
           <div v-if="!isDemoMode" class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
@@ -629,7 +634,7 @@ onUnmounted(() => {
             自動点呼で血圧を使う端末のときだけ出す (最初から遠隔なら出ない)。
             理由は自由入力にせず選択肢から選ばせる — サーバが `reason` を必須で受ける。
           -->
-          <template v-if="bpEnabled && !isRemote">
+          <template v-if="showBpUi && !isRemote">
             <button
               v-if="!isChoosingEscalationReason"
               class="w-full mt-4 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"
@@ -716,14 +721,14 @@ onUnmounted(() => {
           />
           <!-- 医療データ入力元バッジ (業務前のみ) -->
           <div
-            v-if="medicalInputSource && isPreOperation && (session.temperature || (bpEnabled && session.systolic))"
+            v-if="medicalInputSource && isPreOperation && (session.temperature || (showBpUi && session.systolic))"
             class="mt-3 text-center text-xs"
           >
             <span
               class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
               :class="medicalInputSource === 'manual' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'"
             >
-              {{ bpEnabled ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'CoreS3' }}
+              {{ showBpUi ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'CoreS3' }}
             </span>
           </div>
         </div>
