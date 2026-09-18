@@ -25,6 +25,10 @@ const reason = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
 
+// NG 理由の入力中と送信中は、リロードで入力や送信結果が消えるので新版への載せ替えを止める
+// (Refs #345)。待機中の TenkoRemoteAdminView が出している「安全」の申告より拒否が優先される。
+useKioskScreen().declareReloadBlocked(() => ngMode.value || submitting.value)
+
 function judgmentLabel(j: string | null) {
   return j === 'ok' ? 'OK' : j === 'ng' ? 'NG' : '-'
 }

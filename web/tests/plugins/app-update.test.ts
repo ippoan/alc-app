@@ -1,14 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import plugin from '~/plugins/app-update.client'
-import { APP_UPDATE_NOTICE_MESSAGE, APP_UPDATE_NOTICE_MS, APP_UPDATE_TICK_MS, KIOSK_FIRST_STEP, type KioskScreen } from '~/utils/app-update-gate'
+import { APP_UPDATE_NOTICE_MESSAGE, APP_UPDATE_NOTICE_MS, APP_UPDATE_TICK_MS, KIOSK_FIRST_STEP, type KioskScreen, type ReloadContext } from '~/utils/app-update-gate'
 import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
 
 const notifyIntentionalReload = vi.fn()
 mockNuxtImport('useAlarmDevice', () => () => ({ notifyIntentionalReload }))
 
-const screen = vi.fn<() => KioskScreen | null>()
-vi.mock('~/composables/useKioskScreen', () => ({ readKioskScreen: () => screen() }))
+const context = vi.fn<() => ReloadContext>()
+vi.mock('~/composables/useKioskScreen', () => ({ readReloadContext: () => context() }))
+
+/** キオスクが載っている画面の材料 (申告は無し)。 */
+function onKiosk(screen: KioskScreen): ReloadContext {
+  return { screen, safe: 0, blocked: 0 }
+}
 
 /**
  * 本番 flip 後に開きっぱなしのキオスクを新版へ載せ替える plugin。
@@ -29,7 +34,7 @@ describe('plugins/app-update.client', () => {
 
     timers = []
     tick = () => {}
-    screen.mockReturnValue({ step: KIOSK_FIRST_STEP, busy: false })
+    context.mockReturnValue(onKiosk({ step: KIOSK_FIRST_STEP, busy: false }))
     warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     vi.spyOn(window, 'setInterval').mockImplementation(((fn: () => void) => {
@@ -68,16 +73,34 @@ describe('plugins/app-update.client', () => {
 
   it('新版があっても点呼が始まっていれば入れ替えない', () => {
     needRefresh.value = true
-    screen.mockReturnValue({ step: 'medical', busy: false })
+    context.mockReturnValue(onKiosk({ step: 'medical', busy: false }))
     tick()
 
     expect(document.getElementById('app-update-notice')).toBeNull()
     expect(updateServiceWorker).not.toHaveBeenCalled()
   })
 
-  it('管理画面など、キオスクが載っていない画面には広げない', () => {
+  it('誰も安全と申告していない画面 (システム管理など) には広げない', () => {
     needRefresh.value = true
-    screen.mockReturnValue(null)
+    context.mockReturnValue({ screen: null, safe: 0, blocked: 0 })
+    tick()
+
+    expect(document.getElementById('app-update-notice')).toBeNull()
+    expect(timers).toHaveLength(0)
+  })
+
+  it('待機中と申告した画面 (運行管理者席) では入れ替える (Refs #345)', () => {
+    needRefresh.value = true
+    context.mockReturnValue({ screen: null, safe: 1, blocked: 0 })
+    tick()
+
+    expect(document.getElementById('app-update-notice')?.textContent).toBe(APP_UPDATE_NOTICE_MESSAGE)
+    expect(timers).toHaveLength(1)
+  })
+
+  it('申告があっても拒否が出ていれば入れ替えない (Refs #345)', () => {
+    needRefresh.value = true
+    context.mockReturnValue({ screen: null, safe: 1, blocked: 1 })
     tick()
 
     expect(document.getElementById('app-update-notice')).toBeNull()
@@ -86,11 +109,11 @@ describe('plugins/app-update.client', () => {
 
   it('最初の画面へ戻ってきたら告知を出し、grace と理由を残してから入れ替える', () => {
     needRefresh.value = true
-    screen.mockReturnValue({ step: 'report', busy: false })
+    context.mockReturnValue(onKiosk({ step: 'report', busy: false }))
     tick()
     expect(document.getElementById('app-update-notice')).toBeNull()
 
-    screen.mockReturnValue({ step: KIOSK_FIRST_STEP, busy: false })
+    context.mockReturnValue(onKiosk({ step: KIOSK_FIRST_STEP, busy: false }))
     tick()
 
     expect(document.getElementById('app-update-notice')?.textContent).toBe(APP_UPDATE_NOTICE_MESSAGE)

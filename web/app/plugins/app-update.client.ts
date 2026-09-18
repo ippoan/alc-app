@@ -5,7 +5,8 @@
  * `nuxt.config.ts` の `pwa.registerType: 'prompt'` + `pwa.client.periodicSyncForUpdates`
  * と対。あちらが**検知**を担い (新 SW を waiting にして `$pwa.needRefresh` を立てる)、
  * ここが**いつ適用するか**を決める。判定そのものは `~/utils/app-update-gate` の純ロジックで、
- * 「点呼の最初の画面に居る = リロードで失うものが無い」ときだけ通す。
+ * 「点呼の最初の画面に居る = リロードで失うものが無い」ときだけ通す。キオスクの載っていない
+ * 画面 (運行管理者席など) は、その画面が自分で「安全」と申告したときだけ (Refs #345)。
  *
  * `autoUpdate` に戻してはいけない — あちらの register は新 SW の `activated` で
  * 即 `window.location.reload()` するので、**測定中・入力中でも問答無用で飛ぶ。**
@@ -21,7 +22,7 @@ import {
   APP_UPDATE_TICK_MS,
   createAppUpdateGate,
 } from '~/utils/app-update-gate'
-import { readKioskScreen } from '~/composables/useKioskScreen'
+import { readReloadContext } from '~/composables/useKioskScreen'
 import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
 
 /** 告知を出す要素の id (二重挿入の抑止に使う)。 */
@@ -57,7 +58,7 @@ export default defineNuxtPlugin({
       (nuxtApp as unknown as { $pwa?: PwaLike }).$pwa
 
     const gate = createAppUpdateGate({
-      screen: readKioskScreen,
+      context: readReloadContext,
       noticeMs: APP_UPDATE_NOTICE_MS,
       notice: renderNotice,
       beforeApply: () => {

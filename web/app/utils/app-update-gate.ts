@@ -25,9 +25,20 @@
  * そこでリロードすると走っている点呼が飛ぶ。
  *
  * 代わりに {@link KIOSK_FIRST_STEP} — **まだ何も始まっていない画面** — に居ることを条件にする。
- * この瞬間はリロードで失うものが構造的に無い。キオスクが載っていない画面
- * (管理画面など) は `null` になり、**適用しない**。あちらは人が開いて操作するので
- * ナビゲーションが起き、ブラウザ標準の Service Worker 更新チェックで自然に新版へ移る。
+ * この瞬間はリロードで失うものが構造的に無い。
+ *
+ * ## キオスクが載っていない画面 — 申告した画面だけ (Refs #345)
+ *
+ * 運行管理者席は遠隔点呼の呼び出しを待って**画面を開いたまま待機する**ので、キオスクと
+ * まったく同じ形で古い app shell を掴み続ける。「人が開いて操作するのでナビゲーションが
+ * 起きる」という前提は成り立たない。
+ *
+ * かといって「キオスクが載っていなければ安全」にすると**逆に倒れすぎる** — 編集中・
+ * 保存中のシステム管理画面まで問答無用でリロードしてしまい、ここが避けたはずの事故を
+ * 別の画面で再現する。なので **opt-in**: 画面が
+ * {@link ~/composables/useKioskScreen.useKioskScreen} の口で「いま失うものが無い」と
+ * 申告したときだけ安全とし、同じ画面の中の「いまは困る」が 1 件でもあれば止める。
+ * **誰も申告しなければ従来どおり安全ではない** (fail-closed)。
  *
  * DOM / Nuxt に触る wiring は `~/plugins/app-update.client.ts` 側。ここは副作用を
  * すべて {@link AppUpdateGateDeps} で受け取る純ロジックに保つ。
@@ -65,15 +76,33 @@ export interface KioskScreen {
   busy: boolean
 }
 
-/** いまリロードして失うものが無いか。 */
-export function isSafeToReload(screen: KioskScreen | null): boolean {
-  if (screen === null) return false
-  return screen.step === KIOSK_FIRST_STEP && !screen.busy
+/** {@link isSafeToReload} が見る材料をひとまとめにしたもの。 */
+export interface ReloadContext {
+  /** いま載っているキオスク画面。載っていなければ `null`。 */
+  screen: KioskScreen | null
+  /** 「いまリロードして失うものが無い」と申告している component の数 (Refs #345)。 */
+  safe: number
+  /** 「いまリロードされると困る」と申告している component の数 (Refs #345)。 */
+  blocked: number
+}
+
+/**
+ * いまリロードして失うものが無いか。
+ *
+ * - キオスクが載っている → 従来どおり「最初の画面かつ手が離せる」ときだけ
+ * - 載っていない → **安全の申告が 1 件以上あり、拒否が 0 件**のときだけ
+ *   (誰も申告していない画面は従来どおり対象外)
+ */
+export function isSafeToReload(context: ReloadContext): boolean {
+  if (context.screen !== null) {
+    return context.screen.step === KIOSK_FIRST_STEP && !context.screen.busy
+  }
+  return context.safe > 0 && context.blocked === 0
 }
 
 export interface AppUpdateGateDeps {
-  /** いまのキオスク画面 (載っていなければ `null`)。 */
-  screen: () => KioskScreen | null
+  /** いまの判定材料 (キオスクの現在地と、画面からの申告数)。 */
+  context: () => ReloadContext
   /** 告知から入れ替えまでの猶予 (ms)。既定は {@link APP_UPDATE_NOTICE_MS}。 */
   noticeMs: number
   /** 新版がある旨を画面に出す。 */
@@ -90,7 +119,7 @@ export interface AppUpdateGateDeps {
 export type AppUpdateTickResult =
   /** 新版はまだ無い。 */
   | 'no-update'
-  /** 新版はあるが、いま飛ばすと失うものがある (点呼の途中 / 管理画面)。 */
+  /** 新版はあるが、いま飛ばすと失うものがある (点呼の途中 / 誰も安全と申告していない画面)。 */
   | 'not-safe'
   /** 告知を出して入れ替えを予約した (この tick で 1 回だけ)。 */
   | 'applying'
@@ -105,7 +134,7 @@ export interface AppUpdateGate {
 }
 
 /**
- * 「新版があり、かつ点呼の最初の画面に居る」ときだけ入れ替えを予約するゲートを作る。
+ * 「新版があり、かつ {@link isSafeToReload} が許す」ときだけ入れ替えを予約するゲートを作る。
  *
  * 一度 `applying` に入ったら二度と戻らない — 予約の直後に人が触り始めても入れ替えは
  * 取り消さない。告知から {@link AppUpdateGateDeps.noticeMs} 待つのは
@@ -123,7 +152,7 @@ export function createAppUpdateGate(deps: AppUpdateGateDeps): AppUpdateGate {
     tick: () => {
       if (applying) return 'already-applying'
       if (!updateAvailable) return 'no-update'
-      if (!isSafeToReload(deps.screen())) return 'not-safe'
+      if (!isSafeToReload(deps.context())) return 'not-safe'
 
       applying = true
       deps.notice(APP_UPDATE_NOTICE_MESSAGE)
