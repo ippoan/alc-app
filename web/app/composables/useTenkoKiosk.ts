@@ -227,7 +227,11 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     isLoading.value = true
 
     try {
-      const s = await submitMedical(session.value.id, data)
+      // 端末の血圧計有無 (devices.bp_enabled) をサーバが判定するための端末識別子。
+      // bp_enabled 自体は送らない (フェイルクローズ設計、Refs ippoan/alc-app#322)
+      const { deviceId } = useAuth()
+      const body: SubmitMedicalData = deviceId.value ? { ...data, device_id: deviceId.value } : data
+      const s = await submitMedical(session.value.id, body)
       session.value = s
       _advanceByStatus(s.status)
     } catch (e) {

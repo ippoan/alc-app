@@ -515,6 +515,7 @@ export interface SubmitMedicalData {
   pulse?: number
   medical_measured_at?: string
   medical_manual_input?: boolean
+  device_id?: string
 }
 
 export interface SubmitSelfDeclaration {
