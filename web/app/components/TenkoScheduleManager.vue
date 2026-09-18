@@ -123,6 +123,12 @@ const editScheduledAt = ref('')
 const editInstruction = ref('')
 const isUpdating = ref(false)
 
+// 予定フォームを開いている / 保存中は、リロードで入力が消えるので新版への載せ替えを止める
+// (Refs #345)。運行管理者タブの中で TenkoRemoteAdminView の「安全」より拒否が優先される。
+useKioskScreen().declareReloadBlocked(
+  () => showForm.value || editingId.value !== null || isSaving.value || isUpdating.value,
+)
+
 function startEdit(s: TenkoSchedule) {
   editingId.value = s.id
   editManager.value = s.responsible_manager_name

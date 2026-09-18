@@ -55,6 +55,14 @@ const modalEmployeeName = ref('')
 const modalIdInput = ref('')
 const modalIdError = ref<string | null>(null)
 
+// 本番 flip 後の新版への載せ替えを、待機中のこの画面でも許す (Refs #345)。
+// 運行管理者席は遠隔点呼の呼び出しを待って画面を開いたまま待機するので、キオスクと同じく
+// ナビゲーションが起きず、申告しないと古い app shell を永久に掴み続ける (#341 の取りこぼし)。
+// 通話中・顔認証中・読み込み中はリロードで失うものがあるので、そのあいだは申告を下ろす。
+useKioskScreen().declareSafeToReload(
+  () => !isCallActive.value && !faceAuthActive.value && !isLoading.value,
+)
+
 // 運転者情報パネル
 const showDriverInfoPanel = ref(false)
 
