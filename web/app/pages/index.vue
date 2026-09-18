@@ -29,6 +29,9 @@ initApi(
   // キオスク: device credential があれば device JWT を mint して proxy 経由に切替 (#434 3b)。
   // 無ければ null → 従来の X-Tenant-ID 直 fetch に fallback (非破壊)。
   () => useDeviceToken().getDeviceJwt(),
+  // 運行管理者席: VoiceS3R の鍵で運行管理者用の device JWT を取る (#337)。
+  // 使うのは予定の口 (`scope: 'manager-device'`) だけで、キオスクの点呼は触れない。
+  () => useManagerDeviceToken().getManagerJwt(),
 )
 
 // 顔データ同期 (singleton)

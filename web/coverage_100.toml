@@ -150,6 +150,10 @@ branches = true
 path = "app/composables/useKioskAccess.ts"
 branches = true
 
+[[files]]
+path = "app/composables/useManagerDeviceToken.ts"
+branches = true
+
 # --- plugins ---
 
 [[files]]
