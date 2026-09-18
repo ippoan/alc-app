@@ -11,9 +11,16 @@ mockNuxtImport('useBloodPressureSetting', () => () => ({
   setBpEnabled: (v: boolean) => { bpEnabled.value = v },
 }))
 
+// 未登録端末でも血圧計が在れば手入力欄を出す (Refs ippoan/alc-app#322)
+const hasBpHardware = ref(false)
+mockNuxtImport('useBleGateway', () => () => ({
+  hasBpHardware: readonly(hasBpHardware),
+}))
+
 describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
     bpEnabled.value = false
+    hasBpHardware.value = false
   })
 
   it('初期値は空で、触らなければ値を送らない', async () => {
@@ -79,6 +86,16 @@ describe('ManualMedicalInput — 血圧欄は端末設定で出し分ける (Ref
     const skipBtn = wrapper.findAll('button').find(b => b.text() === 'スキップ')
     await skipBtn!.trigger('click')
     expect(wrapper.emitted('skip')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('bpEnabled=false でも hasBpHardware=true なら血圧欄を出す (未登録端末でも値を出せる、Refs #322)', async () => {
+    hasBpHardware.value = true
+    const wrapper = await mountSuspended(ManualMedicalInput)
+
+    expect(wrapper.text()).toContain('収縮期血圧')
+    expect(wrapper.text()).toContain('拡張期血圧')
+
     wrapper.unmount()
   })
 })

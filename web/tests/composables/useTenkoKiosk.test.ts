@@ -23,7 +23,6 @@ vi.mock('~/utils/api', () => ({
 }))
 
 import { useTenkoKiosk } from '~/composables/useTenkoKiosk'
-import { noPendingSchedule } from '~/utils/employee-lookup-messages'
 import {
   getPendingSchedules,
   startTenkoSession,
@@ -257,12 +256,13 @@ describe('useTenkoKiosk', () => {
       expect(k.isLoading.value).toBe(false)
     })
 
-    it('スケジュール空 → エラー', async () => {
+    it('スケジュール空 → エラーにせず schedule_select へ進む (業務後は予定なしで進められる、Refs #322)', async () => {
       vi.mocked(getPendingSchedules).mockResolvedValue([])
       const k = useTenkoKiosk()
       await k.identifyEmployee('emp-1', '田中')
-      expect(k.error.value).toBe(noPendingSchedule())
-      expect(k.step.value).toBe('nfc')
+      expect(k.error.value).toBeNull()
+      expect(k.step.value).toBe('schedule_select')
+      expect(k.pendingSchedules.value).toEqual([])
     })
 
     it('API エラー → error 設定', async () => {
@@ -292,6 +292,21 @@ describe('useTenkoKiosk', () => {
     expect(k.error.value).toBeNull()
   })
 
+  // ---------- proceedWithoutSchedule (Refs ippoan/alc-app#322) ----------
+  // 業務後は法令上「設定することができる」= 任意なので、予定が無くても進められる
+
+  describe('proceedWithoutSchedule', () => {
+    it('selectedTenkoType が post_operation になり face_auth へ進む (selectedSchedule はセットしない)', () => {
+      const k = useTenkoKiosk()
+      k.proceedWithoutSchedule()
+      expect(k.selectedTenkoType.value).toBe('post_operation')
+      expect(k.selectedSchedule.value).toBeNull()
+      expect(k.step.value).toBe('face_auth')
+      expect(k.tenkoType.value).toBe('post_operation')
+      expect(k.isPreOperation.value).toBe(false)
+    })
+  })
+
   // ---------- onFaceAuthComplete ----------
 
   describe('onFaceAuthComplete', () => {
@@ -301,10 +316,28 @@ describe('useTenkoKiosk', () => {
       expect(startTenkoSession).not.toHaveBeenCalled()
     })
 
-    it('通常モード: selectedSchedule なし → 何もしない', async () => {
+    it('通常モード: selectedSchedule なし → 何もしない (業務前は引き続き予定必須)', async () => {
       const k = useTenkoKiosk()
       await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
       expect(startTenkoSession).not.toHaveBeenCalled()
+    })
+
+    it('通常モード: proceedWithoutSchedule 後 (業務後) は予定が無くてもセッションを開始する (Refs #322)', async () => {
+      const sess = makeSession({ tenko_type: 'post_operation', status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValue(sess)
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.proceedWithoutSchedule()
+
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalledWith({
+        tenko_type: 'post_operation',
+        employee_id: 'emp-1',
+        identity_face_photo_url: undefined,
+      })
+      expect(k.step.value).toBe('alcohol')
     })
 
     it('スケジュール選択後: セッション開始 + status による遷移', async () => {

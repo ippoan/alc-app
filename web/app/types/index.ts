@@ -313,6 +313,8 @@ export type BleGatewayMessage =
   | { type: 'error'; message: string }
   | { type: 'heartbeat'; uptime: number; thermo: boolean; bp: boolean }
   | { type: 'reset'; message: string }
+  /** BLE 血圧計とのボンド状態 (Refs ippoan/alc-app-s3#249)。変化したときだけ 1 行出る。旧ファームは送らない */
+  | { type: 'bp_bond'; bonded: boolean }
 
 // --- 自動点呼 (Tenko) ---
 

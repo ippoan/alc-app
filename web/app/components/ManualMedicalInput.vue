@@ -7,6 +7,10 @@ const emit = defineEmits<{
 }>()
 
 const { bpEnabled } = useBloodPressureSetting()
+const { hasBpHardware } = useBleGateway()
+
+/** 手入力欄を出すか。未登録端末でも血圧計が在れば出す (Refs #322) */
+const showBpUi = computed(() => bpEnabled.value || hasBpHardware.value)
 
 const temperature = ref<number | null>(36.5)
 // 血圧は空で始める。既定値 (120/80) を置くと、触っていない値が「測れた値」として
@@ -68,7 +72,7 @@ function handleSkip() {
       </div>
 
       <!-- 収縮期血圧 -->
-      <div v-if="bpEnabled" class="flex flex-col gap-1">
+      <div v-if="showBpUi" class="flex flex-col gap-1">
         <label class="text-xs font-medium text-gray-600">収縮期血圧 (mmHg)</label>
         <input
           v-model.number="systolic"
@@ -82,7 +86,7 @@ function handleSkip() {
       </div>
 
       <!-- 拡張期血圧 -->
-      <div v-if="bpEnabled" class="flex flex-col gap-1">
+      <div v-if="showBpUi" class="flex flex-col gap-1">
         <label class="text-xs font-medium text-gray-600">拡張期血圧 (mmHg)</label>
         <input
           v-model.number="diastolic"

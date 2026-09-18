@@ -30,6 +30,13 @@ const isConnected = ref(false)
 const error = ref<string | null>(null)
 const thermometerConnected = ref(false)
 const bloodPressureConnected = ref(false)
+/**
+ * BLE 血圧計とのボンド状態 (Refs ippoan/alc-app-s3#249)。血圧計は普段スリープしているため、
+ * 接続状態 (`bloodPressureConnected`) だけでは「ボンド済みだが今スリープ中」を「無い」と
+ * 誤判定する。CoreS3 ファームが `{"type":"bp_bond","bonded":bool}` を送るようになった
+ * 端末だけ埋まる (変化したときだけ 1 行、旧ファームは送らない)。
+ */
+const bpBonded = ref(false)
 const latestTemperature = ref<TemperatureReading | null>(null)
 const latestBloodPressure = ref<BloodPressureReading | null>(null)
 const latestAlcohol = ref<AlcoholReading | null>(null)
@@ -303,6 +310,10 @@ export function useBleGateway() {
         break
       }
 
+      case 'bp_bond':
+        bpBonded.value = msg.bonded
+        break
+
       case 'reset':
         // スキャン再開のみ — 接続状態は disconnected/heartbeat で管理
         break
@@ -356,6 +367,13 @@ export function useBleGateway() {
   const hasMedicalData = computed(() =>
     latestTemperature.value !== null || latestBloodPressure.value !== null,
   )
+
+  /**
+   * この端末に血圧計が在るか (Refs ippoan/alc-app#322)。ボンド済みならスリープ中でも true。
+   * **後方互換**: `bp_bond` を送らない旧ファームでは `bpBonded` が立たないので、従来どおり
+   * 接続状態にフォールバックする (退行させない)。
+   */
+  const hasBpHardware = computed(() => bpBonded.value || bloodPressureConnected.value)
 
   function scheduleReconnect(): void {
     if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
@@ -447,6 +465,7 @@ export function useBleGateway() {
     error: readonly(error),
     thermometerConnected: readonly(thermometerConnected),
     bloodPressureConnected: readonly(bloodPressureConnected),
+    bpBonded: readonly(bpBonded),
     latestTemperature: readonly(latestTemperature),
     latestBloodPressure: readonly(latestBloodPressure),
     latestAlcohol: readonly(latestAlcohol),
@@ -454,6 +473,7 @@ export function useBleGateway() {
     gatewayVersion: readonly(gatewayVersion),
     transport: readonly(transport),
     hasMedicalData,
+    hasBpHardware,
     connect,
     autoConnect,
     startAutoConnect,

@@ -110,4 +110,57 @@ describe('useBloodPressureSetting — 血圧計を使うかの受け口は 1 本
 
     expect(bp.bpEnabled.value).toBe(true)
   })
+
+  // ---------- bpConfirmed (Refs ippoan/alc-app#322) ----------
+  // 「サーバが false と答えた」と「まだサーバに聞けていない」を画面が区別するための公開
+
+  describe('bpConfirmed — サーバの設定が決まったか', () => {
+    it('サーバ設定が届くまでは false', async () => {
+      api.getDeviceSettings.mockImplementation(() => new Promise(() => {})) // 未解決のまま
+      const useBloodPressureSetting = await freshComposable()
+
+      expect(useBloodPressureSetting().bpConfirmed.value).toBe(false)
+    })
+
+    it('サーバ設定が届くと true (bp_enabled=false でも true)', async () => {
+      api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(false))
+      const useBloodPressureSetting = await freshComposable()
+
+      const bp = useBloodPressureSetting()
+      await flush()
+
+      expect(bp.bpConfirmed.value).toBe(true)
+      expect(bp.bpEnabled.value).toBe(false)
+    })
+
+    it('端末設定の画面で setBpEnabled が呼ばれても true', async () => {
+      deviceId.value = null // サーバ読み込みは走らせない
+      const useBloodPressureSetting = await freshComposable()
+
+      const bp = useBloodPressureSetting()
+      bp.setBpEnabled(true)
+
+      expect(bp.bpConfirmed.value).toBe(true)
+    })
+
+    it('端末登録が無く読みに行けない → false のまま (「未登録」を画面が判別できる)', async () => {
+      deviceId.value = null
+      const useBloodPressureSetting = await freshComposable()
+
+      const bp = useBloodPressureSetting()
+      await flush()
+
+      expect(bp.bpConfirmed.value).toBe(false)
+    })
+
+    it('取得に失敗した → false のまま (「取得失敗」を画面が判別できる)', async () => {
+      api.getDeviceSettings.mockRejectedValue(new Error('offline'))
+      const useBloodPressureSetting = await freshComposable()
+
+      const bp = useBloodPressureSetting()
+      await flush()
+
+      expect(bp.bpConfirmed.value).toBe(false)
+    })
+  })
 })
