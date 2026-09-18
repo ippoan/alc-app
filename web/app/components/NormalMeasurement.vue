@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadSource } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, uploadBlowVideo, lookupCarInspection, punchTimecard } from '~/utils/api'
-import { saveVideo, markVideoUploaded, getPendingVideos, cleanupOldVideos } from '~/utils/video-store'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, lookupCarInspection, punchTimecard } from '~/utils/api'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
@@ -250,18 +249,22 @@ const useManualInput = ref(false)
 // 測定レコード早期作成
 const activeMeasurementId = ref<string | null>(null)
 
-// 録画 (measuring ステップ用)
+// 録画 (measuring ステップ用)。配線は `useBlowVideoRecording` に括り出してあり、
+// キオスク (自動点呼・遠隔点呼) も同じものを使う (Refs ippoan/alc-app#349)
 const {
-  stream: measuringStream,
   videoRef: measuringVideoRef,
-  isActive: isMeasuringCameraActive,
-  start: startMeasuringCamera,
-  stop: stopMeasuringCamera,
-} = useCamera()
-const { isRecording, startRecording, stopRecording } = useVideoRecorder()
-const recordedVideoBlob = ref<Blob | null>(null)
-const videoStoreId = ref<string | null>(null)
-const videoUploadStatus = ref<'pending' | 'uploading' | 'uploaded' | 'failed' | null>(null)
+  isCameraActive: isMeasuringCameraActive,
+  isRecording,
+  videoStoreId,
+  uploadStatus: videoUploadStatus,
+  retryPendingUploads: retryPendingVideoUploads,
+  startCamera: startMeasuringCamera,
+  stopCamera: stopMeasuringCamera,
+  onAlcStateChange,
+  finishRecording: finishVideoRecording,
+  uploadRecording: uploadVideoRecording,
+  reset: resetVideoRecording,
+} = useBlowVideoRecording()
 
 /** 測定開始レコードを作成 (best-effort: 失敗しても測定フローは続行) */
 async function tryStartMeasurement(empId: string) {
@@ -417,20 +420,7 @@ const medicalInputSource = ref<'ble' | 'manual' | null>(null)
 
 onMounted(() => {
   // 録画: 7日超のローカル録画を削除 + 未アップロード分をリトライ
-  cleanupOldVideos(7).catch(() => {})
-  getPendingVideos().then(pending => {
-    for (const v of pending) {
-      if (!v.measurementId) continue
-      const mId = v.measurementId
-      uploadBlowVideo(v.videoBlob)
-        .then(url => {
-          console.log('[VideoRetry] Uploaded pending video:', v.id)
-          updateMeasurement(mId, { video_url: url }).catch(() => {})
-          markVideoUploaded(v.id).catch(() => {})
-        })
-        .catch(() => console.warn('[VideoRetry] Failed:', v.id))
-    }
-  }).catch(() => {})
+  void retryPendingVideoUploads()
 })
 
 // BLE 体温・血圧を取得時に即レコード更新（best-effort）
@@ -477,30 +467,14 @@ function onManualMedicalSubmit(data: import('~/types').SubmitMedicalData) {
   step.value = 'measuring'
 }
 
-// measuring ステップでカメラ起動/停止
+// measuring ステップでカメラ起動/停止 (デモモードは FC-1200 の state 変化が来ないので即録画)
 watch(step, async (s, prev) => {
   if (s === 'measuring') {
-    try {
-      await startMeasuringCamera('user')
-      console.log('[Measurement] Recording camera started')
-      // デモモードではすぐに録画開始 (FC-1200 state 変化がないため)
-      if (isDemoMode.value && measuringStream.value) {
-        startRecording(measuringStream.value)
-      }
-    } catch (e) {
-      console.warn('[Measurement] Recording camera failed:', e)
-    }
+    await startMeasuringCamera({ recordImmediately: isDemoMode.value })
   } else if (prev === 'measuring') {
     stopMeasuringCamera()
   }
 })
-
-// AlcMeasurement の状態変化 → 録画開始/停止
-function onAlcStateChange(alcState: string) {
-  if (alcState === 'blow_waiting' && measuringStream.value && !isRecording.value) {
-    startRecording(measuringStream.value)
-  }
-}
 
 // FC-1200 測定結果 → BLE 医療データ / 手動入力データをマージ → API に保存
 async function onMeasurementResult(result: MeasurementResult) {
@@ -541,17 +515,8 @@ async function onMeasurementResult(result: MeasurementResult) {
   measurementResult.value = result
   step.value = 'result'
 
-  // 録画停止 + ローカル保存
-  const videoBlob = await stopRecording()
-  if (videoBlob) {
-    recordedVideoBlob.value = videoBlob
-    const vid = crypto.randomUUID()
-    videoStoreId.value = vid
-    saveVideo(vid, videoBlob, employeeId.value, activeMeasurementId.value || undefined)
-      .catch(e => console.warn('[Measurement] video local save failed:', e))
-    console.log(`[Measurement] Video recorded: ${(videoBlob.size / 1024).toFixed(0)}KB`)
-  }
-  stopMeasuringCamera()
+  // 録画停止 + ローカル保存 (カメラもここで落ちる)
+  await finishVideoRecording(employeeId.value, activeMeasurementId.value || undefined)
 
   isSaving.value = true
   saveError.value = null
@@ -588,37 +553,18 @@ async function onMeasurementResult(result: MeasurementResult) {
       console.log('[Measurement] updateMeasurement success')
       saveStatus.value = 'saved'
 
-      // 録画をバックグラウンドでアップロード
-      if (recordedVideoBlob.value && activeMeasurementId.value) {
-        const mId = activeMeasurementId.value
-        const vId = videoStoreId.value
-        videoUploadStatus.value = 'uploading'
-        uploadBlowVideo(recordedVideoBlob.value)
-          .then(url => {
-            console.log('[Measurement] Video uploaded:', url)
-            videoUploadStatus.value = 'uploaded'
-            updateMeasurement(mId, { video_url: url }).catch(() => {})
-            if (vId) markVideoUploaded(vId).catch(() => {})
-          })
-          .catch(e => {
-            console.warn('[Measurement] Video upload failed (will retry later):', e)
-            videoUploadStatus.value = 'failed'
-          })
-      } else if (recordedVideoBlob.value) {
-        videoUploadStatus.value = 'pending'
-      }
+      // 録画をバックグラウンドでアップロード (録画が無ければ何もしない)
+      uploadVideoRecording(activeMeasurementId.value)
     } else {
       // オフラインまたは activeMeasurementId なし → 従来のフロー
       console.log('[Measurement] fallback to offlineSave')
       saveStatus.value = await offlineSave(result, undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
-      if (recordedVideoBlob.value) videoUploadStatus.value = 'pending'
     }
   } catch (e) {
     // 更新失敗時はオフラインキューにフォールバック
     console.error('[Measurement] updateMeasurement failed:', e)
     try {
       saveStatus.value = await offlineSave(result, undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
-      if (recordedVideoBlob.value) videoUploadStatus.value = 'pending'
     } catch (e2) {
       saveError.value = e2 instanceof Error ? e2.message : '保存エラー'
       console.warn('測定結果の保存に失敗:', e2)
@@ -668,10 +614,7 @@ function reset() {
   activeMeasurementId.value = null
   manualMedicalData.value = null
   medicalInputSource.value = null
-  recordedVideoBlob.value = null
-  videoStoreId.value = null
-  videoUploadStatus.value = null
-  stopMeasuringCamera()
+  resetVideoRecording()
 }
 
 const stepLabel = computed<Record<string, string>>(() => ({

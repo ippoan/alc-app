@@ -123,6 +123,10 @@ path = "app/composables/useVideoRecorder.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useBlowVideoRecording.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useWebRtc.ts"
 branches = true
 

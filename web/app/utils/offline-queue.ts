@@ -245,24 +245,47 @@ export async function estimateDbSize(): Promise<{ totalBytes: number; recordCoun
 
 const MAX_RETRIES = 5
 
-/** 紐づいた録画をアップロードし、measurement に video_url を設定 (best-effort) */
-async function uploadLinkedVideo(
+/**
+ * 録画 1 本のアップロード結果。`'skipped'` は「送るものが無かった」
+ * (録画なし / 既にアップロード済み) で、失敗ではない。
+ */
+export type LinkedVideoOutcome = 'uploaded' | 'skipped' | 'failed'
+
+/**
+ * 紐づいた録画をアップロードし、measurement に video_url を設定 (best-effort)。
+ *
+ * 「videoStoreId → getVideo → uploadBlowVideo → updateMeasurement({video_url}) →
+ * markVideoUploaded」はオフラインキューの flush・起動時のリトライ・録画直後の
+ * 3 経路で同型なので、**ここ 1 か所に寄せる** (Refs ippoan/alc-app#349)。
+ *
+ * `blob` を渡すと IndexedDB からの読み出しを省いてそれを送る — 録画直後の経路は
+ * blob を手に持っているので、`saveVideo` の完了を待たずに送れる
+ * (ローカル保存が quota で失敗してもアップロードは通る、従来の挙動)。
+ */
+export async function uploadLinkedVideo(
   videoStoreId: string | undefined,
   measurementId: string | undefined,
   updateFn?: (id: string, data: Record<string, unknown>) => Promise<unknown>,
-): Promise<void> {
-  if (!videoStoreId) return
+  blob?: Blob,
+): Promise<LinkedVideoOutcome> {
+  if (!videoStoreId) return 'skipped'
   try {
-    const record = await getVideo(videoStoreId)
-    if (!record || record.uploadedAt) return
-    const url = await uploadBlowVideo(record.videoBlob)
+    let videoBlob = blob
+    if (!videoBlob) {
+      const record = await getVideo(videoStoreId)
+      if (!record || record.uploadedAt) return 'skipped'
+      videoBlob = record.videoBlob
+    }
+    const url = await uploadBlowVideo(videoBlob)
     if (measurementId && updateFn) {
       await updateFn(measurementId, { video_url: url }).catch(() => {})
     }
     await markVideoUploaded(videoStoreId)
     console.log('[OfflineSync] Video uploaded:', videoStoreId)
+    return 'uploaded'
   } catch (e) {
     console.warn('[OfflineSync] Video upload failed:', videoStoreId, e)
+    return 'failed'
   }
 }
 

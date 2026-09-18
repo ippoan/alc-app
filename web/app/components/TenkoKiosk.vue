@@ -2,7 +2,7 @@
 import type { FaceAuthResult, MeasurementResult, SubmitMedicalData, TenkoRemoteEscalationReason } from '~/types'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
@@ -44,6 +44,84 @@ const {
 // carrying_items ステップに入ったら携行品マスタをロード
 watch(() => step.value, (s) => {
   if (s === 'carrying_items') loadCarryingItems()
+})
+
+// --- アルコール測定の録画と測定レコード (Refs ippoan/alc-app#349) ---
+// 通常点呼 (`NormalMeasurement`) と同じ `useBlowVideoRecording` を使う。同じ
+// component を通る**自動点呼と遠隔点呼の両方**にこれで録画が付く (アルコールの段は
+// `isRemote` で分岐していない)。
+const {
+  videoRef: blowVideoRef,
+  isCameraActive: isBlowCameraActive,
+  isRecording: isBlowRecording,
+  uploadStatus: blowVideoUploadStatus,
+  retryPendingUploads: retryPendingVideoUploads,
+  startCamera: startBlowCamera,
+  onAlcStateChange,
+  finishRecording: finishBlowRecording,
+  uploadRecording: uploadBlowRecording,
+  reset: resetBlowRecording,
+} = useBlowVideoRecording()
+
+onMounted(() => {
+  // 7 日超のローカル録画を削除 + 未アップロード分をリトライ
+  void retryPendingVideoUploads()
+})
+
+/**
+ * この点呼のアルコール測定の `measurements` 行 (Refs ippoan/alc-app#349)。
+ *
+ * **`POST /api/measurements/start` → `PUT /api/measurements/{id}` の 2 本だけを使う。**
+ * `saveMeasurement` (`POST /api/measurements`、`record_as_tenko: true`) は使わない —
+ * あれは `rust-alc-api` 側で `normal_tenko::record` を走らせるので、既に点呼セッションが
+ * あるキオスクから呼ぶと `tenko_method = 通常点呼` のセッションがもう 1 本でき、
+ * CSV に同じ点呼が二重に (しかも別方式で) 出る。
+ *
+ * どちらの口も auth-worker の `KIOSK_ROUTES` に入っているので、キオスクの device JWT で
+ * `/api/proxy` 経由で通る。
+ */
+const alcoholMeasurementId = ref<string | null>(null)
+
+/** 測定レコードを先に作る (best-effort: 失敗しても点呼は続ける) */
+async function startAlcoholMeasurement() {
+  if (!employeeId.value || alcoholMeasurementId.value) return
+  try {
+    const m = await startMeasurement(employeeId.value)
+    alcoholMeasurementId.value = m.id
+  }
+  catch (e) {
+    console.warn('[TenkoKiosk] startMeasurement failed:', e)
+    alcoholMeasurementId.value = null
+  }
+}
+
+/**
+ * 測定レコードを completed にする (best-effort)。**`record_as_tenko` は載せない**。
+ *
+ * **待たない。** `submitAlcohol` が要るのは `measurement_id` だけで、この PUT の完了は
+ * 前提条件ではない。待つと、API が詰まったときに乗務員がアルコールの段で最大 30 秒
+ * (`DEFAULT_FETCH_TIMEOUT_MS`) 足止めされる。
+ */
+function completeAlcoholMeasurement(id: string, result: MeasurementResult) {
+  void updateMeasurement(id, {
+    status: 'completed',
+    alcohol_value: result.alcoholValue,
+    result_type: result.resultType,
+    device_use_count: result.deviceUseCount,
+    face_photo_url: result.facePhotoUrl,
+    measured_at: result.measuredAt.toISOString(),
+    tenko_type: tenkoType.value ?? undefined,
+  }).catch(e => console.warn('[TenkoKiosk] updateMeasurement failed:', e))
+}
+
+// アルコールの段に入ったら録画カメラを起こし、測定レコードを作る。
+// **カメラを先に** — プレビューはローカルなので即出せる。逆順にすると
+// `startMeasurement` が詰まっている間プレビューが出ない
+watch(step, async (s) => {
+  if (s !== 'alcohol') return
+  // デモモードは FC-1200 の state 変化が来ないので即録画
+  await startBlowCamera({ recordImmediately: isDemoMode.value })
+  await startAlcoholMeasurement()
 })
 
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
@@ -235,9 +313,16 @@ onMounted(() => {
 })
 
 // --- アルコール測定結果 ---
-function onMeasurementResult(result: MeasurementResult) {
+async function onMeasurementResult(result: MeasurementResult) {
   const alcoholResult = result.resultType === 'normal' ? 'pass' : 'fail'
-  onAlcoholResult(alcoholResult, result.alcoholValue)
+  const measurementId = alcoholMeasurementId.value
+  // **段を進める前に**録画を止めて blob を確定させる (進めると段が unmount される)
+  await finishBlowRecording(employeeId.value, measurementId ?? undefined)
+  if (measurementId) {
+    completeAlcoholMeasurement(measurementId, result)
+    uploadBlowRecording(measurementId)
+  }
+  onAlcoholResult(alcoholResult, result.alcoholValue, measurementId ?? undefined)
   sendResult(result)
 }
 
@@ -300,6 +385,8 @@ function handleReset() {
   medicalInputSource.value = null
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
   isChoosingEscalationReason.value = false
+  alcoholMeasurementId.value = null
+  resetBlowRecording()
 }
 
 onUnmounted(() => {
@@ -586,10 +673,30 @@ onUnmounted(() => {
       <div v-else-if="step === 'alcohol'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">アルコール測定</h2>
+
+          <!-- 録画カメラプレビュー (v-show: useCamera.start の時点で video が在る必要がある。v-if だと srcObject が入らず映像が出ない) -->
+          <div v-show="isBlowCameraActive" class="relative mb-4 flex justify-center">
+            <video
+              ref="blowVideoRef"
+              autoplay
+              playsinline
+              muted
+              class="w-full aspect-video rounded-lg object-cover border border-gray-200"
+            />
+            <div
+              v-if="isBlowRecording"
+              class="absolute top-1 left-1 flex items-center gap-1 bg-red-600 text-white text-xs px-1.5 py-0.5 rounded"
+            >
+              <span class="w-2 h-2 rounded-full bg-white animate-pulse" />
+              録画中
+            </div>
+          </div>
+
           <AlcMeasurement
             :employee-id="employeeId"
             :demo-mode="isDemoMode"
             @result="onMeasurementResult"
+            @state-change="onAlcStateChange"
           />
         </div>
       </div>
@@ -729,6 +836,32 @@ onUnmounted(() => {
               :class="medicalInputSource === 'manual' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'"
             >
               {{ showBpUi ? '体温・血圧' : '体温' }}: {{ medicalInputSource === 'manual' ? '手動入力' : 'CoreS3' }}
+            </span>
+          </div>
+          <!-- 吹きかけ録画のアップロード状態 (Refs ippoan/alc-app#349) -->
+          <div v-if="blowVideoUploadStatus" class="mt-2 text-center text-xs">
+            <span
+              class="inline-flex items-center gap-1 px-2 py-1 rounded-full"
+              :class="{
+                'bg-blue-100 text-blue-700': blowVideoUploadStatus === 'uploading',
+                'bg-green-100 text-green-700': blowVideoUploadStatus === 'uploaded',
+                'bg-amber-100 text-amber-700': blowVideoUploadStatus === 'pending',
+                'bg-red-100 text-red-700': blowVideoUploadStatus === 'failed',
+              }"
+            >
+              <template v-if="blowVideoUploadStatus === 'uploading'">
+                <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                録画アップロード中...
+              </template>
+              <template v-else-if="blowVideoUploadStatus === 'uploaded'">
+                録画アップロード完了
+              </template>
+              <template v-else-if="blowVideoUploadStatus === 'pending'">
+                録画はローカルに保存済み (後でアップロード)
+              </template>
+              <template v-else-if="blowVideoUploadStatus === 'failed'">
+                録画アップロード失敗 (次回起動時にリトライ)
+              </template>
             </span>
           </div>
         </div>
