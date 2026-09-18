@@ -169,6 +169,10 @@ path = "app/utils/api.ts"
 branches = true
 
 [[files]]
+path = "app/utils/fetch-timeout.ts"
+branches = true
+
+[[files]]
 path = "app/utils/face-approval.ts"
 branches = true
 

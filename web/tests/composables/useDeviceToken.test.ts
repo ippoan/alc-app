@@ -1546,3 +1546,106 @@ describe('useDeviceToken (#434 step 3c)', () => {
     })
   })
 })
+
+// ============================================================
+// auth-worker への HTTP の上限 (Refs ippoan/alc-app#338)。
+// ここがハングすると single-flight (`jwtInFlight`) が永久 pending になり、
+// 以後すべての API 呼び出しが同じ promise を待って連鎖的に固まる。
+// AUTH SIGNBP / AUTH SIGN は既に 10 秒で切り上げているのに、その前後の
+// HTTP には上限が無い、という非対称を解消する。
+// ============================================================
+describe('auth-worker への HTTP の上限 (Refs ippoan/alc-app#338)', () => {
+  it('alarm-nonce / alarm-token に 10 秒の signal が載る', async () => {
+    coreS3Mock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith('/device/alarm-nonce')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const useDeviceToken = await load()
+    expect(await useDeviceToken().getDeviceJwt()).toBe('s3r-jwt')
+
+    expect(fetchMock.mock.calls).toHaveLength(2)
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal)
+    }
+    expect(spy).toHaveBeenCalledWith(10_000)
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('credential 経路 (/device/token) にも signal が載る', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ access_token: 'jwt-1', expires_in: 3600 }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const useDeviceToken = await load()
+    const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+
+    expect(await getDeviceJwt()).toBe('jwt-1')
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  // #336 の refreshSignedBpBonded() は getDeviceJwt() を通さず tryCoreS3Jwt を
+  // 直に呼ぶ (cache を返して終わりにしないため)。timeout は tryCoreS3Jwt の中の
+  // fetch に入れてあるので、この入口からも効く — それを固定する。
+  it('refreshSignedBpBonded (#336 の直呼び経路) の fetch にも signal が載る', async () => {
+    coreS3Mock.isConnected.value = true
+    coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=1')
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith('/device/alarm-nonce')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const useDeviceToken = await load()
+    expect(await useDeviceToken().refreshSignedBpBonded()).toBe(true)
+
+    expect(fetchMock.mock.calls).toHaveLength(2)
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal)
+    }
+  })
+
+  it('pairKioskDevice (/device/pair) にも signal が載る', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ device_id: 'd1', device_secret: 's1' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const useDeviceToken = await load()
+    await useDeviceToken().pairKioskDevice('admin-jwt', 'kiosk-1')
+
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('timeout したら null を返し、single-flight (jwtInFlight) を解いて次の試行を通す', async () => {
+    const timeoutError = new Error('signal timed out')
+    timeoutError.name = 'TimeoutError'
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(timeoutError)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: 'jwt-2', expires_in: 3600 }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const useDeviceToken = await load()
+    const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+
+    // 1 回目は timeout。**自動再送はしない** (サーバ側が成功していることがあるため)
+    expect(await getDeviceJwt()).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // jwtInFlight が null に戻っているので、次の呼び出しは道連れにならない
+    expect(await getDeviceJwt()).toBe('jwt-2')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})

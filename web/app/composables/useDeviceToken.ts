@@ -84,6 +84,7 @@
  */
 import { ref, computed, readonly } from 'vue'
 import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
+import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
 const KIOSK_DEVICE_SECRET_KEY = 'alc_kiosk_device_secret'
@@ -352,7 +353,8 @@ export function useDeviceToken() {
    * 起動時の 1 本。初回の呼び出しで getDeviceJwt() を始める (中で CoreS3 の探索を最大 3 秒待ち、
    * 繋がっていれば署名で取る)。2 回目以降は同じ promise を返す — 途中の getDeviceJwt() も
    * single-flight で同じ取得に合流する。`isStartupJwtPending` は「1 本の解決」か
-   * 「起動から STARTUP_TIMEOUT_MS」の早い方で下りる (fetch に timeout が無いので上限を外さない)。
+   * 「起動から STARTUP_TIMEOUT_MS」の早い方で下りる (fetch 自体にも上限が入ったが、
+   * CoreS3 の探索を含む 1 本は 3 秒より長くなり得るのでこの上限は残す)。
    * WebSerial 非対応なら null で何もしない (最初から確認中にしない)
    */
   function startupDeviceJwt(): Promise<string | null> {
@@ -415,7 +417,7 @@ export function useDeviceToken() {
     let status: number | null = null
     let code = '-'
     try {
-      const nonceRes = await fetch(`${authWorkerUrl}/device/alarm-nonce`)
+      const nonceRes = await fetch(`${authWorkerUrl}/device/alarm-nonce`, withTimeout({}, AUTH_WORKER_FETCH_TIMEOUT_MS))
       if (!nonceRes.ok) {
         status = nonceRes.status
         code = await readErrorCode(nonceRes)
@@ -429,7 +431,7 @@ export function useDeviceToken() {
       if (!signed) throw new Error('AUTH SIG の parse に失敗')
 
       stage = 'token-exchange'
-      const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, {
+      const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, withTimeout({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -441,7 +443,7 @@ export function useDeviceToken() {
           // (auth-worker 側は欠落を「不明」として扱う)。
           ...(signed.bpBonded !== undefined ? { bp_bonded: signed.bpBonded } : {}),
         }),
-      })
+      }, AUTH_WORKER_FETCH_TIMEOUT_MS))
       if (!tokenRes.ok) {
         status = tokenRes.status
         code = await readErrorCode(tokenRes)
@@ -521,11 +523,11 @@ export function useDeviceToken() {
     if (!id || !secret) return null
 
     try {
-      const res = await fetch(`${authWorkerUrl}/device/token`, {
+      const res = await fetch(`${authWorkerUrl}/device/token`, withTimeout({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_id: id, device_secret: secret }),
-      })
+      }, AUTH_WORKER_FETCH_TIMEOUT_MS))
       if (!res.ok) return null
       const data = (await res.json()) as { access_token?: string; expires_in?: number }
       if (!data.access_token) return null
@@ -554,11 +556,11 @@ export function useDeviceToken() {
   ): Promise<{ device_id: string; device_secret: string } | null> {
     if (!adminToken) return null
     try {
-      const res = await fetch(`${authWorkerUrl}/device/pair`, {
+      const res = await fetch(`${authWorkerUrl}/device/pair`, withTimeout({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
         body: JSON.stringify({ label, role: 'device-kiosk' }),
-      })
+      }, AUTH_WORKER_FETCH_TIMEOUT_MS))
       if (!res.ok) return null
       const data = (await res.json()) as { device_id?: string; device_secret?: string }
       if (!data.device_id || !data.device_secret) return null
