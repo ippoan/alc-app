@@ -114,6 +114,7 @@ describe('useTenkoKiosk', () => {
     expect(k.employeeName.value).toBe('')
     expect(k.pendingSchedules.value).toEqual([])
     expect(k.selectedSchedule.value).toBeNull()
+    expect(k.selectedTenkoType.value).toBeNull()
     expect(k.session.value).toBeNull()
     expect(k.error.value).toBeNull()
     expect(k.isLoading.value).toBe(false)
@@ -374,6 +375,100 @@ describe('useTenkoKiosk', () => {
 
       await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
       expect(k.error.value).toBe('セッション開始に失敗しました')
+    })
+  })
+
+  // ---------- 遠隔点呼: 画面で選んだ点呼種別 (Refs #310) ----------
+  // 本番には予定 (pending schedule) を持つ社員が 1 人もいないため #309 の
+  // 「予定があれば種別を引き継ぐ」修正は一度も発火しなかった。予定に依存せず
+  // 画面で選んだ種別を送る経路そのものをテストする (mock で予定を作る代替はしない)。
+
+  describe('遠隔点呼: 画面で選んだ点呼種別 (予定 0 件のまま)', () => {
+    it('(a) ★ selectedTenkoType が post_operation なら startTenkoSession に post_operation で送られる (#309 の再発防止)', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([])
+      const sess = makeSession({ tenko_type: 'post_operation', status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValue(sess)
+
+      const k = useTenkoKiosk({ remoteMode: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.selectedSchedule.value).toBeNull()
+
+      k.selectedTenkoType.value = 'post_operation'
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalledWith({
+        tenko_type: 'post_operation',
+        employee_id: 'emp-1',
+        identity_face_photo_url: undefined,
+      })
+    })
+
+    it('(b) 何も選ばなければ従来どおり業務前が送られる', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([])
+      const sess = makeSession({ status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValue(sess)
+
+      const k = useTenkoKiosk({ remoteMode: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalledWith({
+        tenko_type: 'pre_operation',
+        employee_id: 'emp-1',
+        identity_face_photo_url: undefined,
+      })
+    })
+
+    it('(c) 業務後を選ぶと stepKeys / stepLabels も業務後の並びになる', () => {
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.selectedTenkoType.value = 'post_operation'
+      expect(k.stepKeys.value).toEqual(['nfc', 'face_auth', 'alcohol', 'instruction', 'report', 'completed'])
+      expect(k.stepLabels.value).toEqual(['NFC', '顔認証', 'アルコール', '指示確認', '運行報告', '完了'])
+    })
+
+    it('(d) 回帰: 予定がある枝は従来どおり schedule_id を送り、選んだ種別があっても tenko_type は送らない', async () => {
+      const sess = makeSession({ status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValue(sess)
+
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule({ tenko_type: 'pre_operation' })
+      k.selectedTenkoType.value = 'post_operation'
+
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalledWith({
+        schedule_id: 'sched-1',
+        employee_id: 'emp-1',
+        identity_face_photo_url: undefined,
+      })
+    })
+
+    it('(f) ★ reset() 後は前の乗務員が選んだ種別が残らない', async () => {
+      vi.mocked(getPendingSchedules).mockResolvedValue([])
+      const sess1 = makeSession({ tenko_type: 'post_operation', status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValueOnce(sess1)
+
+      const k = useTenkoKiosk({ remoteMode: true })
+      await k.identifyEmployee('emp-1', '田中')
+      k.selectedTenkoType.value = 'post_operation'
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(k.selectedTenkoType.value).toBe('post_operation')
+
+      k.reset()
+      expect(k.selectedTenkoType.value).toBeNull()
+
+      const sess2 = makeSession({ status: 'identity_verified' })
+      vi.mocked(startTenkoSession).mockResolvedValueOnce(sess2)
+      await k.identifyEmployee('emp-2', '鈴木')
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenLastCalledWith({
+        tenko_type: 'pre_operation',
+        employee_id: 'emp-2',
+        identity_face_photo_url: undefined,
+      })
     })
   })
 
@@ -912,6 +1007,7 @@ describe('useTenkoKiosk', () => {
     k.employeeName.value = '田中'
     k.pendingSchedules.value = [makeSchedule()]
     k.selectedSchedule.value = makeSchedule()
+    k.selectedTenkoType.value = 'post_operation'
     k.session.value = makeSession()
     k.error.value = 'some error'
     k.isLoading.value = true
@@ -925,6 +1021,7 @@ describe('useTenkoKiosk', () => {
     expect(k.employeeName.value).toBe('')
     expect(k.pendingSchedules.value).toEqual([])
     expect(k.selectedSchedule.value).toBeNull()
+    expect(k.selectedTenkoType.value).toBeNull()
     expect(k.session.value).toBeNull()
     expect(k.error.value).toBeNull()
     expect(k.isLoading.value).toBe(false)
@@ -945,6 +1042,20 @@ describe('useTenkoKiosk', () => {
     it('session なし → selectedSchedule.tenko_type', () => {
       const k = useTenkoKiosk()
       k.selectedSchedule.value = makeSchedule({ tenko_type: 'post_operation' })
+      expect(k.tenkoType.value).toBe('post_operation')
+    })
+
+    it('selectedTenkoType は session に上書きされない (session が最優先)', () => {
+      const k = useTenkoKiosk()
+      k.session.value = makeSession({ tenko_type: 'pre_operation' })
+      k.selectedTenkoType.value = 'post_operation'
+      expect(k.tenkoType.value).toBe('pre_operation')
+    })
+
+    it('selectedTenkoType は selectedSchedule より優先される', () => {
+      const k = useTenkoKiosk()
+      k.selectedSchedule.value = makeSchedule({ tenko_type: 'pre_operation' })
+      k.selectedTenkoType.value = 'post_operation'
       expect(k.tenkoType.value).toBe('post_operation')
     })
 

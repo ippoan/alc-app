@@ -5,6 +5,7 @@ import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -28,7 +29,7 @@ const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVid
 
 // 点呼キオスク状態管理
 const {
-  step, employeeId, employeeName, pendingSchedules, selectedSchedule, session,
+  step, employeeId, employeeName, pendingSchedules, selectedSchedule, selectedTenkoType, session,
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
@@ -467,6 +468,28 @@ onUnmounted(() => {
               @click="useManualInput = false"
             >
               NFC で読み取る
+            </button>
+          </div>
+
+          <!-- 点呼種別 (遠隔点呼のみ。予定に依存せず画面で選ぶ。Refs #310) -->
+          <div v-if="remoteMode" class="flex gap-2 mt-4">
+            <button
+              class="flex-1 py-1.5 rounded-lg text-sm font-medium border transition-colors"
+              :class="tenkoType === 'pre_operation'
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'"
+              @click="selectedTenkoType = 'pre_operation'"
+            >
+              {{ tenkoTypeLabel('pre_operation') }}
+            </button>
+            <button
+              class="flex-1 py-1.5 rounded-lg text-sm font-medium border transition-colors"
+              :class="tenkoType === 'post_operation'
+                ? 'bg-orange-500 text-white border-orange-500'
+                : 'bg-white text-orange-500 border-orange-300 hover:bg-orange-50'"
+              @click="selectedTenkoType = 'post_operation'"
+            >
+              {{ tenkoTypeLabel('post_operation') }}
             </button>
           </div>
         </div>
