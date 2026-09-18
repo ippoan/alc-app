@@ -31,9 +31,13 @@
  * (ユーザー決定。Refs ippoan/alc-app#234)。
  *
  * - 署名の取り方は 2 段構え (#322-2、Refs ippoan/alc-app-s3#249)。まず
- *   `AUTH SIGNBP <nonce>` → `AUTH SIGBP <pubkey> <sig> <bp>` (`bp` は血圧計が
- *   ボンド済みなら `1`、未ボンドなら `0`) を試す (`signKioskNonce` がこのモジュールに
- *   閉じて持つ — 管理者ログインと共有する `AUTH SIGN` とは別コマンドの独立した経路)。
+ *   `AUTH SIGNBP <nonce>` → `AUTH SIGBP <pubkey> <sig> BP=1` /
+ *   `AUTH SIGBP <pubkey> <sig> BP=0` (血圧計がボンド済みなら `BP=1`、未ボンドなら
+ *   `BP=0`。CoreS3 ファーム側の既存応答 `OMRON BP=0` / `STATUS LAN=1` に綴りを揃えた形。
+ *   `<sig>` は署名対象の小文字 `<nonce>|bp=1` / `<nonce>|bp=0` に対するもので、
+ *   応答行の大文字 `BP=` とは別物 — ブラウザは検証も構築もせず parse するだけ) を試す
+ *   (`signKioskNonce` がこのモジュールに閉じて持つ — 管理者ログインと共有する
+ *   `AUTH SIGN` とは別コマンドの独立した経路)。
  *   古いファーム (`SIGNBP` 未対応) は未知コマンドとして reject するので、その場合は
  *   **今までどおり** `AUTH SIGN <nonce>` → `AUTH SIG <pubkey> <sig>` parse
  *   (`useDeviceLogin.ts` の `signAlarmDeviceNonce`、#214 と同じ firmware I/F。
@@ -199,16 +203,19 @@ async function readErrorCode(res: { json: () => Promise<unknown> }): Promise<str
 }
 
 /**
- * `AUTH SIGBP <pubkey> <sig> <bp>` を space で分割して parse (#322-2)。`bp` は
- * `1` (ボンド済み) / `0` (未ボンド) のみを受け付ける。形式が合わなければ null
- * (呼び出し側は `AUTH SIGN` へフォールバックする — parseAuthSigLine と同じ流儀)。
+ * `AUTH SIGBP <pubkey> <sig> BP=1` / `AUTH SIGBP <pubkey> <sig> BP=0` を space で
+ * 分割して parse (#322-2、親の確定指示で `<bp>` から `BP=<bp>` へ変更 — CoreS3
+ * ファーム側の既存応答 `OMRON BP=0` / `STATUS LAN=1` に綴りを揃えるため)。4 語目は
+ * 大文字の `BP=1` / `BP=0` のみを受け付ける (署名対象の小文字 `bp=` とは別物)。
+ * 形式が合わなければ null (呼び出し側は `AUTH SIGN` へフォールバックする —
+ * parseAuthSigLine と同じ流儀)。
  */
 function parseAuthSigBpLine(line: string): KioskBondedSignature | null {
   const parts = line.split(' ')
   if (parts.length !== 5 || parts[0] !== 'AUTH' || parts[1] !== 'SIGBP') return null
   const bp = parts[4]
-  if (bp !== '0' && bp !== '1') return null
-  return { pubkey: parts[2]!, sig: parts[3]!, bpBonded: bp === '1' }
+  if (bp !== 'BP=0' && bp !== 'BP=1') return null
+  return { pubkey: parts[2]!, sig: parts[3]!, bpBonded: bp === 'BP=1' }
 }
 
 /**

@@ -1060,7 +1060,7 @@ describe('useDeviceToken (#434 step 3c)', () => {
       it('AUTH SIGNBP が成功したら bp_bonded (true) を alarm-token に足し、AUTH SIGN にはフォールバックしない', async () => {
         coreS3Mock.isConnected.value = true
         coreS3Mock.request.mockImplementation(async (line: string) => {
-          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp 1'
+          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp BP=1'
           throw new Error(`unexpected request: ${line}`)
         })
         const fetchMock = routeFetch({
@@ -1084,7 +1084,7 @@ describe('useDeviceToken (#434 step 3c)', () => {
       it('AUTH SIGNBP が成功して bp=0 なら bp_bonded: false を送る', async () => {
         coreS3Mock.isConnected.value = true
         coreS3Mock.request.mockImplementation(async (line: string) => {
-          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp 0'
+          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp BP=0'
           throw new Error(`unexpected request: ${line}`)
         })
         const fetchMock = routeFetch({
@@ -1145,6 +1145,28 @@ describe('useDeviceToken (#434 step 3c)', () => {
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', coreS3Mock.request)
+      })
+
+      it('4 語目が小文字の bp=1 (署名対象と同じ綴り) では parse せず AUTH SIGN にフォールバックする (応答は大文字 BP= のみ)', async () => {
+        coreS3Mock.isConnected.value = true
+        coreS3Mock.request.mockImplementation(async (line: string) => {
+          if (line.startsWith('AUTH SIGNBP ')) return 'AUTH SIGBP pub-bp sig-bp bp=1'
+          throw new Error(`unexpected direct request: ${line}`)
+        })
+        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+        const fetchMock = routeFetch({
+          '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
+          '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const useDeviceToken = await load()
+        const { getDeviceJwt } = useDeviceToken()
+
+        expect(await getDeviceJwt()).toBe('s3r-jwt')
+        expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', coreS3Mock.request)
+        const tokenCall = fetchMock.mock.calls.find(([u]) => (u as string).endsWith('/device/alarm-token'))!
+        expect(JSON.parse(tokenCall[1].body)).not.toHaveProperty('bp_bonded')
       })
 
       it('AUTH SIGN へのフォールバックが失敗 (no key 等) したら従来どおり coreS3-sign 段の失敗として扱う', async () => {
