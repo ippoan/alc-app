@@ -12,6 +12,7 @@ import {
   cleanupOld,
   markSynced,
   estimateDbSize,
+  uploadLinkedVideo,
 } from '~/utils/offline-queue'
 
 vi.mock('~/utils/video-store', () => ({
@@ -878,5 +879,71 @@ describe('offline-queue', () => {
       expect(items[0].result.diastolic).toBe(80)
       expect(items[0].result.pulse).toBe(72)
     })
+  })
+})
+
+// 録画 1 本のアップロードは flush / 起動時リトライ / 録画直後の 3 経路で共有する
+// (Refs ippoan/alc-app#349)。ここでは export された単体としての振る舞いを見る。
+describe('uploadLinkedVideo', () => {
+  beforeEach(() => {
+    globalThis.indexedDB = new IDBFactory()
+    vi.clearAllMocks()
+  })
+
+  it('videoStoreId が無ければ何もせず skipped', async () => {
+    const { getVideo } = await import('~/utils/video-store')
+    expect(await uploadLinkedVideo(undefined, 'meas-1', vi.fn())).toBe('skipped')
+    expect(getVideo).not.toHaveBeenCalled()
+  })
+
+  it('blob を渡すと IndexedDB を読まずにそれを上げる', async () => {
+    const { getVideo, markVideoUploaded } = await import('~/utils/video-store')
+    const { uploadBlowVideo } = await import('~/utils/api')
+    vi.mocked(uploadBlowVideo).mockResolvedValue('https://example.com/v.webm')
+    const updateFn = vi.fn().mockResolvedValue({})
+    const blob = new Blob(['in-memory'], { type: 'video/webm' })
+
+    expect(await uploadLinkedVideo('vid-1', 'meas-1', updateFn, blob)).toBe('uploaded')
+
+    expect(getVideo).not.toHaveBeenCalled()
+    expect(uploadBlowVideo).toHaveBeenCalledWith(blob)
+    expect(updateFn).toHaveBeenCalledWith('meas-1', { video_url: 'https://example.com/v.webm' })
+    expect(markVideoUploaded).toHaveBeenCalledWith('vid-1')
+  })
+
+  it('blob を渡さなければ store から引いて上げる', async () => {
+    const { getVideo } = await import('~/utils/video-store')
+    const { uploadBlowVideo } = await import('~/utils/api')
+    const stored = new Blob(['from-store'], { type: 'video/webm' })
+    vi.mocked(getVideo).mockResolvedValue({
+      id: 'vid-2', videoBlob: stored, employeeId: 'EMP001', createdAt: new Date().toISOString(),
+    })
+    vi.mocked(uploadBlowVideo).mockResolvedValue('https://example.com/v2.webm')
+
+    expect(await uploadLinkedVideo('vid-2', undefined, undefined)).toBe('uploaded')
+    expect(uploadBlowVideo).toHaveBeenCalledWith(stored)
+  })
+
+  it('アップロードが失敗したら failed', async () => {
+    const { uploadBlowVideo } = await import('~/utils/api')
+    vi.mocked(uploadBlowVideo).mockRejectedValue(new Error('network'))
+    const blob = new Blob(['data'], { type: 'video/webm' })
+    expect(await uploadLinkedVideo('vid-3', 'meas-3', vi.fn(), blob)).toBe('failed')
+  })
+
+  it('store に無い / 既にアップロード済みなら skipped', async () => {
+    const { getVideo } = await import('~/utils/video-store')
+    const { uploadBlowVideo } = await import('~/utils/api')
+
+    vi.mocked(getVideo).mockResolvedValue(undefined)
+    expect(await uploadLinkedVideo('vid-4', 'meas-4', vi.fn())).toBe('skipped')
+
+    vi.mocked(getVideo).mockResolvedValue({
+      id: 'vid-5', videoBlob: new Blob(['x']), employeeId: 'EMP001',
+      createdAt: new Date().toISOString(), uploadedAt: new Date().toISOString(),
+    })
+    expect(await uploadLinkedVideo('vid-5', 'meas-5', vi.fn())).toBe('skipped')
+
+    expect(uploadBlowVideo).not.toHaveBeenCalled()
   })
 })

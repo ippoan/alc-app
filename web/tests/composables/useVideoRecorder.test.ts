@@ -209,6 +209,56 @@ describe('useVideoRecorder', () => {
     expect(capturedRecorder.stop).not.toHaveBeenCalled()
   })
 
+  // 段の切り替え (キオスクの v-else-if) で録画 blob を失わない (Refs ippoan/alc-app#349)
+  it('stopRecording を 2 回呼んでも停止は 1 回で同じ Promise が返る', async () => {
+    let capturedRecorder: any = null
+    vi.stubGlobal('MediaRecorder', class {
+      state = 'inactive' as string
+      ondataavailable: any = null
+      onstop: any = null
+      onerror: any = null
+      static isTypeSupported = vi.fn(() => true)
+      constructor() { capturedRecorder = this }
+      start() { this.state = 'recording' }
+      stop = vi.fn(() => {
+        this.state = 'inactive'
+        this.ondataavailable?.({ data: new Blob(['data'], { type: 'video/webm' }) })
+        this.onstop?.(new Event('stop'))
+      })
+    })
+
+    const { startRecording, stopRecording } = useVideoRecorder()
+    startRecording({} as MediaStream)
+
+    const first = stopRecording()
+    const second = stopRecording()
+    expect(second).toBe(first)
+    expect(await first).toBeInstanceOf(Blob)
+    expect(capturedRecorder.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('unmount 後に stopRecording を呼んでも blob が取り出せる', async () => {
+    const [result, app] = withSetup(() => useVideoRecorder())
+    result.startRecording({} as MediaStream)
+    expect(result.isRecording.value).toBe(true)
+
+    // 段が切り替わって unmount — onUnmounted が stopRecording と同じ経路で止める
+    app.unmount()
+    expect(result.isRecording.value).toBe(false)
+
+    // 呼び出し側が後から await しても blob は消えていない
+    expect(await result.stopRecording()).toBeInstanceOf(Blob)
+  })
+
+  it('startRecording で停止の記憶がリセットされ、次の録画も止められる', async () => {
+    const { startRecording, stopRecording } = useVideoRecorder()
+    startRecording({} as MediaStream)
+    await stopRecording()
+
+    startRecording({} as MediaStream)
+    expect(await stopRecording()).toBeInstanceOf(Blob)
+  })
+
   it('ondataavailable で size=0 のデータは無視', async () => {
     vi.stubGlobal('MediaRecorder', class {
       state = 'inactive' as string

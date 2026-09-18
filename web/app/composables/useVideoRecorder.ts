@@ -9,11 +9,14 @@ export function useVideoRecorder() {
 
   let mediaRecorder: MediaRecorder | null = null
   let chunks: BlobPart[] = []
+  /** 進行中 (または完了済み) の停止処理。`stopRecording` を何度呼んでも 1 回だけ止める */
+  let stopPromise: Promise<Blob | null> | null = null
 
   function startRecording(stream: MediaStream) {
     chunks = []
     recordedBlob.value = null
     error.value = null
+    stopPromise = null
 
     const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
       ? 'video/webm;codecs=vp8'
@@ -47,26 +50,37 @@ export function useVideoRecorder() {
     console.log('[VideoRecorder] Recording started')
   }
 
+  /**
+   * 録画を止めて blob を返す。
+   *
+   * **停止は 1 回だけ走らせ、Promise を使い回す** — キオスクは段が切り替わると
+   * 録画中のまま unmount されるので、下の `onUnmounted` も同じ経路で止める。
+   * 以前は `onUnmounted` が `mediaRecorder.stop()` を直接呼んでいたため、
+   * await 中の `stopRecording()` が解決されず**録画 blob が取り出せずに消えていた**
+   * (Refs ippoan/alc-app#349)。unmount の後にここを呼んだ場合も同じ Promise が
+   * 返るので、blob は段の切り替えで失われない。
+   */
   function stopRecording(): Promise<Blob | null> {
-    return new Promise((resolve) => {
-      if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        resolve(recordedBlob.value)
-        return
-      }
-      const prevOnStop = mediaRecorder.onstop
-      mediaRecorder.onstop = (e) => {
+    if (stopPromise) return stopPromise
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+      return Promise.resolve(recordedBlob.value)
+    }
+    const recorder = mediaRecorder
+    stopPromise = new Promise((resolve) => {
+      const prevOnStop = recorder.onstop
+      recorder.onstop = (e) => {
         if (prevOnStop) (prevOnStop as (e: Event) => void)(e)
         resolve(recordedBlob.value)
       }
-      mediaRecorder.stop()
+      recorder.stop()
       console.log('[VideoRecorder] Recording stopped')
     })
+    return stopPromise
   }
 
   onUnmounted(() => {
-    if (mediaRecorder?.state === 'recording') {
-      mediaRecorder.stop()
-    }
+    // 録画中に unmount されても blob を捨てない (上の stopRecording のコメント参照)
+    if (mediaRecorder?.state === 'recording') void stopRecording()
   })
 
   return { isRecording, recordedBlob, error, startRecording, stopRecording }
