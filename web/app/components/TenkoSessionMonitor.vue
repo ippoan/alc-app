@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
+import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
@@ -220,22 +221,8 @@ function formatDate(iso: string | null) {
   })
 }
 
-function statusLabel(s: string) {
-  const map: Record<string, string> = {
-    identity_verified: '本人確認済',
-    alcohol_testing: 'アルコール検査中',
-    medical_pending: '医療測定待ち',
-    self_declaration_pending: '自己申告待ち',
-    safety_judgment_pending: '安全判定中',
-    daily_inspection_pending: '日常点検待ち',
-    instruction_pending: '指示確認待ち',
-    report_pending: '報告待ち',
-    interrupted: '中断',
-    completed: '完了',
-    cancelled: 'キャンセル',
-  }
-  return map[s] || s
-}
+// 表示名は `~/utils/tenko-status.ts` に集約 (Refs ippoan/alc-app#343)
+const statusLabel = tenkoStatusLabel
 
 function statusColor(s: string) {
   if (s === 'completed') return 'bg-green-100 text-green-800'

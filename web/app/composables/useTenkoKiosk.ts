@@ -10,7 +10,7 @@ import {
   submitAlcohol, submitMedical, submitSelfDeclaration,
   submitDailyInspection, confirmInstruction, submitReport,
   cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
-  getCarryingItems, submitCarryingItemChecks,
+  getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
 } from '~/utils/api'
 
 /** UI ステップ (バックエンド status とは別) */
@@ -39,13 +39,43 @@ export const BP_REQUIREMENT_UNKNOWN_MESSAGE
   = 'この端末では自動点呼の業務前を実施できません (血圧計: 未確認)。'
     + '「もう一度試す」を押して確認し直すか、運行管理者に連絡してください。'
 
-export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
+/**
+ * 「続きから再開」の対象にする status (Refs ippoan/alc-app#343)。
+ *
+ * **`alcohol_tested_at IS NULL` と同値。** `submit_alcohol` は `identity_verified` の
+ * ときしか受け付けない (`rust-alc-api` `tenko_sessions.rs:165-167`) ので、アルコールを
+ * まだ測っていない状態はこの 5 つで尽きる。
+ *
+ * 入れないもの:
+ * - **`interrupted`** — 管理者が中断したものの再開は `AuthUser` 必須の `resume` API の
+ *   領分で、キオスクの鍵 (`auth-worker` の `KIOSK_ROUTES`) では通らない。
+ * - **`completed` / `cancelled`** — 終わっている。
+ * - **`instruction_pending` / `report_pending`** — アルコール測定済み。続きを埋めること
+ *   自体はできるが、**何時間も前に測った値のまま点呼記録が閉じる**ので入れない
+ *   (オーナー要件「途中でアルコールチェック検知とかなければ再利用できるように」)。
+ */
+export const RESUMABLE_TENKO_STATUSES: readonly TenkoSessionStatus[] = [
+  'identity_verified',
+  'medical_pending',
+  'self_declaration_pending',
+  'daily_inspection_pending',
+  'carrying_items_pending',
+]
+
+export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: boolean }) {
   /**
    * 最初から遠隔点呼として始めたか。**setup の 1 回だけで決まる定数**で、
    * 途中では変わらない。段の一覧 (`stepLabels` / `stepKeys`) はこの値だけを見るので、
    * 遠隔へ切り替えても**段の数が変わらず現在地がずれない**。
    */
   const remoteMode = options?.remoteMode ?? false
+  /**
+   * 本人特定のときに未完了セッションも引くか (Refs ippoan/alc-app#343)。
+   * **既定は `false` = 今までどおり** — この composable は通常点呼・遠隔点呼と共有なので、
+   * 新しい導線を足す側 (`TenkoKiosk.vue`) が明示的に有効化する
+   * (`BleStatus.vue` の `showBpUi` を `TenkoKiosk.vue` だけが切るのと同じ流儀)。
+   */
+  const allowResume = options?.allowResume ?? false
   /**
    * 自動点呼の途中から遠隔点呼へ昇格したか (Refs ippoan/alc-app-s3#135)。
    * `remoteMode` とは**混ぜない** — 混ぜると段の一覧が途中で変わる。
@@ -72,6 +102,11 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
   const employeeId = ref('')
   const employeeName = ref('')
   const pendingSchedules = ref<TenkoSchedule[]>([])
+  /**
+   * 途中で止まったまま残っている、アルコール未測定のセッション (Refs ippoan/alc-app#343)。
+   * `allowResume` が false のあいだは**常に空**。
+   */
+  const resumableSessions = ref<TenkoSession[]>([])
   const selectedSchedule = ref<TenkoSchedule | null>(null)
   /** 画面で選んだ点呼種別 (遠隔点呼で使う)。未選択は null で、既定 (業務前) に委ねる */
   const selectedTenkoType = ref<TenkoType | null>(null)
@@ -152,9 +187,17 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     }
 
     isLoading.value = true
+    resumableSessions.value = []
     try {
+      // 未完了セッションの照会は予定の取得と**同時に**投げる (待ち時間は 1 往復ぶんのまま)。
+      // `_fetchResumableSessions` は決して reject しない — 再開は「あれば出る」付加機能で、
+      // 照会が落ちたくらいで本人特定そのものを止めない (Refs ippoan/alc-app#343)
+      const resumable = allowResume
+        ? _fetchResumableSessions(empId)
+        : Promise.resolve<TenkoSession[]>([])
       const schedules = await getPendingSchedules(empId)
       pendingSchedules.value = schedules
+      resumableSessions.value = await resumable
       // 予定が 0 件でもエラーで止めず schedule_select へ進む。業務前は予定必須のまま
       // (指示事項が予定に載る) だが、業務後は予定が無くても進められる (Refs
       // ippoan/alc-app#322、法令上「設定することができる」= 任意)。画面が
@@ -162,6 +205,63 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
       step.value = 'schedule_select'
     } catch (e) {
       error.value = e instanceof Error ? e.message : '予定取得に失敗しました'
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  /**
+   * 途中で止まったままのセッションを引く (Refs ippoan/alc-app#343)。
+   *
+   * **status ごとに 1 本ずつ投げて並列で待つ。** `TenkoSessionFilter.status` は
+   * **単一値一致しか無い**ので「未完了をまとめて 1 回」は引けず、かといって
+   * フィルタ無しで引くと 1 ページ (既定 50 件) がその乗務員の過去の完了セッションで
+   * 埋まって、拾いたい数本が落ちる。**件数より取りこぼさない方を取る** —
+   * 5 本を並列で投げるので、増えるのは往復の本数だけで待ち時間は変わらない。
+   *
+   * **1 本でも落ちたら、取れた分だけ返す。** 決して reject しない。
+   */
+  async function _fetchResumableSessions(empId: string): Promise<TenkoSession[]> {
+    const results = await Promise.allSettled(
+      RESUMABLE_TENKO_STATUSES.map(status => listTenkoSessions({ employee_id: empId, status })),
+    )
+    const found: TenkoSession[] = []
+    for (const r of results) {
+      if (r.status === 'fulfilled') found.push(...r.value.sessions)
+    }
+    // status は上の 5 つに絞ってあるが、**オーナー要件そのもの (アルコール未測定) を
+    // ここでも直接確かめる** — 判定を別 repo の不変条件だけに預けない
+    return found
+      .filter(s => s.alcohol_tested_at === null)
+      .sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''))
+  }
+
+  /**
+   * 拾った未完了セッションを続きから再開する (Refs ippoan/alc-app#343)。
+   *
+   * **新しいセッションは起こさない**し、**新しいスイッチも書かない** —
+   * `session.value` に載せ替えて既存の `_advanceByStatus` に status を渡すだけ。
+   *
+   * **#336 の入口ガードを必ず通す。** 血圧の要否が確定できない端末で業務前を再開すると、
+   * 体温を送った時点で必ず 400 (`bp_required`) になり行き止まりへ入る — 再開の経路が
+   * そこを迂回しないように、`onFaceAuthComplete` と同じ判定を同じ文言で掛ける。
+   */
+  async function resumeSession(s: TenkoSession) {
+    error.value = null
+    // 指示事項と運行管理者名は予定側にしか無い。まだ未実施予定として残っていれば拾う
+    // (消費済みなら取れないので、指示は出ないまま続きへ進む)
+    selectedSchedule.value = pendingSchedules.value.find(p => p.id === s.schedule_id) ?? null
+    // ガードが見る `tenkoType` はこのセッションの種別なので、判定より前に載せ替える
+    session.value = s
+    isLoading.value = true
+    try {
+      if (await isBpRequirementUnknown()) {
+        blockedResumeSession.value = s
+        error.value = BP_REQUIREMENT_UNKNOWN_MESSAGE
+        return
+      }
+      blockedResumeSession.value = null
+      _advanceByStatus(s.status)
     } finally {
       isLoading.value = false
     }
@@ -219,8 +319,15 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
    * (非 null = いま入口で止まっている)。
    */
   const blockedFaceAuthResult = ref<FaceAuthResult | null>(null)
+  /**
+   * 入口で止めた「続きから再開」(Refs ippoan/alc-app#343)。顔認証と同じく、
+   * 「もう一度試す」で**続きから**やり直せるように持つ。
+   */
+  const blockedResumeSession = ref<TenkoSession | null>(null)
   /** 血圧の要否が確定できず、業務前の自動点呼を入口で止めているか (#336) */
-  const bpRequirementUnknown = computed(() => blockedFaceAuthResult.value !== null)
+  const bpRequirementUnknown = computed(
+    () => blockedFaceAuthResult.value !== null || blockedResumeSession.value !== null,
+  )
 
   /**
    * ボンド状態を取り直して、確定したら止めた所から再開する (#336)。
@@ -228,8 +335,9 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
    * **リロードなしで復帰できる導線**を必ず残す。取り直しても不明なら同じ画面に戻るだけ。
    */
   async function retryBpRequirement() {
-    const pending = blockedFaceAuthResult.value
-    if (!pending) return
+    const pendingResume = blockedResumeSession.value
+    const pendingFace = blockedFaceAuthResult.value
+    if (!pendingResume && !pendingFace) return
     error.value = null
     isLoading.value = true
     try {
@@ -237,7 +345,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     } finally {
       isLoading.value = false
     }
-    await onFaceAuthComplete(pending)
+    // 止めた経路へそのまま戻す。両方が同時に立つことはない (入口はどちらか一方)
+    if (pendingResume) {
+      blockedResumeSession.value = null
+      await resumeSession(pendingResume)
+    }
+    if (pendingFace) {
+      await onFaceAuthComplete(pendingFace)
+    }
   }
 
   // --- 顔認証完了 → セッション開始 + アルコール測定 ---
@@ -533,6 +648,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     employeeId.value = ''
     employeeName.value = ''
     pendingSchedules.value = []
+    resumableSessions.value = []
     selectedSchedule.value = null
     selectedTenkoType.value = null
     session.value = null
@@ -545,6 +661,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     escalatedToRemote.value = false
     escalationReason.value = null
     blockedFaceAuthResult.value = null
+    blockedResumeSession.value = null
   }
 
   return {
@@ -553,6 +670,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     employeeId,
     employeeName,
     pendingSchedules,
+    resumableSessions,
     selectedSchedule,
     selectedTenkoType,
     session,
@@ -576,6 +694,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean }) {
     // Actions
     identifyEmployee,
     selectSchedule,
+    resumeSession,
     proceedWithoutSchedule,
     onFaceAuthComplete,
     retryBpRequirement,

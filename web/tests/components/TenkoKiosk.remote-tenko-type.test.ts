@@ -32,6 +32,7 @@ vi.mock('~/utils/api', () => ({
   uploadFacePhoto: vi.fn(),
   getCarryingItems: vi.fn(async () => []),
   submitCarryingItemChecks: vi.fn(),
+  listTenkoSessions: vi.fn(async () => ({ sessions: [], total: 0, page: 1, per_page: 50 })),
 }))
 
 mockNuxtImport('useWebRtc', () => () => ({

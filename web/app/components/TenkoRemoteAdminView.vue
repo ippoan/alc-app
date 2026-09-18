@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { FaceAuthResult, TenkoSession, DriverInfo } from '~/types'
+import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
@@ -98,16 +99,8 @@ async function fetchSession(sessionId: string) {
   } catch { /* セッション未作成の場合は無視 */ }
 }
 
-function statusLabel(s: string) {
-  const map: Record<string, string> = {
-    identity_verified: '本人確認済', alcohol_testing: 'アルコール検査中',
-    medical_pending: '医療測定待ち', self_declaration_pending: '自己申告待ち',
-    safety_judgment_pending: '安全判定中', daily_inspection_pending: '日常点検待ち',
-    instruction_pending: '指示確認待ち', report_pending: '報告待ち',
-    interrupted: '中断', completed: '完了', cancelled: 'キャンセル',
-  }
-  return map[s] || s
-}
+// 表示名は `~/utils/tenko-status.ts` に集約 (Refs ippoan/alc-app#343)
+const statusLabel = tenkoStatusLabel
 
 function statusColor(s: string) {
   if (s === 'completed') return 'bg-green-100 text-green-800'

@@ -29,17 +29,17 @@ const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVid
 
 // 点呼キオスク状態管理
 const {
-  step, employeeId, employeeName, pendingSchedules, selectedSchedule, selectedTenkoType, session,
+  step, employeeId, employeeName, pendingSchedules, resumableSessions, selectedSchedule, selectedTenkoType, session,
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
   bpRequirementUnknown, retryBpRequirement,
-  identifyEmployee, selectSchedule, proceedWithoutSchedule, onFaceAuthComplete,
+  identifyEmployee, selectSchedule, resumeSession, proceedWithoutSchedule, onFaceAuthComplete,
   onAlcoholResult, onMedicalSubmit, onSelfDeclarationSubmit,
   onDailyInspectionSubmit, carryingItems, loadCarryingItems, onCarryingItemsSubmit,
   onInstructionConfirm, onReportSubmit,
   reset,
-} = useTenkoKiosk({ remoteMode: props.remoteMode })
+} = useTenkoKiosk({ remoteMode: props.remoteMode, allowResume: true })
 
 // carrying_items ステップに入ったら携行品マスタをロード
 watch(() => step.value, (s) => {
@@ -501,12 +501,29 @@ onUnmounted(() => {
 
       <!-- Step 2: スケジュール選択 -->
       <div v-else-if="step === 'schedule_select'" class="flex flex-col gap-4">
+        <!--
+          再開を選んだが血圧の要否が確定できず入口で止めた場合 (Refs #336 / #343)。
+          再開の経路が #339 の入口ガードを迂回しないよう、顔認証の段と同じ文言・同じ
+          「もう一度試す」を出す (理由は上のグローバルエラーに出ている)。
+        -->
+        <div v-if="bpRequirementUnknown" class="bg-white rounded-2xl p-4 shadow-sm">
+          <h2 class="text-lg font-semibold text-gray-700 mb-4">血圧計: 未確認</h2>
+          <button
+            data-testid="retry-bp-from-schedule-select"
+            class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+            @click="retryBpRequirement"
+          >
+            もう一度試す
+          </button>
+        </div>
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">点呼予定選択</h2>
           <TenkoScheduleSelect
             :schedules="pendingSchedules"
             :employee-name="employeeName"
+            :resumable-sessions="resumableSessions"
             @select="selectSchedule"
+            @resume="resumeSession"
             @no-schedule="proceedWithoutSchedule"
           />
         </div>
