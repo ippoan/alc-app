@@ -1593,6 +1593,29 @@ describe('auth-worker への HTTP の上限 (Refs ippoan/alc-app#338)', () => {
     expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
   })
 
+  // #336 の refreshSignedBpBonded() は getDeviceJwt() を通さず tryCoreS3Jwt を
+  // 直に呼ぶ (cache を返して終わりにしないため)。timeout は tryCoreS3Jwt の中の
+  // fetch に入れてあるので、この入口からも効く — それを固定する。
+  it('refreshSignedBpBonded (#336 の直呼び経路) の fetch にも signal が載る', async () => {
+    coreS3Mock.isConnected.value = true
+    coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=1')
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith('/device/alarm-nonce')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const useDeviceToken = await load()
+    expect(await useDeviceToken().refreshSignedBpBonded()).toBe(true)
+
+    expect(fetchMock.mock.calls).toHaveLength(2)
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal)
+    }
+  })
+
   it('pairKioskDevice (/device/pair) にも signal が載る', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

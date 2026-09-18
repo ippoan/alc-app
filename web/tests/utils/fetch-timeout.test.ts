@@ -1,9 +1,9 @@
 // fetch-timeout.ts — fetch に上限を載せる共通ヘルパー (Refs ippoan/alc-app#338)
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
-  withTimeout, asTimeoutError, fetchWithTimeout,
+  withTimeout, asTimeoutError, fetchWithTimeout, timeoutMessageFor,
   DEFAULT_FETCH_TIMEOUT_MS, UPLOAD_FETCH_TIMEOUT_MS, AUTH_WORKER_FETCH_TIMEOUT_MS,
-  FETCH_TIMEOUT_MESSAGE,
+  FETCH_TIMEOUT_MESSAGE_READ, FETCH_TIMEOUT_MESSAGE_WRITE,
 } from '~/utils/fetch-timeout'
 
 /** `AbortSignal.timeout()` が発火したときの失敗と同じ形 (name だけで判定している)。 */
@@ -60,11 +60,38 @@ describe('withTimeout', () => {
   })
 })
 
+// 本番でハングした回は POST が**サーバに届いて成功していた**。押し直させると
+// 宙ぶらりんの点呼セッションが増えるので、書き込みでは再試行を促さない
+// (Refs ippoan/alc-app#338)。
+describe('timeoutMessageFor', () => {
+  it.each(['GET', 'HEAD', 'get'])('%s は押し直してよいと書く', (method) => {
+    expect(timeoutMessageFor(method)).toBe(FETCH_TIMEOUT_MESSAGE_READ)
+  })
+
+  it('method 未指定は GET 扱い', () => {
+    expect(timeoutMessageFor()).toBe(FETCH_TIMEOUT_MESSAGE_READ)
+  })
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'post'])('%s は再試行を促さない', (method) => {
+    expect(timeoutMessageFor(method)).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
+  })
+
+  it('書き込みの文言には「もう一度お試しください」が入らず、確認の導線が入る', () => {
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).not.toContain('もう一度お試しください')
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('完了している可能性があります')
+    expect(FETCH_TIMEOUT_MESSAGE_WRITE).toContain('確認してください')
+  })
+})
+
 describe('asTimeoutError', () => {
-  it('TimeoutError は次の行動が書いてある文言に置き換える', () => {
+  it('TimeoutError は次の行動が書いてある文言に置き換える (既定 = 読み取り)', () => {
     const out = asTimeoutError(timeoutError())
     expect(out).toBeInstanceOf(Error)
-    expect((out as Error).message).toBe(FETCH_TIMEOUT_MESSAGE)
+    expect((out as Error).message).toBe(FETCH_TIMEOUT_MESSAGE_READ)
+  })
+
+  it('method を渡せば書き込み用の文言になる', () => {
+    expect((asTimeoutError(timeoutError(), 'POST') as Error).message).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
   })
 
   it('それ以外の Error はそのまま返す', () => {
@@ -108,7 +135,12 @@ describe('fetchWithTimeout', () => {
 
   it('timeout したら文言にして reject する (無言で止まらない)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(timeoutError()))
-    await expect(fetchWithTimeout('/api/x')).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+    await expect(fetchWithTimeout('/api/x')).rejects.toThrow(FETCH_TIMEOUT_MESSAGE_READ)
+  })
+
+  it('書き込みの timeout は init.method を見て再試行を促さない文言になる', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(timeoutError()))
+    await expect(fetchWithTimeout('/api/x', { method: 'POST' })).rejects.toThrow(FETCH_TIMEOUT_MESSAGE_WRITE)
   })
 
   it('timeout 以外の失敗はそのまま投げる', async () => {

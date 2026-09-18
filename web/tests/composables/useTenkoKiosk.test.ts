@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
-import { FETCH_TIMEOUT_MESSAGE } from '~/utils/fetch-timeout'
+import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 
 const deviceId = ref<string | null>('device-1')
 mockNuxtImport('useAuth', () => () => ({ deviceId }))
@@ -440,8 +440,8 @@ describe('useTenkoKiosk', () => {
     // 応答が返らない fetch は解決も拒否もしないのでスピナーが消えなかった
     // (Refs ippoan/alc-app#338)。api.ts が上限で reject するようになったので、
     // ここは既存の catch に落ちて「無言で止まらない」ことを固定する。
-    it('セッション開始が timeout → 文言を出して spinner を止める', async () => {
-      vi.mocked(startTenkoSession).mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE))
+    it('セッション開始が timeout → 再試行を促さない文言を出して spinner を止める', async () => {
+      vi.mocked(startTenkoSession).mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE_WRITE))
 
       const k = useTenkoKiosk()
       k.employeeId.value = 'emp-1'
@@ -449,14 +449,16 @@ describe('useTenkoKiosk', () => {
 
       await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
 
-      expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE)
+      // サーバ側では点呼が始まっている可能性があるので、押し直させない
+      expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
+      expect(k.error.value).not.toContain('もう一度お試しください')
       expect(k.isLoading.value).toBe(false)
       expect(k.step.value).not.toBe('alcohol')
     })
 
     it('顔写真アップロードが timeout → 文言を出して spinner を止める', async () => {
       const blob = new Blob(['x'])
-      vi.mocked(uploadFacePhoto).mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE))
+      vi.mocked(uploadFacePhoto).mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE_WRITE))
 
       const k = useTenkoKiosk()
       k.employeeId.value = 'emp-1'
@@ -465,7 +467,7 @@ describe('useTenkoKiosk', () => {
       await k.onFaceAuthComplete({ verified: true, similarity: 0.9, snapshot: blob })
 
       expect(startTenkoSession).not.toHaveBeenCalled()
-      expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE)
+      expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
       expect(k.isLoading.value).toBe(false)
     })
   })

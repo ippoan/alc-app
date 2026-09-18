@@ -13,6 +13,11 @@
  *
  * **自動再送はここに入れない。** 応答が返らなかっただけでサーバ側は成功していることが
  * あり (実測: セッションは作られていた)、再送すると二重に作ってしまう。
+ *
+ * **人にも安易に再送させない。** 本番でハングした回は `POST /api/tenko/sessions/start` が
+ * サーバに届いて処理され、応答だけがページに返らなかった。ここで「もう一度お試しください」と
+ * 出すと、押すたびに宙ぶらりんの点呼セッションが増える (実測: 1 日で 7 本)。
+ * ⇒ **文言は 1 種類で済ませず、副作用の有無 (HTTP method) で出し分ける。**
  */
 
 /**
@@ -31,8 +36,29 @@ export const UPLOAD_FETCH_TIMEOUT_MS = 120_000
  */
 export const AUTH_WORKER_FETCH_TIMEOUT_MS = 10_000
 
-/** timeout したときに画面へ出す文言 (次の行動まで書く)。 */
-export const FETCH_TIMEOUT_MESSAGE = '通信が応答しません。もう一度お試しください'
+/**
+ * 副作用が無く、そのまま押し直してよい HTTP method。
+ * method 未指定の fetch は GET なので、既定もこちら側になる。
+ */
+const RETRY_SAFE_METHODS = new Set(['GET', 'HEAD'])
+
+/** 読み取り (GET/HEAD) が timeout したとき。押し直して構わないので、そう書く。 */
+export const FETCH_TIMEOUT_MESSAGE_READ = '通信が応答しません。もう一度お試しください'
+
+/**
+ * 書き込み (POST/PUT/PATCH/DELETE) が timeout したとき。
+ * **再試行を促さない** — 応答が返らなかっただけでサーバ側は成功していることがあり、
+ * 押し直すと同じ登録が二重に積み上がる。
+ */
+export const FETCH_TIMEOUT_MESSAGE_WRITE
+  = '通信が応答しませんでした。操作は完了している可能性があります。同じ操作を繰り返さず、運行管理者に確認してください'
+
+/** その要求を押し直してよいかで文言を選ぶ。 */
+export function timeoutMessageFor(method?: string): string {
+  return RETRY_SAFE_METHODS.has((method ?? 'GET').toUpperCase())
+    ? FETCH_TIMEOUT_MESSAGE_READ
+    : FETCH_TIMEOUT_MESSAGE_WRITE
+}
 
 /**
  * `RequestInit` に timeout の `AbortSignal` を載せて返す。
@@ -47,14 +73,15 @@ export function withTimeout<T extends RequestInit>(init: T, ms: number = DEFAULT
 
 /**
  * `AbortSignal.timeout()` が発火したときの失敗を、現場が次の手を打てる文言に置き換える。
+ * `method` でその要求を押し直してよいかが変わるので、それも渡す。
  * それ以外の失敗 (HTTP エラー・呼び出し側自身の中断) はそのまま返す。
  */
-export function asTimeoutError(e: unknown): unknown {
-  if (e instanceof Error && e.name === 'TimeoutError') return new Error(FETCH_TIMEOUT_MESSAGE)
+export function asTimeoutError(e: unknown, method?: string): unknown {
+  if (e instanceof Error && e.name === 'TimeoutError') return new Error(timeoutMessageFor(method))
   return e
 }
 
-/** timeout 付きの `fetch`。timeout したら `FETCH_TIMEOUT_MESSAGE` で reject する。 */
+/** timeout 付きの `fetch`。timeout したら method に応じた文言で reject する。 */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
@@ -64,6 +91,6 @@ export async function fetchWithTimeout(
     return await fetch(url, withTimeout(init, ms))
   }
   catch (e) {
-    throw asTimeoutError(e)
+    throw asTimeoutError(e, init.method)
   }
 }

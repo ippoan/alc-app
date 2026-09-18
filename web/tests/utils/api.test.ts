@@ -70,7 +70,8 @@ import {
   setupApi, teardownApi, API_BASE, jwtToken, restoreNativeApis,
 } from '../helpers/api-test-env'
 import {
-  FETCH_TIMEOUT_MESSAGE, DEFAULT_FETCH_TIMEOUT_MS, UPLOAD_FETCH_TIMEOUT_MS,
+  FETCH_TIMEOUT_MESSAGE_READ, FETCH_TIMEOUT_MESSAGE_WRITE,
+  DEFAULT_FETCH_TIMEOUT_MS, UPLOAD_FETCH_TIMEOUT_MS,
 } from '~/utils/fetch-timeout'
 import {
   TEST_EMPLOYEE_ID, TEST_TENANT_ID,
@@ -2563,22 +2564,33 @@ describe.skipIf(isLive)('fetch の上限 (Refs ippoan/alc-app#338)', () => {
     expect(spy).not.toHaveBeenCalledWith(DEFAULT_FETCH_TIMEOUT_MS)
   })
 
-  it('timeout したら次の行動が書いてある文言で reject する (request 経路)', async () => {
+  // ★ 本番でハングした回は POST が**サーバに届いて成功していた** (セッションは
+  // 作られていた)。ここで「もう一度お試しください」と出すと押すたびに宙ぶらりんの
+  // 点呼セッションが増える (実測: 1 日 7 本) ので、書き込みでは再試行を促さない。
+  it('読み取りが timeout → 押し直してよいと書く', async () => {
     initApi(API_BASE, () => 'admin-jwt')
     mockFetch.mockRejectedValueOnce(makeTimeoutError())
-    await expect(startTenkoSession(startTenkoSessionBody)).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+    await expect(getEmployees()).rejects.toThrow(FETCH_TIMEOUT_MESSAGE_READ)
   })
 
-  it('timeout したら次の行動が書いてある文言で reject する (アップロード経路)', async () => {
+  it('点呼セッション開始 (POST) が timeout → 再試行を促さない', async () => {
     initApi(API_BASE, () => 'admin-jwt')
     mockFetch.mockRejectedValueOnce(makeTimeoutError())
-    await expect(uploadFacePhoto(new Blob(['x']))).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+    const err = await startTenkoSession(startTenkoSessionBody).catch((e: Error) => e)
+    expect((err as Error).message).toBe(FETCH_TIMEOUT_MESSAGE_WRITE)
+    expect((err as Error).message).not.toContain('もう一度お試しください')
   })
 
-  it('timeout したら次の行動が書いてある文言で reject する (public ingest 経路)', async () => {
+  it('アップロード (POST) が timeout → 再試行を促さない', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockRejectedValueOnce(makeTimeoutError())
+    await expect(uploadFacePhoto(new Blob(['x']))).rejects.toThrow(FETCH_TIMEOUT_MESSAGE_WRITE)
+  })
+
+  it('端末登録 (POST) が timeout → 再試行を促さない', async () => {
     initApi(API_BASE)
     mockFetch.mockRejectedValueOnce(makeTimeoutError())
-    await expect(createDeviceRegistrationRequest('kiosk-1')).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+    await expect(createDeviceRegistrationRequest('kiosk-1')).rejects.toThrow(FETCH_TIMEOUT_MESSAGE_WRITE)
   })
 
   it('timeout 以外の失敗の文言は変えない', async () => {

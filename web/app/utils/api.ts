@@ -127,7 +127,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   catch (e) {
     // timeout は素の `TimeoutError` のままだと画面に出せないので文言に置き換える。
-    throw asTimeoutError(e)
+    // 書き込み (POST 等) は**サーバ側で成功していることがある**ので、method を渡して
+    // 「もう一度お試しください」と書かない口に振り分ける (Refs ippoan/alc-app#338)。
+    throw asTimeoutError(e, options.method)
   }
 }
 
