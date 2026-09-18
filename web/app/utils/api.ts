@@ -28,6 +28,9 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import { createAuthFetch } from '@ippoan/auth-client'
+import {
+  withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
+} from '~/utils/fetch-timeout'
 
 let apiBase = ''
 let getAccessToken: (() => string | null) | null = null
@@ -98,23 +101,34 @@ function buildAuthHeaders(): Record<string, string> {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
-  // admin browser JWT があれば same-origin proxy (/api/proxy, #434 step 3d) 経由にする。
-  // proxy (auth-worker /alc-proxy) が JWT を検証して X-Tenant-ID + X-User-* を注入し
-  // OIDC mint する (Cloud Run IAM lockdown 後も到達可)。401→refresh→retry を効かせるため
-  // proxyAuthFetch (createAuthFetch インスタンス) を使う。
-  if (getAccessToken?.()) {
-    // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
-    // 通過 = initApi 済み) ので non-null。
-    return proxyAuthFetch!<T>(toProxyPath(path), options)
+  // 上限 (timeout) の `AbortSignal.timeout()` はここ 1 箇所で載せる
+  // (実装は `~/utils/fetch-timeout`。Refs ippoan/alc-app#338)。下の 3 経路はどれも
+  // この init をそのまま fetch へ素通しする (createAuthFetch も `{ ...init }` で signal を
+  // 渡す) ので、admin / device JWT / X-Tenant-ID fallback の全部に同じ上限が効く。
+  const opts = withTimeout(options)
+  try {
+    // admin browser JWT があれば same-origin proxy (/api/proxy, #434 step 3d) 経由にする。
+    // proxy (auth-worker /alc-proxy) が JWT を検証して X-Tenant-ID + X-User-* を注入し
+    // OIDC mint する (Cloud Run IAM lockdown 後も到達可)。401→refresh→retry を効かせるため
+    // proxyAuthFetch (createAuthFetch インスタンス) を使う。
+    if (getAccessToken?.()) {
+      // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
+      // 通過 = initApi 済み) ので non-null。
+      return await proxyAuthFetch!<T>(toProxyPath(path), opts)
+    }
+    // キオスク: admin JWT が無く device JWT があれば same-origin proxy 経由。
+    // proxy が device JWT を検証して X-Tenant-ID に変換する。
+    if (getKioskDeviceJwt) {
+      const jwt = await getKioskDeviceJwt()
+      if (jwt) return await proxyRequest<T>(path, jwt, opts)
+    }
+    // 認証情報なし: 従来の X-Tenant-ID 直 fetch に fallback (段階移行で非破壊)。
+    return await authFetch<T>(path, opts)
   }
-  // キオスク: admin JWT が無く device JWT があれば same-origin proxy 経由。
-  // proxy が device JWT を検証して X-Tenant-ID に変換する。
-  if (getKioskDeviceJwt) {
-    const jwt = await getKioskDeviceJwt()
-    if (jwt) return proxyRequest<T>(path, jwt, options)
+  catch (e) {
+    // timeout は素の `TimeoutError` のままだと画面に出せないので文言に置き換える。
+    throw asTimeoutError(e)
   }
-  // 認証情報なし: 従来の X-Tenant-ID 直 fetch に fallback (段階移行で非破壊)。
-  return authFetch<T>(path, options)
 }
 
 /** device JWT を Bearer に載せて same-origin proxy (/api/proxy) に転送する。 */
@@ -133,7 +147,7 @@ async function bearerRequest<T>(url: string, jwt: string, options: RequestInit):
   if (typeof options.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
-  const res = await fetch(url, { ...options, headers })
+  const res = await fetchWithTimeout(url, { ...options, headers })
   if (!res.ok) {
     const body = await res.text()
     // **status を Error に載せる。** 呼び出し側 (TimecardManager 等) は既に
@@ -159,7 +173,7 @@ async function bearerRequest<T>(url: string, jwt: string, options: RequestInit):
 async function publicIngestRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   if (options.body) headers.set('Content-Type', 'application/json')
-  const res = await fetch(path, { ...options, headers })
+  const res = await fetchWithTimeout(path, { ...options, headers })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`API エラー (${res.status}): ${body || res.statusText}`)
@@ -174,19 +188,19 @@ async function publicIngestRequest<T>(path: string, options: RequestInit = {}): 
  * (proxy が X-Tenant-ID 注入 + OIDC mint)。どちらも無ければ従来の `${apiBase}` 直叩き
  * (X-Tenant-ID fallback) に倒す (lockdown 前の非破壊)。
  */
-async function proxyRawFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function proxyRawFetch(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
   let jwt = getAccessToken?.() ?? null
   if (!jwt && getKioskDeviceJwt) jwt = await getKioskDeviceJwt()
   if (jwt) {
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${jwt}`)
-    return fetch(toProxyPath(path), { ...init, headers })
+    return fetchWithTimeout(toProxyPath(path), { ...init, headers }, timeoutMs)
   }
   // 認証情報なし: 直叩き fallback
   if (!apiBase) throw new Error('API 未初期化')
   const headers = new Headers(init.headers)
   for (const [k, v] of Object.entries(buildAuthHeaders())) headers.set(k, v)
-  return fetch(`${apiBase}${path}`, { ...init, headers })
+  return fetchWithTimeout(`${apiBase}${path}`, { ...init, headers }, timeoutMs)
 }
 
 /** 測定結果を保存 */
@@ -416,7 +430,7 @@ export async function uploadFacePhoto(blob: Blob): Promise<string> {
   const res = await proxyRawFetch(`/api/upload/face-photo`, {
     method: 'POST',
     body: formData,
-  })
+  }, UPLOAD_FETCH_TIMEOUT_MS)
 
   if (!res.ok) throw new Error(`アップロード失敗 (${res.status})`)
   const data = await res.json()
@@ -431,7 +445,7 @@ export async function uploadReportAudio(blob: Blob): Promise<string> {
   const res = await proxyRawFetch(`/api/upload/report-audio`, {
     method: 'POST',
     body: formData,
-  })
+  }, UPLOAD_FETCH_TIMEOUT_MS)
 
   if (!res.ok) throw new Error(`音声アップロード失敗 (${res.status})`)
   const data = await res.json()
@@ -445,7 +459,7 @@ export async function uploadBlowVideo(blob: Blob): Promise<string> {
   const res = await proxyRawFetch(`/api/upload/blow-video`, {
     method: 'POST',
     body: formData,
-  })
+  }, UPLOAD_FETCH_TIMEOUT_MS)
 
   if (!res.ok) throw new Error(`録画アップロード失敗 (${res.status})`)
   const data = await res.json()
@@ -1144,7 +1158,7 @@ export async function uploadGuidanceAttachment(recordId: string, file: File): Pr
   const res = await proxyRawFetch(`/api/guidance-records/${recordId}/attachments`, {
     method: 'POST',
     body: formData,
-  })
+  }, UPLOAD_FETCH_TIMEOUT_MS)
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
   return res.json()
 }

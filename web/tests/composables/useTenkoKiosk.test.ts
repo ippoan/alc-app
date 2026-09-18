@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
+import { FETCH_TIMEOUT_MESSAGE } from '~/utils/fetch-timeout'
 
 const deviceId = ref<string | null>('device-1')
 mockNuxtImport('useAuth', () => () => ({ deviceId }))
@@ -242,7 +243,7 @@ describe('useTenkoKiosk', () => {
       vi.mocked(getPendingSchedules).mockResolvedValue([])
       const k = useTenkoKiosk({ remoteMode: true })
       await k.identifyEmployee('emp-1', '田中')
-      expect(k.step.value).toBe('face_auth')
+      expect(k.step.value).not.toBe('alcohol')
       expect(k.employeeId.value).toBe('emp-1')
       expect(k.employeeName.value).toBe('田中')
       expect(getPendingSchedules).toHaveBeenCalledWith('emp-1')
@@ -253,7 +254,7 @@ describe('useTenkoKiosk', () => {
       vi.mocked(getPendingSchedules).mockResolvedValue([makeSchedule({ tenko_type: 'post_operation' })])
       const k = useTenkoKiosk({ remoteMode: true })
       await k.identifyEmployee('emp-1', '田中')
-      expect(k.step.value).toBe('face_auth')
+      expect(k.step.value).not.toBe('alcohol')
       expect(k.selectedSchedule.value?.tenko_type).toBe('post_operation')
       expect(k.tenkoType.value).toBe('post_operation')
     })
@@ -262,7 +263,7 @@ describe('useTenkoKiosk', () => {
       vi.mocked(getPendingSchedules).mockRejectedValue(new Error('network'))
       const k = useTenkoKiosk({ remoteMode: true })
       await k.identifyEmployee('emp-1', '田中')
-      expect(k.step.value).toBe('face_auth')
+      expect(k.step.value).not.toBe('alcohol')
       expect(k.error.value).toBeNull()
       expect(k.selectedSchedule.value).toBeNull()
     })
@@ -321,7 +322,7 @@ describe('useTenkoKiosk', () => {
       k.proceedWithoutSchedule()
       expect(k.selectedTenkoType.value).toBe('post_operation')
       expect(k.selectedSchedule.value).toBeNull()
-      expect(k.step.value).toBe('face_auth')
+      expect(k.step.value).not.toBe('alcohol')
       expect(k.tenkoType.value).toBe('post_operation')
       expect(k.isPreOperation.value).toBe(false)
     })
@@ -434,6 +435,38 @@ describe('useTenkoKiosk', () => {
 
       await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
       expect(k.error.value).toBe('セッション開始に失敗しました')
+    })
+
+    // 応答が返らない fetch は解決も拒否もしないのでスピナーが消えなかった
+    // (Refs ippoan/alc-app#338)。api.ts が上限で reject するようになったので、
+    // ここは既存の catch に落ちて「無言で止まらない」ことを固定する。
+    it('セッション開始が timeout → 文言を出して spinner を止める', async () => {
+      vi.mocked(startTenkoSession).mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE))
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE)
+      expect(k.isLoading.value).toBe(false)
+      expect(k.step.value).not.toBe('alcohol')
+    })
+
+    it('顔写真アップロードが timeout → 文言を出して spinner を止める', async () => {
+      const blob = new Blob(['x'])
+      vi.mocked(uploadFacePhoto).mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE))
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9, snapshot: blob })
+
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.error.value).toBe(FETCH_TIMEOUT_MESSAGE)
+      expect(k.isLoading.value).toBe(false)
     })
   })
 

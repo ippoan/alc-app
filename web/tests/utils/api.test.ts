@@ -70,6 +70,9 @@ import {
   setupApi, teardownApi, API_BASE, jwtToken, restoreNativeApis,
 } from '../helpers/api-test-env'
 import {
+  FETCH_TIMEOUT_MESSAGE, DEFAULT_FETCH_TIMEOUT_MS, UPLOAD_FETCH_TIMEOUT_MS,
+} from '~/utils/fetch-timeout'
+import {
   TEST_EMPLOYEE_ID, TEST_TENANT_ID,
   SEED_MEASUREMENT_ID, SEED_SCHEDULE_ID, SEED_SESSION_ID,
   SEED_WEBHOOK_ID, SEED_FAILURE_ID, SEED_DEVICE_ID, SEED_TIMECARD_CARD_ID,
@@ -2488,5 +2491,99 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
   it('apiBase 未設定 + 認証無 → proxyRawFetch が API 未初期化 を throw', async () => {
     initApi('')
     await expect(uploadFacePhoto(new Blob(['x']))).rejects.toThrow('API 未初期化')
+  })
+})
+
+// ============================================================
+// fetch の上限 (timeout)。応答が返らない fetch は解決も拒否もしないため、
+// 画面が無言でスピナーのまま永久に止まっていた (Refs ippoan/alc-app#338)。
+// mock 専用 (live は実 API が即応するので上限に触れない)。
+// ============================================================
+
+/** `AbortSignal.timeout()` が発火したときの失敗と同じ形。 */
+function makeTimeoutError(): Error {
+  const e = new Error('signal timed out')
+  e.name = 'TimeoutError'
+  return e
+}
+
+describe.skipIf(isLive)('fetch の上限 (Refs ippoan/alc-app#338)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('admin JWT 経路 (createAuthFetch) にも signal が渡る', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await getEmployees()
+    expect(spy).toHaveBeenCalledWith(DEFAULT_FETCH_TIMEOUT_MS)
+    expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('device JWT 経路 (bearerRequest) にも signal が渡る', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await getEmployees()
+    expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('X-Tenant-ID 直 fetch fallback にも signal が渡る', async () => {
+    initApi(API_BASE, undefined, () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await getEmployees()
+    expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('bearerRequest の直呼び (runDriverMasterSync) にも signal が渡る', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ results: [] }))
+    await runDriverMasterSync()
+    expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('端末登録前の public ingest 経路にも signal が渡る', async () => {
+    initApi(API_BASE)
+    mockFetch.mockResolvedValueOnce(okJson({ code: 'abc' }))
+    await createDeviceRegistrationRequest('kiosk-1')
+    expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('顔写真アップロードは重いので別枠の長い上限になる', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ url: 'https://r2/x.jpg' }))
+    await uploadFacePhoto(new Blob(['x']))
+    expect(spy).toHaveBeenCalledWith(UPLOAD_FETCH_TIMEOUT_MS)
+    expect(spy).not.toHaveBeenCalledWith(DEFAULT_FETCH_TIMEOUT_MS)
+  })
+
+  it('timeout したら次の行動が書いてある文言で reject する (request 経路)', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockRejectedValueOnce(makeTimeoutError())
+    await expect(startTenkoSession(startTenkoSessionBody)).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+  })
+
+  it('timeout したら次の行動が書いてある文言で reject する (アップロード経路)', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockRejectedValueOnce(makeTimeoutError())
+    await expect(uploadFacePhoto(new Blob(['x']))).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+  })
+
+  it('timeout したら次の行動が書いてある文言で reject する (public ingest 経路)', async () => {
+    initApi(API_BASE)
+    mockFetch.mockRejectedValueOnce(makeTimeoutError())
+    await expect(createDeviceRegistrationRequest('kiosk-1')).rejects.toThrow(FETCH_TIMEOUT_MESSAGE)
+  })
+
+  it('timeout 以外の失敗の文言は変えない', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(errResponse(500, 'boom'))
+    await expect(startTenkoSession(startTenkoSessionBody)).rejects.toThrow('API エラー (500): boom')
   })
 })
