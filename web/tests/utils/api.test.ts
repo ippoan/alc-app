@@ -19,6 +19,7 @@ import {
   confirmInstruction, submitReport,
   cancelTenkoSession, listTenkoSessions, getTenkoDashboard,
   escalateTenkoSessionToRemote,
+  submitManagerJudgment,
   interruptTenkoSession, resumeTenkoSession,
   // Tenko records
   downloadTenkoRecordsCsv,
@@ -822,6 +823,7 @@ describe('api', () => {
       ['batchCreateSchedules', () => batchCreateSchedules([createScheduleBody] as any), '/api/tenko/schedules/batch'],
       ['startTenkoSession', () => startTenkoSession(startTenkoSessionBody as any), '/api/tenko/sessions/start'],
       ['cancelTenkoSession', () => cancelTenkoSession(SEED_SESSION_ID, { reason: 'test' }), `/api/tenko/sessions/${SEED_SESSION_ID}/cancel`],
+      ['submitManagerJudgment', () => submitManagerJudgment(SEED_SESSION_ID, { judgment: 'ok', judged_by_employee_id: UUID3 }), `/api/tenko/sessions/${SEED_SESSION_ID}/judgment`],
       ['interruptTenkoSession', () => interruptTenkoSession(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}/interrupt`],
       ['resumeTenkoSession', () => resumeTenkoSession(SEED_SESSION_ID, { reason: 'resumed' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/resume`],
       ['createWebhook', () => createWebhook(createWebhookBody as any), '/api/tenko/webhooks'],
@@ -1129,6 +1131,25 @@ describe('api', () => {
         const body = JSON.parse(mockFetch.mock.calls[0][1].body)
         // reason は必須 (サーバが空文字を弾く)。画面が選択肢から選ばせた語をそのまま送る
         expect(body).toEqual({ reason: '血圧計の故障' })
+      })
+    })
+
+    // 運行管理者の判定 (Refs ippoan/alc-app#315)。reason は任意、judged_by_employee_id は必須
+    it('submitManagerJudgment sends judgment, reason, judged_by_employee_id', async () => {
+      stubOk({})
+      await callApi(() => submitManagerJudgment(UUID3, { judgment: 'ng', reason: '体調不良の申告あり', judged_by_employee_id: UUID4 }))
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body).toEqual({ judgment: 'ng', reason: '体調不良の申告あり', judged_by_employee_id: UUID4 })
+      })
+    })
+
+    it('submitManagerJudgment: reason を省いて送れる (任意入力)', async () => {
+      stubOk({})
+      await callApi(() => submitManagerJudgment(UUID3, { judgment: 'ok', judged_by_employee_id: UUID4 }))
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body).toEqual({ judgment: 'ok', judged_by_employee_id: UUID4 })
       })
     })
 
