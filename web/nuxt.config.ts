@@ -53,7 +53,21 @@ export default defineNuxtConfig({
   },
 
   pwa: {
-    registerType: 'autoUpdate',
+    // ★ `autoUpdate` に戻さないこと (Refs #338 の項目 5)。
+    // `autoUpdate` は (1) `skipWaiting` / `clientsClaim` を入れて**走行中のページの足元で**
+    // 新 SW を activate させ、(2) register が `activated` で即 `window.location.reload()` する
+    // ため、**点呼の測定中・入力中でも問答無用でタブが飛ぶ**。
+    // `prompt` なら新 SW は waiting で待ち `$pwa.needRefresh` が立つだけなので、
+    // 「いつ適用するか」を `app/plugins/app-update.client.ts` が決められる
+    // (無操作が続いたとき = 点呼をしていないときだけ、告知してから入れ替える)。
+    registerType: 'prompt',
+    client: {
+      // ★ 既定は `0` = **定期チェックが 1 度も走らない**。ブラウザが Service Worker の更新を
+      // 見に行くのはナビゲーション時だけなので、24 時間開きっぱなしのキオスクは本番の flip を
+      // 永久に知らず、古い app shell を掴み続けて遅延 chunk が 404 になっていた (#338 の引き金)。
+      // 5 分ごとに `registration.update()` を打たせる (取りに行くのは sw.js 1 本)。
+      periodicSyncForUpdates: 300,
+    },
     // manifest は module に生成させず `public/manifest-{driver,manager}.webmanifest` を
     // 静的に置き、トップ画面が `?role=` に応じて `<link rel="manifest">` を出し分ける
     // (Refs #179)。`false` にすると module は manifest の生成も link の自動注入もしないので、

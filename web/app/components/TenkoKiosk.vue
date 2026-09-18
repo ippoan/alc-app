@@ -50,6 +50,15 @@ watch(() => step.value, (s) => {
 const { syncStep, sendResult } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
 
+// 本番 flip 後の新版への載せ替えを「最初の画面に居るとき」だけ許すための現在地 (Refs #338)。
+// `useTenkoKiosk` の state は component ごとの素の ref で外からは読めないので、ここで出す。
+// 入口で止まっている間 (bpRequirementUnknown) と読み込み中は、リロードで止めた理由や
+// 照会中の要求が消えるため busy 扱いにする。
+useKioskScreen().track(() => ({
+  step: step.value,
+  busy: bpRequirementUnknown.value || isLoading.value,
+}))
+
 /**
  * 遠隔点呼で映像を繋ぐ段 (Refs ippoan/alc-app-s3#135)。
  *

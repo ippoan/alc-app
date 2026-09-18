@@ -231,3 +231,15 @@ branches = true
 [[files]]
 path = "app/composables/useStrayAlcohol.ts"
 branches = true
+
+[[files]]
+path = "app/plugins/app-update.client.ts"
+branches = true
+
+[[files]]
+path = "app/utils/app-update-gate.ts"
+branches = true
+
+[[files]]
+path = "app/composables/useKioskScreen.ts"
+branches = true
