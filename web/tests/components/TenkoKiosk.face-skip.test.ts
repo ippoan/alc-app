@@ -32,6 +32,8 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   session: ref(null),
   error,
   isLoading: ref(false),
+  bpRequirementUnknown: ref(false),
+  retryBpRequirement: vi.fn(async () => {}),
   safetyJudgment: ref(null),
   tenkoType: ref(null),
   isPreOperation: ref(true),
