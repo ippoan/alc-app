@@ -39,6 +39,9 @@ let tokenRefresher: (() => Promise<void>) | null = null
 // キオスク device JWT getter (#434 3b)。設定されていて admin JWT が無い時、
 // JSON リクエストを same-origin proxy (/api/proxy) 経由に切替える。
 let getKioskDeviceJwt: (() => Promise<string | null>) | null = null
+// 運行管理者席 (VoiceS3R) の device JWT getter (Refs #337)。**キオスクの getter とは別物**で、
+// `scope: 'manager-device'` を渡した呼び出しだけがこちらを使う。admin JWT が無いときだけ動く。
+let getManagerDeviceJwt: (() => Promise<string | null>) | null = null
 
 // JSON 経路の transport (ヘッダー付与 + 401→refresh→retry single-flight) は
 // @ippoan/auth-client の createAuthFetch に集約 (Refs ippoan/auth-worker#257)。
@@ -60,12 +63,14 @@ export function initApi(
   tenantGetter?: () => string | null,
   refresher?: () => Promise<void>,
   deviceJwtGetter?: () => Promise<string | null>,
+  managerDeviceJwtGetter?: () => Promise<string | null>,
 ) {
   apiBase = baseUrl.replace(/\/$/, '')
   getAccessToken = tokenGetter || null
   getDeviceTenantId = tenantGetter || null
   tokenRefresher = refresher || null
   getKioskDeviceJwt = deviceJwtGetter || null
+  getManagerDeviceJwt = managerDeviceJwtGetter || null
   // authFetch は **admin JWT が無い fallback 経路専用** (admin は proxyAuthFetch へ行く)。
   // よって token は常に付けず、X-Tenant-ID kiosk fallback だけ載せる。
   authFetch = apiBase
@@ -99,7 +104,35 @@ function buildAuthHeaders(): Record<string, string> {
   return headers
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+/**
+ * その呼び出しが**どの資格で通るか**を明示する印 (Refs #337)。
+ *
+ * - `'default'` … 従来どおり `admin JWT` → `キオスクの device JWT` → 直 fetch。
+ *   **キオスクの点呼 (`useTenkoKiosk`) は全部これ** — 運行管理者トークンには絶対に触れない
+ * - `'manager-device'` … **運行管理者席 (VoiceS3R) の鍵で通す口**。auth-worker#573 が
+ *   role `device-tenko-manager` に許した**予定の口だけ**に付ける。admin JWT があれば
+ *   従来どおりそちらが優先 (admin タブは今までと 1 ミリも変わらない)
+ *
+ * **暗黙のフォールバックを作らない**のが肝。`'manager-device'` の呼び出しが
+ * キオスクの鍵へ落ちると、サーバは `device-kiosk` の許可表で弾いて 403 を返すだけで、
+ * 画面には理由が出ない (= #337 の症状そのもの)。だから落とさずに理由を投げる。
+ */
+export type RequestTokenScope = 'default' | 'manager-device'
+
+/**
+ * 運行管理者席の端末で認証できなかったときの文言 (#338 と同じ趣旨 —
+ * **無言で 403 にしない**)。`/device/setup` で用途「運行管理者席」の登録がまだの鍵も、
+ * auth-worker が 401 を返すので (403 ではなく) このメッセージになる。
+ */
+export const MANAGER_DEVICE_AUTH_FAILED_MESSAGE
+  = '運行管理者席の端末で認証できませんでした。この席の警告デバイス (VoiceS3R) が USB でつながっていて、'
+    + '用途「運行管理者席」で鍵が登録されているか確認してください'
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  scope: RequestTokenScope = 'default',
+): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
   // 上限 (timeout) の `AbortSignal.timeout()` はここ 1 箇所で載せる
   // (実装は `~/utils/fetch-timeout`。Refs ippoan/alc-app#338)。下の 3 経路はどれも
@@ -115,6 +148,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
       // 通過 = initApi 済み) ので non-null。
       return await proxyAuthFetch!<T>(toProxyPath(path), opts)
+    }
+    // 運行管理者タブ: admin JWT が無く、この呼び出しが運行管理者の口なら
+    // **運行管理者席の鍵**で通す (#337)。**キオスクの鍵へは落とさない** — 落としても
+    // auth-worker の `device-kiosk` 許可表で 403 になるだけで、理由が画面に出ないため。
+    // getter 自体が未設定の環境 (初期化で渡していない) は従来どおり下へ抜ける。
+    if (scope === 'manager-device' && getManagerDeviceJwt) {
+      const managerJwt = await getManagerDeviceJwt()
+      if (!managerJwt) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+      return await proxyRequest<T>(path, managerJwt, opts)
     }
     // キオスク: admin JWT が無く device JWT があれば same-origin proxy 経由。
     // proxy が device JWT を検証して X-Tenant-ID に変換する。
@@ -499,40 +541,51 @@ async function downloadCsv(path: string, filename: string): Promise<void> {
 }
 
 // --- スケジュール ---
+//
+// ★ 予定の口は**運行管理者の権限** (Refs #337)。運行管理者タブは admin browser JWT を
+// 持たない (NFC + 顔認証で入る) ので、admin JWT が無いときは**運行管理者席の鍵**
+// (`scope: 'manager-device'`) で通す。auth-worker#573 が role `device-tenko-manager` に
+// 許したのは下の 6 本 (`GET,POST /api/tenko/schedules` / `POST .../batch` /
+// `GET,PUT,DELETE .../{id}`) だけで、**ここに付ける印とサーバの許可表は 1 対 1** に対応する。
+//
+// **`getPendingSchedules` だけは `default` のまま。** あれはキオスクが点呼の入口で自分の
+// 予定を引く口で、`KIOSK_ROUTES` に元から入っている — **キオスクの点呼が運行管理者
+// トークンを使ってはいけない** (使えば運行管理者席の鍵が乗務員端末にも要ることになる)。
 
 export async function createSchedule(data: CreateTenkoSchedule): Promise<TenkoSchedule> {
   return request<TenkoSchedule>('/api/tenko/schedules', {
     method: 'POST',
     body: JSON.stringify(data),
-  })
+  }, 'manager-device')
 }
 
 export async function batchCreateSchedules(schedules: CreateTenkoSchedule[]): Promise<TenkoSchedule[]> {
   return request<TenkoSchedule[]>('/api/tenko/schedules/batch', {
     method: 'POST',
     body: JSON.stringify({ schedules }),
-  })
+  }, 'manager-device')
 }
 
 export async function listSchedules(filter: TenkoScheduleFilter = {}): Promise<TenkoSchedulesResponse> {
-  return request<TenkoSchedulesResponse>(`/api/tenko/schedules${toParams(filter)}`)
+  return request<TenkoSchedulesResponse>(`/api/tenko/schedules${toParams(filter)}`, {}, 'manager-device')
 }
 
 export async function getSchedule(id: string): Promise<TenkoSchedule> {
-  return request<TenkoSchedule>(`/api/tenko/schedules/${id}`)
+  return request<TenkoSchedule>(`/api/tenko/schedules/${id}`, {}, 'manager-device')
 }
 
 export async function updateSchedule(id: string, data: UpdateTenkoSchedule): Promise<TenkoSchedule> {
   return request<TenkoSchedule>(`/api/tenko/schedules/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
-  })
+  }, 'manager-device')
 }
 
 export async function deleteSchedule(id: string): Promise<void> {
-  await request<void>(`/api/tenko/schedules/${id}`, { method: 'DELETE' })
+  await request<void>(`/api/tenko/schedules/${id}`, { method: 'DELETE' }, 'manager-device')
 }
 
+/** キオスクが点呼の入口で引く「自分の未消化の予定」。**運行管理者トークンは使わない** (#337)。 */
 export async function getPendingSchedules(employeeId: string): Promise<TenkoSchedule[]> {
   return request<TenkoSchedule[]>(`/api/tenko/schedules/pending/${employeeId}`)
 }
