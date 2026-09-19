@@ -167,6 +167,43 @@ describe('TenkoScheduleSelect', () => {
     wrapper.unmount()
   })
 
+  // --- 1 度再開した点呼は導線ごと出さない (Refs ippoan/alc-app#351) ---
+
+  it('★ resumed_at が入っている行は「続きから再開」を描かない', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleSelect, {
+      props: {
+        schedules: [],
+        employeeName: '田中',
+        resumableSessions: [makeSession({ id: 'resumed', resumed_at: '2026-03-31T23:05:00Z' })],
+      },
+    })
+
+    // 再開は 1 回までで、押した先で必ず 400 になる。押せるボタンを描いてから断らない
+    expect(wrapper.find('[data-testid="resume-session"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('続きから再開')
+    expect(wrapper.text()).not.toContain('さんの途中で止まっている点呼')
+
+    wrapper.unmount()
+  })
+
+  it('★ 再開済みが混ざっていても、まだ再開していない行は出る', async () => {
+    const fresh = makeSession({ id: 'fresh' })
+    const wrapper = await mountSuspended(TenkoScheduleSelect, {
+      props: {
+        schedules: [],
+        employeeName: '田中',
+        resumableSessions: [makeSession({ id: 'resumed', resumed_at: '2026-03-31T23:05:00Z' }), fresh],
+      },
+    })
+
+    const buttons = wrapper.findAll('[data-testid="resume-session"]')
+    expect(buttons).toHaveLength(1)
+    await buttons[0]!.trigger('click')
+    expect(wrapper.emitted('resume')![0]).toEqual([fresh])
+
+    wrapper.unmount()
+  })
+
   it('再開の候補があっても、予定一覧と「予定なしで業務後として進む」はそのまま出る', async () => {
     const wrapper = await mountSuspended(TenkoScheduleSelect, {
       props: {

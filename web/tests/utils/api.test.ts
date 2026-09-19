@@ -20,7 +20,7 @@ import {
   cancelTenkoSession, listTenkoSessions, getTenkoDashboard,
   escalateTenkoSessionToRemote,
   submitManagerJudgment,
-  interruptTenkoSession, resumeTenkoSession,
+  interruptTenkoSession, resumeTenkoSession, selfResumeTenkoSession, apiErrorCode,
   // Tenko records
   downloadTenkoRecordsCsv,
   // Webhooks
@@ -830,6 +830,7 @@ describe('api', () => {
       ['submitManagerJudgment', () => submitManagerJudgment(SEED_SESSION_ID, { judgment: 'ok', judged_by_employee_id: UUID3 }), `/api/tenko/sessions/${SEED_SESSION_ID}/judgment`],
       ['interruptTenkoSession', () => interruptTenkoSession(SEED_SESSION_ID), `/api/tenko/sessions/${SEED_SESSION_ID}/interrupt`],
       ['resumeTenkoSession', () => resumeTenkoSession(SEED_SESSION_ID, { reason: 'resumed' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/resume`],
+      ['selfResumeTenkoSession', () => selfResumeTenkoSession(SEED_SESSION_ID, { reason: 'resumed' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/self-resume`],
       ['createWebhook', () => createWebhook(createWebhookBody as any), '/api/tenko/webhooks'],
       ['createBaseline', () => createBaseline(createHealthBaselineBody as any), '/api/tenko/health-baselines'],
       ['createFailure', () => createFailure(createEquipmentFailureBody as any), '/api/tenko/equipment-failures'],
@@ -2597,5 +2598,50 @@ describe.skipIf(isLive)('fetch の上限 (Refs ippoan/alc-app#338)', () => {
     initApi(API_BASE, () => 'admin-jwt')
     mockFetch.mockResolvedValueOnce(errResponse(500, 'boom'))
     await expect(startTenkoSession(startTenkoSessionBody)).rejects.toThrow('API エラー (500): boom')
+  })
+})
+
+// --- 400 の `error` コードの取り出し (Refs ippoan/alc-app#351) ---
+// 呼び出し側 (キオスクの「続きから再開」) は `already_resumed` と
+// それ以外を**別の画面遷移**に振り分けるので、取り出しの境界をここで固定する。
+describe.skipIf(isLive)('apiErrorCode (Refs ippoan/alc-app#351)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('★ 400 の body から error コードを取り出す', () => {
+    const e = new Error('API エラー (400): {"error":"already_resumed","message":"この点呼は既に再開済みです"}')
+    expect(apiErrorCode(e)).toBe('already_resumed')
+  })
+
+  it('★ request() が実際に投げた Error から取り出せる (文言の作り方と揃っている)', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(
+      errResponse(400, '{"error":"session_not_resumable","message":"この点呼は再開できません"}'),
+    )
+    const err = await selfResumeTenkoSession(SEED_SESSION_ID, { reason: 'x' } as any).catch((e: Error) => e)
+    expect(apiErrorCode(err)).toBe('session_not_resumable')
+  })
+
+  it('Error でないものは null', () => {
+    expect(apiErrorCode('already_resumed')).toBeNull()
+  })
+
+  it('body が載っていない文言は null', () => {
+    expect(apiErrorCode(new Error('Failed to fetch'))).toBeNull()
+  })
+
+  it('body が JSON でなければ null (壊れた応答を既知のコードに丸めない)', () => {
+    expect(apiErrorCode(new Error('API エラー (502): {壊れた本文'))).toBeNull()
+  })
+
+  it('JSON でも error が文字列でなければ null', () => {
+    expect(apiErrorCode(new Error('API エラー (400): {"message":"理由だけ"}'))).toBeNull()
+    expect(apiErrorCode(new Error('API エラー (400): {"error":42}'))).toBeNull()
   })
 })
