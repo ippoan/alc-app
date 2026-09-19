@@ -147,9 +147,20 @@ const MENU_TABS: readonly SubTabDef[] = [
 // 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
 // 可視タブとハンバーガーは**排他**: 同じ導線が 2 か所に出ないよう、可視側へ出す端末では
 // ハンバーガーから外す。出せない端末は従来どおりハンバーガーにだけ残す (導線を消さない)
-const { showBpUi } = useBpUiEnabled()
-const visibleTabs = computed(() => showBpUi.value ? [...VISIBLE_TABS, BP_TAB] : VISIBLE_TABS)
-const menuTabs = computed(() => showBpUi.value ? MENU_TABS : [...MENU_TABS, BP_TAB])
+//
+// **例外: 判定待ち (`checking`) のあいだに血圧測定の画面を開いているときだけ可視側へ出す**
+// (Refs ippoan/alc-app#376)。`checking` は署名ボンドの probe が決着するまで最大 8 秒続き、
+// 測定台は `?station=bp` 無しで開くと必ずここを通る。画面は「血圧測定」なのにタブ行に
+// 無く、選択中の印がハンバーガーに付く、という不一致が出ていた。**`bp` だけの規則**:
+// 他のメニュー項目 (デモ・設定) は選んでもハンバーガーに留まり、`isMenuTabActive` の点灯が
+// 「いまメニュー側に居る」を示す。`unused` / `unavailable` は決着済みで「この端末では出せない」
+// が確定しているので、従来どおりハンバーガー側に留める
+const { showBpUi, bpUiState } = useBpUiEnabled()
+const bpInVisible = computed(() =>
+  showBpUi.value || (driverSubTab.value === 'bp' && bpUiState.value === 'checking'),
+)
+const visibleTabs = computed(() => bpInVisible.value ? [...VISIBLE_TABS, BP_TAB] : VISIBLE_TABS)
+const menuTabs = computed(() => bpInVisible.value ? MENU_TABS : [...MENU_TABS, BP_TAB])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
 // 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
 const isMenuTabActive = computed(() => menuTabs.value.some(t => t.key === driverSubTab.value))

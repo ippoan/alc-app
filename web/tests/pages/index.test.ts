@@ -578,6 +578,31 @@ describe('pages/index — 血圧測定を可視タブに出す (Refs ippoan/alc-
     expect(visibleTabLabels(wrapper)).toEqual(['通常点呼', '自動点呼', '遠隔点呼'])
     expect(await menuTabLabels(wrapper)).toContain('血圧測定')
   })
+
+  // 判定待ち (`checking`) は probe が決着するまで最大 8 秒続く。測定台は `?station=bp` 無しで
+  // 開くと必ずここを通り、画面は「血圧測定」なのにタブ行に無く、選択中の印がハンバーガーに付いた
+  // (Refs ippoan/alc-app#376)。**`bp` だけの規則** — 他のタブはメニュー側に留まる
+  describe('判定待ち (checking) のあいだ (Refs ippoan/alc-app#376)', () => {
+    it('血圧測定の画面を開いているなら、可視タブに「血圧測定」が出て、ハンバーガーには出ない', async () => {
+      bpUi.state.value = 'checking'
+      wrapper = await mountIndex('/?role=driver&tab=bp')
+
+      expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+      expect(visibleTabLabels(wrapper)).toEqual(['通常点呼', '自動点呼', '遠隔点呼', '血圧測定'])
+      // 排他: 同じ導線が 2 か所に出ない。選択中の印もハンバーガーには付かない
+      expect(hamburgerButton(wrapper).classes()).not.toContain('bg-blue-600')
+      expect(await menuTabLabels(wrapper)).toEqual(['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定'])
+    })
+
+    it('血圧測定の画面に居なければ、従来どおり可視タブには出ず、ハンバーガーにだけ出る', async () => {
+      bpUi.state.value = 'checking'
+      wrapper = await mountIndex('/?role=driver')
+
+      expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
+      expect(visibleTabLabels(wrapper)).toEqual(['通常点呼', '自動点呼', '遠隔点呼'])
+      expect(await menuTabLabels(wrapper)).toEqual(['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定', '血圧測定'])
+    })
+  })
 })
 
 describe('pages/index — 測定台かどうかを端末の名乗りで決める (Refs ippoan/alc-app#368)', () => {
