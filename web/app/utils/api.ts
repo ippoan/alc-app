@@ -709,6 +709,48 @@ export async function resumeTenkoSession(sessionId: string, data: ResumeSession)
   })
 }
 
+/**
+ * キオスクが自分で拾った点呼を「続きから再開」したことをサーバに残す
+ * (Refs ippoan/alc-app#351、口は ippoan/rust-alc-api#676)。
+ *
+ * 上の `resumeTenkoSession` (管理者用 `/resume`) とは**別の口**。あちらは `AuthUser` 必須で
+ * `status` を書き換えるが、こちらは `resumed_at` と `resume_reason` だけを書き、**`status` に
+ * 触らない** (段の復元はキオスクがローカルでやる)。キオスクの device token で通る
+ * (`auth-worker` の `KIOSK_ROUTES` に登録済み)。
+ *
+ * **再開は 1 セッションにつき 1 回まで** — 2 回目は 400 (`already_resumed`) が返る。
+ */
+export async function selfResumeTenkoSession(sessionId: string, data: ResumeSession): Promise<TenkoSession> {
+  return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/self-resume`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+/**
+ * rust-alc-api が 400 で返す body (`{"error": "…", "message": "…"}`) の `error` を取り出す。
+ *
+ * この層は失敗を `API エラー (400): <body>` という **Error の文言**にして投げるので、
+ * 呼び出し側が分岐したい「どの 400 か」はそこからしか読めない。文言の作り方を知っているのは
+ * この module なので、**取り出しもここに置く** (呼び出し側に書式を写さない)。
+ *
+ * `error` が読めなければ `null` — 呼び出し側は「分からない失敗」として扱う
+ * (**分からない失敗を既知の 1 つに丸めない**)。
+ */
+export function apiErrorCode(e: unknown): string | null {
+  const message = e instanceof Error ? e.message : ''
+  const start = message.indexOf('{')
+  if (start < 0) return null
+  try {
+    const body = JSON.parse(message.slice(start)) as { error?: unknown }
+    return typeof body.error === 'string' ? body.error : null
+  }
+  catch {
+    // body が JSON でない (プロキシの HTML エラーページ等) ときは分からない失敗にする
+    return null
+  }
+}
+
 // --- レコード ---
 
 export async function downloadTenkoRecordsCsv(filter: TenkoRecordFilter = {}): Promise<void> {

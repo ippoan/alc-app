@@ -23,7 +23,11 @@ const hasBpHardware = ref(false)
 mockNuxtImport('useBloodPressureSetting', () => () => ({ bpEnabled, setBpEnabled: vi.fn() }))
 mockNuxtImport('useBleGateway', () => () => ({ hasBpHardware }))
 
-vi.mock('~/utils/api', () => ({
+// `apiErrorCode` は**実物を使う** (Refs ippoan/alc-app#351) — 400 の body から
+// コードを取り出すのは api.ts が作った文言の読み方そのものなので、ここで差し替えると
+// 「文言の作り方と読み方が揃っているか」という肝心の所を素通りする。
+vi.mock('~/utils/api', async () => ({
+  ...(await vi.importActual<typeof import('~/utils/api')>('~/utils/api')),
   getPendingSchedules: vi.fn(),
   startTenkoSession: vi.fn(),
   submitAlcohol: vi.fn(),
@@ -38,9 +42,13 @@ vi.mock('~/utils/api', () => ({
   getCarryingItems: vi.fn(),
   submitCarryingItemChecks: vi.fn(),
   listTenkoSessions: vi.fn(),
+  selfResumeTenkoSession: vi.fn(),
 }))
 
-import { useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE, RESUMABLE_TENKO_STATUSES } from '~/composables/useTenkoKiosk'
+import {
+  useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE, RESUMABLE_TENKO_STATUSES,
+  KIOSK_SELF_RESUME_REASON, ALREADY_RESUMED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE,
+} from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
   startTenkoSession,
@@ -56,6 +64,7 @@ import {
   getCarryingItems,
   submitCarryingItemChecks,
   listTenkoSessions,
+  selfResumeTenkoSession,
 } from '~/utils/api'
 
 // --- helpers ---
@@ -1537,9 +1546,17 @@ describe('useTenkoKiosk', () => {
       })
     }
 
+    /** サーバが返す「再開済みにした行」 (Refs ippoan/alc-app#351) */
+    const RESUMED_AT = '2026-03-31T23:05:00Z'
+
     beforeEach(() => {
       vi.mocked(getPendingSchedules).mockResolvedValue([])
       vi.mocked(listTenkoSessions).mockResolvedValue(page([]))
+      // 既定はサーバが受け付ける。`started_at` は**サーバも書き換えない**ので、
+      // 返ってくるのは元の行に resumed_at / resume_reason が乗ったものになる
+      vi.mocked(selfResumeTenkoSession).mockImplementation(async (id, data) =>
+        makeSession({ id, resumed_at: RESUMED_AT, resume_reason: data.reason }),
+      )
     })
 
     it('allowResume を渡さないと 1 回も引かない (既定は今までどおり)', async () => {
@@ -1682,7 +1699,9 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk({ allowResume: true })
       await k.resumeSession(stuck)
 
-      expect(k.session.value).toStrictEqual(stuck)
+      // サーバが返した「再開済みにした行」を載せる (Refs ippoan/alc-app#351)
+      expect(k.session.value?.id).toBe('sess-stuck')
+      expect(k.session.value?.resumed_at).toBe(RESUMED_AT)
       expect(k.step.value).toBe(expected)
       expect(k.error.value).toBeNull()
       expect(k.isLoading.value).toBe(false)
@@ -1776,6 +1795,141 @@ describe('useTenkoKiosk', () => {
       expect(k.bpRequirementUnknown.value).toBe(true)
       expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
       expect(k.step.value).not.toBe('medical')
+    })
+
+    // ----- 再開した時刻をサーバに残す (Refs ippoan/alc-app#351) -----
+
+    /** サーバの 400 (`{"error": …, "message": …}`) と同じ形の失敗 */
+    function badRequest(code: string, message: string): Error {
+      return Object.assign(
+        new Error(`API エラー (400): ${JSON.stringify({ error: code, message })}`),
+        { status: 400 },
+      )
+    }
+
+    it('★ 再開したらサーバに知らせる — 固定の理由を添えて self-resume を 1 回だけ呼ぶ', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+
+      await k.resumeSession(stuck)
+
+      expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
+      expect(selfResumeTenkoSession).toHaveBeenCalledWith('sess-stuck', { reason: KIOSK_SELF_RESUME_REASON })
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBeNull()
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('★ `started_at` は送らない — 送るのは reason だけ (記録は書き換えず、再開の事実を足す)', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending', started_at: '2026-03-31T15:12:26Z' })
+      const k = useTenkoKiosk({ allowResume: true })
+
+      await k.resumeSession(stuck)
+
+      const body = vi.mocked(selfResumeTenkoSession).mock.calls[0]![1]
+      expect(Object.keys(body)).toEqual(['reason'])
+      // 管理者用の `/resume` (status を書き換える口) は使わない
+      expect(startTenkoSession).not.toHaveBeenCalled()
+    })
+
+    it('★ 入口ガードで止めた分は「1 回まで」を食い潰さない (サーバを呼ばない)', async () => {
+      deviceId.value = null
+      signedBpBonded.value = null
+      hasProbedBpBond.value = true
+      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+
+      expect(k.bpRequirementUnknown.value).toBe(true)
+      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
+
+      // 「もう一度試す」で通ったときに初めて 1 回ぶんを使う
+      refreshSignedBpBonded.mockImplementationOnce(async () => {
+        signedBpBonded.value = false
+        return false
+      })
+      await k.retryBpRequirement()
+
+      expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
+      expect(k.step.value).toBe('medical')
+    })
+
+    it('★ already_resumed は無言で止めず、文言を出して最初の画面へ戻す', async () => {
+      vi.mocked(selfResumeTenkoSession).mockRejectedValue(
+        badRequest('already_resumed', 'この点呼は既に再開済みです。新しく点呼をやり直してください'),
+      )
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      await k.resumeSession(stuck)
+
+      expect(k.error.value).toBe(ALREADY_RESUMED_MESSAGE)
+      // 押し直しても永久に通らないので、乗務員 ID の画面まで戻す
+      expect(k.step.value).toBe('nfc')
+      expect(k.session.value).toBeNull()
+      expect(k.employeeId.value).toBe('')
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('★ session_not_resumable も理由の分かる文言を出して最初の画面へ戻す', async () => {
+      vi.mocked(selfResumeTenkoSession).mockRejectedValue(
+        badRequest('session_not_resumable', 'この点呼は再開できません。新しく点呼をやり直してください'),
+      )
+      const stuck = makeSession({ status: 'medical_pending' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+
+      expect(k.error.value).toBe(SESSION_NOT_RESUMABLE_MESSAGE)
+      expect(k.error.value).toContain('やり直して')
+      expect(k.step.value).toBe('nfc')
+      expect(k.session.value).toBeNull()
+    })
+
+    it('★ 通信が落ちたときは続きへ通さない — 予定選択に留めて押し直させる', async () => {
+      vi.mocked(selfResumeTenkoSession).mockRejectedValue(new Error('Failed to fetch'))
+      const stuck = makeSession({ status: 'medical_pending' })
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      await k.resumeSession(stuck)
+
+      // 黙って通すと #351 の症状 (実施時刻の残らない点呼) をそのまま作ってしまう
+      expect(k.step.value).toBe('schedule_select')
+      expect(k.error.value).toBe('Failed to fetch')
+      // やり直せるように乗務員は保ったまま
+      expect(k.employeeId.value).toBe('emp-1')
+
+      vi.mocked(selfResumeTenkoSession).mockResolvedValueOnce(
+        makeSession({ status: 'medical_pending', resumed_at: RESUMED_AT }),
+      )
+      await k.resumeSession(stuck)
+
+      expect(k.error.value).toBeNull()
+      expect(k.step.value).toBe('medical')
+    })
+
+    it('Error でないもので落ちても文言を出す (無言で止めない)', async () => {
+      vi.mocked(selfResumeTenkoSession).mockRejectedValue('boom')
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(makeSession({ status: 'medical_pending' }))
+
+      expect(k.error.value).toBe('点呼の再開に失敗しました')
+      expect(k.step.value).not.toBe('medical')
+    })
+
+    it('★ 1 度再開した点呼は再開候補に出さない (押してから断らない)', async () => {
+      serveByStatus([
+        makeSession({ id: 'resumed', status: 'medical_pending', resumed_at: RESUMED_AT }),
+        makeSession({ id: 'fresh', status: 'medical_pending' }),
+      ])
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['fresh'])
     })
 
     it('reset() で止めた再開が残らない', async () => {

@@ -11,6 +11,7 @@ import {
   submitDailyInspection, confirmInstruction, submitReport,
   cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
   getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
+  selfResumeTenkoSession, apiErrorCode,
 } from '~/utils/api'
 
 /** UI ステップ (バックエンド status とは別) */
@@ -38,6 +39,36 @@ export type TenkoStep =
 export const BP_REQUIREMENT_UNKNOWN_MESSAGE
   = 'この端末では自動点呼の業務前を実施できません (血圧計: 未確認)。'
     + '「もう一度試す」を押して確認し直すか、運行管理者に連絡してください。'
+
+/**
+ * 「続きから再開」をサーバに残すときの `resume_reason` (Refs ippoan/alc-app#351)。
+ *
+ * **固定文字列を必ず入れる。** キオスクは device token で通る = `AuthUser` が無いので
+ * `resumed_by_user_id` は NULL のままになる。あの列は「どの管理者が再開を承認したか」で
+ * あって、自己再開に管理者は居ない — 空のままだと後から「なぜ NULL か」が読めないので、
+ * 理由の側に「管理者ではなくキオスクが自分で再開した」と書き残す。
+ */
+export const KIOSK_SELF_RESUME_REASON = 'キオスク自己再開 (顔認証済)'
+
+/**
+ * 既に 1 度再開されている点呼を、もう 1 度再開しようとしたときの文言
+ * (Refs ippoan/alc-app#351)。サーバの 400 (`already_resumed`) と同じ言い回しにする。
+ *
+ * **再開は 1 セッションにつき 1 回まで** (`resumed_at` は単数カラムで 2 回目の時刻を
+ * 持てない)。押し直しても永久に通らないので、**次の行動は「新しく点呼をやり直す」**。
+ */
+export const ALREADY_RESUMED_MESSAGE
+  = 'この点呼は既に再開済みです。新しく点呼をやり直してください'
+
+/**
+ * 終わっている (completed / cancelled) か管理者が中断した点呼を再開しようとしたときの文言
+ * (Refs ippoan/alc-app#351、サーバの 400 `session_not_resumable`)。
+ *
+ * 一覧を引いた後に別の端末で閉じられた、といった行き違いで起きる。こちらも押し直しでは
+ * 通らないので、**理由 (もう終わっている) と次の行動を必ず並べる**。
+ */
+export const SESSION_NOT_RESUMABLE_MESSAGE
+  = 'この点呼は再開できません (すでに終了または中断されています)。新しく点呼をやり直してください'
 
 /**
  * 「続きから再開」の対象にする status (Refs ippoan/alc-app#343)。
@@ -237,9 +268,11 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
       if (r.status === 'fulfilled') found.push(...r.value.sessions)
     }
     // status は上の 5 つに絞ってあるが、**オーナー要件そのもの (アルコール未測定) を
-    // ここでも直接確かめる** — 判定を別 repo の不変条件だけに預けない
+    // ここでも直接確かめる** — 判定を別 repo の不変条件だけに預けない。
+    // `resumed_at` が入っている行も落とす (Refs ippoan/alc-app#351) — 再開は 1 回までで、
+    // 出しても押した先で必ず 400 になる。**押せる導線を出してから断らない**
     return found
-      .filter(s => s.alcohol_tested_at === null)
+      .filter(s => s.alcohol_tested_at === null && s.resumed_at === null)
       .sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''))
   }
 
@@ -252,6 +285,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    * **#336 の入口ガードを必ず通す。** 血圧の要否が確定できない端末で業務前を再開すると、
    * 体温を送った時点で必ず 400 (`bp_required`) になり行き止まりへ入る — 再開の経路が
    * そこを迂回しないように、`onFaceAuthComplete` と同じ判定を同じ文言で掛ける。
+   *
+   * **再開した時刻をサーバに残す** (Refs ippoan/alc-app#351)。以前はここが state を
+   * 差し替えるだけでサーバに何も言わず、記録には何時間も前の `started_at` しか残らなかった。
+   * `started_at` は**書き換えない** — 前半を実際にやった時刻は事実として残し、
+   * 「その続きを何時に実施したか」を `resumed_at` に並べて足す。
+   *
+   * 呼ぶのは**入口ガードを通した後**。ガードで止めた時点で呼ぶと、「再開は 1 回まで」を
+   * 体温すら測らないまま食い潰す (「もう一度試す」で戻ってきても 2 回目は 400 になる)。
    */
   async function resumeSession(s: TenkoSession) {
     error.value = null
@@ -268,9 +309,38 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
         return
       }
       blockedResumeSession.value = null
+      if (!await _recordSelfResume(s)) return
       _advanceByStatus(s.status)
     } finally {
       isLoading.value = false
+    }
+  }
+
+  /**
+   * 再開の事実と時刻をサーバへ残す (Refs ippoan/alc-app#351)。続きへ進んでよければ `true`。
+   *
+   * **無言では止めない** — 失敗の種類ごとに、理由と次の行動を必ず画面に出す:
+   *
+   * - `already_resumed` / `session_not_resumable` — **押し直しても永久に通らない**ので、
+   *   文言を出して `reset()` で最初の画面 (乗務員 ID) へ戻す。新しい点呼としてやり直す
+   * - それ以外 (通信断・上流の不調など) — 予定選択の画面に留めて**押し直させる**
+   *   (#340 と同じ流儀)。ここで黙って続きへ通すと、直そうとしている #351 の症状
+   *   (実施時刻がどこにも残らない点呼) をそのまま作ってしまう
+   */
+  async function _recordSelfResume(s: TenkoSession): Promise<boolean> {
+    try {
+      session.value = await selfResumeTenkoSession(s.id, { reason: KIOSK_SELF_RESUME_REASON })
+      return true
+    } catch (e) {
+      const code = apiErrorCode(e)
+      if (code === 'already_resumed' || code === 'session_not_resumable') {
+        // reset() が error も畳むので、文言は**戻した後**に載せる
+        reset()
+        error.value = code === 'already_resumed' ? ALREADY_RESUMED_MESSAGE : SESSION_NOT_RESUMABLE_MESSAGE
+        return false
+      }
+      error.value = e instanceof Error ? e.message : '点呼の再開に失敗しました'
+      return false
     }
   }
 
