@@ -26,7 +26,7 @@ const alarmMock = vi.hoisted(() => ({
 mockNuxtImport('useAlarmDevice', () => () => alarmMock)
 
 const signAlarmDeviceNonceMock = vi.hoisted(() => vi.fn())
-vi.mock('~/composables/useDeviceLogin', () => ({
+vi.mock('~/utils/alarm-sign', () => ({
   signAlarmDeviceNonce: signAlarmDeviceNonceMock,
 }))
 

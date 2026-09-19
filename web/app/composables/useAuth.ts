@@ -37,8 +37,7 @@ const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000 // 5分
 
 /**
  * Google ログイン (`loginWithGoogleRedirect`) が auth-worker に渡す `redirect_uri` の
- * 唯一の出どころ。警告デバイス認証 (#214) も同じ文字列を nonce 取得と device-login の
- * 両方で使う必要があるため、ここから呼ぶ (文字列リテラル `/auth/callback` はここ 1 か所)。
+ * 唯一の出どころ (旧管理者ログイン #214、#353-8 で廃止。文字列リテラル `/auth/callback` はここ 1 か所)。
  */
 export function getAuthCallbackUrl(): string {
   return `${window.location.origin}/auth/callback`

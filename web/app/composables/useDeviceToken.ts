@@ -40,7 +40,7 @@
  *   `AUTH SIGN` とは別コマンドの独立した経路)。
  *   古いファーム (`SIGNBP` 未対応) は未知コマンドとして reject するので、その場合は
  *   **今までどおり** `AUTH SIGN <nonce>` → `AUTH SIG <pubkey> <sig>` parse
- *   (`useDeviceLogin.ts` の `signAlarmDeviceNonce`、#214 と同じ firmware I/F。
+ *   (`utils/alarm-sign.ts` の共有署名関数、#214 と同じ firmware I/F。
  *   送り先は `useCoreS3Serial().request` を渡す) にフォールバックし、この場合は
  *   ボンド状態が「不明」であって「未ボンド」ではない — `/device/alarm-token` に
  *   `bp_bonded` を送らない (`SIGNBP` が成功した場合だけ送る)。ボンド状態は CoreS3 の
@@ -83,7 +83,7 @@
  * `MAX_FAILURE_DETAIL_LEN` で切り詰める。coreS3-sign 以外の段では null。
  */
 import { ref, computed, readonly } from 'vue'
-import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
+import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
@@ -122,7 +122,7 @@ interface KioskBondedSignature {
   bpBonded: boolean
 }
 
-/** `AUTH SIGN` 系コマンドと同じ 10 秒 (useDeviceLogin.ts の AUTH_SIGN_TIMEOUT_MS と同値)。 */
+/** `AUTH SIGN` 系コマンドと同じ 10 秒 (utils/alarm-sign.ts の AUTH_SIGN_TIMEOUT_MS と同値)。 */
 const AUTH_SIGNBP_TIMEOUT_MS = 10_000
 const AUTH_SIGNBP_MATCH_PREFIX = 'AUTH SIGBP '
 
@@ -245,7 +245,7 @@ function parseAuthSigBpLine(line: string): KioskBondedSignature | null {
 
 /**
  * `AUTH SIGNBP <nonce>` を送り、応答 `AUTH SIGBP <pubkey> <sig> <bp>` を parse する
- * (#322-2)。管理者ログインと共有する `signAlarmDeviceNonce` (useDeviceLogin.ts) とは
+ * (#322-2)。旧管理者ログイン (#353-8 で廃止) と共有していた署名関数 (utils/alarm-sign.ts) とは
  * 別コマンドの独立した経路 — このモジュールに閉じる (キオスク専用)。firmware が
  * `SIGNBP` を未知コマンドとして `ERR AUTH: ...` を返せば request がそのまま reject する
  * ので、ここでは投げっぱなしにする (呼び出し側の signKioskNonce でフォールバックする)。
@@ -262,7 +262,7 @@ async function signKioskBondedNonce(
 /**
  * キオスク用の署名取得 (#322-2)。まずボンド状態つき `AUTH SIGNBP` を試し、古いファーム
  * (未知コマンドとして reject) や parse 失敗なら**今までどおり** `AUTH SIGN`
- * (signAlarmDeviceNonce、useDeviceLogin.ts と共有 — 管理者ログインの挙動には触れない) に
+ * (utils/alarm-sign.ts の共有署名関数) に
  * フォールバックする。フォールバック時は `bpBonded` を持たない (= ボンド状態は「不明」)。
  * `AUTH SIGN` 側の失敗 (no key 等) はここでは捕まえず、そのまま呼び出し側 (tryCoreS3Jwt) へ
  * 伝える — 診断 (#135 lastFailureDetail 等) の挙動を変えないため。
