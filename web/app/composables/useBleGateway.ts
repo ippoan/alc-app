@@ -6,6 +6,13 @@ import type {
   Fc1200State,
 } from '~/types'
 import { readAlcohol } from '~/utils/alcohol'
+// 明示 import (別名) で呼ぶ — Nuxt の自動 import に任せた
+// `[useCoreS3Serial, useAtomS3Serial].map(f => f())` は heterogeneous な配列の
+// destructuring になり、返り値の型が両者の union + `possibly undefined` に潰れて
+// nuxi typecheck が通らなかった (Refs #353)。呼び先を分けて別々に呼べば型は
+// そのまま保たれる
+import { useCoreS3Serial as useCoreS3Transport } from '~/composables/useCoreS3Serial'
+import { useAtomS3Serial as useAtomS3Transport } from '~/composables/useAtomS3Serial'
 
 // Android BLE Bridge WebSocket
 const BLE_WS_URL = 'ws://127.0.0.1:9877'
@@ -95,7 +102,8 @@ export function useBleGateway() {
   // 預かるかは arbiter が kind で決めるので、ここは**両方の登録・配線を共通の
   // transports 配列で扱い**、実際に名乗り出た方だけが鳴る形にする (Refs #353)。
   // kind が一意に決まるので登録順に依存しない
-  const [coreS3, atomS3] = [useCoreS3Serial, useAtomS3Serial].map(useTransport => useTransport())
+  const coreS3 = useCoreS3Transport()
+  const atomS3 = useAtomS3Transport()
   const transports = [coreS3, atomS3]
 
   // firmware が USB に流す FC-1200 の状態遷移 (`EVT FC1200 <name> <args...>`)。
