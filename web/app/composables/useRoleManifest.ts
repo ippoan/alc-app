@@ -14,13 +14,6 @@ const ROLES: ManifestRole[] = ['driver', 'manager', 'admin', 'general']
 /** 血圧測定タブの `?tab=` (index.vue の DriverSubTab と同じ値) */
 export const BP_TAB = 'bp'
 
-/**
- * 血圧測定台として起動した印の `?station=` (index.vue の `isBpStation` と同じ値)。
- * `manifest-bp.webmanifest` の `start_url` は `tab=bp` と `station=bp` の両方を持つが、
- * `station=` の方は通常端末の URL 同期が書き込まないので「測定台として開いたか」を表せる。
- */
-export const BP_STATION = 'bp'
-
 /** `<link rel="manifest">` と `<meta name="theme-color">` の組 */
 export interface RoleManifest {
   href: string
@@ -68,20 +61,16 @@ function first(v: unknown): string | undefined {
  * 着信通知からの直行 (`?mode=incoming_call`) は運行管理者、それ以外は `?role=`、
  * 未知の値と無指定は運行者。
  *
- * ただし運行者のうち血圧測定タブ (`?tab=bp`) と測定台 (`?station=bp`) だけは別アプリ
- * (`'bp'`) として扱う — 血圧しか測らない端末を別アイコンで入れるため。測定台の URL は
- * `?station=bp` なので、`?tab=bp` だけを見ると点呼キオスクの名前でインストールされる。
- * `?tab=bp` の方も残す (インストール済みの端末の `start_url` が持っているため)。
- * `?tab=` は運行者のときしかサブタブの意味を持たないので (index.vue の onAdminTabChange 参照)、
- * 運行管理者・システム管理者の `?tab=bp` / `?station=bp` は素通しする。
+ * ただし運行者のうち血圧測定タブ (`?tab=bp`) だけは別アプリ (`'bp'`) として扱う —
+ * 血圧しか測らない端末を別アイコンで入れるため。`?tab=` は運行者のときしか
+ * サブタブの意味を持たないので (index.vue の onAdminTabChange 参照)、
+ * 運行管理者・システム管理者の `?tab=bp` は素通しする。
  */
 export function manifestRoleFromQuery(query: Record<string, unknown>): ManifestRole {
   if (first(query.mode) === 'incoming_call') return 'manager'
   const role = first(query.role) as ManifestRole | undefined
   const resolved = role && ROLES.includes(role) ? role : 'driver'
-  if (resolved === 'driver' && (first(query.tab) === BP_TAB || first(query.station) === BP_STATION)) {
-    return 'bp'
-  }
+  if (resolved === 'driver' && first(query.tab) === BP_TAB) return 'bp'
   return resolved
 }
 
