@@ -77,10 +77,18 @@ mockNuxtImport('useAuth', () => () => ({
 
 // index.vue / TodayPunchHistory (自動 stub 経由でも読み込まれる) など他の実物も
 // このモジュールを import するので、`importOriginal` で残りの export はそのまま残す
+// initApi は**本物をそのまま呼ぶ**が、渡された getter の顔ぶれだけ控える
+// (測定台の getter を通常端末に渡していないことを固定する。Refs ippoan/alc-app#353)
+const initApiSpy = vi.hoisted(() => vi.fn())
+
 vi.mock('~/utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('~/utils/api')>()
   return {
     ...actual,
+    initApi: (...args: Parameters<typeof actual.initApi>) => {
+      initApiSpy(...args)
+      return actual.initApi(...args)
+    },
     getEmployeeByNfcId: vi.fn(async () => ({ id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' })),
     getEmployeeByCode: vi.fn(async () => ({ id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' })),
     punchTimecard: vi.fn(async () => {}),
@@ -361,6 +369,21 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(wrapper.findComponent(MeasurementLog).exists()).toBe(true)
     // tab=bp のとおり血圧測定タブ自体は出る (通常端末の1タブとして)
     expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+  })
+
+  it('測定台 (?station=bp) のときだけ測定台の device JWT getter を initApi に渡す (Refs ippoan/alc-app#353)', async () => {
+    // `scope: 'bp-station'` を付けた 4 本は**点呼と共用**なので、通常端末にこの getter を
+    // 渡すと ATOM S3 の無い端末で点呼の口が落ちる。渡すのは測定台として開いた画面だけ
+    initApiSpy.mockClear()
+    wrapper = await mountIndex('/?role=driver&tab=bp')
+    expect(initApiSpy).toHaveBeenCalledTimes(1)
+    expect(initApiSpy.mock.calls[0]![6]).toBeUndefined()
+    wrapper.unmount()
+
+    initApiSpy.mockClear()
+    wrapper = await mountIndex(bpManifest().start_url)
+    expect(initApiSpy).toHaveBeenCalledTimes(1)
+    expect(typeof initApiSpy.mock.calls[0]![6]).toBe('function')
   })
 
   it('(manifest) 血圧端末の manifest (?tab=bp&station=bp) で開くと、点呼まわりの部品を出さない (Refs ippoan/alc-app#353)', async () => {

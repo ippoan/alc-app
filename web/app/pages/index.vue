@@ -21,6 +21,23 @@ function loginWithLineworks() {
   const authWorkerUrl = (config.public.authWorkerUrl as string) || 'https://auth.ippoan.org'
   window.location.href = `${authWorkerUrl}/oauth/lineworks/redirect?address=${address}&redirect_uri=${redirectUri}`
 }
+/**
+ * 血圧測定台として起動されたか (`manifest-bp.webmanifest` の `start_url` =
+ * `/?role=driver&tab=bp&station=bp` で開かれたか)。`driverSubTab` と同じく
+ * **起動時のクエリで 1 回だけ**判定する非リアクティブな定数。
+ *
+ * **`?tab=bp` では判定しない** — `driverSubTab` の URL 同期 (下の watch) が
+ * ハンバーガーで血圧測定タブを選んだときに `?tab=bp` を書き込むため、通常端末で
+ * それを選んでリロードすると `manifestRoleFromQuery()` ベースの判定では
+ * 「測定台として起動した」と誤認し、点呼に戻れなくなる (Refs ippoan/alc-app#353、
+ * 裏取りで実測)。`tab=` は「いまどのタブか」、`station=` は「測定台として起動したか」
+ * で問いが別なので、通常端末の URL 同期が絶対に書き込まない `station` 独自クエリを見る。
+ */
+const isBpStation = route.query.station === 'bp'
+// ★ `initApi` より前に置く — 測定台の device JWT getter を渡すかどうかがこれで決まる
+// (`scope: 'bp-station'` の 4 本は点呼と共用なので、**測定台として開いた画面だけ**が
+// 測定台の鍵を使う。通常端末では getter が無く、従来どおりキオスクの鍵へ進む)。
+
 initApi(
   config.public.apiBase as string,
   () => accessToken.value,
@@ -32,7 +49,16 @@ initApi(
   // 運行管理者席: VoiceS3R の鍵で運行管理者用の device JWT を取る (#337)。
   // 使うのは予定の口 (`scope: 'manager-device'`) だけで、キオスクの点呼は触れない。
   () => useManagerDeviceToken().getManagerJwt(),
+  // 血圧測定台: ATOM S3 の鍵で測定台用の device JWT を取る (#353)。
+  // **測定台として開いたときだけ渡す** — 通常端末に渡すと、点呼と共用の 4 本
+  // (`scope: 'bp-station'`) が ATOM S3 の無い端末で落ちてしまう。
+  isBpStation ? () => useBpStationDeviceToken().getBpStationJwt() : undefined,
 )
+
+// 測定台は起動直後に 1 本取りに行く。署名 (`AUTH SIGNBP`) で決まるボンド状態が
+// 画面の「血圧を使うか」の唯一の材料で、それまで血圧測定の画面は `checking` (待ち) のまま
+// (`useBpUiEnabled`)。取りに行かないと永久に待ち続ける
+if (isBpStation) void useBpStationDeviceToken().getBpStationJwt()
 
 // 顔データ同期 (singleton)
 useFaceSync()
@@ -75,20 +101,6 @@ const driverSubTab = ref<DriverSubTab>(
   : route.query.tab === 'bp' ? 'bp'
   : 'normal',
 )
-
-/**
- * 血圧測定台として起動されたか (`manifest-bp.webmanifest` の `start_url` =
- * `/?role=driver&tab=bp&station=bp` で開かれたか)。`driverSubTab` と同じく
- * **起動時のクエリで 1 回だけ**判定する非リアクティブな定数。
- *
- * **`?tab=bp` では判定しない** — `driverSubTab` の URL 同期 (下の watch) が
- * ハンバーガーで血圧測定タブを選んだときに `?tab=bp` を書き込むため、通常端末で
- * それを選んでリロードすると `manifestRoleFromQuery()` ベースの判定では
- * 「測定台として起動した」と誤認し、点呼に戻れなくなる (Refs ippoan/alc-app#353、
- * 裏取りで実測)。`tab=` は「いまどのタブか」、`station=` は「測定台として起動したか」
- * で問いが別なので、通常端末の URL 同期が絶対に書き込まない `station` 独自クエリを見る。
- */
-const isBpStation = route.query.station === 'bp'
 
 // URL クエリ同期。`?station=bp` (測定台として起動した印) が元々付いていれば引き継ぐ —
 // 落としても測定台の判定自体 (起動時の 1 回評価) は変わらないので詰まりはしないが、

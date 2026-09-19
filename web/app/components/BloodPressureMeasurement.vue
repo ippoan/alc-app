@@ -17,12 +17,17 @@ import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
  *   `record_as_tenko` を**付けない**ので点呼の記録にはならない。
  * - 顔の扱いは `utils/face-approval.ts` の判定 1 か所に従う。**未登録なら飛ばせる**
  *   (乗務員の点呼と同じ方針)。審査中・却下は登録済みなので従来どおり弾く。
- * - 血圧計を使わない設定 (`useBloodPressureSetting`) の端末では案内だけを出す。
+ * - 血圧計が使えない端末では案内だけを出す。判定は**生の `bpEnabled` ではなく
+ *   `useBpUiEnabled()` の `bpUiState`** を見る (Refs ippoan/alc-app#353) —
+ *   測定台は `devices` に行を持たず `deviceId` が構造的に空なので、サーバ設定
+ *   (`devices.bp_enabled`) は**永久に false** で、直参照だと測定台が 1 台も測れない。
+ *   `checking` (まだ署名を取りに行っていない) は**「使わない設定」に倒さず待つ** —
+ *   倒すと起動直後に必ず詰まる。
  */
 
 type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done'
 
-const { bpEnabled } = useBloodPressureSetting()
+const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
 
 const step = ref<BpStep>('nfc')
@@ -125,14 +130,23 @@ function reset() {
 
 <template>
   <div class="w-full max-w-md mx-auto p-4 flex flex-col gap-4">
-    <!-- 血圧計を使わない設定の端末: 何も測らせない -->
-    <div v-if="!bpEnabled" class="bg-white rounded-2xl p-4 shadow-sm text-center">
+    <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
+    <div v-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
+      <h2 class="text-lg font-semibold text-gray-700 mb-2">血圧測定</h2>
+      <div class="flex items-center justify-center gap-3 py-2 text-sm text-gray-500">
+        <span class="inline-block w-5 h-5 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
+        血圧計を確認しています...
+      </div>
+    </div>
+
+    <!-- 血圧計が使えない端末: 何も測らせない -->
+    <div v-else-if="bpUiState !== 'show'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
       <h2 class="text-lg font-semibold text-gray-700 mb-2">血圧測定</h2>
       <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-        この端末では血圧計を使わない設定です
+        血圧計が見つかりません
       </p>
       <p class="mt-2 text-xs text-gray-500">
-        デバイス設定で血圧計を使う設定にしてください。
+        血圧計の電源が入っていて、この端末とペアリング済みか確認してください。
       </p>
     </div>
 

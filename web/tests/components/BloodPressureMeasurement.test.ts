@@ -1,5 +1,6 @@
+import type { BpUiState } from '~/composables/useBloodPressureSetting'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
@@ -35,10 +36,13 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   startTenkoSession: startTenkoSessionMock,
 }))
 
-const bpEnabled = ref(true)
-mockNuxtImport('useBloodPressureSetting', () => () => ({
-  bpEnabled,
-  setBpEnabled: vi.fn(),
+// 「この端末で血圧を使うか」の判定は **`useBpUiEnabled` の 1 か所** (Refs ippoan/alc-app#353)。
+// 生の `bpEnabled` (= サーバの `devices.bp_enabled`) は、`devices` に行を持たない
+// 測定台では**永久に false** なので、画面はこちらを見る
+const bpUiState = ref<BpUiState>('show')
+mockNuxtImport('useBpUiEnabled', () => () => ({
+  bpUiState,
+  showBpUi: computed(() => bpUiState.value === 'show'),
 }))
 
 const latestBloodPressure = ref<{ systolic: number, diastolic: number, pulse?: number, measuredAt: Date } | null>(null)
@@ -70,7 +74,7 @@ async function tapCard(wrapper: Awaited<ReturnType<typeof mountBp>>, nfcId = 'te
 
 describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
-    bpEnabled.value = true
+    bpUiState.value = 'show'
     latestBloodPressure.value = null
     employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }
     getEmployeeByNfcIdMock.mockReset()
@@ -176,17 +180,43 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     wrapper.unmount()
   })
 
-  it('BloodPressureMeasurement — 血圧計を使わない設定の端末では案内を出す', async () => {
-    bpEnabled.value = false
+  it.each<BpUiState>(['unused', 'unavailable', 'unregistered'])(
+    'BloodPressureMeasurement — %s の端末では「血圧計が見つかりません」の案内だけを出す',
+    async (state) => {
+      bpUiState.value = state
+      const wrapper = await mountBp()
+
+      expect(wrapper.text()).toContain('血圧計が見つかりません')
+      // 測る口はどれも出さない
+      expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+
+      wrapper.unmount()
+    },
+  )
+
+  it('BloodPressureMeasurement — checking の間は待つ (「使わない設定」に倒さない)', async () => {
+    // ★ ここで倒すと、署名をまだ取りに行っていない起動直後に**必ず**詰まる
+    bpUiState.value = 'checking'
     const wrapper = await mountBp()
 
-    expect(wrapper.text()).toContain('この端末では血圧計を使わない設定です')
-    // 測る口はどれも出さない
+    expect(wrapper.text()).toContain('血圧計を確認しています')
+    expect(wrapper.text()).not.toContain('血圧計が見つかりません')
+    // まだ測らせない (確認が済むまで)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
-    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
 
     wrapper.unmount()
+  })
+
+  it('BloodPressureMeasurement — 生の bpEnabled は見ない (測定台では永久に false のため)', () => {
+    const src = readFileSync(
+      resolve(import.meta.dirname!, '../../app/components/BloodPressureMeasurement.vue'),
+      'utf-8',
+    )
+    // 判定は useBpUiEnabled の 1 か所に寄せる (doc コメントの言及は残るので、呼び出しの形を見る)
+    expect(src).not.toMatch(/useBloodPressureSetting\s*\(/)
+    expect(src).toMatch(/useBpUiEnabled\s*\(/)
   })
 
   it('BloodPressureMeasurement — 点呼の記録を作らない', async () => {
