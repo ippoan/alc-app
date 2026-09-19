@@ -542,4 +542,61 @@ describe('useNfcReader', () => {
     await nextTick()
     expect(wsMock.connect).not.toHaveBeenCalled()
   })
+
+  // ---------- 血圧測定台の Atom S3 (Refs ippoan/alc-app#353) ----------
+  // 測定台に CoreS3 もブリッジも無い。Atom S3 だけが繋がっている端末で
+  // 「カードは読めるのに未接続」と出さない
+
+  it('測定台: Atom S3 が繋がっていれば isConnected が true で、readers は ATOM S3 になる', async () => {
+    // 再 mount 時点で既に接続済み (immediate の sync)
+    atomState.isConnected.value = true
+    const reader = await load()
+
+    expect(reader.isConnected.value).toBe(true)
+    expect(reader.readers.value).toEqual(['ATOM S3'])
+    // CoreS3 は掴みに行っていない
+    expect(coreMock.connect).not.toHaveBeenCalled()
+  })
+
+  it('測定台: Atom S3 が後から繋がれば isConnected が true になり、抜ければ false に戻る', async () => {
+    const reader = await load()
+    expect(reader.isConnected.value).toBe(false)
+    expect(reader.readers.value).toEqual([])
+
+    atomState.isConnected.value = true
+    await nextTick()
+    expect(reader.isConnected.value).toBe(true)
+    expect(reader.readers.value).toEqual(['ATOM S3'])
+
+    atomState.isConnected.value = false
+    await nextTick()
+    expect(reader.isConnected.value).toBe(false)
+    expect(reader.readers.value).toEqual([])
+  })
+
+  it('測定台: Atom S3 直結中はブリッジのエラーとバージョンを見せない (ブリッジは元から無い)', async () => {
+    const reader = await load()
+    reader.connect()
+    wsState.error.value = 'NFC ブリッジとの接続でエラーが発生しました'
+    wsState.bridgeVersion.value = '0.1.0'
+    await nextTick()
+    // Atom S3 が来る前はブリッジの状態が透ける
+    expect(reader.error.value).toBe('NFC ブリッジとの接続でエラーが発生しました')
+
+    atomState.isConnected.value = true
+    await nextTick()
+
+    expect(reader.isConnected.value).toBe(true)
+    expect(reader.error.value).toBeNull()
+    expect(reader.bridgeVersion.value).toBeNull()
+  })
+
+  it('CoreS3 と Atom S3 が両方繋がっていたら CoreS3 を優先する (従来どおり)', async () => {
+    coreState.isConnected.value = true
+    atomState.isConnected.value = true
+    const reader = await load()
+
+    expect(reader.isConnected.value).toBe(true)
+    expect(reader.readers.value).toEqual(['CoreS3'])
+  })
 })

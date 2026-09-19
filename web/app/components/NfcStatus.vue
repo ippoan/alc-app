@@ -21,9 +21,16 @@ const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRe
 const { latestVersion, checkLatestVersion, isUpdateAvailable } = useNfcBridgeUpdate()
 const { isCheckingKioskAccess } = useKioskAccess()
 
-// WebSerial の初回許可はユーザー操作が要る (CoreS3 直結のポート選択)
+// WebSerial の初回許可はユーザー操作が要る (CoreS3 / 測定台の Atom S3 直結のポート選択)
 const coreS3 = useCoreS3Serial()
+const atomS3 = useAtomS3Serial()
 const canUseSerial = isWebSerialSupported()
+// USB 直結で NFC リーダーが繋がっているか。ブリッジの接続状態とは別 (下の案内の条件)。
+// 測定台に CoreS3 は挿さらず Atom S3 だけが挿さる (Refs ippoan/alc-app#353)
+const isDirectConnected = computed(() => coreS3.isConnected.value || atomS3.isConnected.value)
+// 血圧測定台として開いた画面か (`pages/index.vue` の `?station=bp` と同じ判定)。
+// 未接続案内で名指しする端末が違うので、ここで出し分ける
+const isBpStation = useRoute().query.station === 'bp'
 const isRequestingPort = ref(false)
 async function requestSerialPort() {
   isRequestingPort.value = true
@@ -43,8 +50,8 @@ const licenseExpiryStatus = ref<LicenseExpiryStatus | null>(null)
 const showUpdateBanner = computed(() => {
   if (isAndroidApp.value) return false
   if (!isConnected.value || !latestVersion.value) return false
-  // CoreS3 直結にブリッジは要らない (readers が 'CoreS3' なら直結)
-  if (readers.value?.[0] === 'CoreS3') return false
+  // USB 直結 (CoreS3 / 測定台の Atom S3) にブリッジは要らない
+  if (isDirectConnected.value) return false
   // version 未送信（旧ブリッジ）→ 常にアップデート促す
   if (!bridgeVersion.value) return true
   return isUpdateAvailable(bridgeVersion.value)
@@ -186,11 +193,16 @@ const showNfcGuide = ref(false)
     </div>
 
     <!-- 未接続時の案内 -->
-    <!-- CoreS3 直結 (WebSerial): 常駐アプリは要らない。NFC ブリッジの接続状態とは切り離す —
-         NFC ブリッジ (bridge/Android) が繋がっていても CoreS3 の USB 許可はまだかもしれない -->
-    <template v-if="canUseSerial && !coreS3.isConnected.value && !isCheckingKioskAccess">
+    <!-- USB 直結 (WebSerial): 常駐アプリは要らない。NFC ブリッジの接続状態とは切り離す —
+         NFC ブリッジ (bridge/Android) が繋がっていても CoreS3 の USB 許可はまだかもしれない。
+         測定台では CoreS3 ではなく Atom S3 が挿さるので、名指しする端末を出し分ける -->
+    <template v-if="canUseSerial && !isDirectConnected && !isCheckingKioskAccess">
       <div class="flex flex-col items-center gap-2">
-        <p class="text-sm text-center text-gray-500">
+        <p v-if="isBpStation" class="text-sm text-center text-gray-500">
+          測定台の ATOM S3 (VoiceS3R) が USB でつながっているか確認してください。<br>
+          初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。
+        </p>
+        <p v-else class="text-sm text-center text-gray-500">
           CoreS3 が USB でつながっているか確認してください。<br>
           初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。
         </p>

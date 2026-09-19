@@ -20,8 +20,15 @@ const alarmDevice = useAlarmDevice()
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
 const atomS3 = useAtomS3Serial()
+// 血圧測定台として開いた画面か (`pages/index.vue` の `?station=bp` と同じ判定)。
+// CoreS3 と Atom S3 は USB の見た目が同一 (VID 0x303A / PID 0x1001) でこのカードは両方を
+// 受け持つので、画面が名指しする端末は測定台かどうかで変える (Refs ippoan/alc-app#353)
+const isBpStation = useRoute().query.station === 'bp'
+const bleGwDeviceName = isBpStation ? 'ATOM S3' : 'CoreS3'
 
-// この端末で血圧計 (Omron HEM-6231T) を使うか (Refs ippoan/alc-app-s3#135)。
+// この端末で Omron 血圧計を使うか (Refs ippoan/alc-app-s3#135)。対象は Omron の
+// HEM-6231T / HCR-1901T2 だけ — ニプロの血圧計 (NBP-1BLE) はこの設定に依らず拾う
+// (firmware hub-ble の `omron_enabled`)。
 // 正本はサーバの端末設定 (`devices.bp_enabled`) — 端末の NVS に置くと端末を
 // 入れ替えたときに消えるため。画面の表示はこの 1 系統だけを見る。
 const { bpEnabled, setBpEnabled } = useBloodPressureSetting()
@@ -60,7 +67,7 @@ async function toggleAlwaysOnSelf() {
   }
 }
 
-// --- 血圧計 (Omron HEM-6231T) を使うか (Refs ippoan/alc-app-s3#135) ---
+// --- Omron 血圧計を使うか (Refs ippoan/alc-app-s3#135) ---
 // 正本はサーバ (`devices.bp_enabled`)。保存はサーバへの更新を正とし、繋がっている
 // 端末があれば同じ値を流し込む。端末が 1 台も繋がっていなくても保存でき、次に端末が
 // 繋がったときに効く。端末側の保存先は NVS (CoreS3 / VoiceS3R とも同じ 1 行の口)。
@@ -507,7 +514,7 @@ async function testBleGw() {
         bpEnabled.value ? `血圧計: ${bp ? '接続' : '未接続'}` : null,
       ].filter(Boolean).join(' / ')
     } else {
-      bleGwTestResult.value = '接続失敗 — CoreS3 が USB に接続されているか確認してください'
+      bleGwTestResult.value = `接続失敗 — ${bleGwDeviceName} が USB に接続されているか確認してください`
     }
   } catch (e) {
     bleGwTestResult.value = `エラー: ${e instanceof Error ? e.message : '不明'}`
@@ -661,8 +668,9 @@ async function syncFc1200Date() {
           </span>
         </label>
 
-        <!-- 血圧計 (Omron HEM-6231T) を使うか。正本はサーバ (devices.bp_enabled、既定 OFF)。
-             端末 (CoreS3 / VoiceS3R) が繋がっていなくても保存でき、次に繋がったときに効く -->
+        <!-- Omron 血圧計を使うか (HEM-6231T / HCR-1901T2。ニプロは対象外)。正本はサーバ
+             (devices.bp_enabled、既定 OFF)。端末 (CoreS3 / VoiceS3R / 測定台の Atom S3) が
+             繋がっていなくても保存でき、次に繋がったときに効く -->
         <label class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
           <input
             type="checkbox"
@@ -673,7 +681,7 @@ async function syncFc1200Date() {
             @change="setOmronBp"
           />
           <span>
-            この端末で Omron 血圧計 (HEM-6231T) を使う
+            この端末で Omron 血圧計を使う
             <span v-if="omronBpSaveError" data-testid="omron-bp-error" class="block text-red-500">設定を保存できませんでした (通信を確認してください)</span>
             <span v-else-if="omronBpDeviceError" data-testid="omron-bp-device-error" class="block text-red-500">端末に設定を送れませんでした (firmware が古い可能性があります)</span>
             <span v-else-if="omronBpRestartNotice" data-testid="omron-bp-restart-notice" class="block text-amber-600">設定を変えました。VoiceS3R は再起動すると有効になります</span>
@@ -918,7 +926,7 @@ async function syncFc1200Date() {
       <div class="bg-white rounded-xl shadow-sm overflow-hidden">
         <div class="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
           <div>
-            <h3 class="text-sm font-medium text-gray-800">BLE 体温計・血圧計 (CoreS3)</h3>
+            <h3 class="text-sm font-medium text-gray-800">BLE 体温計・血圧計 ({{ bleGwDeviceName }})</h3>
             <p class="text-xs text-gray-500">{{ bpEnabled ? '体温計・血圧計接続用' : '体温計接続用' }} / 115200 baud</p>
           </div>
           <button
@@ -940,7 +948,7 @@ async function syncFc1200Date() {
               <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full" :class="bleGw.isConnected.value ? 'bg-green-500' : 'bg-gray-300'" />
                 <div>
-                  <p class="text-sm text-gray-800">ESP32-S3 (CoreS3 など)</p>
+                  <p class="text-sm text-gray-800">ESP32-S3 ({{ bleGwDeviceName }} など)</p>
                   <p class="text-xs text-gray-500 font-mono">{{ formatVidPid(entry.info) }}</p>
                 </div>
               </div>
