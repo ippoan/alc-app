@@ -106,14 +106,30 @@ mockNuxtImport('useBleGateway', () => () => ({
   gatewayVersion: ref(null),
 }))
 
+// 登録済みのシリアルポート。既定は空 (= navigator.serial が無い test 環境の実装と同じ)。
+// BLE ゲートウェイのポート行・接続テストは、ポートが 1 つ以上あるときしか描画されない
+const serialPorts = ref<{ port: object, info: { usbVendorId?: number, usbProductId?: number } }[]>([])
+/** WebSerial 対応か。既定は非対応 (test 環境の実装と同じ)。BLE ゲートウェイのカードは対応時だけ描画される */
+const serialSupport = { supported: false }
+mockNuxtImport('useSerialDeviceManager', () => () => ({
+  ports: readonly(serialPorts),
+  isSupported: serialSupport.supported,
+  refreshPorts: vi.fn(async () => {}),
+  requestNewPort: vi.fn(async () => null),
+  forgetPort: vi.fn(async () => {}),
+}))
+/** ESP32-S3 native USB (CoreS3 も Atom S3 も同じ VID/PID で、USB 記述子では見分けられない) */
+const ESP32_S3_PORT = { port: {}, info: { usbVendorId: 0x303a, usbProductId: 0x1001 } }
+
 // mountSuspended は自動で unmount しないので、前のテストの watch (CoreS3 の接続) が残らないよう畳む
 const mountedWrappers: { unmount: () => void }[] = []
 afterEach(() => {
   mountedWrappers.splice(0).forEach(w => w.unmount())
 })
 
-async function mountDeviceSettings() {
+async function mountDeviceSettings(route?: string) {
   const wrapper = await mountSuspended(DeviceSettings, {
+    ...(route ? { route } : {}),
     global: { stubs: { GwStatusCard: true } },
   })
   mountedWrappers.push(wrapper)
@@ -139,6 +155,8 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     alarmRequestMock.mockReset()
     alarmRequestMock.mockImplementation(async line => echoOmron(line))
     atomS3Connected.value = false
+    serialPorts.value = []
+    serialSupport.supported = false
     atomS3RequestMock.mockReset()
     atomS3RequestMock.mockImplementation(async line => echoOmron(line))
     bpEnabled.value = false
@@ -266,7 +284,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     })
   })
 
-  describe('血圧計 (Omron HEM-6231T) を使うかの設定 (Refs ippoan/alc-app-s3#135)', () => {
+  describe('Omron 血圧計を使うかの設定 (Refs ippoan/alc-app-s3#135)', () => {
     const checkbox = (wrapper: Awaited<ReturnType<typeof mountDeviceSettings>>) =>
       wrapper.find<HTMLInputElement>('[data-testid="omron-bp-checkbox"]')
     const settle = async (wrapper: Awaited<ReturnType<typeof mountDeviceSettings>>) => {
@@ -493,6 +511,52 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       await new Promise(resolve => setTimeout(resolve, 400))
       await settle(wrapper)
       expect(coreS3RequestMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // CoreS3 と Atom S3 は USB の見た目が同一で、BLE ゲートウェイのカードは両方を受け持つ。
+  // 測定台 (Atom S3 しか挿さらない) で「CoreS3 が…」と出さない (Refs ippoan/alc-app#353)
+  describe('BLE ゲートウェイのカード — 名指しする端末を測定台で出し分ける (Refs #353)', () => {
+    const STATION_ROUTE = '/?role=driver&tab=bp&station=bp'
+    const findButton = (wrapper: Awaited<ReturnType<typeof mountDeviceSettings>>, text: string) =>
+      wrapper.findAll('button').find(b => b.text() === text)
+
+    it('CoreS3 キオスク: 見出し・ポート行・接続失敗の案内は従来どおり CoreS3 を名指しする', async () => {
+      serialSupport.supported = true
+      serialPorts.value = [ESP32_S3_PORT]
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.text()).toContain('BLE 体温計・血圧計 (CoreS3)')
+      expect(wrapper.text()).toContain('ESP32-S3 (CoreS3 など)')
+
+      await findButton(wrapper, '接続テスト')!.trigger('click')
+      await flush()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.text()).toContain('接続失敗 — CoreS3 が USB に接続されているか確認してください')
+      expect(wrapper.text()).not.toContain('ATOM S3')
+    })
+
+    it('測定台: 見出し・ポート行・接続失敗の案内は ATOM S3 を名指しし、CoreS3 は出ない', async () => {
+      serialSupport.supported = true
+      serialPorts.value = [ESP32_S3_PORT]
+      const wrapper = await mountDeviceSettings(STATION_ROUTE)
+      expect(wrapper.text()).toContain('BLE 体温計・血圧計 (ATOM S3)')
+      expect(wrapper.text()).toContain('ESP32-S3 (ATOM S3 など)')
+
+      await findButton(wrapper, '接続テスト')!.trigger('click')
+      await flush()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.text()).toContain('接続失敗 — ATOM S3 が USB に接続されているか確認してください')
+      expect(wrapper.text()).not.toContain('CoreS3')
+    })
+
+    it.each([
+      ['CoreS3 キオスク', undefined],
+      ['測定台', STATION_ROUTE],
+    ])('%s: Omron 血圧計のチェックボックスは機種を 1 つに絞らない (HEM-6231T / HCR-1901T2 の両方が対象)', async (_name, route) => {
+      const wrapper = await mountDeviceSettings(route)
+      const label = wrapper.find('[data-testid="omron-bp-checkbox"]').element.closest('label')!
+      expect(label.textContent).toContain('この端末で Omron 血圧計を使う')
+      expect(label.textContent).not.toContain('HEM-6231T')
     })
   })
 })
