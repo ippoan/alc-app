@@ -163,7 +163,32 @@ describe('useCoreS3Serial', () => {
       expect(await connect()).toBe(true)
       expect(core.isConnected.value).toBe(true)
       // プローブ窓を待っていない (`HB OK` は claim 直後の 1 本目)
-      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
+    })
+
+    it('STATUS ... BOARD=cores3 (配備済み CoreS3 の後方互換) でも claim する', async () => {
+      const dev = createMockPort()
+      dev.emit('STATUS LAN=up RS232=0 BLE=0 WIFI=1 ROT=0 BOARD=cores3 ALARM=idle/none/-/0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      expect(await connect()).toBe(true)
+      expect(core.isConnected.value).toBe(true)
+    })
+
+    it('BOARD=cores3 の無い STATUS では legacyClaim しない (8 秒で見送り)', async () => {
+      const dev = createMockPort()
+      dev.emit('STATUS LAN=up RS232=0 BLE=0 WIFI=1 ROT=0 ALARM=idle/none/-/0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const p = core.connect(0)
+      await vi.advanceTimersByTimeAsync(3000)
+      await expect(p).resolves.toBe(false)
+
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(core.isConnected.value).toBe(false)
+      expect(dev.port.close).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -361,7 +386,7 @@ describe('useCoreS3Serial', () => {
 
       core.sendGrace()
       await vi.advanceTimersByTimeAsync(0)
-      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n', 'HB OK grace=45\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n', 'HB OK grace=45\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.at(-1)).toBe('HB OK\n')
@@ -385,7 +410,7 @@ describe('useCoreS3Serial', () => {
       await connectWithJson(dev)
 
       await expect(core.write('{"cmd":"reset"}')).resolves.toBe(true)
-      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n', '{"cmd":"reset"}\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n', '{"cmd":"reset"}\n'])
     })
 
     it('未接続なら false (書きに行かない)', async () => {
@@ -523,7 +548,7 @@ describe('useCoreS3Serial', () => {
       dev.emit(line)
       await vi.advanceTimersByTimeAsync(100)
 
-      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
     })
 
     it('送信に失敗したら残りを打ち切り、ポートは返さない (release しない)', async () => {
@@ -590,10 +615,10 @@ describe('useCoreS3Serial', () => {
       await connectWithJson(dev)
 
       // claim 直後の 1 本目 (firmware の初回武装を早める)
-      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.filter(line => line === 'HB OK\n')).toHaveLength(3)
@@ -852,7 +877,7 @@ describe('useCoreS3Serial', () => {
 
     // 探索 1 回。プローブは arbiter が撃つ
     expect(getPorts).toHaveBeenCalledTimes(1)
-    expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
+    expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
   })
 })
 

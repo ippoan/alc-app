@@ -7,9 +7,11 @@
  *
  * プロトコル (行指向 \n / ASCII / 115200 8N1):
  *   host → dev  `DEVICE`                     … 機種判定のためのプローブ (arbiter が撃つ)
+ *   host → dev  `STATUS`                     … 同じく機種判定のためのプローブ (後方互換、下記)
  *   host → dev  `HB OK`                      … 3 秒ごと。CoreS3 は返信しない
  *   dev  → host `{"type":"ready",...}`       … BLE ゲートウェイの JSON メッセージ
  *   dev  → host `DEVICE cores3 VER=...`      … プローブへの応答 (名乗り、arbiter が判定)
+ *   dev  → host `STATUS ... BOARD=cores3 ...` … 配備済みファームの旧い名乗り (後方互換)
  *   dev  → host `EVT <NAME> <args...>`       … NFC など状態遷移の通知
  * 既知の接頭辞に当てはまらない行は捨てる。
  *
@@ -17,6 +19,13 @@
  * VID 0x303A / PID 0x1001 で同一。ポートの探索・open・`DEVICE` プローブ・
  * `DEVICE <kind>` の判定は useSerialArbiter が 1 本で行う (Refs ippoan/alc-app#182,
  * #353)。ここは預かったポートの使い方だけを持つ。
+ *
+ * **機種識別の正本は `DEVICE cores3`** (`alc-app-s3` の `hub-drivers/src/console.rs` の
+ * `handle_common`)。`STATUS ... BOARD=cores3` の `legacyClaim` は**配備済み CoreS3 の
+ * ための暫定** — 本番稼働中の CoreS3 (kiosk 用途で 3 台) がまだ `DEVICE` に対応して
+ * いない間の後方互換で、全台に OTA が当たったら消す (Refs ippoan/alc-app#353)。
+ * 警告デバイスと測定台はまだ配備されていないので、この暫定は要らない
+ * (useAlarmDevice.ts / useAtomS3Serial.ts は `DEVICE` のみ)。
  *
  * 接続しているあいだは 3 秒ごとに `HB OK` を送る。CoreS3 は heartbeat が途切れたら
  * 自分の判断で鳴るので、ブラウザは「鳴れ」と命令しない — タブを閉じた・別タブへ移った・
@@ -85,8 +94,8 @@ const DIAG_EVENT_PREFIXES = [
 ]
 
 /** 行の素性。機種識別 (`DEVICE <kind>`) は arbiter が行うので、ここはメッセージの
- * 振り分けにだけ使う */
-type LineKind = 'json' | 'event' | 'alarm' | 'unknown'
+ * 振り分けと legacyClaim (後方互換) の判定にだけ使う */
+type LineKind = 'json' | 'event' | 'alarm' | 'status' | 'unknown'
 
 // シングルトン: 1 台の PC につながる CoreS3 は 1 台
 const isConnected = ref(false)
@@ -124,8 +133,10 @@ let startupProbePromise: Promise<boolean> | null = null
  * (実機で確認しない限り) 出るはずのない行を誤配しない保険として残す。
  */
 function classify(line: string): LineKind {
-  if (line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
+  if (line.startsWith('STATUS alarm') || line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
   if (line.startsWith('{')) return 'json'
+  // legacyClaim (後方互換) の判定材料。配備済み CoreS3 のための暫定 (doc 冒頭参照)
+  if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'status'
   if (line.startsWith('EVT ')) return 'event'
   return 'unknown'
 }
@@ -213,7 +224,7 @@ export function useCoreS3Serial() {
       const queryId = logQueryId(line)
       if (queryId !== null) void replyLog(queryId)
     }
-    // 'alarm' / 'unknown' は捨てる (機種の名乗り 'DEVICE ...' は arbiter が消費する)
+    // 'alarm' / 'status' / 'unknown' は捨てる (機種の名乗りは arbiter/legacyClaim が消費する)
   }
 
   // --- get_log への返信 ---
@@ -283,6 +294,10 @@ export function useCoreS3Serial() {
   // --- arbiter に預けるハンドラ (機種識別は arbiter が `DEVICE cores3` で行う) ---
 
   const claimant: SerialClaimant = {
+    // 後方互換 (暫定、doc 冒頭参照): DEVICE が無いときだけ、配備済み CoreS3 の
+    // 旧い名乗り (STATUS ... BOARD=cores3) を見る
+    legacyClaim: lines => lines.some(line => classify(line) === 'status'),
+
     onOpen(_port, _reader, w, lines) {
       held = w
       isConnected.value = true

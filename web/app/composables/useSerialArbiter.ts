@@ -14,6 +14,12 @@
  * この 1 本 (arbiter) が `kind` で振り分けるだけで済み、利用側は `register(kind,
  * claimant)` でハンドラを預けるだけになる (Refs ippoan/alc-app#182)。
  *
+ * `DEVICE` に答えない配備済みファーム (CoreS3 は本番稼働中) のために、`STATUS` も
+ * 撃つ。`DEVICE` を返さない機だけ `legacyClaim` (`SerialClaimant` の任意メソッド) で
+ * 旧い名乗り (`STATUS ... BOARD=cores3` 等) を見る後方互換の抜け道を用意している
+ * (Refs ippoan/alc-app#353)。全台に `DEVICE`対応 の OTA が行き渡ったら `STATUS` の
+ * 送信と `legacyClaim` は撤去できる。
+ *
  * 探索者が複数居ると 8 秒のプローブ窓でポートを奪い合う (実機で再現)。だから探索は
  * この 1 本に集約する。
  *
@@ -120,6 +126,13 @@ function errorName(e: unknown): string {
  * `kind` がそのまま識別子になる。
  */
 export interface SerialClaimant {
+  /**
+   * 後方互換用 (任意)。`DEVICE <kind>` の行が 1 本も無い場合だけ呼ばれる —
+   * 配備済みでまだ `DEVICE` に対応していないファームの旧い名乗り
+   * (`STATUS ... BOARD=cores3` 等) を見て「これは自分だ」と判定したい機種だけ実装する。
+   * `DEVICE` に対応済みの機種は実装不要
+   */
+  legacyClaim?(lines: string[]): boolean
   /** ポートを受け取る。`lines` はプローブ中に集まった行 (`DEVICE ...` を含む) */
   onOpen(
     port: SerialPort,
@@ -396,6 +409,9 @@ export function useSerialArbiter() {
    * `DEVICE <kind>` の kind で持ち主を決める。kind は機種ごとに一意なので、
    * 判明した時点で「これは自分だ (`claim`)」か「これは自分ではない (`reject`)」の
    * どちらかに確定する — 利用側ごとの述語は要らない。
+   *
+   * `DEVICE` 行が 1 本も無ければ、`legacyClaim` を持つ利用側だけ後方互換で試す
+   * (配備済みでまだ `DEVICE` に対応していないファーム向け、Refs ippoan/alc-app#353)。
    */
   function resolveDevice(lines: string[]): { owner: Owner | null } | null {
     for (const line of lines) {
@@ -404,7 +420,10 @@ export function useSerialArbiter() {
       const claimant = claimants.get(kind)
       return { owner: claimant && !held.has(kind) ? { name: kind, claimant } : null }
     }
-    return null // まだ DEVICE 行が来ていない (判定材料なし)
+    for (const [name, claimant] of pending()) {
+      if (claimant.legacyClaim?.(lines)) return { owner: { name, claimant } }
+    }
+    return null // まだ判定材料が無い
   }
 
   function probe(s: PortSession): Promise<Owner | null> {
@@ -451,16 +470,21 @@ export function useSerialArbiter() {
         if (resolved) finish(resolved.owner)
       })
 
-      function sendDevice(): void {
+      // `DEVICE` (正本) と `STATUS` (配備済みファームの後方互換) の両方を撃つ。
+      // 全台に DEVICE 対応の OTA が行き渡ったら STATUS 送信は撤去できる
+      function sendProbe(): void {
         sends += 1
         void writeLine(s.writer, 'DEVICE').then((ok) => {
+          if (!ok) finish(null)
+        })
+        void writeLine(s.writer, 'STATUS').then((ok) => {
           if (!ok) finish(null)
         })
         if (sends >= PROBE_MAX_SENDS) stopSends()
       }
 
-      sendDevice()
-      sendTimer = setInterval(sendDevice, PROBE_SEND_INTERVAL)
+      sendProbe()
+      sendTimer = setInterval(sendProbe, PROBE_SEND_INTERVAL)
     })
   }
 

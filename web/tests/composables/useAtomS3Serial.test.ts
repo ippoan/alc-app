@@ -388,6 +388,6 @@ describe('useAtomS3Serial', () => {
 
     // 探索 1 回。プローブは arbiter が撃つ
     expect(getPorts).toHaveBeenCalledTimes(1)
-    expect(dev.writes).toEqual(['DEVICE\n'])
+    expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n'])
   })
 })

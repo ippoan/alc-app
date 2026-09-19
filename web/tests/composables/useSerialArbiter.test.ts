@@ -368,7 +368,7 @@ describe('useSerialArbiter', () => {
       arbiter.register('alarm', claimant)
 
       await vi.advanceTimersByTimeAsync(8000)
-      expect(silent.writes).toHaveLength(8)
+      expect(silent.writes).toHaveLength(16)
       expect(silent.port.close).toHaveBeenCalledTimes(1)
 
       await vi.advanceTimersByTimeAsync(10000)

@@ -331,19 +331,19 @@ describe('useAlarmDevice', () => {
       alarm.connect(0)
 
       await vi.advanceTimersByTimeAsync(0)
-      expect(silent.writes).toEqual(['DEVICE\n'])
+      expect(silent.writes).toEqual(['DEVICE\n', 'STATUS\n'])
 
       // 1 秒ごとに 8 回目まで送って打ち止め
       await vi.advanceTimersByTimeAsync(7000)
-      expect(silent.writes).toHaveLength(8)
+      expect(silent.writes).toHaveLength(16)
 
       // 7999ms 時点ではまだ諦めない
       await vi.advanceTimersByTimeAsync(999)
       expect(silent.port.close).not.toHaveBeenCalled()
 
-      // 8 秒経過 → 諦めて close。送信は 8 回で止まったまま
+      // 8 秒経過 → 諦めて close。DEVICE/STATUS の送信は 8 回 (16 本) で止まったまま
       await vi.advanceTimersByTimeAsync(1)
-      expect(silent.writes).toHaveLength(8)
+      expect(silent.writes).toHaveLength(16)
       expect(silent.port.close).toHaveBeenCalledTimes(1)
       expect(alarm.isConnected.value).toBe(false)
 
@@ -535,13 +535,13 @@ describe('useAlarmDevice', () => {
 
     it('接続直後と 3 秒ごとに HB OK を送る (購読中・着信なし)', async () => {
       const dev = await connectDevice()
-      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'STATUS\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'STATUS\n', 'HB OK\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes).toHaveLength(5)
+      expect(dev.writes).toHaveLength(6)
     })
 
     it('room 購読が切れても 15 秒までは HB OK、超えたら HB NG signaling、復旧で即 HB OK (#198)', async () => {
@@ -704,7 +704,7 @@ describe('useAlarmDevice', () => {
 
     it('接続中なら今の heartbeat に grace=45 を足した 1 行を送る', async () => {
       const dev = await connectDevice()
-      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'STATUS\n', 'HB OK\n'])
 
       alarm.notifyIntentionalReload()
       await vi.advanceTimersByTimeAsync(0)
