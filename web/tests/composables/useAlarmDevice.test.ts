@@ -104,9 +104,9 @@ function installSerialMock(serialMock: {
 // --- Tests ---
 
 /**
- * ポートの探索・open・`STATUS` プローブは useSerialArbiter に移った (#182)。
- * ここで見るのは「警告デバイスの利用側として外から見える挙動」が不変であること —
- * 公開 API の形、heartbeat の周期と中身、deviceState、再スキャンの間隔。
+ * ポートの探索・open・`DEVICE` プローブ・機種判定は useSerialArbiter に移った
+ * (#182, #353)。ここで見るのは「警告デバイスの利用側として外から見える挙動」が
+ * 不変であること — 公開 API の形、heartbeat の周期と中身、deviceState、再スキャンの間隔。
  */
 describe('useAlarmDevice', () => {
   let mod: typeof import('~/composables/useAlarmDevice')
@@ -185,7 +185,7 @@ describe('useAlarmDevice', () => {
 
     it('connect(0) なら待たずに探索する (BLE GW と同居しない管理者 PC)', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect(0)
@@ -195,77 +195,72 @@ describe('useAlarmDevice', () => {
       expect(alarm.isConnected.value).toBe(true)
     })
 
-    it('EVT ALARM 行 → 採用して接続', async () => {
+    it('DEVICE alarm 行 → 採用して接続し、onOpen で STATUS を 1 回撃って初期状態を取る', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=alarming cause=silence\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()
       await vi.advanceTimersByTimeAsync(5000)
 
       expect(alarm.isConnected.value).toBe(true)
+      // DEVICE は名乗り専用で状態を持たないため、onOpen が STATUS を 1 回撃つ
+      expect(dev.writes).toContain('STATUS\n')
+
+      dev.emit('STATUS alarm state=alarming cause=silence hb_age_ms=1200 VER=0.1.0\n')
+      await vi.advanceTimersByTimeAsync(0)
       expect(alarm.deviceState.value).toEqual({ state: 'alarming', cause: 'silence' })
-      expect(dev.writes[0]).toBe('STATUS\n')
     })
 
-    it('STATUS alarm 行 → 採用し、state/cause 以外のトークンは無視する', async () => {
+    it('STATUS alarm 行 → state/cause 以外のトークンは無視する', async () => {
       const dev = createMockPort()
-      dev.emit('STATUS alarm state=muted cause=ng:fc1200 hb_age_ms=1200 VER=0.1.0\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()
       await vi.advanceTimersByTimeAsync(5000)
 
-      expect(alarm.isConnected.value).toBe(true)
+      dev.emit('STATUS alarm state=muted cause=ng:fc1200 hb_age_ms=1200 VER=0.1.0\n')
+      await vi.advanceTimersByTimeAsync(0)
       expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'ng:fc1200' })
     })
 
-    it('state= の無い行でも採用はするが deviceState は更新しない', async () => {
+    it('EVT ALARM state=... 行 → deviceState を更新する', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()
       await vi.advanceTimersByTimeAsync(5000)
 
-      expect(alarm.isConnected.value).toBe(true)
-      expect(alarm.deviceState.value).toBeNull()
+      dev.emit('EVT ALARM state=alarming cause=silence\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.deviceState.value).toEqual({ state: 'alarming', cause: 'silence' })
     })
 
-    it('EVT BOOT など他の行は判定材料にしない (後続の EVT ALARM で採用)', async () => {
+    it('state= の無い行では deviceState を更新しない', async () => {
       const dev = createMockPort()
-      dev.emit('EVT BOOT ver=0.1.0\n\nEVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()
       await vi.advanceTimersByTimeAsync(5000)
+      expect(alarm.deviceState.value).toBeNull()
 
-      expect(alarm.isConnected.value).toBe(true)
-      expect(alarm.deviceState.value).toEqual({ state: 'idle', cause: 'none' })
+      dev.emit('EVT ALARM\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.deviceState.value).toBeNull()
     })
 
     it('値の無いチャンクは読み飛ばす', async () => {
       const dev = createMockPort()
       dev.push({ value: undefined, done: false })
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()
       await vi.advanceTimersByTimeAsync(5000)
 
-      expect(alarm.isConnected.value).toBe(true)
-    })
-
-    it('採用後に別機種の行が来ても判定は覆らない', async () => {
-      const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-      alarm.connect()
-      await vi.advanceTimersByTimeAsync(5000)
-
-      dev.emit('PONG\n')
-      await vi.advanceTimersByTimeAsync(0)
       expect(alarm.isConnected.value).toBe(true)
     })
 
@@ -283,7 +278,7 @@ describe('useAlarmDevice', () => {
     it('InvalidStateError (他 composable が使用中) は除外せず次の候補へ', async () => {
       const busy = createMockPort({ openError: new DOMException('busy', 'InvalidStateError') })
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [busy.port, dev.port]) })
       await load()
       alarm.connect()
@@ -328,7 +323,7 @@ describe('useAlarmDevice', () => {
 
   // ---------- STATUS プローブ ----------
 
-  describe('STATUS プローブ', () => {
+  describe('DEVICE プローブ', () => {
     it('1 秒ごとに最大 8 回送り、8 秒無応答なら閉じるが除外はしない', async () => {
       const silent = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [silent.port]) })
@@ -336,7 +331,7 @@ describe('useAlarmDevice', () => {
       alarm.connect(0)
 
       await vi.advanceTimersByTimeAsync(0)
-      expect(silent.writes).toEqual(['STATUS\n'])
+      expect(silent.writes).toEqual(['DEVICE\n'])
 
       // 1 秒ごとに 8 回目まで送って打ち止め
       await vi.advanceTimersByTimeAsync(7000)
@@ -357,7 +352,7 @@ describe('useAlarmDevice', () => {
       expect(silent.port.open).toHaveBeenCalledTimes(2)
     })
 
-    it('7999ms までは未確定 — 遅れて来た 5 秒ごとのバナーでも採用する', async () => {
+    it('7999ms までは未確定 — 遅れて来た DEVICE 応答でも採用する', async () => {
       const late = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [late.port]) })
       await load()
@@ -367,12 +362,12 @@ describe('useAlarmDevice', () => {
       expect(alarm.isConnected.value).toBe(false)
       expect(late.port.close).not.toHaveBeenCalled()
 
-      late.emit('EVT ALARM state=idle cause=none\n')
+      late.emit('DEVICE alarm VER=0.1.0\n')
       await vi.advanceTimersByTimeAsync(0)
       expect(alarm.isConnected.value).toBe(true)
     })
 
-    it('STATUS の write に失敗したら閉じるが除外はしない', async () => {
+    it('DEVICE の write に失敗したら閉じるが除外はしない', async () => {
       const dev = createMockPort({ writeError: true })
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
@@ -394,13 +389,14 @@ describe('useAlarmDevice', () => {
       ['STATUS LAN=up VER=1.2.3\n', 'CoreS3 の STATUS'],
       ['PONG\n', 'PONG'],
       ['{"type":"ready","version":"1.0"}\n', 'JSON 行'],
-    ])('%s → 名乗り出ずに手放し、10 秒後の再スキャンでは開き直さない', async (line) => {
+    ])('%s → DEVICE 行が来ないので 8 秒のプローブ窓が切れて手放し、10 秒後の再スキャンでは開き直さない', async (line) => {
       const other = createMockPort()
       other.emit(line)
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
       alarm.connect()
-      await vi.advanceTimersByTimeAsync(5000)
+      // INITIAL_SCAN_DELAY (5 秒) + プローブ窓 (8 秒)
+      await vi.advanceTimersByTimeAsync(13000)
 
       expect(other.port.close).toHaveBeenCalledTimes(1)
       expect(alarm.isConnected.value).toBe(false)
@@ -418,7 +414,8 @@ describe('useAlarmDevice', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(other.port.open).toHaveBeenCalledTimes(1)
 
-      await vi.advanceTimersByTimeAsync(60000)
+      // プローブ窓 (8 秒) が切れて見送ってから 60 秒の cooldown
+      await vi.advanceTimersByTimeAsync(8000 + 60000)
       expect(other.port.open).toHaveBeenCalledTimes(2)
     })
   })
@@ -443,7 +440,7 @@ describe('useAlarmDevice', () => {
 
     it('navigator.serial は直接触らない (列挙は arbiter 経由)', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       const getPorts = vi.fn(async () => [dev.port])
       const requestPort = vi.fn(async () => dev.port)
       installSerialMock({ getPorts, requestPort })
@@ -479,7 +476,7 @@ describe('useAlarmDevice', () => {
 
     it('接続済みなら再度 connect しても探索しない', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       const getPorts = vi.fn(async () => [dev.port])
       installSerialMock({ getPorts })
       await load()
@@ -528,7 +525,7 @@ describe('useAlarmDevice', () => {
   describe('heartbeat', () => {
     async function connectDevice() {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()
@@ -538,13 +535,13 @@ describe('useAlarmDevice', () => {
 
     it('接続直後と 3 秒ごとに HB OK を送る (購読中・着信なし)', async () => {
       const dev = await connectDevice()
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes).toHaveLength(4)
+      expect(dev.writes).toHaveLength(5)
     })
 
     it('room 購読が切れても 15 秒までは HB OK、超えたら HB NG signaling、復旧で即 HB OK (#198)', async () => {
@@ -580,7 +577,7 @@ describe('useAlarmDevice', () => {
 
     it('購読が開く前に接続しても、connect() から 15 秒までは HB OK', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       setRooms({ watching: false })
@@ -697,7 +694,7 @@ describe('useAlarmDevice', () => {
   describe('notifyIntentionalReload', () => {
     async function connectDevice() {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect(0)
@@ -707,7 +704,7 @@ describe('useAlarmDevice', () => {
 
     it('接続中なら今の heartbeat に grace=45 を足した 1 行を送る', async () => {
       const dev = await connectDevice()
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'STATUS\n', 'HB OK\n'])
 
       alarm.notifyIntentionalReload()
       await vi.advanceTimersByTimeAsync(0)
@@ -753,7 +750,7 @@ describe('useAlarmDevice', () => {
   describe('reload 後の即再接続', () => {
     it('握っていた印 (sessionStorage) があれば connect() は 5 秒待たずに探索し、印を消す', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect(0)
@@ -763,7 +760,7 @@ describe('useAlarmDevice', () => {
 
       // reload: module の状態は消えるが sessionStorage は残る
       const reloaded = createMockPort()
-      reloaded.emit('EVT ALARM state=idle cause=none\n')
+      reloaded.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [reloaded.port]) })
       vi.resetModules()
       mod = await import('~/composables/useAlarmDevice')
@@ -778,7 +775,7 @@ describe('useAlarmDevice', () => {
 
     it('disconnect() の明示切断で印を消す → 次の connect() は 5 秒待つ', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect(0)
@@ -795,7 +792,7 @@ describe('useAlarmDevice', () => {
 
     it('抜線 (onClose) では印を消さない — 挿し直しの前に reload しても即スキャンする', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect(0)
@@ -813,7 +810,7 @@ describe('useAlarmDevice', () => {
   describe('requestPort', () => {
     it('許可されたら待たずに探索を始める (ボタン直後の 5 秒待ちは未接続に見える)', async () => {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       const getPorts = vi.fn(async () => [dev.port])
       installSerialMock({ requestPort: vi.fn(async () => dev.port), getPorts })
       await load()
@@ -842,7 +839,7 @@ describe('useAlarmDevice', () => {
   describe('request', () => {
     async function connectDevice() {
       const dev = createMockPort()
-      dev.emit('EVT ALARM state=idle cause=none\n')
+      dev.emit('DEVICE alarm VER=0.1.0\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
       alarm.connect()

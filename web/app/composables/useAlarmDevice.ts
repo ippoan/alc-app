@@ -11,10 +11,16 @@
  *
  * プロトコル (firmware と同文。行指向 \n / ASCII / 115200 8N1):
  *   host → dev  `HB OK` / `HB NG <reason>`  … 3 秒ごと。デバイスは返信しない
- *   host → dev  `STATUS`                    … 機種判定のためのプローブ (arbiter が撃つ)
+ *   host → dev  `DEVICE`                    … 機種判定のためのプローブ (arbiter が撃つ)
+ *   host → dev  `STATUS`                    … 接続直後に 1 回だけ (下記)
+ *   dev  → host `DEVICE alarm VER=<ver>`    … プローブへの応答 (名乗り、arbiter が判定)
  *   dev  → host `STATUS alarm state=<idle|alarming|muted> cause=<none|silence|ng:<reason>|call> hb_age_ms=<n|-> VER=<ver>`
  *   dev  → host `EVT ALARM state=<...> cause=<...>` … 状態遷移のたび + 5 秒ごと無条件
  * 末尾トークン ` call=1` / ` call=0` は任意 (無ければ 0)。` grace=<秒>` も任意 (下記)。
+ *
+ * `DEVICE` は名乗り専用で状態を持たない。接続直後の初期状態 (`state=`/`cause=`) は
+ * `EVT ALARM` の次の周期送信 (5 秒ごと) を待たず `STATUS` を 1 回撃って取る
+ * (onOpen、Refs ippoan/alc-app#353)。以後の状態は `EVT ALARM` のプッシュで追う。
  *
  * 送る中身は useActiveRooms から組み立てる:
  *   room 一覧の購読 (WebSocket) が 15 秒以上切れている → `HB NG signaling` (着信を受けられない)
@@ -27,10 +33,9 @@
  * 広げる (Refs ippoan/alc-app-s3#192)。呼び口は notifyIntentionalReload()。
  *
  * 機種識別を USB 記述子では行えない: CoreS3 の BLE ゲートウェイも VoiceS3R も
- * VID 0x303A / PID 0x1001 で同一。ポートの探索・open・`STATUS` プローブは
- * useSerialArbiter が 1 本で行い、ここは「`STATUS alarm` / `EVT ALARM` が来たら
- * 自分のものだ」と名乗り出る述語と、預かったポートの使い方だけを持つ
- * (Refs ippoan/alc-app#182)。
+ * VID 0x303A / PID 0x1001 で同一。ポートの探索・open・`DEVICE` プローブ・
+ * `DEVICE <kind>` の判定は useSerialArbiter が 1 本で行う (Refs ippoan/alc-app#182,
+ * #353)。ここは預かったポートの使い方だけを持つ。
  *
  * 診断ログ (`[ALARM-DEV]`) は運行者端末の DevTools で読む用に出しっぱなし (Refs #197)。
  */
@@ -45,7 +50,12 @@ export interface AlarmDeviceState {
 }
 
 /** arbiter に登録する名前 */
-const CLAIMANT_NAME = 'alarm-device'
+/**
+ * arbiter に登録する名前。`DEVICE alarm` の kind (auth-worker の `DEVICE_KINDS` の
+ * key に揃えた語彙、Refs ippoan/alc-app#353) と一致させる — arbiter は `DEVICE <kind>`
+ * の kind をそのままこの名前として引く
+ */
+const CLAIMANT_NAME = 'alarm'
 
 /** mount 直後は BLE ゲートウェイに先にポートを選ばせる (同居しない PC では 0 を渡す) */
 const INITIAL_SCAN_DELAY = 5000
@@ -104,12 +114,12 @@ export function useAlarmDevice() {
 
   // --- 行の解釈 ---
 
-  function classify(line: string): 'alarm' | 'other' | 'unknown' {
-    if (line.startsWith('STATUS alarm') || line.startsWith('EVT ALARM')) return 'alarm'
-    // `STATUS LAN=...` (CoreS3) / `PONG` / JSON — 警告デバイスではないと確定できる行
-    if (line.startsWith('STATUS ') || line.startsWith('PONG') || line.startsWith('{')) return 'other'
-    // `EVT BOOT ...` 等は無視 (判定材料にしない)
-    return 'unknown'
+  /**
+   * `state=`/`cause=` を積む行か (機種識別ではなく、状態行の振り分けにだけ使う。
+   * 機種識別は `DEVICE alarm` を見る arbiter 側、Refs ippoan/alc-app#353)。
+   */
+  function isStateLine(line: string): boolean {
+    return line.startsWith('STATUS alarm') || line.startsWith('EVT ALARM')
   }
 
   /** `state=` / `cause=` を拾って deviceState に畳む */
@@ -124,7 +134,7 @@ export function useAlarmDevice() {
   }
 
   function handleLine(line: string): void {
-    if (classify(line) === 'alarm') applyLine(line)
+    if (isStateLine(line)) applyLine(line)
   }
 
   // --- heartbeat ---
@@ -194,19 +204,21 @@ export function useAlarmDevice() {
     return true
   }
 
-  // --- arbiter に預ける述語とハンドラ ---
+  // --- arbiter に預けるハンドラ (機種識別は arbiter が `DEVICE alarm` で行う) ---
 
   const claimant: SerialClaimant = {
-    claim: lines => lines.some(line => classify(line) === 'alarm'),
-    reject: lines => lines.some(line => classify(line) === 'other'),
-
     onOpen(_port, _reader, w, lines) {
       held = w
       isConnected.value = true
       sessionStorage.setItem(RECONNECT_MARK_KEY, '1')
       log(`claimed port (probe lines=${lines.length})`)
-      // プローブ中に来ていた行 (名乗り出た根拠) をここで畳む
+      // プローブ中に来ていた行を畳む (`DEVICE ...` の名乗りそのものは isStateLine に
+      // 当てはまらないので無視される)
       for (const line of lines) handleLine(line)
+      // `DEVICE` は名乗り専用で状態を持たないため、初期状態 (state=/cause=) を
+      // ここで `STATUS` を 1 回撃って取る。応答は通常の onLine 経由で handleLine に届く
+      // (次の `EVT ALARM` の定期送信 (5 秒ごと) を待たない、Refs ippoan/alc-app#353)
+      void writeLine(w, 'STATUS')
       startHeartbeat(w)
     },
 

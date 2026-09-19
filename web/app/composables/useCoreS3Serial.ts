@@ -6,20 +6,17 @@
  * 受け取った行を接頭辞で振り分けて配る。
  *
  * プロトコル (行指向 \n / ASCII / 115200 8N1):
- *   host → dev  `STATUS`                     … 機種判定のためのプローブ (arbiter が撃つ)
+ *   host → dev  `DEVICE`                     … 機種判定のためのプローブ (arbiter が撃つ)
  *   host → dev  `HB OK`                      … 3 秒ごと。CoreS3 は返信しない
  *   dev  → host `{"type":"ready",...}`       … BLE ゲートウェイの JSON メッセージ
- *   dev  → host `STATUS BOARD=cores3 ...`    … プローブへの応答 (名乗り)
+ *   dev  → host `DEVICE cores3 VER=...`      … プローブへの応答 (名乗り、arbiter が判定)
  *   dev  → host `EVT <NAME> <args...>`       … NFC など状態遷移の通知
  * 既知の接頭辞に当てはまらない行は捨てる。
  *
  * 機種識別を USB 記述子では行えない: CoreS3 も警告デバイス (Atom VoiceS3R) も
- * VID 0x303A / PID 0x1001 で同一。ポートの探索・open・`STATUS` プローブは
- * useSerialArbiter が 1 本で行い、ここは「これは CoreS3 だ」と名乗り出る述語と、
- * 預かったポートの使い方だけを持つ (Refs ippoan/alc-app#182)。
- *
- * ready まで無言のファームウェアが「無応答」で閉じられ続けないよう、JSON 行が
- * 先着したら `STATUS` の応答を待たずに claim する。
+ * VID 0x303A / PID 0x1001 で同一。ポートの探索・open・`DEVICE` プローブ・
+ * `DEVICE <kind>` の判定は useSerialArbiter が 1 本で行う (Refs ippoan/alc-app#182,
+ * #353)。ここは預かったポートの使い方だけを持つ。
  *
  * 接続しているあいだは 3 秒ごとに `HB OK` を送る。CoreS3 は heartbeat が途切れたら
  * 自分の判断で鳴るので、ブラウザは「鳴れ」と命令しない — タブを閉じた・別タブへ移った・
@@ -87,8 +84,9 @@ const DIAG_EVENT_PREFIXES = [
   'EVT OTA NG',
 ]
 
-/** 行の素性。CoreS3 のものか、警告デバイスのものか、どちらとも言えないか */
-type LineKind = 'json' | 'status' | 'event' | 'alarm' | 'unknown'
+/** 行の素性。機種識別 (`DEVICE <kind>`) は arbiter が行うので、ここはメッセージの
+ * 振り分けにだけ使う */
+type LineKind = 'json' | 'event' | 'alarm' | 'unknown'
 
 // シングルトン: 1 台の PC につながる CoreS3 は 1 台
 const isConnected = ref(false)
@@ -116,16 +114,18 @@ let logReplyGeneration = 0
 let startupProbePromise: Promise<boolean> | null = null
 
 /**
- * 行の接頭辞から素性を決める。
+ * 行の接頭辞から素性を決める。機種識別ではなく、採用後の行を配る先を決めるためだけ
+ * (機種識別は `DEVICE <kind>` を見る arbiter 側、Refs ippoan/alc-app#353)。
  *
- * 警告デバイスの行を先に見る: `EVT ALARM` は `EVT ` にも当てはまるため。空白まで見る —
- * CoreS3 が起動時に出す `EVT ALARM_RESTORED` を警告デバイスの行と取り違えて CoreS3 を
- * 見送らないため (Refs ippoan/alc-app#225)。
+ * 警告デバイスの行 (`EVT ALARM`) を先に見る: `EVT ` にも当てはまるため。空白まで見る —
+ * CoreS3 が起動時に出す `EVT ALARM_RESTORED` を警告デバイスの行と取り違えて
+ * CoreS3 自身の EVT ハンドラへ配らないため (Refs ippoan/alc-app#225)。この機は
+ * `DEVICE cores3` で名乗るので、両機が同じポートを取り合うことは無いが、
+ * (実機で確認しない限り) 出るはずのない行を誤配しない保険として残す。
  */
 function classify(line: string): LineKind {
-  if (line.startsWith('STATUS alarm') || line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
+  if (line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
   if (line.startsWith('{')) return 'json'
-  if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'status'
   if (line.startsWith('EVT ')) return 'event'
   return 'unknown'
 }
@@ -213,7 +213,7 @@ export function useCoreS3Serial() {
       const queryId = logQueryId(line)
       if (queryId !== null) void replyLog(queryId)
     }
-    // 'status' (名乗りそのもの) / 'alarm' / 'unknown' は捨てる
+    // 'alarm' / 'unknown' は捨てる (機種の名乗り 'DEVICE ...' は arbiter が消費する)
   }
 
   // --- get_log への返信 ---
@@ -280,17 +280,9 @@ export function useCoreS3Serial() {
     })
   }
 
-  // --- arbiter に預ける述語とハンドラ ---
+  // --- arbiter に預けるハンドラ (機種識別は arbiter が `DEVICE cores3` で行う) ---
 
   const claimant: SerialClaimant = {
-    // JSON か `BOARD=cores3` の名乗りが来たら自分のもの
-    claim: lines => lines.some((line) => {
-      const kind = classify(line)
-      return kind === 'json' || kind === 'status'
-    }),
-    // 警告デバイスの行が来たら自分のものではないと確定
-    reject: lines => lines.some(line => classify(line) === 'alarm'),
-
     onOpen(_port, _reader, w, lines) {
       held = w
       isConnected.value = true

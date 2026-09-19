@@ -9,63 +9,29 @@
  * (`useBleGateway.processMessage`) は変えずに済む。
  *
  * 機種識別を USB 記述子では行えない: CoreS3 も Atom S3 (測定台) も Espressif の
- * native USB (VID 0x303A / PID 0x1001) で同一。ポートの探索・open・`STATUS` プローブは
- * useSerialArbiter が 1 本で行い、ここは「これは Atom S3 の測定台だ」と名乗り出る述語と、
- * 預かったポートの使い方だけを持つ (useCoreS3Serial.ts:1-45 の doc、Refs ippoan/alc-app#182)。
+ * native USB (VID 0x303A / PID 0x1001) で同一。ポートの探索・open・`DEVICE` プローブ・
+ * `DEVICE <kind>` の判定は useSerialArbiter が 1 本で行う (Refs ippoan/alc-app#182,
+ * #353)。ここは預かったポートの使い方だけを持つ。
  *
- * 機種識別の正規の形は「`STATUS` 応答の先頭 2 トークン」— `atoms3-alarm/src/console.rs`
- * の doc (★ `STATUS` 応答の先頭 2 トークン `STATUS alarm` は変えないこと。ブラウザ側は
- * これで機種を識別する) の通り、CoreS3 は `STATUS ... BOARD=cores3`、警告デバイスは
- * `STATUS alarm ...` で名乗る。測定台 (`atoms3-nfc`) は `STATUS nfc ...` で名乗る
- * (`start_common` が `STATUS <tag> ...` を返す。`<tag>` は `"nfc"` 固定、
- * `crates/atoms3-nfc/src/main.rs`)。
- *
- * **後方互換**: `STATUS` に無応答で `ERR UNSUPPORTED (<tag>)` を返す初版ファーム
- * (`start_common` が `STATUS` を返す前の版) が Pages で配布済み
- * (ippoan/alc-app-s3#260、`https://ippoan.github.io/alc-app-s3/atoms3-nfc.html`) なので、
- * それを焼いた個体のために `ERR UNSUPPORTED (nfc)` も claim 信号に残す。裸の
- * `ERR UNSUPPORTED` は `start_common` を使う機 (atoms3-timecard / atoms3-alarm /
- * atoms3-print) 全部の catch-all なので使わない — tag まで見て測定台に限定する。
- *
- * BLE の測定値 (JSON) が `STATUS` の応答より先に届くこともあるため、JSON の先着も
- * claim 信号に含める (useCoreS3Serial.ts の「ready まで無言のファームウェアを取りこぼさない」
- * 流儀と同じフォールバック)。
+ * 名乗りの kind は auth-worker の `DEVICE_KINDS` の key に揃えた語彙で `bp-station`
+ * (`nfc` ではない)。release 前で測定台の実機は現場にまだ 1 台も無い (Pages に置いた
+ * だけ) ので、`STATUS` ベースの旧い名乗りや `ERR UNSUPPORTED` への後方互換は持たない。
+ * JSON の先着も claim 信号にしない — CoreS3 と測定台は同じ BLE の JSON を出すので
+ * JSON は機種を決められず、`DEVICE` は `handle_common` (読み出しスレッド) が即答する
+ * ので「ready まで無言」の心配も無い。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { writeLine } from '~/composables/useSerialArbiter'
 
-/** arbiter に登録する名前 */
-const CLAIMANT_NAME = 'atoms3'
+/**
+ * arbiter に登録する名前。`DEVICE bp-station` の kind と一致させる — arbiter は
+ * `DEVICE <kind>` の kind をそのままこの名前として引く
+ */
+const CLAIMANT_NAME = 'bp-station'
 
 /** connect() が claim を待つ上限 (useCoreS3Serial と同じ値・同じ意味) */
 const CLAIM_TIMEOUT = 3000
-
-/** 測定台 (`atoms3-nfc`) が `start_common` に渡す tag。ここ限定で名乗る */
-const NFC_TAG = 'nfc'
-
-/** 行の素性。自分のものか、他の 2 機 (CoreS3 / 警告デバイス) のものか、どちらとも言えないか */
-type LineKind = 'alarm' | 'cores3' | 'nfc' | 'unsupported' | 'json' | 'unknown'
-
-/**
- * 行の接頭辞から素性を決める。
- *
- * 警告デバイスの行を先に見る: `EVT ALARM` は `EVT ` にも当てはまるため。空白まで見る —
- * CoreS3 が起動時に出す `EVT ALARM_RESTORED` を警告デバイスの行と取り違えないため
- * (useCoreS3Serial.ts の `classify()` と同じ注意、Refs ippoan/alc-app#225)。
- *
- * `STATUS nfc` / `ERR UNSUPPORTED (nfc)` はどちらも tag (`nfc`) まで見る — 接頭辞だけだと
- * `atoms3-timecard` / `atoms3-alarm` / `atoms3-print` の `STATUS` 応答や
- * `ERR UNSUPPORTED` (どの機も catch-all で返しうる) と取り違える (doc 冒頭の注意参照)。
- */
-function classify(line: string): LineKind {
-  if (line.startsWith('STATUS alarm') || line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
-  if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'cores3'
-  if (line.startsWith(`STATUS ${NFC_TAG}`)) return 'nfc'
-  if (line.startsWith(`ERR UNSUPPORTED (${NFC_TAG})`)) return 'unsupported'
-  if (line.startsWith('{')) return 'json'
-  return 'unknown'
-}
 
 // シングルトン: 1 台の PC につながる測定台は 1 台
 const isConnected = ref(false)
@@ -81,7 +47,7 @@ let held: WritableStreamDefaultWriter<Uint8Array> | null = null
 
 /** JSON として読める行だけ配る。他機と語彙を共有しているので中身の検査はしない */
 function handleLine(line: string): void {
-  if (classify(line) !== 'json') return
+  if (!line.startsWith('{')) return
   try {
     const msg = JSON.parse(line) as unknown
     for (const cb of [...jsonHandlers]) cb(msg)
@@ -96,21 +62,9 @@ export function useAtomS3Serial() {
   const arbiter = useSerialArbiter()
   const isSupported = arbiter.isSupported
 
-  // --- arbiter に預ける述語とハンドラ ---
+  // --- arbiter に預けるハンドラ (機種識別は arbiter が `DEVICE bp-station` で行う) ---
 
   const claimant: SerialClaimant = {
-    // `STATUS nfc` (正規の名乗り) か `ERR UNSUPPORTED (nfc)` (初版ファームの後方互換)、
-    // あるいは JSON が先着したら自分のもの
-    claim: lines => lines.some((line) => {
-      const kind = classify(line)
-      return kind === 'nfc' || kind === 'unsupported' || kind === 'json'
-    }),
-    // 警告デバイスか CoreS3 の名乗りが来たら自分のものではないと確定
-    reject: lines => lines.some((line) => {
-      const kind = classify(line)
-      return kind === 'alarm' || kind === 'cores3'
-    }),
-
     onOpen(_port, _reader, w, lines) {
       held = w
       isConnected.value = true

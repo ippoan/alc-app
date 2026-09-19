@@ -92,8 +92,8 @@ function installSerialMock(serialMock: {
 // --- Tests ---
 
 /**
- * CoreS3 の利用側。ポートの探索・open・`STATUS` プローブは useSerialArbiter が行う (#182)。
- * ここで見るのは「行の振り分け」と「claim / reject の述語」。
+ * CoreS3 の利用側。ポートの探索・open・`DEVICE` プローブ・機種判定は useSerialArbiter が
+ * 行う (#182, #353)。ここで見るのは「行の振り分け」と「預かったポートの使い方」。
  */
 describe('useCoreS3Serial', () => {
   let mod: typeof import('~/composables/useCoreS3Serial')
@@ -112,11 +112,11 @@ describe('useCoreS3Serial', () => {
     return await p
   }
 
-  /** JSON 行を先着させて claim させる (実機の BLE ゲートウェイと同じ形) */
+  /** DEVICE cores3 を先着させて claim させる (機種識別は arbiter が行う) */
   async function connectWithJson(dev: MockPortHandle) {
     installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
     await load()
-    dev.emit('{"type":"ready","version":"1.0.0"}\n')
+    dev.emit('DEVICE cores3 VER=1.2.3\n')
     expect(await connect()).toBe(true)
   }
 
@@ -150,81 +150,20 @@ describe('useCoreS3Serial', () => {
     })
   })
 
-  // ---------- claim / reject ----------
+  // ---------- claim (機種識別は arbiter が DEVICE cores3 で行う。網羅的な
+  // claim/reject の検証は useSerialArbiter.test.ts 側にある) ----------
 
   describe('claim', () => {
-    it('JSON 行が先着したら STATUS の応答を待たずに claim する', async () => {
+    it('DEVICE cores3 で claim されたら接続する', async () => {
       const dev = createMockPort()
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
       expect(await connect()).toBe(true)
       expect(core.isConnected.value).toBe(true)
-      // プローブの 8 秒窓を待っていない (`HB OK` は claim 直後の 1 本目)
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
-    })
-
-    it('STATUS に BOARD=cores3 が含まれれば claim する', async () => {
-      const dev = createMockPort()
-      dev.emit('STATUS BOARD=cores3 LAN=up VER=1.2.3\n')
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-
-      await expect(connect()).resolves.toBe(true)
-    })
-
-    it('BOARD= の無い STATUS では claim しない (8 秒で見送り)', async () => {
-      const dev = createMockPort()
-      dev.emit('STATUS LAN=up VER=1.2.3\n')
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-
-      const p = core.connect(0)
-      await vi.advanceTimersByTimeAsync(3000)
-      await expect(p).resolves.toBe(false)
-
-      // arbiter のプローブ窓 (8 秒) が切れて手放す
-      await vi.advanceTimersByTimeAsync(5000)
-      expect(core.isConnected.value).toBe(false)
-      expect(dev.port.close).toHaveBeenCalledTimes(1)
-    })
-
-    it.each([
-      ['EVT ALARM state=alarming cause=silence\n', 'EVT ALARM'],
-      ['EVT ALARM\n', 'EVT ALARM (引数なし)'],
-      ['STATUS alarm state=idle cause=none hb_age_ms=1200 VER=0.1.0\n', 'STATUS alarm'],
-    ])('警告デバイスの行 (%s) は reject して即手放す', async (line) => {
-      const dev = createMockPort()
-      dev.emit(line)
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-
-      void core.connect(0)
-      await vi.advanceTimersByTimeAsync(0)
-      expect(core.isConnected.value).toBe(false)
-      // 8 秒待たずに閉じている (reject が確定した時点で打ち切り)
-      expect(dev.port.close).toHaveBeenCalledTimes(1)
-    })
-
-    it('CoreS3 の起動時の EVT ALARM_RESTORED では reject せず、続く JSON で claim する (Refs #225)', async () => {
-      const dev = createMockPort()
-      dev.emit('EVT ALARM_RESTORED\n')
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-      const events: string[] = []
-      core.onEvent(name => events.push(name))
-
-      const p = core.connect(0)
-      await vi.advanceTimersByTimeAsync(0)
-      // 警告デバイスと取り違えて見送っていない
-      expect(dev.port.close).not.toHaveBeenCalled()
-
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
-      await vi.advanceTimersByTimeAsync(0)
-      await expect(p).resolves.toBe(true)
-      // プローブ中の EVT も CoreS3 のものとして配る
-      expect(events).toEqual(['ALARM_RESTORED'])
+      // プローブ窓を待っていない (`HB OK` は claim 直後の 1 本目)
+      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
     })
   })
 
@@ -238,7 +177,7 @@ describe('useCoreS3Serial', () => {
       const seen: unknown[] = []
       core.onJson(msg => seen.push(msg))
 
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await connect()
 
       expect(seen).toEqual([{ type: 'ready', version: '1.0.0' }])
@@ -422,7 +361,7 @@ describe('useCoreS3Serial', () => {
 
       core.sendGrace()
       await vi.advanceTimersByTimeAsync(0)
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', 'HB OK grace=45\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n', 'HB OK grace=45\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.at(-1)).toBe('HB OK\n')
@@ -446,7 +385,7 @@ describe('useCoreS3Serial', () => {
       await connectWithJson(dev)
 
       await expect(core.write('{"cmd":"reset"}')).resolves.toBe(true)
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', '{"cmd":"reset"}\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n', '{"cmd":"reset"}\n'])
     })
 
     it('未接続なら false (書きに行かない)', async () => {
@@ -584,7 +523,7 @@ describe('useCoreS3Serial', () => {
       dev.emit(line)
       await vi.advanceTimersByTimeAsync(100)
 
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
     })
 
     it('送信に失敗したら残りを打ち切り、ポートは返さない (release しない)', async () => {
@@ -651,10 +590,10 @@ describe('useCoreS3Serial', () => {
       await connectWithJson(dev)
 
       // claim 直後の 1 本目 (firmware の初回武装を早める)
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
-      expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n', 'HB OK\n'])
+      expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n', 'HB OK\n'])
 
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.filter(line => line === 'HB OK\n')).toHaveLength(3)
@@ -671,7 +610,7 @@ describe('useCoreS3Serial', () => {
       expect(dev.writes.slice(afterRelease)).toEqual([])
 
       // 登録は残っているので 10 秒後の再スキャンで掴み直す
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await vi.advanceTimersByTimeAsync(1000)
       expect(core.isConnected.value).toBe(true)
 
@@ -696,7 +635,7 @@ describe('useCoreS3Serial', () => {
       expect(core.isConnected.value).toBe(false)
 
       // 諦めたあとでも、遅れて来た JSON で採用される
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await vi.advanceTimersByTimeAsync(0)
       expect(core.isConnected.value).toBe(true)
     })
@@ -716,7 +655,7 @@ describe('useCoreS3Serial', () => {
       core.onOpen(() => order.push('open'))
       core.onJson(() => order.push('json'))
 
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await connect()
 
       expect(order).toEqual(['open', 'json'])
@@ -733,7 +672,7 @@ describe('useCoreS3Serial', () => {
       expect(opened).toEqual([1])
 
       await core.release()
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await vi.advanceTimersByTimeAsync(10000)
       expect(core.isConnected.value).toBe(true)
       expect(opened).toEqual([1, 1])
@@ -748,7 +687,7 @@ describe('useCoreS3Serial', () => {
       core.onOpen(() => opened.push(1))
       expect(opened).toEqual([])
 
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await connect()
       expect(opened).toEqual([1])
     })
@@ -760,7 +699,7 @@ describe('useCoreS3Serial', () => {
       const inner: number[] = []
       core.onOpen(() => core.onOpen(() => inner.push(1)))
 
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       await connect()
       expect(inner).toEqual([1])
     })
@@ -800,7 +739,7 @@ describe('useCoreS3Serial', () => {
       const getPorts = vi.fn(async () => [dev.port])
       installSerialMock({ getPorts })
       await load()
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
 
       const first = core.startupProbe()
       expect(core.startupProbe()).toBe(first)
@@ -853,7 +792,7 @@ describe('useCoreS3Serial', () => {
       const requestPort = vi.fn(async () => dev.port)
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]), requestPort })
       await load()
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
 
       const p = core.requestPort()
       await vi.advanceTimersByTimeAsync(0)
@@ -881,7 +820,7 @@ describe('useCoreS3Serial', () => {
       const dev = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
-      dev.emit('{"type":"ready"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready"}\n')
       await connect()
 
       const p = core.request('AUTH TICKET', 'AUTH TICKET ', 10_000)
@@ -908,12 +847,12 @@ describe('useCoreS3Serial', () => {
     const getPorts = vi.fn(async () => [dev.port])
     installSerialMock({ getPorts })
     await load()
-    dev.emit('{"type":"ready","version":"1.0.0"}\n')
+    dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
     await connect()
 
     // 探索 1 回。プローブは arbiter が撃つ
     expect(getPorts).toHaveBeenCalledTimes(1)
-    expect(dev.writes).toEqual(['STATUS\n', 'HB OK\n'])
+    expect(dev.writes).toEqual(['DEVICE\n', 'HB OK\n'])
   })
 })
 

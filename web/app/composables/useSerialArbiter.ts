@@ -2,17 +2,20 @@
  * WebSerial ポートの調停 (シングルトン)。
  *
  * 同じ VID/PID の別機種が同居する PC で「誰がどのポートを開くか」を 1 か所に集める。
- * CoreS3 (BLE ゲートウェイ / NFC) も警告デバイス (Atom VoiceS3R) も Espressif の
- * native USB (0x303A:0x1001) なので、USB 記述子では見分けられない。開いてから
- * `STATUS` を撃ち、返ってきた行を利用側に見せて「これは自分の機種だ」と名乗り出た
- * ところへ渡す。
+ * CoreS3 (BLE ゲートウェイ / NFC) も警告デバイス (Atom VoiceS3R) も測定台 (Atom S3)
+ * も Espressif の native USB (0x303A:0x1001) なので、USB 記述子では見分けられない。
+ * 開いてから `DEVICE` を撃ち、返ってきた `DEVICE <kind> ...` の `kind` で
+ * 「これは自分の機種だ」と名乗り出たところへポートを渡す。
+ *
+ * `DEVICE` は機種の名乗り専用のコマンドで、全機種が同じ場所 (`alc_hub_drivers::
+ * console::handle_common`) で共通に答える (Refs ippoan/alc-app#353)。`kind` は
+ * 各機種で一意 (`cores3` / `alarm` / `bp-station` 等) なので、`kind` が判明した時点で
+ * 「これは自分だ」か「これは自分ではない」かのどちらかに確定する — 機種が増えても
+ * この 1 本 (arbiter) が `kind` で振り分けるだけで済み、利用側は `register(kind,
+ * claimant)` でハンドラを預けるだけになる (Refs ippoan/alc-app#182)。
  *
  * 探索者が複数居ると 8 秒のプローブ窓でポートを奪い合う (実機で再現)。だから探索は
- * この 1 本に集約し、利用側は `register` で述語とハンドラを預けるだけにする
- * (Refs ippoan/alc-app#182)。
- *
- * プロトコルの解釈は arbiter に持たせない。`claim` / `reject` を利用側から渡すので、
- * 機種が増えても arbiter は変わらない。
+ * この 1 本に集約する。
  *
  * 名乗り出なかったポートを永久除外にはしない — 60 秒おいて再訪する。一度
  * 「警告デバイスではない」と判定しただけで CoreS3 のポートに二度と触れなくなると、
@@ -72,8 +75,9 @@ const PROBE_MAX_SENDS = 8
  * これだけ待って誰も名乗り出なければ諦める。
  *
  * 3 秒では実機で「接続にならない」が出た。ポートを open した瞬間にデバイスが
- * リセットされると、その窓に応答が間に合わないため。8 秒あれば 5 秒ごとに無条件で
- * 出る警告デバイスの `EVT ALARM` バナーも拾える。
+ * リセットされると、その窓に応答が間に合わないため。`DEVICE` は
+ * `PROBE_SEND_INTERVAL` (1 秒) ごとに `PROBE_MAX_SENDS` (8 回) まで撃ち直すので、
+ * 1 回書き損じても後続の送信で拾える余裕を持たせている。
  */
 const PROBE_TIMEOUT = 8000
 /** 誰も名乗り出なかったポートを再訪するまでの間隔 (永久除外はしない) */
@@ -111,21 +115,12 @@ function errorName(e: unknown): string {
 }
 
 /**
- * ポートを使う側。プロトコルの解釈はすべてこちら側の知識。
- *
- * `claim` / `reject` にはプローブ中に集まった行が**古い順に全部**渡る。判定は行の
- * 到着ごとにやり直されるので、実装は「この配列のどれかが自分の機種の応答か」を
- * 答えればよい。
+ * ポートを使う側。機種識別 (`DEVICE <kind>` の kind 一致) は arbiter が行うので、
+ * ここは「預かったポートの使い方」だけを持つ。`register(kind, claimant)` の
+ * `kind` がそのまま識別子になる。
  */
 export interface SerialClaimant {
-  /** 「これは自分の機種だ」なら true。最初に true を返した利用側がポートを取る */
-  claim(lines: string[]): boolean
-  /**
-   * 「自分の機種ではない」と確定できるなら true。名乗り出ていない利用側が全員
-   * これを返した時点でプローブを打ち切り、ポートを手放す。
-   */
-  reject(lines: string[]): boolean
-  /** ポートを受け取る。`lines` はプローブ中に集まった行 (claim の判断に使ったもの) */
+  /** ポートを受け取る。`lines` はプローブ中に集まった行 (`DEVICE ...` を含む) */
   onOpen(
     port: SerialPort,
     reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -389,15 +384,27 @@ export function useSerialArbiter() {
 
   // --- 機種判定 ---
 
-  function pickClaimant(lines: string[]): Owner | null {
-    for (const [name, claimant] of pending()) {
-      if (claimant.claim(lines)) return { name, claimant }
-    }
-    return null
+  /** `DEVICE <kind> ...` の `kind` を取り出す。`DEVICE` で始まらない行は null */
+  function deviceKind(line: string): string | null {
+    if (!line.startsWith('DEVICE ')) return null
+    const rest = line.slice('DEVICE '.length)
+    const sp = rest.indexOf(' ')
+    return sp === -1 ? rest : rest.slice(0, sp)
   }
 
-  function allRejected(lines: string[]): boolean {
-    return pending().every(([, claimant]) => claimant.reject(lines))
+  /**
+   * `DEVICE <kind>` の kind で持ち主を決める。kind は機種ごとに一意なので、
+   * 判明した時点で「これは自分だ (`claim`)」か「これは自分ではない (`reject`)」の
+   * どちらかに確定する — 利用側ごとの述語は要らない。
+   */
+  function resolveDevice(lines: string[]): { owner: Owner | null } | null {
+    for (const line of lines) {
+      const kind = deviceKind(line)
+      if (kind === null) continue
+      const claimant = claimants.get(kind)
+      return { owner: claimant && !held.has(kind) ? { name: kind, claimant } : null }
+    }
+    return null // まだ DEVICE 行が来ていない (判定材料なし)
   }
 
   function probe(s: PortSession): Promise<Owner | null> {
@@ -440,24 +447,20 @@ export function useSerialArbiter() {
         // 判定は済んだが引き渡し前 — 同じチャンクの残りは lines に積むだけ
         if (settled) return
 
-        const owner = pickClaimant(s.lines)
-        if (owner) {
-          finish(owner)
-          return
-        }
-        if (allRejected(s.lines)) finish(null)
+        const resolved = resolveDevice(s.lines)
+        if (resolved) finish(resolved.owner)
       })
 
-      function sendStatus(): void {
+      function sendDevice(): void {
         sends += 1
-        void writeLine(s.writer, 'STATUS').then((ok) => {
+        void writeLine(s.writer, 'DEVICE').then((ok) => {
           if (!ok) finish(null)
         })
         if (sends >= PROBE_MAX_SENDS) stopSends()
       }
 
-      sendStatus()
-      sendTimer = setInterval(sendStatus, PROBE_SEND_INTERVAL)
+      sendDevice()
+      sendTimer = setInterval(sendDevice, PROBE_SEND_INTERVAL)
     })
   }
 

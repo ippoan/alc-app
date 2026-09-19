@@ -89,13 +89,12 @@ let heartbeatCheckTimer: ReturnType<typeof setInterval> | null = null
 const HEARTBEAT_TIMEOUT = 30000
 
 export function useBleGateway() {
-  // serial 側のポートは自前で探さない。探索・open・機種判定は useSerialArbiter に
-  // 集約され、その利用側 (useCoreS3Serial / useAtomS3Serial) から JSON を受け取る
-  // (Refs #182)。どちらが実際にポートを預かるかは arbiter が決めるので、ここは
-  // **両方の登録・配線を共通の transports 配列で扱い**、実際に名乗り出た方だけが
-  // 鳴る形にする (Refs #353)。配列の並びは register される順そのもの — 先頭
-  // (coreS3) を先に register することが、あいまいな JSON 行での既存の claim
-  // 優先度を変えないための前提になる
+  // serial 側のポートは自前で探さない。探索・open・機種判定 (`DEVICE <kind>` の
+  // kind 一致) は useSerialArbiter に集約され、その利用側 (useCoreS3Serial /
+  // useAtomS3Serial) から JSON を受け取る (Refs #182)。どちらが実際にポートを
+  // 預かるかは arbiter が kind で決めるので、ここは**両方の登録・配線を共通の
+  // transports 配列で扱い**、実際に名乗り出た方だけが鳴る形にする (Refs #353)。
+  // kind が一意に決まるので登録順に依存しない
   const [coreS3, atomS3] = [useCoreS3Serial, useAtomS3Serial].map(useTransport => useTransport())
   const transports = [coreS3, atomS3]
 
@@ -225,9 +224,9 @@ export function useBleGateway() {
   /**
    * `transports` の先頭から順に claim を待つ。**Promise.all で全員を待つと、
    * 負けた方の CLAIM_TIMEOUT ぶん無駄に待たされる**ので、register だけ先に
-   * 全員済ませ (この時点で配列の並び = arbiter への登録順になる。あいまいな
-   * JSON 行での既存 2 本の claim を奪わないため、先頭 = coreS3 を動かさないこと)、
-   * 結果は前から順に見て最初に true を返した時点で終わる。
+   * 全員済ませ、結果は前から順に見て最初に true を返した時点で終わる
+   * (arbiter は `DEVICE <kind>` の kind で一意に振り分けるので、register の順序が
+   * 結果を左右することはない)。
    */
   async function connectTransports(delay: number): Promise<boolean> {
     const results = transports.map(t => t.connect(delay))
