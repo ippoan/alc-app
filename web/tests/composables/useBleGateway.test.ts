@@ -752,6 +752,70 @@ describe('useBleGateway', () => {
       })
     })
 
+    // =============================================
+    // Atom S3 (血圧計用 PC の測定台、Refs ippoan/alc-app#353)
+    // =============================================
+    describe('Atom S3 (測定台)', () => {
+      /**
+       * STATUS 未対応機の実機と同じ形 (ERR UNSUPPORTED を先着させる)。
+       * CoreS3 側が claim できず諦めるまで (CLAIM_TIMEOUT=3 秒) 待ってから
+       * Atom S3 側の結果を見るので、通常の autoConnect ヘルパー (0ms 分の進行) では
+       * 足りない
+       */
+      async function connectAtomS3(dev: MockPortHandle) {
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+        await load()
+        dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+        const p = gw.autoConnect()
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(await p).toBe(true)
+      }
+
+      it('CoreS3 が居ない PC では Atom S3 (測定台) が名乗り出て isConnected が立つ', async () => {
+        const dev = createMockPort()
+        await connectAtomS3(dev)
+
+        expect(gw.isConnected.value).toBe(true)
+        expect(gw.transport.value).toBe('serial')
+      })
+
+      it('Atom S3 からの血圧 JSON も processMessage を通る (CoreS3 と同じ語彙)', async () => {
+        const dev = createMockPort()
+        await connectAtomS3(dev)
+
+        dev.emit('{"type":"blood_pressure","systolic":120,"diastolic":80,"pulse":72,"unit":"mmHg"}\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.latestBloodPressure.value).toEqual({ systolic: 120, diastolic: 80, pulse: 72, unit: 'mmHg', measuredAt: expect.any(Date) })
+      })
+
+      it('抜線でも state を畳む (CoreS3 と同じ cleanup 経路)', async () => {
+        const dev = createMockPort()
+        await connectAtomS3(dev)
+
+        dev.end()
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.isConnected.value).toBe(false)
+        expect(gw.transport.value).toBeNull()
+      })
+
+      it('手動接続 (ポートピッカー) でも CoreS3 が claim できなければ Atom S3 側の結果を見る', async () => {
+        const dev = createMockPort()
+        const requestPort = vi.fn(async () => dev.port)
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]), requestPort })
+        await load()
+        dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+
+        const p = gw.connect()
+        await vi.advanceTimersByTimeAsync(3000)
+        await p
+
+        expect(gw.isConnected.value).toBe(true)
+        expect(gw.transport.value).toBe('serial')
+      })
+    })
+
     describe('processMessage (serial)', () => {
       it('ready → gatewayVersion + heartbeat 監視開始 (serial のみ)', async () => {
         const dev = createMockPort()

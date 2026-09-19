@@ -90,8 +90,14 @@ const HEARTBEAT_TIMEOUT = 30000
 
 export function useBleGateway() {
   // serial 側のポートは自前で探さない。探索・open・機種判定は useSerialArbiter に
-  // 集約され、その利用側 useCoreS3Serial から JSON を受け取る (Refs #182)
-  const coreS3 = useCoreS3Serial()
+  // 集約され、その利用側 (useCoreS3Serial / useAtomS3Serial) から JSON を受け取る
+  // (Refs #182)。どちらが実際にポートを預かるかは arbiter が決めるので、ここは
+  // **両方の登録・配線を共通の transports 配列で扱い**、実際に名乗り出た方だけが
+  // 鳴る形にする (Refs #353)。配列の並びは register される順そのもの — 先頭
+  // (coreS3) を先に register することが、あいまいな JSON 行での既存の claim
+  // 優先度を変えないための前提になる
+  const [coreS3, atomS3] = [useCoreS3Serial, useAtomS3Serial].map(useTransport => useTransport())
+  const transports = [coreS3, atomS3]
 
   // firmware が USB に流す FC-1200 の状態遷移 (`EVT FC1200 <name> <args...>`)。
   // CoreS3 の画面と連動しないので、PC 直結と同じ語彙でここから進みを出す
@@ -130,9 +136,9 @@ export function useBleGateway() {
       transport.value = 'websocket'
       error.value = null
       wsReconnectAttempts = 0
-      // WS に決まったので serial の探索は降りる (後から CoreS3 を挿されて
-      // transport が横取りされないように)
-      void coreS3.disconnect()
+      // WS に決まったので serial の探索は降りる (後から CoreS3 / Atom S3 を
+      // 挿されて transport が横取りされないように)
+      for (const t of transports) void t.disconnect()
     }
 
     ws.onmessage = (event: MessageEvent) => {
@@ -196,24 +202,39 @@ export function useBleGateway() {
 
   // --- WebSerial transport (CoreS3 / ATOM Lite USB) ---
 
-  /** CoreS3 の受け口を 1 度だけ繋ぐ */
+  /** CoreS3 / Atom S3 どちらの受け口も 1 度だけ繋ぐ (arbiter が渡した方だけが実際に鳴る) */
   function wire(): void {
     if (wired) return
     wired = true
 
-    coreS3.onOpen(() => {
-      isConnected.value = true
-      transport.value = 'serial'
-    })
+    for (const t of transports) {
+      t.onOpen(() => {
+        isConnected.value = true
+        transport.value = 'serial'
+      })
+      t.onJson((msg) => {
+        console.log('[BLE-GW RX]', msg)
+        processMessage(msg as BleGatewayMessage)
+      })
+      // 抜線・クラッシュでポートを失った → serial の state を畳む
+      // (掴み直しは arbiter が 10 秒ごとの再スキャンで行う)
+      t.onClose(() => { void cleanup() })
+    }
+  }
 
-    coreS3.onJson((msg) => {
-      console.log('[BLE-GW RX]', msg)
-      processMessage(msg as BleGatewayMessage)
-    })
-
-    // 抜線・クラッシュでポートを失った → serial の state を畳む
-    // (掴み直しは arbiter が 10 秒ごとの再スキャンで行う)
-    coreS3.onClose(() => { void cleanup() })
+  /**
+   * `transports` の先頭から順に claim を待つ。**Promise.all で全員を待つと、
+   * 負けた方の CLAIM_TIMEOUT ぶん無駄に待たされる**ので、register だけ先に
+   * 全員済ませ (この時点で配列の並び = arbiter への登録順になる。あいまいな
+   * JSON 行での既存 2 本の claim を奪わないため、先頭 = coreS3 を動かさないこと)、
+   * 結果は前から順に見て最初に true を返した時点で終わる。
+   */
+  async function connectTransports(delay: number): Promise<boolean> {
+    const results = transports.map(t => t.connect(delay))
+    for (const result of results) {
+      if (await result) return true
+    }
+    return false
   }
 
   /** ブラウザのポートピッカーで手動接続 */
@@ -228,8 +249,12 @@ export function useBleGateway() {
 
     wire()
     // 許可 (ユーザー操作) のあとは arbiter に任せる。ここで open すると
-    // 調停役と二重に掴んで InvalidStateError になる (#182)
-    await coreS3.requestPort()
+    // 調停役と二重に掴んで InvalidStateError になる (#182)。ピッカーは 1 回だけ
+    // (useSerialArbiter が両方の利用側で共有するシングルトンなので、どちらの
+    // requestPort() を呼んでも同じダイアログになる)
+    const granted = await useSerialArbiter().requestPort()
+    if (!granted) return
+    await connectTransports(0)
   }
 
   /** 許可済みポートに自動接続 (arbiter の claim を待つ) */
@@ -245,7 +270,7 @@ export function useBleGateway() {
     }
 
     wire()
-    return await coreS3.connect(0)
+    return await connectTransports(0)
   }
 
   // --- 共通: メッセージ処理 (Serial / WebSocket 共用) ---
@@ -330,7 +355,11 @@ export function useBleGateway() {
       sendWsCommand(cmd)
       return
     }
-    const ok = await coreS3.write(JSON.stringify(cmd))
+    // 実際に預かっている方だけ書ける (held が null なら即 false で返る、Refs #353)
+    let ok = false
+    for (const t of transports) {
+      if (await t.write(JSON.stringify(cmd))) { ok = true; break }
+    }
     if (ok) console.log('[BLE-GW TX]', cmd)
     else console.warn('[BLE-GW] sendCommand failed:', cmd)
   }
@@ -440,8 +469,8 @@ export function useBleGateway() {
 
   async function disconnect(): Promise<void> {
     disconnectWebSocket()
-    // 明示的な切断なので探索ごと降りる
-    await coreS3.disconnect()
+    // 明示的な切断なので探索ごと降りる (両方)
+    for (const t of transports) await t.disconnect()
     await cleanup()
   }
 
@@ -449,8 +478,9 @@ export function useBleGateway() {
     stopHeartbeatCheck()
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 
-    // 預かっているポートは arbiter に返す (登録は残るので掴み直しに行く)
-    await coreS3.release()
+    // 預かっているポートは arbiter に返す (登録は残るので掴み直しに行く。
+    // 実際に預かっている方だけが release() で意味を持つ)
+    for (const t of transports) await t.release()
 
     if (transport.value === 'serial') {
       isConnected.value = false
