@@ -309,6 +309,39 @@ describe('useSerialArbiter', () => {
     })
   })
 
+  // ---------- 行頭に無い DEVICE (直前のログ行に連結) ----------
+
+  describe('DEVICE が行頭に無い', () => {
+    it('直前のログ行が途中で切れて連結されていても、機種を識別して claim する', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT NFC_READY port=0DEVICE alarm state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      // onOpen へ渡す行は受信したまま (加工しない)
+      expect(seen.backlog).toEqual(['EVT NFC_READY port=0DEVICE alarm state=idle'])
+    })
+
+    it('連結されていても kind が別なら、名乗り出ずに見送る', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT NFC_READY port=0DEVICE core LAN=up\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(0)
+      expect(dev.port.close).toHaveBeenCalledTimes(1)
+    })
+  })
+
   // ---------- 見送りと再訪 ----------
 
   describe('見送り', () => {
@@ -956,6 +989,60 @@ describe('useSerialArbiter', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       await assertion
+    })
+
+    // 起動直後は USB CDC が詰まり、直前のログ行が途中で切れて応答が連結される。
+    // 接頭辞は行頭とは限らない (Refs ippoan/alc-app#353)
+    it('接頭辞が行頭に無い応答 (直前のログ行に連結) も、見つけた位置から後ろで resolve する', async () => {
+      const { dev, seen } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('EVT NFC_READY port=0AUTH SIGBP xxx yyy BP=1\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await expect(p).resolves.toBe('AUTH SIGBP xxx yyy BP=1')
+      // 行の配送は変えない — claimant には受信した行がそのまま届く
+      expect(seen.lines).toContain('EVT NFC_READY port=0AUTH SIGBP xxx yyy BP=1')
+    })
+
+    it('ERR も行頭に無ければ、見つけた位置から後ろで reject する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      const assertion = expect(p).rejects.toThrow(/^ERR AUTH: no key$/)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('EVT NFC_READY port=0ERR AUTH: no key\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('ERR の行が matchPrefix を含んでいても、先に現れた ERR で reject する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      const assertion = expect(p).rejects.toThrow('ERR AUTH SIGBP unsupported')
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('ERR AUTH SIGBP unsupported\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('応答のあとに ERR の文字列が現れても、先に現れた matchPrefix で resolve する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('AUTH SIGBP xxx yyy BP=1 note=ERR AUTH\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await expect(p).resolves.toBe('AUTH SIGBP xxx yyy BP=1 note=ERR AUTH')
     })
 
     it('無関係な行では resolve も reject もせず、timeoutMs で reject する', async () => {
