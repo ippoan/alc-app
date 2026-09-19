@@ -8,6 +8,12 @@
  * の doc 参照) — CoreS3 の BLE ゲートウェイと同じ JSON 語彙なので、行の解釈
  * (`useBleGateway.processMessage`) は変えずに済む。
  *
+ * NFC も同じ 1 本に乗る。測定台には NFC ブリッジ (Windows の常駐アプリ + USB リーダー)
+ * を置かないので、**免許証を読むのはこの Atom S3 だけ**。読み取りループは CoreS3 と
+ * 共通の実装 (alc-app-s3 `crates/hub-drivers/src/nfc.rs`、ボード非依存) なので、行も
+ * CoreS3 と同じ `EVT NFC_LICENSE issue=… expiry=…` で来る ⇒ `onEvent` も同形にして
+ * useNfcReader が両機を同じ受け口で捌けるようにする (Refs ippoan/alc-app#353)。
+ *
  * 機種識別を USB 記述子では行えない: CoreS3 も Atom S3 (測定台) も Espressif の
  * native USB (VID 0x303A / PID 0x1001) で同一。ポートの探索・open・`DEVICE` プローブ・
  * `DEVICE <kind>` の判定は useSerialArbiter が 1 本で行う (Refs ippoan/alc-app#182,
@@ -37,6 +43,7 @@ const CLAIM_TIMEOUT = 3000
 const isConnected = ref(false)
 
 const jsonHandlers = new Set<(msg: unknown) => void>()
+const eventHandlers = new Set<(name: string, args: string[]) => void>()
 const openHandlers = new Set<() => void>()
 const closeHandlers = new Set<() => void>()
 /** claim を待っている connect() */
@@ -45,8 +52,32 @@ const waiters = new Set<() => void>()
 /** 預かっているポートの writer (未接続なら null) */
 let held: WritableStreamDefaultWriter<Uint8Array> | null = null
 
-/** JSON として読める行だけ配る。他機と語彙を共有しているので中身の検査はしない */
+/**
+ * `EVT <NAME> <args...>` を名前と引数に割って配る (useCoreS3Serial の dispatchEvent と同形)。
+ *
+ * **絞り込みはしない。** CoreS3 側で `EVT` を選り分けているのは `get_log` に載せる
+ * 診断ログ (`DIAG_EVENT_PREFIXES` → `appendDiag`) の方だけで、`onEvent` への配布は
+ * 全部通す (免許証・カードの値を診断ログに残さないための許可リストなので、配布に
+ * 持ち込むと `NFC_LICENSE` が画面へ届かなくなる)。測定台は診断ログを持たないので、
+ * ここには配布しか無い。
+ */
+function dispatchEvent(line: string): void {
+  // 'EVT ' の 4 文字を落とし、最初の空白までが名前
+  const sep = line.indexOf(' ', 4)
+  const name = sep === -1 ? line.slice(4) : line.slice(4, sep)
+  const args = sep === -1 ? [] : line.slice(sep + 1).split(' ')
+  for (const cb of [...eventHandlers]) cb(name, args)
+}
+
+/**
+ * JSON (BLE ゲートウェイ) と `EVT` (NFC など) を配る。JSON の中身は検査しない
+ * (他機と語彙を共有しているため)。どちらでもない行は捨てる
+ */
 function handleLine(line: string): void {
+  if (line.startsWith('EVT ')) {
+    dispatchEvent(line)
+    return
+  }
   if (!line.startsWith('{')) return
   try {
     const msg = JSON.parse(line) as unknown
@@ -88,6 +119,12 @@ export function useAtomS3Serial() {
   /** JSON として読めた行を受け取る */
   function onJson(cb: (msg: unknown) => void): void {
     jsonHandlers.add(cb)
+  }
+
+  /** `EVT <NAME> <args...>` を受け取る。返り値を呼ぶと解除できる (useCoreS3Serial と同形) */
+  function onEvent(cb: (name: string, args: string[]) => void): () => void {
+    eventHandlers.add(cb)
+    return () => { eventHandlers.delete(cb) }
   }
 
   /** ポートを預かった (接続した)。登録時点で既に接続済みならその場で 1 回呼ぶ */
@@ -160,6 +197,7 @@ export function useAtomS3Serial() {
     isSupported,
     isConnected: readonly(isConnected),
     onJson,
+    onEvent,
     onOpen,
     onClose,
     write,

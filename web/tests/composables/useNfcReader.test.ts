@@ -43,6 +43,38 @@ function emitCoreEvent(name: string, args: string[] = []) {
   for (const cb of [...coreEventHandlers]) cb(name, args)
 }
 
+// --- useAtomS3Serial のモック (血圧測定台の Atom S3、公開 API 10 キー) ---
+
+const atomState = {
+  isConnected: ref(false),
+}
+/** useNfcReader が繋いだ EVT の受け口 */
+let atomEventHandlers: Array<(name: string, args: string[]) => void> = []
+const atomMock = {
+  isSupported: true,
+  onJson: vi.fn(),
+  onEvent: vi.fn((cb: (name: string, args: string[]) => void) => {
+    atomEventHandlers.push(cb)
+    return () => {}
+  }),
+  onOpen: vi.fn(),
+  onClose: vi.fn(),
+  write: vi.fn(async () => true),
+  connect: vi.fn(async () => atomState.isConnected.value),
+  release: vi.fn(async () => {}),
+  disconnect: vi.fn(async () => {}),
+  request: vi.fn(async () => ''),
+}
+mockNuxtImport('useAtomS3Serial', () => () => ({
+  ...atomMock,
+  isConnected: readonly(atomState.isConnected),
+}))
+
+/** 測定台の Atom S3 から `EVT <NAME> <args...>` が届いた体にする */
+function emitAtomEvent(name: string, args: string[] = []) {
+  for (const cb of [...atomEventHandlers]) cb(name, args)
+}
+
 // --- useNfcWebSocket のモック (公開 API 9 キー) ---
 
 const wsState = {
@@ -118,6 +150,8 @@ describe('useNfcReader', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     serialSupport.supported = true
     coreEventHandlers = []
+    atomEventHandlers = []
+    atomState.isConnected.value = false
     wsCallbacks.read = []
     wsCallbacks.license = []
     wsCallbacks.error = []
@@ -150,17 +184,20 @@ describe('useNfcReader', () => {
 
     expect(reader.connect).toBe(wsMock.connect)
     expect(reader.disconnect).toBe(wsMock.disconnect)
-    // CoreS3 には一切触らない
+    // CoreS3 にも測定台にも一切触らない
     expect(coreMock.onEvent).not.toHaveBeenCalled()
+    expect(atomMock.onEvent).not.toHaveBeenCalled()
   })
 
   it('EVT の受け口は 1 度しか繋がない (解除できないため)', async () => {
     const reader = await load()
     expect(coreMock.onEvent).toHaveBeenCalledTimes(1)
+    expect(atomMock.onEvent).toHaveBeenCalledTimes(1)
 
     // 2 つ目の component が同じ composable を呼んでも増えない
     const [second, secondApp] = withSetup(() => mod.useNfcReader())
     expect(coreMock.onEvent).toHaveBeenCalledTimes(1)
+    expect(atomMock.onEvent).toHaveBeenCalledTimes(1)
 
     // それでも 2 つ目にもイベントは配られる
     const seen: string[] = []
@@ -253,6 +290,74 @@ describe('useNfcReader', () => {
 
     emitCoreEvent('NFC_REMOVED')
     expect(seen).toEqual([])
+  })
+
+  // ---------- 血圧測定台 (Atom S3) 直結 ----------
+  //
+  // 測定台には CoreS3 も NFC ブリッジ (Windows の常駐アプリ) も無く、読むのは
+  // Atom S3 だけ。読み取りループは CoreS3 と共通なので行は同じ `EVT NFC_LICENSE`
+  // で来る (alc-app-s3 `crates/hub-drivers/src/nfc.rs`、Refs ippoan/alc-app#353)
+
+  it('測定台の EVT NFC_LICENSE も onLicenseRead → onRead の順で配る', async () => {
+    const reader = await load()
+    const order: string[] = []
+    let license: NfcLicenseReadEvent | null = null
+    let read: NfcReadEvent | null = null
+    reader.onLicenseRead((e) => { order.push('license'); license = e })
+    reader.onRead((e) => { order.push('read'); read = e })
+
+    emitAtomEvent('NFC_LICENSE', [`issue=${ISSUE}`, `expiry=${EXPIRY}`])
+
+    expect(order).toEqual(['license', 'read'])
+    expect(license).toEqual({
+      type: 'nfc_license_read',
+      card_type: 'driver_license',
+      card_id: CARD_ID,
+      expiry_date: CARD_ID,
+      atr: '',
+    })
+    // **測定台のファームは打刻を送らない** (uplink を持たない) ので 'cores3' とは
+    // 名乗らない — 'cores3' にすると受け手が「ハブが既に打った」と読んで打刻が消える
+    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'bp-station' })
+  })
+
+  it('測定台からの 26 桁にできない NFC_LICENSE は捨てる', async () => {
+    const reader = await load()
+    const seen: unknown[] = []
+    reader.onLicenseRead(e => seen.push(e))
+    reader.onRead(e => seen.push(e))
+
+    emitAtomEvent('NFC_LICENSE', [`issue=${ISSUE}`, 'expiry=2028040'])
+    expect(seen).toEqual([])
+  })
+
+  it('CoreS3 が繋がっていなくても測定台の読み取りは届く (測定台には CoreS3 が無い)', async () => {
+    coreState.isConnected.value = false
+    atomState.isConnected.value = true
+    const reader = await load()
+    const seen: NfcReadEvent[] = []
+    reader.onRead(e => seen.push(e))
+
+    emitAtomEvent('NFC_LICENSE', [`issue=${ISSUE}`, `expiry=${EXPIRY}`])
+
+    expect(seen).toEqual([{ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'bp-station' }])
+  })
+
+  it('測定台の unmount 後は配らない / 2 つ目の component にも配る', async () => {
+    const reader = await load()
+    const [second, secondApp] = withSetup(() => mod.useNfcReader())
+    const seen: string[] = []
+    second.onRead(e => seen.push(e.employee_id))
+    reader.onRead(() => {})
+
+    emitAtomEvent('NFC_LICENSE', [`issue=${ISSUE}`, `expiry=${EXPIRY}`])
+    expect(seen).toEqual([ISSUE + EXPIRY])
+
+    secondApp.unmount()
+    app!.unmount()
+    app = null
+    emitAtomEvent('NFC_LICENSE', ['issue=20240501', `expiry=${EXPIRY}`])
+    expect(seen).toEqual([ISSUE + EXPIRY])
   })
 
   // ---------- 重複除去 ----------

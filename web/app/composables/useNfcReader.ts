@@ -1,5 +1,6 @@
 /**
- * 免許証の読み取り口。CoreS3 直結 (USB) と NFC ブリッジ (WebSocket 9876) を束ねる。
+ * 免許証の読み取り口。USB 直結 (CoreS3 / 血圧測定台の Atom S3) と NFC ブリッジ
+ * (WebSocket 9876) を束ねる。
  *
  * 公開 API は useNfcWebSocket と 1 対 1 で同じ 9 キー。呼び出し側 (NfcStatus /
  * LicenseRegistration) は経路の違いを知らずに済む (Refs ippoan/alc-app#182)。
@@ -8,6 +9,12 @@
  *   - WebSerial が使えない環境 (Android WebView 等) → useNfcWebSocket をそのまま返す
  *   - 使える環境では CoreS3 を優先し、**直結しているあいだブリッジは購読しない**。
  *     直結が切れたら 9876 へ戻す
+ *   - 血圧測定台 (`?station=bp`) には CoreS3 もブリッジも無く、挿さっているのは
+ *     Atom S3 だけ。**どちらか一方しか繋がらない端末が普通**なので、`EVT` は
+ *     CoreS3 と Atom S3 の**両方**から受ける (Refs ippoan/alc-app#353)。ポートの
+ *     取り合いは arbiter が `DEVICE <kind>` で捌くので、1 本のポートを両方が
+ *     預かることは無い。測定台の Atom S3 を掴むのは useBpStationDeviceToken
+ *     (起動時に 1 回) なので、ここは**受け口を繋ぐだけ**で connect() はしない
  *
  * それでも経路の切り替わり際に同じ免許証が二重に届きうるので、同じ employee_id を
  * DEDUPE_WINDOW_MS 以内に再受信したら捨てる。firmware 側にも重複除去はあるが、
@@ -41,13 +48,25 @@ const DATE_LEN = 8
  */
 const CARD_ID_PAD = '0'.repeat(10)
 
-/** `EVT` を受け取る、生きている useNfcReader の受け口 */
-type EventSink = (name: string, args: string[]) => void
+/**
+ * `EVT` を受け取る、生きている useNfcReader の受け口。
+ *
+ * `source` は**どの端末から来た行か** — 束ねたあとでは判別できないので、繋いだ
+ * 側が名乗って渡す (`emitRead` の doc と同じ理由)
+ */
+type EventSink = (name: string, args: string[], source: NfcReadSource) => void
 
 // useNfcReader は複数の component から呼ばれる。onEvent は解除を返すが、useNfcReader は
 // module 単位で 1 回だけ購読するので、繋ぐのは 1 度だけにして、配る先はここで出し入れする
 const sinks = new Set<EventSink>()
 let wired = false
+
+/** 端末 1 台ぶんの `onEvent` に渡す受け口を作る (生きている sink 全部へ配る) */
+function fanout(source: NfcReadSource) {
+  return (name: string, args: string[]): void => {
+    for (const sink of [...sinks]) sink(name, args, source)
+  }
+}
 
 export function useNfcReader() {
   const ws = useNfcWebSocket()
@@ -55,6 +74,8 @@ export function useNfcReader() {
   if (!isWebSerialSupported()) return ws
 
   const core = useCoreS3Serial()
+  // 測定台の Atom S3 (NFC は CoreS3 と共通実装なので、行も `EVT NFC_LICENSE` で同じ)
+  const atom = useAtomS3Serial()
 
   const isConnected = ref(false)
   const error = ref<string | null>(null)
@@ -92,16 +113,25 @@ export function useNfcReader() {
     for (const cb of [...errorCallbacks]) cb(event)
   }
 
-  // --- CoreS3 直結 ---
+  // --- USB 直結 (CoreS3 / 測定台の Atom S3) ---
 
-  function handleCoreEvent(name: string, args: string[]): void {
+  /**
+   * どちらの端末から来た `EVT` も同じ形で捌く — 読み取りループは alc-app-s3 の
+   * `crates/hub-drivers/src/nfc.rs` 1 本 (ボード非依存) で、CoreS3 も測定台も
+   * `EVT NFC_LICENSE issue=… expiry=…` を出す。
+   *
+   * 違うのは `source` だけ ⇒ 引数で受ける。`LICENSE_EXPIRED` は CoreS3 の画面
+   * (`crates/hub-ui`) が出す行で、画面を持たない測定台からは来ない — 来ないことは
+   * 異常ではないので、ここは待ち受けるだけにしておく。
+   */
+  function handleDeviceEvent(name: string, args: string[], source: NfcReadSource): void {
     if (name === 'NFC_LICENSE') {
       const issue = argValue(args, 'issue')
       const expiry = argValue(args, 'expiry')
       // 26 桁の契約を満たせない行は捨てる (utils/license.ts の桁が合わなくなる)
       if (issue.length !== DATE_LEN || expiry.length !== DATE_LEN) return
 
-      console.log('[NFC] License read (CoreS3):', { issue, expiry })
+      console.log(`[NFC] License read (${source}):`, { issue, expiry })
 
       const cardId = CARD_ID_PAD + issue + expiry
       // useNfcWebSocket と同じ順 — 先に期限を配り、続けて読み取りを配る
@@ -113,7 +143,7 @@ export function useNfcReader() {
         // ATR は USB CDC の行に乗らない (ブリッジ経由でのみ得られる)
         atr: '',
       })
-      emitRead(issue + expiry, 'cores3')
+      emitRead(issue + expiry, source)
       return
     }
 
@@ -124,12 +154,11 @@ export function useNfcReader() {
     }
   }
 
-  sinks.add(handleCoreEvent)
+  sinks.add(handleDeviceEvent)
   if (!wired) {
     wired = true
-    core.onEvent((name, args) => {
-      for (const sink of [...sinks]) sink(name, args)
-    })
+    core.onEvent(fanout('cores3'))
+    atom.onEvent(fanout('bp-station'))
   }
 
   // --- NFC ブリッジ (9876) ---
@@ -196,7 +225,7 @@ export function useNfcReader() {
   }
 
   onUnmounted(() => {
-    sinks.delete(handleCoreEvent)
+    sinks.delete(handleDeviceEvent)
   })
 
   return {
