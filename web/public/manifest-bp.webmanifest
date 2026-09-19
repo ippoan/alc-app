@@ -1,6 +1,6 @@
 {
-  "id": "/?role=driver&tab=bp",
-  "start_url": "/?role=driver&tab=bp",
+  "id": "/?role=driver&tab=bp&station=bp",
+  "start_url": "/?role=driver&tab=bp&station=bp",
   "scope": "/",
   "name": "血圧測定",
   "short_name": "血圧",

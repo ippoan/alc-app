@@ -76,10 +76,28 @@ const driverSubTab = ref<DriverSubTab>(
   : 'normal',
 )
 
-// URL クエリ同期
+/**
+ * 血圧測定台として起動されたか (`manifest-bp.webmanifest` の `start_url` =
+ * `/?role=driver&tab=bp&station=bp` で開かれたか)。`driverSubTab` と同じく
+ * **起動時のクエリで 1 回だけ**判定する非リアクティブな定数。
+ *
+ * **`?tab=bp` では判定しない** — `driverSubTab` の URL 同期 (下の watch) が
+ * ハンバーガーで血圧測定タブを選んだときに `?tab=bp` を書き込むため、通常端末で
+ * それを選んでリロードすると `manifestRoleFromQuery()` ベースの判定では
+ * 「測定台として起動した」と誤認し、点呼に戻れなくなる (Refs ippoan/alc-app#353、
+ * 裏取りで実測)。`tab=` は「いまどのタブか」、`station=` は「測定台として起動したか」
+ * で問いが別なので、通常端末の URL 同期が絶対に書き込まない `station` 独自クエリを見る。
+ */
+const isBpStation = route.query.station === 'bp'
+
+// URL クエリ同期。`?station=bp` (測定台として起動した印) が元々付いていれば引き継ぐ —
+// 落としても測定台の判定自体 (起動時の 1 回評価) は変わらないので詰まりはしないが、
+// リロードするたびに測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)。
+// `isBpStation` は起動時の 1 回評価から変わらないので、ここで参照しても等価
 watch(activeRole, (role) => {
   const params = new URLSearchParams()
   if (role !== 'driver') params.set('role', role)
+  if (isBpStation) params.set('station', 'bp')
   const qs = params.toString()
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
@@ -88,6 +106,7 @@ watch(driverSubTab, (tab) => {
   if (activeRole.value !== 'driver') return
   const params = new URLSearchParams()
   if (tab !== 'normal') params.set('tab', tab)
+  if (isBpStation) params.set('station', 'bp')
   const qs = params.toString()
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
@@ -270,6 +289,7 @@ function onRoleTabClick(role: RoleTab) {
 
 <template>
   <div class="flex flex-col h-full">
+    <template v-if="!isBpStation">
     <!-- ロールタブ (Android横画面時は非表示→ハンバーガーメニューに移動) -->
     <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 pt-2 flex items-center gap-2">
       <div class="flex-1 flex gap-1 bg-gray-200 rounded-lg p-1">
@@ -532,6 +552,12 @@ function onRoleTabClick(role: RoleTab) {
       <ScreenShareSender />
       <!-- 測定ログ: フッターバー (縦画面時のみ。横画面時はサイドバー内) -->
       <MeasurementLog v-if="!isAndroidLandscape" />
+    </template>
+    </template>
+    <template v-else>
+      <!-- 血圧測定台として開いた画面: 点呼まわりの部品 (ロールタブ・バナー・サブタブ・
+           ハンバーガー・画面共有・測定ログ) は出さない (Refs ippoan/alc-app#353) -->
+      <BloodPressureMeasurement class="flex-1 min-h-0" />
     </template>
 
     <!-- 横画面: 管理者/admin → 運行者に戻るバー -->
