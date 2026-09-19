@@ -162,10 +162,11 @@ describe('useBleGateway', () => {
     gw = useBleGateway()
   }
 
-  /** JSON 行を先着させて arbiter に claim させる (実機の BLE ゲートウェイと同じ形) */
+  /** DEVICE cores3 を先着させて arbiter に claim させる (機種識別は arbiter が行う) */
   async function connectSerial(dev: MockPortHandle, ready = true) {
     installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
     await load()
+    dev.emit('DEVICE cores3 VER=1.2.3\n')
     if (ready) dev.emit('{"type":"ready","version":"1.0.0"}\n')
     else dev.emit('{"type":"reset"}\n')
     expect(await autoConnect()).toBe(true)
@@ -609,7 +610,7 @@ describe('useBleGateway', () => {
       const dev = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
-      dev.emit('{"type":"ready","version":"1.0.0"}\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
       const promise = gw.startAutoConnect(2, 10)
       await vi.advanceTimersByTimeAsync(0)
       expect(await promise).toBe(true)
@@ -662,7 +663,7 @@ describe('useBleGateway', () => {
         const requestPort = vi.fn(async () => dev.port)
         installSerialMock({ getPorts: vi.fn(async () => [dev.port]), requestPort })
         await load()
-        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
 
         const p = gw.connect()
         await vi.advanceTimersByTimeAsync(0)
@@ -721,7 +722,7 @@ describe('useBleGateway', () => {
 
       it('CoreS3 が先に (起動時の探索で) 繋がっていても、あとから wire すれば isConnected が立つ (Refs #238)', async () => {
         const dev = createMockPort()
-        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
         installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
         await load()
 
@@ -744,11 +745,79 @@ describe('useBleGateway', () => {
         await load()
 
         const p = gw.autoConnect()
+        // coreS3 / atomS3 それぞれの CLAIM_TIMEOUT (3 秒) で false に解決する
         await vi.advanceTimersByTimeAsync(3000)
         expect(await p).toBe(false)
         expect(gw.isConnected.value).toBe(false)
-        // reject が確定した時点で手放している
+
+        // DEVICE 行が来ないので、arbiter 自身のプローブ窓 (8 秒) が切れるまで手放さない
+        await vi.advanceTimersByTimeAsync(5000)
         expect(alarm.port.close).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    // =============================================
+    // Atom S3 (血圧計用 PC の測定台、Refs ippoan/alc-app#353)
+    // =============================================
+    describe('Atom S3 (測定台)', () => {
+      /**
+       * DEVICE bp-station (実機と同じ名乗り) を先着させる。
+       * kind が一致しないので coreS3 側は claim されないが、coreS3.connect() 自身の
+       * 待ち (CLAIM_TIMEOUT=3 秒) は arbiter の判定の速さと無関係に満了するまで
+       * 解決しないので、それを待ってから atomS3 側の結果を見る。通常の autoConnect
+       * ヘルパー (0ms 分の進行) では足りない
+       */
+      async function connectAtomS3(dev: MockPortHandle) {
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+        await load()
+        dev.emit('DEVICE bp-station VER=0.1.0\n')
+        const p = gw.autoConnect()
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(await p).toBe(true)
+      }
+
+      it('CoreS3 が居ない PC では Atom S3 (測定台) が名乗り出て isConnected が立つ', async () => {
+        const dev = createMockPort()
+        await connectAtomS3(dev)
+
+        expect(gw.isConnected.value).toBe(true)
+        expect(gw.transport.value).toBe('serial')
+      })
+
+      it('Atom S3 からの血圧 JSON も processMessage を通る (CoreS3 と同じ語彙)', async () => {
+        const dev = createMockPort()
+        await connectAtomS3(dev)
+
+        dev.emit('{"type":"blood_pressure","systolic":120,"diastolic":80,"pulse":72,"unit":"mmHg"}\n')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.latestBloodPressure.value).toEqual({ systolic: 120, diastolic: 80, pulse: 72, unit: 'mmHg', measuredAt: expect.any(Date) })
+      })
+
+      it('抜線でも state を畳む (CoreS3 と同じ cleanup 経路)', async () => {
+        const dev = createMockPort()
+        await connectAtomS3(dev)
+
+        dev.end()
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(gw.isConnected.value).toBe(false)
+        expect(gw.transport.value).toBeNull()
+      })
+
+      it('手動接続 (ポートピッカー) でも CoreS3 が claim できなければ Atom S3 側の結果を見る', async () => {
+        const dev = createMockPort()
+        const requestPort = vi.fn(async () => dev.port)
+        installSerialMock({ getPorts: vi.fn(async () => [dev.port]), requestPort })
+        await load()
+        dev.emit('DEVICE bp-station VER=0.1.0\n')
+
+        const p = gw.connect()
+        await vi.advanceTimersByTimeAsync(3000)
+        await p
+
+        expect(gw.isConnected.value).toBe(true)
+        expect(gw.transport.value).toBe('serial')
       })
     })
 
@@ -822,7 +891,7 @@ describe('useBleGateway', () => {
       // autoConnect() を呼ぶのは AlcMeasurement だけで、あれは measuring 段にしか出ない。
       it('★ autoConnect を通らなくても段階が立つ (起動時の探索だけで繋がっている待機画面)', async () => {
         const dev = createMockPort()
-        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
         installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
         await load()
 
@@ -1044,7 +1113,7 @@ describe('useBleGateway', () => {
         expect(gw.isConnected.value).toBe(false)
 
         // arbiter の再スキャン + backoff 越しに復帰する
-        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
         await vi.advanceTimersByTimeAsync(20000)
         expect(gw.isConnected.value).toBe(true)
         expect(gw.transport.value).toBe('serial')
@@ -1096,7 +1165,7 @@ describe('useBleGateway', () => {
         const getPorts = vi.fn(async () => [dev.port])
         installSerialMock({ getPorts })
         await load()
-        dev.emit('{"type":"ready","version":"1.0.0"}\n')
+        dev.emit('DEVICE cores3 VER=1.2.3\n{"type":"ready","version":"1.0.0"}\n')
         await autoConnect()
 
         expect(getPorts).toHaveBeenCalledTimes(1)

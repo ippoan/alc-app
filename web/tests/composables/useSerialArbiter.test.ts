@@ -127,8 +127,11 @@ function emitConnect(port: any): void {
   ;(navigator as any).serial.dispatchEvent(ev)
 }
 
-/** 「自分の機種だ」と名乗り出る印を持つ利用側 */
-function createClaimant(mine: string, notMine: string) {
+/**
+ * 利用側のハンドラだけを持つ (機種識別は arbiter が `DEVICE <kind>` で行うので、
+ * claim / reject の述語は無い — `register(kind, claimant)` の kind が識別子になる)。
+ */
+function createClaimant() {
   const seen = {
     opened: 0,
     closed: 0,
@@ -140,8 +143,6 @@ function createClaimant(mine: string, notMine: string) {
     writer: null as WritableStreamDefaultWriter<Uint8Array> | null,
   }
   const claimant: SerialClaimant = {
-    claim: lines => lines.some(line => line.startsWith(mine)),
-    reject: lines => lines.some(line => line.startsWith(notMine)),
     onOpen(port, _reader, writer, lines) {
       seen.opened += 1
       seen.port = port
@@ -206,7 +207,7 @@ describe('useSerialArbiter', () => {
     await load()
     expect(arbiter.isSupported).toBe(false)
 
-    const { claimant } = createClaimant('ALARM', 'CORE')
+    const { claimant } = createClaimant()
     arbiter.register('alarm', claimant)
     arbiter.start(0)
     await vi.advanceTimersByTimeAsync(60000)
@@ -219,28 +220,55 @@ describe('useSerialArbiter', () => {
   describe('claim', () => {
     it('claim した利用側にポート・reader・writer とプローブ中の行を渡す', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(dev.writes[0]).toBe('STATUS\n')
+      expect(dev.writes[0]).toBe('DEVICE\n')
       expect(seen.opened).toBe(1)
       expect(seen.port).toBe(dev.port)
       expect(seen.writer).not.toBeNull()
-      expect(seen.backlog).toEqual(['ALARM state=idle'])
+      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
+    })
+
+    it('DEVICE <kind> の後に空白が無くても kind を取り出せる (末尾に他のトークンが無い応答)', async () => {
+      const dev = createMockPort()
+      dev.emit('DEVICE alarm\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+    })
+
+    it('空行は読み飛ばす (連続する改行)', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT BOOT ver=0.1.0\n\nDEVICE alarm state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      expect(seen.backlog).toEqual(['EVT BOOT ver=0.1.0', 'DEVICE alarm state=idle'])
     })
 
     it('採用後の行は加工せず onLine へ流す', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -251,32 +279,33 @@ describe('useSerialArbiter', () => {
 
     it('同じチャンクで claim 行のあとに来た行は onOpen の lines に載る', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\nALARM state=alarming\n')
+      dev.emit('DEVICE alarm state=idle\nDEVICE alarm state=alarming\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(seen.backlog).toEqual(['ALARM state=idle', 'ALARM state=alarming'])
+      expect(seen.backlog).toEqual(['DEVICE alarm state=idle', 'DEVICE alarm state=alarming'])
       expect(seen.lines).toEqual([])
     })
 
-    it('登録順に尋ね、先に登録した利用側が取る', async () => {
+    it('DEVICE <kind> の kind で一意に決まる — 別の kind で登録した利用側には渡らない', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const first = createClaimant('ALARM', 'ZZZ')
-      const second = createClaimant('ALARM', 'ZZZ')
-      arbiter.register('alarm', first.claimant)
-      arbiter.register('core', second.claimant)
+      const alarmSide = createClaimant()
+      const coreSide = createClaimant()
+      // 登録順を入れ替えても結果は変わらない (kind が identifier なので順序に依存しない)
+      arbiter.register('core', coreSide.claimant)
+      arbiter.register('alarm', alarmSide.claimant)
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(first.seen.opened).toBe(1)
-      expect(second.seen.opened).toBe(0)
+      expect(alarmSide.seen.opened).toBe(1)
+      expect(coreSide.seen.opened).toBe(0)
     })
   })
 
@@ -285,11 +314,11 @@ describe('useSerialArbiter', () => {
   describe('見送り', () => {
     it('全員が reject したら手放し、60 秒は再訪しない', async () => {
       const other = createMockPort()
-      other.emit('CORE LAN=up\n')
+      other.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -303,11 +332,11 @@ describe('useSerialArbiter', () => {
 
     it('見送った候補も RTS → DTR の順で落としてから閉じる (再訪のたびに再起動させない)', async () => {
       const other = createMockPort()
-      other.emit('CORE LAN=up\n')
+      other.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -317,11 +346,11 @@ describe('useSerialArbiter', () => {
 
     it('60 秒経ったら見送ったポートを再訪する (永久除外にしない)', async () => {
       const other = createMockPort()
-      other.emit('CORE LAN=up\n')
+      other.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(other.port.open).toHaveBeenCalledTimes(1)
@@ -335,11 +364,11 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts: vi.fn(async () => [silent.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
 
       await vi.advanceTimersByTimeAsync(8000)
-      expect(silent.writes).toHaveLength(8)
+      expect(silent.writes).toHaveLength(16)
       expect(silent.port.close).toHaveBeenCalledTimes(1)
 
       await vi.advanceTimersByTimeAsync(10000)
@@ -348,17 +377,17 @@ describe('useSerialArbiter', () => {
 
     it('新しい利用側が register したら見送り印を捨てて即スキャンする', async () => {
       const other = createMockPort()
-      other.emit('CORE LAN=up\n')
+      other.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
 
-      const first = createClaimant('ALARM', 'CORE')
+      const first = createClaimant()
       arbiter.register('alarm', first.claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(other.port.open).toHaveBeenCalledTimes(1)
 
       // CoreS3 の利用側が後から来た → 10 秒周期を待たずに開き直す
-      const second = createClaimant('CORE', 'ALARM')
+      const second = createClaimant()
       arbiter.register('core', second.claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -370,7 +399,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(getPorts).toHaveBeenCalledTimes(1)
@@ -386,13 +415,13 @@ describe('useSerialArbiter', () => {
   describe('connect イベント', () => {
     it('connect で 1 秒後にスキャンが走り claim される', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       let portsAvailable: any[] = []
       const getPorts = vi.fn(async () => portsAvailable)
       installSerialMock({ getPorts })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(getPorts).toHaveBeenCalledTimes(1)
@@ -413,11 +442,11 @@ describe('useSerialArbiter', () => {
 
     it('見送り中 (60 秒 cooldown 中) のポートでも connect なら待たずに再訪する', async () => {
       const other = createMockPort()
-      other.emit('CORE LAN=up\n')
+      other.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       // 全員 reject → 見送り、本来なら 60 秒は再訪しない
@@ -438,14 +467,14 @@ describe('useSerialArbiter', () => {
   describe('複数の利用側', () => {
     it('1 本目が埋まっても、まだ空いている利用側のために探索を続ける', async () => {
       const alarmPort = createMockPort()
-      alarmPort.emit('ALARM state=idle\n')
+      alarmPort.emit('DEVICE alarm state=idle\n')
       const corePort = createMockPort()
-      corePort.emit('CORE LAN=up\n')
+      corePort.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [alarmPort.port, corePort.port]) })
       await load()
 
-      const alarm = createClaimant('ALARM', 'CORE')
-      const core = createClaimant('CORE', 'ALARM')
+      const alarm = createClaimant()
+      const core = createClaimant()
       arbiter.register('alarm', alarm.claimant)
       arbiter.register('core', core.claimant)
       await vi.advanceTimersByTimeAsync(0)
@@ -458,18 +487,18 @@ describe('useSerialArbiter', () => {
 
     it('預かり中のポートはスキャンで開き直さない', async () => {
       const alarmPort = createMockPort()
-      alarmPort.emit('ALARM state=idle\n')
+      alarmPort.emit('DEVICE alarm state=idle\n')
       const corePort = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [alarmPort.port, corePort.port]) })
       await load()
 
-      const alarm = createClaimant('ALARM', 'CORE')
+      const alarm = createClaimant()
       arbiter.register('alarm', alarm.claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(alarmPort.port.open).toHaveBeenCalledTimes(1)
 
       // CoreS3 の利用側が後から来ても、警告デバイスのポートは触らない
-      const core = createClaimant('CORE', 'ALARM')
+      const core = createClaimant()
       arbiter.register('core', core.claimant)
       await vi.advanceTimersByTimeAsync(8000)
 
@@ -479,13 +508,13 @@ describe('useSerialArbiter', () => {
 
     it('片方を unregister しても、もう片方の探索は止めない', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       const getPorts = vi.fn(async () => [dev.port])
       installSerialMock({ getPorts })
       await load()
 
-      const alarm = createClaimant('ALARM', 'CORE')
-      const core = createClaimant('CORE', 'ZZZ')
+      const alarm = createClaimant()
+      const core = createClaimant()
       arbiter.register('alarm', alarm.claimant)
       arbiter.register('core', core.claimant)
       await vi.advanceTimersByTimeAsync(0)
@@ -506,11 +535,11 @@ describe('useSerialArbiter', () => {
   describe('返却', () => {
     it('release でポートを閉じて onClose を呼び、掴み直しへ', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -524,11 +553,11 @@ describe('useSerialArbiter', () => {
 
     it('close の前に RTS → DTR の順で落とす (ESP32-S3 を再起動させない)', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -543,11 +572,11 @@ describe('useSerialArbiter', () => {
 
     it('setSignals が失敗しても close は呼ぶ (非対応のポート)', async () => {
       const dev = createMockPort({ signalsError: true })
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -561,11 +590,11 @@ describe('useSerialArbiter', () => {
 
     it('RTS の setSignals が失敗しても DTR と close は続ける', async () => {
       const dev = createMockPort({ firstSignalsError: true })
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -581,7 +610,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await arbiter.release('alarm')
       expect(seen.closed).toBe(0)
@@ -589,11 +618,11 @@ describe('useSerialArbiter', () => {
 
     it('受信ループが終わったら (抜線) 返させて掴み直しへ', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -611,14 +640,14 @@ describe('useSerialArbiter', () => {
   describe('isArbitratedPort', () => {
     it('握っているポートだけ true', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       const outsider = createMockPort({ vid: 0x1A86 })
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
       expect(mod.isArbitratedPort(dev.port)).toBe(false)
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -638,7 +667,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(other.port.open).not.toHaveBeenCalled()
@@ -647,11 +676,11 @@ describe('useSerialArbiter', () => {
     it('open が失敗したら印を残さず次の候補へ', async () => {
       const busy = createMockPort({ openError: new DOMException('busy', 'InvalidStateError') })
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [busy.port, dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -669,7 +698,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts: vi.fn(async () => [noRead.port, noWrite.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -684,7 +713,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts: vi.fn(async () => [noRead.port, noWrite.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -694,25 +723,25 @@ describe('useSerialArbiter', () => {
 
     it('書き込めないポートでも、先に名乗り出があればそちらが勝つ', async () => {
       const dev = createMockPort({ writeError: true })
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
-      // STATUS の write 失敗はあとから届くが、判定は覆らない
+      // DEVICE の write 失敗はあとから届くが、判定は覆らない
       expect(seen.opened).toBe(1)
       expect(seen.closed).toBe(0)
     })
 
-    it('STATUS の write に失敗したら諦めて閉じる', async () => {
+    it('DEVICE の write に失敗したら諦めて閉じる', async () => {
       const dev = createMockPort({ writeError: true })
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -729,7 +758,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       arbiter.start(5000)
 
@@ -759,7 +788,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(getPorts).toHaveBeenCalledTimes(1)
@@ -772,12 +801,12 @@ describe('useSerialArbiter', () => {
 
     it('全員が預かったら再スキャンを予約しない', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       const getPorts = vi.fn(async () => [dev.port])
       installSerialMock({ getPorts })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -793,7 +822,7 @@ describe('useSerialArbiter', () => {
       installSerialMock({ getPorts })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
 
       // 無応答ポートを 8 秒握っている (= scanning 中) 最中に挿し直しの connect が来る
@@ -853,11 +882,11 @@ describe('useSerialArbiter', () => {
     /** 'core' を claim させてから返す (writer への直アクセス用に seen も返す) */
     async function claimAsCore() {
       const dev = createMockPort()
-      dev.emit('CORE hello\n')
+      dev.emit('DEVICE core hello\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant, seen } = createClaimant('CORE', 'ZZZ')
+      const { claimant, seen } = createClaimant()
       arbiter.register('core', claimant)
       await vi.advanceTimersByTimeAsync(0)
       expect(seen.opened).toBe(1)
@@ -1015,10 +1044,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
   it('scan の開始・閉じた理由・60 秒再訪は常時出す (候補ごとの行は出さない)', async () => {
     const other = createMockPort()
-    other.emit('CORE LAN=up\n')
+    other.emit('DEVICE core LAN=up\n')
     installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
     await load()
-    const { claimant } = createClaimant('ALARM', 'CORE')
+    const { claimant } = createClaimant()
     arbiter.register('alarm', claimant)
     await vi.advanceTimersByTimeAsync(0)
 
@@ -1034,10 +1063,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
   it('release / unregister は誰のポートをなぜ閉じたかを出す', async () => {
     const dev = createMockPort()
-    dev.emit('ALARM state=idle\n')
+    dev.emit('DEVICE alarm state=idle\n')
     installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
     await load()
-    const { claimant } = createClaimant('ALARM', 'CORE')
+    const { claimant } = createClaimant()
     arbiter.register('alarm', claimant)
     await vi.advanceTimersByTimeAsync(0)
 
@@ -1046,7 +1075,7 @@ describe('useSerialArbiter 診断ログ', () => {
 
     // 掴み直したところで unregister (mock の reader は cancel 後に再利用できないので別ポート)
     const dev2 = createMockPort()
-    dev2.emit('ALARM state=idle\n')
+    dev2.emit('DEVICE alarm state=idle\n')
     installSerialMock({ getPorts: vi.fn(async () => [dev2.port]) })
     await vi.advanceTimersByTimeAsync(10000)
     await arbiter.unregister('alarm')
@@ -1060,10 +1089,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('claim', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
     await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1072,10 +1101,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('見送り (全員 reject)', async () => {
       const other = createMockPort()
-      other.emit('CORE LAN=up\n')
+      other.emit('DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [other.port]) })
     await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1086,7 +1115,7 @@ describe('useSerialArbiter 診断ログ', () => {
       const silent = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [silent.port]) })
     await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(8000)
 
@@ -1098,7 +1127,7 @@ describe('useSerialArbiter 診断ログ', () => {
       const broken = createMockPort({ readable: false })
       installSerialMock({ getPorts: vi.fn(async () => [busy.port, broken.port]) })
     await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1126,10 +1155,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('alc_debug_serial が無くても debug の行は置き場に入る (コンソールには出ない)', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1148,7 +1177,7 @@ describe('useSerialArbiter 診断ログ', () => {
       const busy = createMockPort({ openError: openError as Error })
       installSerialMock({ getPorts: vi.fn(async () => [busy.port]) })
       await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1158,7 +1187,7 @@ describe('useSerialArbiter 診断ログ', () => {
     it('connect イベントを残す (コンソールにも出す)', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1170,11 +1199,11 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('close の失敗はエラー名を残す (握りつぶさない)', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       dev.port.close.mockRejectedValueOnce(new DOMException('gone', 'NetworkError'))
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
-      const { claimant, seen } = createClaimant('ALARM', 'CORE')
+      const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1187,10 +1216,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('受信ループが終わった (抜線) release は reason=read_end を残す', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1202,10 +1231,10 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('release に渡した理由を残す (理由なしは今までの行のまま)', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
 
@@ -1226,11 +1255,11 @@ describe('useSerialArbiter 診断ログ', () => {
   describe('closeArbitratedPortsForUnload', () => {
     it('★ 握っているポートを RTS → DTR の順で落としてから閉じる', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       dev.calls.length = 0
@@ -1248,11 +1277,11 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('★ pagehide と beforeunload の両方から呼ばれても 1 回しか閉じない', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       dev.calls.length = 0
@@ -1268,11 +1297,11 @@ describe('useSerialArbiter 診断ログ', () => {
     it('close に失敗しても投げない (ページはどのみち閉じる)', async () => {
       const dev = createMockPort()
       dev.port.close = vi.fn(async () => { throw new Error('locked') })
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       dev.calls.length = 0
@@ -1289,11 +1318,11 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('★ bfcache へ入るだけの pagehide (persisted) では閉じない', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       dev.calls.length = 0
@@ -1308,11 +1337,11 @@ describe('useSerialArbiter 診断ログ', () => {
 
     it('★ bfcache で見送った後も、本当の unload では閉じる (印を立てていない)', async () => {
       const dev = createMockPort()
-      dev.emit('ALARM state=idle\n')
+      dev.emit('DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
-      const { claimant } = createClaimant('ALARM', 'CORE')
+      const { claimant } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
       dev.calls.length = 0
