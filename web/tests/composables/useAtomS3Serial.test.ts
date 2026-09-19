@@ -255,6 +255,77 @@ describe('useAtomS3Serial', () => {
     })
   })
 
+  // ---------- onEvent (NFC など。useCoreS3Serial と同形) ----------
+
+  describe('onEvent', () => {
+    it('EVT NFC_LICENSE を名前と引数に割って配る', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const seen: Array<[string, string[]]> = []
+      atom.onEvent((name, args) => seen.push([name, args]))
+
+      dev.emit('EVT NFC_LICENSE issue=20230401 expiry=20280401\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen).toEqual([['NFC_LICENSE', ['issue=20230401', 'expiry=20280401']]])
+    })
+
+    it('引数の無い EVT は args が空配列', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const seen: Array<[string, string[]]> = []
+      atom.onEvent((name, args) => seen.push([name, args]))
+
+      dev.emit('EVT NFC_READY\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen).toEqual([['NFC_READY', []]])
+    })
+
+    it('プローブ中に来ていた EVT も採用時に配る', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const seen: Array<[string, string[]]> = []
+      atom.onEvent((name, args) => seen.push([name, args]))
+
+      dev.emit('DEVICE bp-station VER=0.1.0\nEVT NFC_LICENSE issue=20230401 expiry=20280401\n')
+      await connect()
+
+      expect(seen).toEqual([['NFC_LICENSE', ['issue=20230401', 'expiry=20280401']]])
+    })
+
+    it('返り値を呼ぶと解除できる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const seen: string[] = []
+      const off = atom.onEvent(name => seen.push(name))
+
+      off()
+      dev.emit('EVT NFC_LICENSE issue=20230401 expiry=20280401\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen).toEqual([])
+    })
+
+    it('EVT は JSON として配らず、JSON は EVT として配らない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const json: unknown[] = []
+      const events: string[] = []
+      atom.onJson(msg => json.push(msg))
+      atom.onEvent(name => events.push(name))
+
+      dev.emit('EVT NFC_LICENSE issue=20230401 expiry=20280401\n')
+      dev.emit('{"type":"bp_bond","bonded":true}\n')
+      dev.emit('PONG\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(json).toEqual([{ type: 'bp_bond', bonded: true }])
+      expect(events).toEqual(['NFC_LICENSE'])
+    })
+  })
+
   // ---------- connect / onOpen / onClose ----------
 
   describe('connect', () => {

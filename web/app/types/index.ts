@@ -47,6 +47,13 @@ export interface NfcReadEvent {
    * ブリッジの先に CoreS3 は居ないので、**ブラウザが打たないと打刻が消える**。
    * WebSerial の無い環境 (Android WebView) はこちらしか無い。
    *
+   * **`'bp-station'` は血圧測定台の Atom S3 が読んだ = 誰も打刻していない。**
+   * 測定台のファーム (`atoms3-nfc`) は uplink を持たず打刻を送らない
+   * (alc-app-s3 `crates/atoms3-nfc/Cargo.toml`) ので、`'bridge'` と同じく
+   * **ブラウザが打たないと打刻が消える**。それでも `'bridge'` と分けてあるのは、
+   * 読んだのが測定台の端末か Windows の常駐アプリかで**案内の出しようが違う**ため
+   * (測定台に NFC ブリッジは置かない、Refs ippoan/alc-app#353)。
+   *
    * **必須にしてある。** optional にすると新しい発火元が黙って打刻を落とす /
    * 二重にする側へ倒れる。
    */
@@ -54,7 +61,7 @@ export interface NfcReadEvent {
 }
 
 /** [`NfcReadEvent.source`] の値。 */
-export type NfcReadSource = 'cores3' | 'bridge'
+export type NfcReadSource = 'cores3' | 'bridge' | 'bp-station'
 
 /** NFC 免許証読み取りイベント */
 export interface NfcLicenseReadEvent {
