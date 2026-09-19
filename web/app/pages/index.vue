@@ -301,7 +301,6 @@ function onRoleTabClick(role: RoleTab) {
 
 <template>
   <div class="flex flex-col h-full">
-    <template v-if="!isBpStation">
     <!-- ロールタブ (Android横画面時は非表示→ハンバーガーメニューに移動) -->
     <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 pt-2 flex items-center gap-2">
       <div class="flex-1 flex gap-1 bg-gray-200 rounded-lg p-1">
@@ -564,12 +563,6 @@ function onRoleTabClick(role: RoleTab) {
       <ScreenShareSender />
       <!-- 測定ログ: フッターバー (縦画面時のみ。横画面時はサイドバー内) -->
       <MeasurementLog v-if="!isAndroidLandscape" />
-    </template>
-    </template>
-    <template v-else>
-      <!-- 血圧測定台として開いた画面: 点呼まわりの部品 (ロールタブ・バナー・サブタブ・
-           ハンバーガー・画面共有・測定ログ) は出さない (Refs ippoan/alc-app#353) -->
-      <BloodPressureMeasurement class="flex-1 min-h-0" />
     </template>
 
     <!-- 横画面: 管理者/admin → 運行者に戻るバー -->

@@ -10,6 +10,7 @@ import TodayPunchHistory from '~/components/TodayPunchHistory.vue'
 import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
 import IcPunchAlcoholPrompt from '~/components/IcPunchAlcoholPrompt.vue'
 import DeviceUnregisteredBanner from '~/components/DeviceUnregisteredBanner.vue'
+import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import type { LatestPunch } from '~/types'
@@ -386,23 +387,41 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(typeof initApiSpy.mock.calls[0]![6]).toBe('function')
   })
 
-  it('(manifest) 血圧端末の manifest (?tab=bp&station=bp) で開くと、点呼まわりの部品を出さない (Refs ippoan/alc-app#353)', async () => {
+  it('(manifest) 血圧端末の manifest (?tab=bp&station=bp) で開いても、点呼まわりの部品を出す (Refs ippoan/alc-app#353)', async () => {
+    // 詰まったときに人が自力で抜けられるように nav を残す。以前は測定台だけ nav を隠していたが、
+    // デバイス設定への道も一緒に消え、「血圧計が見つかりません」で止まると押せるものが何も無かった
     wrapper = await mountIndex(bpManifest().start_url)
-    // ロールタブ (運行者/運行管理者/システム管理者/汎用管理) のボタンが出ない
-    expect(wrapper.findAll('button').some(b => b.text() === '運行管理者')).toBe(false)
+    // ロールタブ (運行者/運行管理者/システム管理者/汎用管理)
+    expect(wrapper.findAll('button').some(b => b.text() === '運行管理者')).toBe(true)
     // 端末未登録バナー
-    expect(wrapper.findComponent(DeviceUnregisteredBanner).exists()).toBe(false)
+    expect(wrapper.findComponent(DeviceUnregisteredBanner).exists()).toBe(true)
     // 点呼サブタブ (通常点呼/自動点呼/遠隔点呼)
-    expect(wrapper.findAll('button').some(b => b.text() === '通常点呼')).toBe(false)
-    expect(wrapper.findAll('button').some(b => b.text() === '自動点呼')).toBe(false)
-    expect(wrapper.findAll('button').some(b => b.text() === '遠隔点呼')).toBe(false)
-    // ハンバーガーメニュー自体 (3 本線アイコン) が無い → 自動点呼デモ/デバイス設定にも辿り着けない
-    expect(wrapper.findAll('button').some(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))).toBe(false)
+    expect(wrapper.findAll('button').some(b => b.text() === '通常点呼')).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.text() === '自動点呼')).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.text() === '遠隔点呼')).toBe(true)
+    // ハンバーガーメニュー (3 本線アイコン) — ここからデバイス設定 (USB 許可) へ入れる
+    expect(wrapper.findAll('button').some(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))).toBe(true)
     // 画面共有・測定ログ
-    expect(wrapper.findComponent(ScreenShareSender).exists()).toBe(false)
-    expect(wrapper.findComponent(MeasurementLog).exists()).toBe(false)
-    // 血圧測定だけは出る
-    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+    expect(wrapper.findComponent(ScreenShareSender).exists()).toBe(true)
+    expect(wrapper.findComponent(MeasurementLog).exists()).toBe(true)
+    // 血圧測定は start_url の tab=bp のとおり出る。1 つだけ (測定台専用の別描画は無い)
+    expect(wrapper.findAllComponents(BloodPressureMeasurement)).toHaveLength(1)
+  })
+
+  it('測定台 (?station=bp) でもハンバーガーからデバイス設定へ辿り着ける (行き止まりにならない) (Refs ippoan/alc-app#353)', async () => {
+    wrapper = await mountIndex(bpManifest().start_url)
+    const hamburger = wrapper.findAll('button').find(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))
+    expect(hamburger).toBeTruthy()
+    await hamburger!.trigger('click')
+    await nextTick()
+
+    const item = wrapper.findAll('button').find(b => b.text() === 'デバイス設定')
+    expect(item).toBeTruthy()
+    await item!.trigger('click')
+    await nextTick()
+    expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
+    // 血圧測定タブは切り替わって消える
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
   })
 })
 
