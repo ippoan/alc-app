@@ -57,6 +57,16 @@ export const BLE_GW_DEVICES = [
 /** 調停の対象にする VID。CoreS3 も VoiceS3R もこれで、記述子では見分けられない */
 const ARBITRATED_VID = 0x303A
 
+/**
+ * 血圧測定台 (ATOM S3) が名乗る kind (`DEVICE bp-station`)。
+ *
+ * **語彙の正本はここ 1 か所** — `useAtomS3Serial` が arbiter へ登録する名前
+ * (`CLAIMANT_NAME`) も、下の {@link arbitratedDeviceKind} が「測定台か否か」を分ける
+ * 境目も同じ文字列なので、2 か所に書くと**片方だけ直す事故**になる
+ * (Refs ippoan/alc-app#368)。auth-worker の `DEVICE_KINDS` の key に揃えた語彙。
+ */
+export const BP_STATION_DEVICE_KIND = 'bp-station'
+
 const SERIAL_OPTIONS: SerialOptions = {
   baudRate: 115200,
   dataBits: 8,
@@ -176,6 +186,69 @@ let scanTimer: ReturnType<typeof setTimeout> | null = null
 let rescanRequested = false
 /** onPortConnected の購読は register() の初回だけ張る (module 単位で 1 本) */
 let connectSubscribed = false
+
+/**
+ * 名乗りで決着した機種の種別 (Refs ippoan/alc-app#368)。
+ *
+ * - `'bp-station'` … 血圧測定台の ATOM S3 が名乗った
+ * - `'other'` … 名乗ったのは測定台以外 (CoreS3・警告デバイス等)
+ *
+ * **`null` (未確定) は別の状態**で、この union には入れない ({@link arbitratedDeviceKind})。
+ */
+export type ArbitratedDeviceKind = 'bp-station' | 'other'
+
+/** `DEVICE bp-station` を名乗ったポートが在ったか */
+const sawBpStationKind = ref(false)
+/** `bp-station` 以外の機種 (`cores3` 等) を名乗ったポートが在ったか */
+const sawOtherDeviceKind = ref(false)
+
+/**
+ * **名乗りで決着した機種** — 「この PC は測定台か」を URL ではなく端末の名乗りで
+ * 決めるための口 (Refs ippoan/alc-app#368)。
+ *
+ * # なぜ arbiter が持つのか
+ *
+ * 端末は自分で名乗っている (`DEVICE bp-station VER=…`)。その名乗りを読んで持ち主を
+ * 決めているのは既にここ (`resolveDevice`) だけなのに、`deviceKind()` も
+ * `resolveDevice()` も内部関数で**外から機種を知る口が無かった**。だから利用側は
+ * `?station=bp` のような URL クエリで人にもう一度書かせていた。ここが発生源。
+ *
+ * # 3 値であること (真偽 2 値にしない)
+ *
+ * `null` は**まだ決着していない** (probe 中・候補ポートが 1 つも無い) の意味で、
+ * 「測定台ではない」ではない。probe は `PROBE_SEND_INTERVAL` ごとに
+ * `PROBE_MAX_SENDS` 回まで撃ち `PROBE_TIMEOUT` で打ち切るので、**起動直後は必ず
+ * ここを通る**。真偽 2 値にすると probe する前にキオスク扱いへ倒れ、測定台の鍵を
+ * 使うべき画面がキオスクの鍵 (または無認証 fetch) へ落ちる。`useSignedBpBond` の
+ * `hasProbedBpBond` や `useBloodPressureSetting` の `BpUiState::checking` と同じ流儀。
+ *
+ * # 両方繋がっている PC は CoreS3 優先
+ *
+ * 1 台の PC に CoreS3 と測定台の ATOM S3 が両方挿さっていたら `'other'` (= キオスク)
+ * に倒す。`useNfcReader` が直結を CoreS3 優先で束ねているのと同じ向きに揃える
+ * (**測定台に CoreS3 は挿さらない**のが前提なので、CoreS3 が居る PC はキオスク)。
+ * 一度 `'other'` になったら `'bp-station'` へは戻らない。
+ *
+ * # 名乗りは claimant の登録と無関係に控える
+ *
+ * `claimants` に居ない機種 (誰も預からず見送ったポート) の名乗りも控える。測定台の
+ * ATOM S3 を実際に預かるのは `useBpStationDeviceToken` が `atom.connect()` を呼んで
+ * からで、**その判断材料がこの値**という順序になるため。
+ */
+const arbitratedDeviceKind = computed<ArbitratedDeviceKind | null>(() =>
+  sawOtherDeviceKind.value
+    ? 'other'
+    : sawBpStationKind.value ? BP_STATION_DEVICE_KIND : null,
+)
+
+/**
+ * 名乗った機種を控える — {@link arbitratedDeviceKind} の唯一の書き手。
+ * `DEVICE <kind>` を読んだ時点と、`legacyClaim` で決着した時点で呼ぶ。
+ */
+function noteDeviceKind(kind: string): void {
+  if (kind === BP_STATION_DEVICE_KIND) sawBpStationKind.value = true
+  else sawOtherDeviceKind.value = true
+}
 
 /**
  * `request()` が待っている応答 (session ごとに高々 1 件)。
@@ -421,11 +494,17 @@ export function useSerialArbiter() {
     for (const line of lines) {
       const kind = deviceKind(line)
       if (kind === null) continue
+      // 誰も預からない機種でも控える — 「測定台か」の判断材料は名乗りだけ (#368)
+      noteDeviceKind(kind)
       const claimant = claimants.get(kind)
       return { owner: claimant && !held.has(kind) ? { name: kind, claimant } : null }
     }
     for (const [name, claimant] of pending()) {
-      if (claimant.legacyClaim?.(lines)) return { owner: { name, claimant } }
+      if (claimant.legacyClaim?.(lines)) {
+        // 旧い名乗りで決着した機は `DEVICE` を持たないので、登録名がそのまま機種
+        noteDeviceKind(name)
+        return { owner: { name, claimant } }
+      }
     }
     return null // まだ判定材料が無い
   }
@@ -689,6 +768,11 @@ export function useSerialArbiter() {
   return {
     isSupported,
     isArbitratedPort,
+    /**
+     * 名乗りで決着した機種。`null` = 未確定 (`arbitratedDeviceKind` の doc を参照)。
+     * ポートを預かるかどうかとは無関係に決まるので、利用側を登録していなくても読める
+     */
+    arbitratedDeviceKind,
     register,
     unregister,
     release,

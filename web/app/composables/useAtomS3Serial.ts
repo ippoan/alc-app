@@ -28,13 +28,15 @@
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
-import { writeLine } from '~/composables/useSerialArbiter'
+import { writeLine, BP_STATION_DEVICE_KIND } from '~/composables/useSerialArbiter'
 
 /**
  * arbiter に登録する名前。`DEVICE bp-station` の kind と一致させる — arbiter は
- * `DEVICE <kind>` の kind をそのままこの名前として引く
+ * `DEVICE <kind>` の kind をそのままこの名前として引く。**語彙の正本は arbiter 側**
+ * (`BP_STATION_DEVICE_KIND`) から引く — 同じ文字列を「測定台か」の判定にも使うので、
+ * 2 か所に書くと片方だけ直す事故になる (Refs ippoan/alc-app#368)
  */
-const CLAIMANT_NAME = 'bp-station'
+const CLAIMANT_NAME = BP_STATION_DEVICE_KIND
 
 /** connect() が claim を待つ上限 (useCoreS3Serial と同じ値・同じ意味) */
 const CLAIM_TIMEOUT = 3000

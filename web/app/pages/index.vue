@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { LatestPunch } from '~/types'
-import { initApi } from '~/utils/api'
+import { initApi, setBpStationJwtGetter } from '~/utils/api'
 
 const config = useRuntimeConfig()
 const route = useRoute()
@@ -22,9 +22,14 @@ function loginWithLineworks() {
   window.location.href = `${authWorkerUrl}/oauth/lineworks/redirect?address=${address}&redirect_uri=${redirectUri}`
 }
 /**
- * 血圧測定台として起動されたか (`manifest-bp.webmanifest` の `start_url` =
- * `/?role=driver&tab=bp&station=bp` で開かれたか)。`driverSubTab` と同じく
+ * **URL が**「血圧測定台として起動した」と言っているか (`manifest-bp.webmanifest` の
+ * `start_url` = `/?role=driver&tab=bp&station=bp` で開かれたか)。`driverSubTab` と同じく
  * **起動時のクエリで 1 回だけ**判定する非リアクティブな定数。
+ *
+ * **これだけで測定台を決めない** (Refs ippoan/alc-app#368) — 長い URL を人に配る運用を
+ * やめるため、**端末の名乗り**も判断材料にする (下の `isBpStation` がその OR)。
+ * 読む側としてこのクエリは残す: `?station=bp` 付きの既存 URL とインストール済みの PWA を
+ * 壊さないことが優先で、「URL が言っている」も判断材料の 1 つとして扱えばよいため。
  *
  * **`?tab=bp` では判定しない** — `driverSubTab` の URL 同期 (下の watch) が
  * ハンバーガーで血圧測定タブを選んだときに `?tab=bp` を書き込むため、通常端末で
@@ -33,10 +38,33 @@ function loginWithLineworks() {
  * 裏取りで実測)。`tab=` は「いまどのタブか」、`station=` は「測定台として起動したか」
  * で問いが別なので、通常端末の URL 同期が絶対に書き込まない `station` 独自クエリを見る。
  */
-const isBpStation = route.query.station === 'bp'
-// ★ `initApi` より前に置く — 測定台の device JWT getter を渡すかどうかがこれで決まる
-// (`scope: 'bp-station'` の 4 本は点呼と共用なので、**測定台として開いた画面だけ**が
-// 測定台の鍵を使う。通常端末では getter が無く、従来どおりキオスクの鍵へ進む)。
+const isBpStationUrl = route.query.station === 'bp'
+
+/**
+ * **端末の名乗り**で決着した機種 (`null` = まだ決着していない)。測定台の ATOM S3 は
+ * `DEVICE bp-station`、CoreS3 は `DEVICE cores3` と自分で名乗る — その名乗りを読んで
+ * ポートの持ち主を決めている `useSerialArbiter` が、決着した機種をそのまま公開する
+ * (Refs ippoan/alc-app#368)。**両方繋がっている PC は CoreS3 優先**で `'other'`。
+ *
+ * ここで `useSerialArbiter()` を呼んでも探索は始まらない (`start`/`register` で始まる) —
+ * 読んでいるのは既に走っている探索の結果だけ。
+ */
+const { arbitratedDeviceKind } = useSerialArbiter()
+
+/**
+ * この画面を測定台として扱うか — **URL の印と端末の名乗りの OR** (Refs ippoan/alc-app#368)。
+ *
+ * 「測定台はこの長い URL で開いてください」と人に配る運用をやめるのが目的。端末は
+ * 自分で名乗っているので、ハンバーガーの「血圧測定」から入った画面 (= `station` 無し) でも
+ * ATOM S3 が挿さっていれば測定台として動く。`?station=bp` 付きの URL は従来どおり
+ * 起動の時点で true なので、既存 URL とインストール済み PWA の挙動は変わらない。
+ */
+const isBpStation = computed(() => isBpStationUrl || arbitratedDeviceKind.value === 'bp-station')
+
+// ★ `initApi` より前に上の 2 つを置く — 測定台の device JWT getter を渡すかどうかが
+// これで決まる (`scope: 'bp-station'` の 4 本は点呼と共用なので、**測定台と決着した画面
+// だけ**が測定台の鍵を使う。未確定のあいだとキオスクでは getter が無く、従来どおり
+// キオスクの鍵へ進む)。
 
 initApi(
   config.public.apiBase as string,
@@ -50,15 +78,39 @@ initApi(
   // 使うのは予定の口 (`scope: 'manager-device'`) だけで、キオスクの点呼は触れない。
   () => useManagerDeviceToken().getManagerJwt(),
   // 血圧測定台: ATOM S3 の鍵で測定台用の device JWT を取る (#353)。
-  // **測定台として開いたときだけ渡す** — 通常端末に渡すと、点呼と共用の 4 本
-  // (`scope: 'bp-station'`) が ATOM S3 の無い端末で落ちてしまう。
-  isBpStation ? () => useBpStationDeviceToken().getBpStationJwt() : undefined,
+  // **`?station=bp` 付きで開いたときだけ、ここで渡す** — 通常端末に渡すと、点呼と共用の
+  // 4 本 (`scope: 'bp-station'`) が ATOM S3 の無い端末で落ちてしまう。名乗りで決着する
+  // 画面 (`station` 無しの URL) は決着の数秒後に `setBpStationJwtGetter` で後入れする
+  // (下の watch、Refs ippoan/alc-app#368)。既存 URL の経路はここで完結させて変えない
+  isBpStationUrl ? bpStationJwtGetter : undefined,
 )
 
-// 測定台は起動直後に 1 本取りに行く。署名 (`AUTH SIGNBP`) で決まるボンド状態が
-// 画面の「血圧を使うか」の唯一の材料で、それまで血圧測定の画面は `checking` (待ち) のまま
-// (`useBpUiEnabled`)。取りに行かないと永久に待ち続ける
-if (isBpStation) void useBpStationDeviceToken().getBpStationJwt()
+/** 測定台の device JWT を取る (`initApi` へ渡す分と後入れする分で同じ 1 本) */
+function bpStationJwtGetter(): Promise<string | null> {
+  return useBpStationDeviceToken().getBpStationJwt()
+}
+
+/**
+ * 測定台と決まったら、測定台の鍵を使う口を開く (Refs ippoan/alc-app#368)。
+ *
+ * `initApi` は**起動時 1 回きり**だが、端末の名乗りの決着は数秒後 (`useSerialArbiter` の
+ * probe は 1 秒ごとに最大 8 回・8 秒で打ち切り) なので、`?station=bp` の無い URL では
+ * ここから後入れする。`immediate` を付けてあるので `?station=bp` 付きの起動もこの 1 本に
+ * 乗る (`initApi` で既に渡してあるので入れ直しても同じもの)。
+ *
+ * **未確定のあいだとキオスクでは入れない** — `scope: 'bp-station'` の 4 本は点呼と共用で、
+ * getter が在るのに JWT が取れなければ `api.ts` は投げる (暗黙のフォールバックを作らない、
+ * Refs #337)。未確定で入れると CoreS3 キオスクの点呼 4 本が全部落ちる。
+ *
+ * 決着したら 1 本取りに行く。署名 (`AUTH SIGNBP`) で決まるボンド状態が画面の
+ * 「血圧を使うか」の唯一の材料で、それまで血圧測定の画面は `checking` (待ち) のまま
+ * (`useBpUiEnabled`)。取りに行かないと永久に待ち続ける
+ */
+watch(isBpStation, (station) => {
+  if (!station) return
+  setBpStationJwtGetter(bpStationJwtGetter)
+  void bpStationJwtGetter()
+}, { immediate: true })
 
 // 顔データ同期 (singleton)
 useFaceSync()
@@ -103,13 +155,17 @@ const driverSubTab = ref<DriverSubTab>(
 )
 
 // URL クエリ同期。`?station=bp` (測定台として起動した印) が元々付いていれば引き継ぐ —
-// 落としても測定台の判定自体 (起動時の 1 回評価) は変わらないので詰まりはしないが、
-// リロードするたびに測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)。
-// `isBpStation` は起動時の 1 回評価から変わらないので、ここで参照しても等価
+// 落としても測定台の判定自体は変わらないので詰まりはしないが、リロードするたびに
+// 測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)。
+//
+// **書き込むのは `isBpStationUrl` (URL が元々言っていた) ぶんだけ。名乗りでは書かない**
+// (Refs ippoan/alc-app#368) — 名乗りで決まった印を URL へ焼き付けると、ATOM S3 を抜いた
+// あとにリロードした画面が「測定台として開いた」と名乗り続け、ATOM S3 の無い端末で
+// 点呼と共用の 4 本が落ちる。名乗りは毎回 probe し直せるので URL に残す必要も無い
 watch(activeRole, (role) => {
   const params = new URLSearchParams()
   if (role !== 'driver') params.set('role', role)
-  if (isBpStation) params.set('station', 'bp')
+  if (isBpStationUrl) params.set('station', 'bp')
   const qs = params.toString()
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
@@ -118,7 +174,7 @@ watch(driverSubTab, (tab) => {
   if (activeRole.value !== 'driver') return
   const params = new URLSearchParams()
   if (tab !== 'normal') params.set('tab', tab)
-  if (isBpStation) params.set('station', 'bp')
+  if (isBpStationUrl) params.set('station', 'bp')
   const qs = params.toString()
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
