@@ -51,6 +51,15 @@ mockNuxtImport('useAlarmDevice', () => () => ({
   request: alarmRequestMock,
 }))
 
+// 血圧測定台 (Atom S3、claimant 名 `bp-station`、Refs ippoan/alc-app#353)。
+// 血圧計の設定は CoreS3 / 警告デバイスと同じ 1 行の口で撃つ
+const atomS3Connected = ref(false)
+const atomS3RequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
+mockNuxtImport('useAtomS3Serial', () => () => ({
+  isConnected: atomS3Connected,
+  request: atomS3RequestMock,
+}))
+
 // 血圧計を使うかの表示は useBloodPressureSetting の 1 系統 (Refs ippoan/alc-app-s3#135)
 const bpEnabled = ref(false)
 const setBpEnabledMock = vi.fn((v: boolean) => { bpEnabled.value = v })
@@ -129,6 +138,9 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     alarmConnected.value = false
     alarmRequestMock.mockReset()
     alarmRequestMock.mockImplementation(async line => echoOmron(line))
+    atomS3Connected.value = false
+    atomS3RequestMock.mockReset()
+    atomS3RequestMock.mockImplementation(async line => echoOmron(line))
     bpEnabled.value = false
     setBpEnabledMock.mockClear()
     api.getDeviceSettings.mockReset()
@@ -333,6 +345,36 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       await settle(wrapper)
 
       expect(wrapper.find('[data-testid="omron-bp-restart-notice"]').exists()).toBe(false)
+    })
+
+    it('測定台 (Atom S3) が繋がっていれば端末にも送る (CoreS3・警告デバイスは挿さっていない、Refs #353)', async () => {
+      activatedDeviceId.value = 'device-1'
+      coreS3Connected.value = false
+      alarmConnected.value = false
+      atomS3Connected.value = true
+      const wrapper = await mountDeviceSettings()
+
+      await checkbox(wrapper).setValue(true)
+      await settle(wrapper)
+
+      expect(api.updateDeviceCallSettings).toHaveBeenCalledWith('device-1', true, null, undefined, true)
+      expect(atomS3RequestMock).toHaveBeenLastCalledWith('OMRON BP ON', 'OK OMRON BP=', 3000)
+      expect(coreS3RequestMock).not.toHaveBeenCalled()
+      expect(alarmRequestMock).not.toHaveBeenCalled()
+    })
+
+    it('測定台のときも再起動が要る旨を出す (警告デバイスと同じ Atom S3 系ファーム)', async () => {
+      activatedDeviceId.value = 'device-1'
+      coreS3Connected.value = false
+      alarmConnected.value = false
+      atomS3Connected.value = true
+      const wrapper = await mountDeviceSettings()
+
+      await checkbox(wrapper).setValue(true)
+      await settle(wrapper)
+
+      expect(wrapper.find('[data-testid="omron-bp-restart-notice"]').text())
+        .toBe('設定を変えました。VoiceS3R は再起動すると有効になります')
     })
 
     it('(受け口) サーバの設定が血圧の表示に反映される', async () => {

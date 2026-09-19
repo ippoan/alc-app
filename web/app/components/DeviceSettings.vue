@@ -17,6 +17,9 @@ const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJ
 // 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 const alarmDevice = useAlarmDevice()
+// 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
+// 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
+const atomS3 = useAtomS3Serial()
 
 // この端末で血圧計 (Omron HEM-6231T) を使うか (Refs ippoan/alc-app-s3#135)。
 // 正本はサーバの端末設定 (`devices.bp_enabled`) — 端末の NVS に置くと端末を
@@ -85,6 +88,9 @@ const omronBpRestartNotice = ref(false)
 const omronTarget = computed(() => {
   if (coreS3.isConnected.value) return { needsRestart: false, request: coreS3.request }
   if (alarmDevice.isConnected.value) return { needsRestart: true, request: alarmDevice.request }
+  // 測定台の PC には CoreS3 も警告デバイスも挿さらないので、上の 2 分岐とは実際には競合しない。
+  // 測定台のファームは警告デバイスと同じ Atom S3 系で、設定の反映に再起動が要る。
+  if (atomS3.isConnected.value) return { needsRestart: true, request: atomS3.request }
   return null
 })
 
