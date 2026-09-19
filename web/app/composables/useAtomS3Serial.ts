@@ -147,6 +147,15 @@ export function useAtomS3Serial() {
     await arbiter.unregister(CLAIMANT_NAME)
   }
 
+  /**
+   * 1 行送って応答 1 つを待つ (`AUTH SIGNBP <nonce>` → `AUTH SIGBP <pubkey> <sig> BP=<1|0>`
+   * の後続タスク用。firmware 側は `handle_common` にあるので測定台も応答できる)。
+   * 実体は arbiter 側 (useSerialArbiter.request) — 測定台が預かっているポートに送る。
+   */
+  function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+  }
+
   return {
     isSupported,
     isConnected: readonly(isConnected),
@@ -157,5 +166,6 @@ export function useAtomS3Serial() {
     connect,
     release,
     disconnect,
+    request,
   }
 }
