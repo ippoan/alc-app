@@ -92,6 +92,24 @@ export function useBloodPressureSetting() {
  * 解くので、自動点呼の入口ガード (`useTenkoKiosk.isBpRequirementUnknown`) の
  * 「試す前に止めない」判定と競合する。
  *
+ * ## 測定台はボンド状態を待たない (最優先、Refs ippoan/alc-app#368)
+ *
+ * **測定台と決着した端末 (`useBpStationMode`) は、署名のボンド状態に関わらず `show`。**
+ *
+ * `bp=1/0` は「**点呼で血圧記録が法的に要るか**」を決める値で、**血圧しか測らない
+ * 測定台では答えが常に「要る」**。それでも待っていると詰む端末がある — ニプロ
+ * NBP-1BLE は**測定するまで BLE の広告を出さない**ので (`hub-ble` の
+ * `should_remember_bp_bond` が `got_data` を条件にしている)、**1 回測るまで `bp=1` に
+ * ならず、測定台が「血圧計が見つかりません」のまま**になる。**1 回測るには血圧 UI が
+ * 要る**という鶏と卵。
+ *
+ * 実機で確かめた結果、**`BP=0` のままでも `AUTH SIGNBP` の署名も
+ * `/device/alarm-token` の JWT 発行も成功**しており、止まっていたのはこの UI の
+ * ゲートだけだった。
+ *
+ * **未確定のあいだは倒さない** — `useBpStationMode` は名乗りが決着するまで false
+ * なので、probe 前の CoreS3 キオスクを巻き込まない。
+ *
  * `useBloodPressureSetting()` の戻り値には足していない。中で `useBleGateway()` を
  * 呼ぶと、血圧の段を持たない画面 (端末設定・通常点呼・血圧測定) にも gateway の
  * 副作用が広がるため、**必要な画面だけが呼ぶ 2 本目の口**にした。
@@ -113,8 +131,12 @@ export function useBpUiEnabled() {
   const { hasBpHardware } = useBleGateway()
   const { signedBpBonded, hasProbedBpBond } = useSignedBpBond()
   const { deviceId } = useAuth()
+  const { isBpStation } = useBpStationMode()
 
   const bpUiState = computed<BpUiState>(() => {
+    // 測定台は血圧しか測らないので「血圧が要るか」の答えが常に「要る」。ボンド状態
+    // (`bp=1`) を待つと、測るまで広告を出さない血圧計で永久に出ない (上の doc、#368)
+    if (isBpStation.value) return 'show'
     // 1 つでも「使う」と言っていれば出す (未登録端末でも血圧計が在れば出す、Refs #322)
     if (bpEnabled.value || hasBpHardware.value || signedBpBonded.value === true) return 'show'
     // サーバが false と答えた / 署名で「血圧計は無い」と確認できた

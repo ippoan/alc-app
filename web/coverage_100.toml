@@ -162,6 +162,10 @@ branches = true
 path = "app/composables/useBpStationDeviceToken.ts"
 branches = true
 
+[[files]]
+path = "app/composables/useBpStationMode.ts"
+branches = true
+
 # --- plugins ---
 
 [[files]]
