@@ -23,11 +23,18 @@ import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
  *   (`devices.bp_enabled`) は**永久に false** で、直参照だと測定台が 1 台も測れない。
  *   `checking` (まだ署名を取りに行っていない) は**「使わない設定」に倒さず待つ** —
  *   倒すと起動直後に必ず詰まる。
+ * - **測定台では、案内の下に `NfcStatus` を置く** (USB 許可の導線)。`show` に進む署名は
+ *   ATOM S3 のシリアルから取るので、そのブラウザに Web Serial の許可が無いと署名が取れず、
+ *   案内のまま抜けられない (許可ボタンが `NfcStatus` にしか無い鶏と卵)。ここで読んだ
+ *   カードは**点呼の流れに繋がない** (`@read` を受けない) — 血圧計が使えない画面で始めても
+ *   測れないため。CoreS3 キオスク (`?station=bp` でない) は従来どおり案内だけ。
  */
 
 type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done'
 
 const { bpUiState } = useBpUiEnabled()
+// 血圧測定台として開いた画面か (`pages/index.vue` の `?station=bp` と同じ判定)
+const isBpStation = useRoute().query.station === 'bp'
 const { latestBloodPressure } = useBleGateway()
 
 const step = ref<BpStep>('nfc')
@@ -148,6 +155,10 @@ function reset() {
       <p class="mt-2 text-xs text-gray-500">
         血圧計の電源が入っていて、この端末とペアリング済みか確認してください。
       </p>
+      <!-- 測定台: USB 許可の導線。読んだカードでは何も始めない (@read を受けない) -->
+      <div v-if="isBpStation" class="mt-4 text-left">
+        <NfcStatus />
+      </div>
     </div>
 
     <template v-else>
