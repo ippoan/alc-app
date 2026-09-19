@@ -127,6 +127,33 @@ const driverSubTab = ref<DriverSubTab>(
   : 'normal',
 )
 
+// サブタブの表示定義。**縦画面・横画面の両方がここから描く** (以前は 6 か所に直書きで、
+// 片方だけ直すと縦横でタブの並びがずれた)。`DriverSubTab` の union と上の `?tab=` の分岐は
+// 別に持つ — `key` は union で型検査されるので、ここへ足し忘れ・打ち間違いは tsc が落とす
+type SubTabDef = { key: DriverSubTab, label: string }
+const BP_TAB: SubTabDef = { key: 'bp', label: '血圧測定' }
+const VISIBLE_TABS: readonly SubTabDef[] = [
+  { key: 'normal', label: '通常点呼' },
+  { key: 'tenko', label: '自動点呼' },
+  { key: 'remote', label: '遠隔点呼' },
+]
+const MENU_TABS: readonly SubTabDef[] = [
+  { key: 'demo', label: '自動点呼デモ' },
+  { key: 'remote_demo', label: '遠隔点呼デモ' },
+  { key: 'device', label: 'デバイス設定' },
+]
+
+// 血圧測定の置き場所。**`BloodPressureMeasurement` が中身を出せる状態 (`showBpUi`) と同じ
+// 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
+// 可視タブとハンバーガーは**排他**: 同じ導線が 2 か所に出ないよう、可視側へ出す端末では
+// ハンバーガーから外す。出せない端末は従来どおりハンバーガーにだけ残す (導線を消さない)
+const { showBpUi } = useBpUiEnabled()
+const visibleTabs = computed(() => showBpUi.value ? [...VISIBLE_TABS, BP_TAB] : VISIBLE_TABS)
+const menuTabs = computed(() => showBpUi.value ? MENU_TABS : [...MENU_TABS, BP_TAB])
+// ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
+// 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
+const isMenuTabActive = computed(() => menuTabs.value.some(t => t.key === driverSubTab.value))
+
 // URL クエリ同期。`?station=bp` (測定台として起動した印) が元々付いていれば引き継ぐ —
 // 落としても測定台の判定自体は変わらないので詰まりはしないが、リロードするたびに
 // 測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)。
@@ -365,13 +392,9 @@ function onRoleTabClick(role: RoleTab) {
       <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 mt-2 flex items-center gap-2">
         <div class="flex-1 flex gap-1 bg-blue-100 rounded-lg p-1">
           <button
-            v-for="tab in ([
-              { key: 'normal' as const, label: '通常点呼' },
-              { key: 'tenko' as const, label: '自動点呼' },
-              { key: 'remote' as const, label: '遠隔点呼' },
-            ])"
+            v-for="tab in visibleTabs"
             :key="tab.key"
-            class="flex-1 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+            class="flex-1 whitespace-nowrap px-1 py-2 rounded-md text-xs sm:px-3 sm:text-sm font-medium transition-colors"
             :class="driverSubTab === tab.key
               ? 'bg-white text-blue-800 shadow-sm'
               : 'text-blue-700 hover:text-blue-900'"
@@ -384,7 +407,7 @@ function onRoleTabClick(role: RoleTab) {
         <div ref="menuRef" class="relative">
           <button
             class="p-2 rounded-md transition-colors"
-            :class="['demo', 'remote_demo', 'device', 'bp'].includes(driverSubTab)
+            :class="isMenuTabActive
               ? 'bg-blue-600 text-white'
               : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
             @click.stop="menuOpen = !menuOpen"
@@ -398,12 +421,7 @@ function onRoleTabClick(role: RoleTab) {
             class="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border py-1 z-50"
           >
             <button
-              v-for="item in ([
-                { key: 'demo' as const, label: '自動点呼デモ' },
-                { key: 'remote_demo' as const, label: '遠隔点呼デモ' },
-                { key: 'device' as const, label: 'デバイス設定' },
-                { key: 'bp' as const, label: '血圧測定' },
-              ])"
+              v-for="item in menuTabs"
               :key="item.key"
               class="w-full text-left px-4 py-2 text-sm transition-colors"
               :class="driverSubTab === item.key
@@ -444,11 +462,7 @@ function onRoleTabClick(role: RoleTab) {
         <div v-if="isAndroidLandscape" class="shrink-0 bg-gray-50 border-b flex items-center px-2 py-1 gap-1">
           <!-- サブタブ -->
           <button
-            v-for="tab in ([
-              { key: 'normal' as const, label: '通常点呼' },
-              { key: 'tenko' as const, label: '自動点呼' },
-              { key: 'remote' as const, label: '遠隔点呼' },
-            ])"
+            v-for="tab in visibleTabs"
             :key="tab.key"
             class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
             :class="driverSubTab === tab.key
@@ -463,7 +477,7 @@ function onRoleTabClick(role: RoleTab) {
           <div ref="menuRef" class="relative">
             <button
               class="p-1.5 rounded-md transition-colors"
-              :class="['demo', 'remote_demo', 'device', 'bp'].includes(driverSubTab)
+              :class="isMenuTabActive
                 ? 'bg-blue-600 text-white'
                 : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
               @click.stop="menuOpen = !menuOpen"
@@ -492,12 +506,7 @@ function onRoleTabClick(role: RoleTab) {
               <div class="border-t my-1" />
               <!-- その他タブ -->
               <button
-                v-for="item in ([
-                  { key: 'demo' as const, label: '自動点呼デモ' },
-                  { key: 'remote_demo' as const, label: '遠隔点呼デモ' },
-                  { key: 'device' as const, label: 'デバイス設定' },
-                  { key: 'bp' as const, label: '血圧測定' },
-                ])"
+                v-for="item in menuTabs"
                 :key="item.key"
                 class="w-full text-left px-4 py-2 text-sm transition-colors"
                 :class="driverSubTab === item.key

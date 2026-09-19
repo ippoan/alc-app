@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { ref, readonly, nextTick, defineComponent } from 'vue'
+import { ref, readonly, computed, nextTick, defineComponent } from 'vue'
 import type { VueWrapper } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import IndexPage from '~/pages/index.vue'
@@ -196,6 +196,21 @@ mockNuxtImport('useSerialArbiter', () => () => ({
   request: vi.fn(async () => ''),
   start: vi.fn(),
   requestPort: vi.fn(async () => false),
+}))
+
+// 血圧測定を可視タブに出すかの判定 (`useBpUiEnabled`)。実物は BLE gateway / 署名ボンド /
+// 端末認証を読むので、ここでは状態だけ差し替える。既定は `unused` (= 従来どおりハンバーガーだけ)。
+// `showBpUi` は実物と同じく `bpUiState === 'show'` から導く
+const bpUi = { state: ref<'show' | 'unused' | 'checking' | 'unregistered' | 'unavailable'>('unused') }
+mockNuxtImport('useBpUiEnabled', () => () => ({
+  bpUiState: readonly(bpUi.state),
+  showBpUi: computed(() => bpUi.state.value === 'show'),
+}))
+
+// Android 横画面 (トップのタブバーが縦画面と別の描画になる)。既定は縦
+const landscape = { on: ref(false) }
+mockNuxtImport('useAndroidLandscape', () => () => ({
+  isAndroidLandscape: readonly(landscape.on),
 }))
 
 // 測定台の device JWT。実物は ATOM S3 へ `AUTH SIGNBP` を撃つので、呼ばれた回数だけ見る
@@ -459,6 +474,109 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
     // 血圧測定タブは切り替わって消える
     expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
+  })
+})
+
+describe('pages/index — 血圧測定を可視タブに出す (Refs ippoan/alc-app#373)', () => {
+  // 血圧しか測らない端末が、測りに行くたびにハンバーガーを開かされていた。`bpUiState === 'show'`
+  // (BloodPressureMeasurement が中身を出せる状態と同じ述語) の端末では可視タブへ、
+  // それ以外は従来どおりハンバーガーへ。**2 か所に同じ導線を出さない** (排他)
+
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+  })
+
+  /** 可視のサブタブ (縦: 青いタブ行 / 横: トップのタブバー) の文言 */
+  function visibleTabLabels(w: VueWrapper) {
+    const row = w.find(landscape.on.value ? '.border-b.bg-gray-50' : '.bg-blue-100')
+    return row.findAll('button').map(b => b.text()).filter(t => ['通常点呼', '自動点呼', '遠隔点呼', '血圧測定'].includes(t))
+  }
+
+  function hamburgerButton(w: VueWrapper) {
+    const b = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!b) throw new Error('hamburger not found')
+    return b
+  }
+
+  /** ハンバーガーを開いて、メニュー内のタブ (デモ・設定・血圧) の文言を返す */
+  async function menuTabLabels(w: VueWrapper) {
+    await hamburgerButton(w).trigger('click')
+    await nextTick()
+    const menu = w.find('.absolute.right-0')
+    return menu.findAll('button').map(b => b.text()).filter(t => ['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定', '血圧測定'].includes(t))
+  }
+
+  describe.each([
+    { name: '縦画面', isLandscape: false },
+    { name: 'Android 横画面', isLandscape: true },
+  ])('$name', ({ isLandscape }) => {
+    beforeEach(() => { landscape.on.value = isLandscape })
+
+    it('bpUiState が show なら可視タブに「血圧測定」が出て、ハンバーガーには出ない', async () => {
+      bpUi.state.value = 'show'
+      wrapper = await mountIndex('/?role=driver')
+
+      expect(visibleTabLabels(wrapper)).toEqual(['通常点呼', '自動点呼', '遠隔点呼', '血圧測定'])
+      // 排他: 同じ導線が 2 か所に出ない。デモ・設定は従来どおり残る
+      expect(await menuTabLabels(wrapper)).toEqual(['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定'])
+    })
+
+    it.each(['unused', 'checking'] as const)('bpUiState が %s なら可視タブには出ず、ハンバーガーにだけ出る', async (state) => {
+      bpUi.state.value = state
+      wrapper = await mountIndex('/?role=driver')
+
+      expect(visibleTabLabels(wrapper)).toEqual(['通常点呼', '自動点呼', '遠隔点呼'])
+      expect(await menuTabLabels(wrapper)).toEqual(['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定', '血圧測定'])
+    })
+
+    it('可視の「血圧測定」を選ぶと血圧測定が開き、ハンバーガーのアイコンは点灯しない (選択中に見えない)', async () => {
+      bpUi.state.value = 'show'
+      wrapper = await mountIndex('/?role=driver')
+      const litClass = 'bg-blue-600'
+      expect(hamburgerButton(wrapper).classes()).not.toContain(litClass)
+
+      const tab = wrapper.findAll('button').find(b => b.text() === '血圧測定')
+      await tab!.trigger('click')
+      await nextTick()
+
+      expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+      expect(hamburgerButton(wrapper).classes()).not.toContain(litClass)
+    })
+
+    it('ハンバーガー側の血圧測定 (show でない端末) を選ぶと、従来どおりアイコンが点灯する', async () => {
+      bpUi.state.value = 'unused'
+      wrapper = await mountIndex('/?role=driver')
+      await menuTabLabels(wrapper)
+      const item = wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === '血圧測定')
+      await item!.trigger('click')
+      await nextTick()
+
+      expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+      expect(hamburgerButton(wrapper).classes()).toContain('bg-blue-600')
+    })
+  })
+
+  it('血圧を選んだまま show でなくなっても、導線はハンバーガーに移るだけで消えない (行き止まりにならない)', async () => {
+    bpUi.state.value = 'show'
+    wrapper = await mountIndex('/?role=driver&tab=bp')
+    expect(visibleTabLabels(wrapper)).toContain('血圧測定')
+
+    bpUi.state.value = 'unavailable'
+    await nextTick()
+
+    expect(visibleTabLabels(wrapper)).toEqual(['通常点呼', '自動点呼', '遠隔点呼'])
+    expect(await menuTabLabels(wrapper)).toContain('血圧測定')
   })
 })
 
