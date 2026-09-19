@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 /**
@@ -12,6 +12,10 @@ const alarmDeviceMock = vi.hoisted(() => ({
   request: vi.fn(),
 }))
 mockNuxtImport('useAlarmDevice', () => () => alarmDeviceMock)
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 describe('signAlarmDeviceNonce (#231 useDeviceToken / #337 useManagerDeviceToken と共有する切り出し関数)', () => {
   it('AUTH SIGN <nonce> を送り、AUTH SIG <pubkey> <sig> を parse して返す', async () => {
