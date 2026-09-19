@@ -18,6 +18,14 @@ mockNuxtImport('useSignedBpBond', () => () => ({
   hasProbedBpBond: readonly(hasProbedBpBond),
 }))
 
+// 測定台として扱うか (URL の印 ∪ 端末の名乗り、Refs ippoan/alc-app#368)。
+// 既定は false = 通常のキオスク — 他のテストは従来どおりの条件で回る
+const isBpStation = ref(false)
+mockNuxtImport('useBpStationMode', () => () => ({
+  isBpStationUrl: false,
+  isBpStation: readonly(isBpStation),
+}))
+
 // 端末設定 (サーバ) — 血圧計を使うかの正本は `devices.bp_enabled`
 const api = vi.hoisted(() => ({ getDeviceSettings: vi.fn() }))
 vi.mock('~/utils/api', async original => ({
@@ -190,6 +198,7 @@ describe('useBpUiEnabled — 血圧を使うかの判定 1 か所 (Refs ippoan/a
     hasBpHardware.value = false
     signedBpBonded.value = null
     hasProbedBpBond.value = false
+    isBpStation.value = false
     api.getDeviceSettings.mockReset()
     api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(false))
   })
@@ -285,5 +294,56 @@ describe('useBpUiEnabled — 血圧を使うかの判定 1 か所 (Refs ippoan/a
     signedBpBonded.value = true
     expect(bp.bpUiState.value).toBe('show')
     expect(bp.showBpUi.value).toBe(true)
+  })
+
+  // ---------- 測定台はボンド状態を待たない (Refs ippoan/alc-app#368) ----------
+  //
+  // ニプロ NBP-1BLE は**測定するまで広告を出さない**ので、`bp=1` を待つと
+  // 「1 回測るまで血圧画面が出ない / 血圧画面が無いと測れない」の鶏と卵で詰む。
+  // 測定台は血圧しか測らない端末なので「血圧が要るか」の答えは常に「要る」。
+
+  it('★ 測定台と決着していれば、署名が false でも show (測るまで広告を出さない血圧計で詰まない)', async () => {
+    isBpStation.value = true
+    signedBpBonded.value = false
+    hasProbedBpBond.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('show')
+    expect(bp.showBpUi.value).toBe(true)
+  })
+
+  it('★ 測定台と決着していれば、署名が null (不明) でも show', async () => {
+    isBpStation.value = true
+    signedBpBonded.value = null
+    hasProbedBpBond.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('show')
+  })
+
+  it('★ 測定台と決着していれば、まだ署名を取りに行っていなくても show (checking にしない)', async () => {
+    isBpStation.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('show')
+  })
+
+  it('★ 測定台と決着していれば、サーバが bp_enabled=false と答えても show (unused に倒さない)', async () => {
+    isBpStation.value = true
+    const mod = await freshModule()
+    const bp = mod.useBpUiEnabled()
+    await flush()
+
+    expect(bp.bpUiState.value).toBe('show')
+  })
+
+  it('★ 未確定・キオスク (isBpStation=false) は従来どおり — probe 前のキオスクを巻き込まない', async () => {
+    isBpStation.value = false
+    const bp = await unconfirmed()
+    expect(bp.bpUiState.value).toBe('checking')
+
+    // 名乗りが決着した瞬間に show へ変わる (computed なので画面は読み直さなくてよい)
+    isBpStation.value = true
+    expect(bp.bpUiState.value).toBe('show')
   })
 })

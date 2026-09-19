@@ -22,46 +22,19 @@ function loginWithLineworks() {
   window.location.href = `${authWorkerUrl}/oauth/lineworks/redirect?address=${address}&redirect_uri=${redirectUri}`
 }
 /**
- * **URL が**「血圧測定台として起動した」と言っているか (`manifest-bp.webmanifest` の
- * `start_url` = `/?role=driver&tab=bp&station=bp` で開かれたか)。`driverSubTab` と同じく
- * **起動時のクエリで 1 回だけ**判定する非リアクティブな定数。
+ * この画面を測定台として扱うか — **URL の印 (`?station=bp`) と端末の名乗り
+ * (`DEVICE bp-station`) の OR** (Refs ippoan/alc-app#368)。判定の実体と、なぜ URL だけで
+ * 決めるのをやめたかは `useBpStationMode` の doc にまとめてある。
  *
- * **これだけで測定台を決めない** (Refs ippoan/alc-app#368) — 長い URL を人に配る運用を
- * やめるため、**端末の名乗り**も判断材料にする (下の `isBpStation` がその OR)。
- * 読む側としてこのクエリは残す: `?station=bp` 付きの既存 URL とインストール済みの PWA を
- * 壊さないことが優先で、「URL が言っている」も判断材料の 1 つとして扱えばよいため。
+ * **読み手が 2 つある** (ここと `useBpUiEnabled`) ので、判定は composable 1 本に寄せて
+ * ある — 片方だけ直す事故を防ぐため。
  *
- * **`?tab=bp` では判定しない** — `driverSubTab` の URL 同期 (下の watch) が
- * ハンバーガーで血圧測定タブを選んだときに `?tab=bp` を書き込むため、通常端末で
- * それを選んでリロードすると `manifestRoleFromQuery()` ベースの判定では
- * 「測定台として起動した」と誤認し、点呼に戻れなくなる (Refs ippoan/alc-app#353、
- * 裏取りで実測)。`tab=` は「いまどのタブか」、`station=` は「測定台として起動したか」
- * で問いが別なので、通常端末の URL 同期が絶対に書き込まない `station` 独自クエリを見る。
+ * - `isBpStationUrl` … URL 同期が `station=bp` を書き戻すかだけに使う (下の watch)
+ * - `isBpStation` … 測定台の鍵を使うか (名乗りで決着すれば `station` 無しでも true)
  */
-const isBpStationUrl = route.query.station === 'bp'
+const { isBpStationUrl, isBpStation } = useBpStationMode()
 
-/**
- * **端末の名乗り**で決着した機種 (`null` = まだ決着していない)。測定台の ATOM S3 は
- * `DEVICE bp-station`、CoreS3 は `DEVICE cores3` と自分で名乗る — その名乗りを読んで
- * ポートの持ち主を決めている `useSerialArbiter` が、決着した機種をそのまま公開する
- * (Refs ippoan/alc-app#368)。**両方繋がっている PC は CoreS3 優先**で `'other'`。
- *
- * ここで `useSerialArbiter()` を呼んでも探索は始まらない (`start`/`register` で始まる) —
- * 読んでいるのは既に走っている探索の結果だけ。
- */
-const { arbitratedDeviceKind } = useSerialArbiter()
-
-/**
- * この画面を測定台として扱うか — **URL の印と端末の名乗りの OR** (Refs ippoan/alc-app#368)。
- *
- * 「測定台はこの長い URL で開いてください」と人に配る運用をやめるのが目的。端末は
- * 自分で名乗っているので、ハンバーガーの「血圧測定」から入った画面 (= `station` 無し) でも
- * ATOM S3 が挿さっていれば測定台として動く。`?station=bp` 付きの URL は従来どおり
- * 起動の時点で true なので、既存 URL とインストール済み PWA の挙動は変わらない。
- */
-const isBpStation = computed(() => isBpStationUrl || arbitratedDeviceKind.value === 'bp-station')
-
-// ★ `initApi` より前に上の 2 つを置く — 測定台の device JWT getter を渡すかどうかが
+// ★ `initApi` より前に上の判定を置く — 測定台の device JWT getter を渡すかどうかが
 // これで決まる (`scope: 'bp-station'` の 4 本は点呼と共用なので、**測定台と決着した画面
 // だけ**が測定台の鍵を使う。未確定のあいだとキオスクでは getter が無く、従来どおり
 // キオスクの鍵へ進む)。
