@@ -60,6 +60,13 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
   request: atomS3RequestMock,
 }))
 
+// 端末の名乗り (`DEVICE bp-station`)。測定台かどうかの判定は `useBpStationMode` 1 か所で、
+// URL の印と名乗りの OR (Refs ippoan/alc-app#368)
+const arbitratedDeviceKind = ref<'bp-station' | 'other' | null>(null)
+mockNuxtImport('useSerialArbiter', () => () => ({
+  arbitratedDeviceKind: readonly(arbitratedDeviceKind),
+}))
+
 // 血圧計を使うかの表示は useBloodPressureSetting の 1 系統 (Refs ippoan/alc-app-s3#135)
 const bpEnabled = ref(false)
 const setBpEnabledMock = vi.fn((v: boolean) => { bpEnabled.value = v })
@@ -155,6 +162,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     alarmRequestMock.mockReset()
     alarmRequestMock.mockImplementation(async line => echoOmron(line))
     atomS3Connected.value = false
+    arbitratedDeviceKind.value = null
     serialPorts.value = []
     serialSupport.supported = false
     atomS3RequestMock.mockReset()
@@ -546,6 +554,45 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       await flush()
       await wrapper.vm.$nextTick()
       expect(wrapper.text()).toContain('接続失敗 — ATOM S3 が USB に接続されているか確認してください')
+      expect(wrapper.text()).not.toContain('CoreS3')
+    })
+
+    // 測定台かどうかは URL だけでなく端末の名乗りでも決まる (Refs ippoan/alc-app#368)。
+    // 見出しとポート行は接続状態に関係なく常に出るので、ここが誤表示の本命
+    it('(a) URL に station=bp が無くても、端末が bp-station と名乗れば ATOM S3 を名指しする', async () => {
+      arbitratedDeviceKind.value = 'bp-station'
+      serialSupport.supported = true
+      serialPorts.value = [ESP32_S3_PORT]
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.text()).toContain('BLE 体温計・血圧計 (ATOM S3)')
+      expect(wrapper.text()).toContain('ESP32-S3 (ATOM S3 など)')
+
+      await findButton(wrapper, '接続テスト')!.trigger('click')
+      await flush()
+      await wrapper.vm.$nextTick()
+      // script 内の参照 (`.value` 忘れだと [object Object] になる)
+      expect(wrapper.text()).toContain('接続失敗 — ATOM S3 が USB に接続されているか確認してください')
+      expect(wrapper.text()).not.toContain('CoreS3')
+      expect(wrapper.text()).not.toContain('[object Object]')
+    })
+
+    it('(b) URL に station=bp が無く、名乗りが未決着 (null) なら CoreS3 のまま', async () => {
+      arbitratedDeviceKind.value = null
+      serialSupport.supported = true
+      serialPorts.value = [ESP32_S3_PORT]
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.text()).toContain('BLE 体温計・血圧計 (CoreS3)')
+      expect(wrapper.text()).toContain('ESP32-S3 (CoreS3 など)')
+      expect(wrapper.text()).not.toContain('ATOM S3')
+    })
+
+    it('(c) URL に station=bp があれば、名乗りが未決着でも従来どおり ATOM S3 を名指しする', async () => {
+      arbitratedDeviceKind.value = null
+      serialSupport.supported = true
+      serialPorts.value = [ESP32_S3_PORT]
+      const wrapper = await mountDeviceSettings(STATION_ROUTE)
+      expect(wrapper.text()).toContain('BLE 体温計・血圧計 (ATOM S3)')
+      expect(wrapper.text()).toContain('ESP32-S3 (ATOM S3 など)')
       expect(wrapper.text()).not.toContain('CoreS3')
     })
 

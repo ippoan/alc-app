@@ -20,11 +20,13 @@ const alarmDevice = useAlarmDevice()
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
 const atomS3 = useAtomS3Serial()
-// 血圧測定台として開いた画面か (`pages/index.vue` の `?station=bp` と同じ判定)。
+// 血圧測定台として開いた画面か。判定は `useBpStationMode` 1 か所 (Refs ippoan/alc-app#368) —
+// URL の `?station=bp` だけでなく端末の名乗り (`DEVICE bp-station`) も見るので、
+// `?station=bp` の無い URL で開いた測定台でも正しく名指しできる。
 // CoreS3 と Atom S3 は USB の見た目が同一 (VID 0x303A / PID 0x1001) でこのカードは両方を
 // 受け持つので、画面が名指しする端末は測定台かどうかで変える (Refs ippoan/alc-app#353)
-const isBpStation = useRoute().query.station === 'bp'
-const bleGwDeviceName = isBpStation ? 'ATOM S3' : 'CoreS3'
+const { isBpStation } = useBpStationMode()
+const bleGwDeviceName = computed(() => isBpStation.value ? 'ATOM S3' : 'CoreS3')
 
 // この端末で Omron 血圧計を使うか (Refs ippoan/alc-app-s3#135)。対象は Omron の
 // HEM-6231T / HCR-1901T2 だけ — ニプロの血圧計 (NBP-1BLE) はこの設定に依らず拾う
@@ -514,7 +516,7 @@ async function testBleGw() {
         bpEnabled.value ? `血圧計: ${bp ? '接続' : '未接続'}` : null,
       ].filter(Boolean).join(' / ')
     } else {
-      bleGwTestResult.value = `接続失敗 — ${bleGwDeviceName} が USB に接続されているか確認してください`
+      bleGwTestResult.value = `接続失敗 — ${bleGwDeviceName.value} が USB に接続されているか確認してください`
     }
   } catch (e) {
     bleGwTestResult.value = `エラー: ${e instanceof Error ? e.message : '不明'}`

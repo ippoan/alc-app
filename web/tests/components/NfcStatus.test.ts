@@ -47,6 +47,13 @@ mockNuxtImport('useFingerprint', () => () => ({
 const isCheckingKioskAccess = ref(false)
 mockNuxtImport('useKioskAccess', () => () => ({ isCheckingKioskAccess }))
 
+// 端末の名乗り (`DEVICE bp-station`)。測定台かどうかの判定は `useBpStationMode` 1 か所で、
+// URL の印と名乗りの OR (Refs ippoan/alc-app#368)
+const arbitratedDeviceKind = ref<'bp-station' | 'other' | null>(null)
+mockNuxtImport('useSerialArbiter', () => () => ({
+  arbitratedDeviceKind: readonly(arbitratedDeviceKind),
+}))
+
 let webSerialSupported = true
 vi.mock('~/utils/webserial', () => ({
   isWebSerialSupported: () => webSerialSupported,
@@ -61,6 +68,7 @@ describe('NfcStatus — serial ブロックの表示条件 (Refs #234)', () => {
     isConnected.value = false
     coreS3Connected.value = false
     atomS3Connected.value = false
+    arbitratedDeviceKind.value = null
     latestVersion.value = null
     webSerialSupported = true
     isCheckingKioskAccess.value = false
@@ -146,6 +154,7 @@ describe('NfcStatus — 血圧測定台の未接続案内 (Refs #353)', () => {
     isConnected.value = false
     coreS3Connected.value = false
     atomS3Connected.value = false
+    arbitratedDeviceKind.value = null
     latestVersion.value = null
     webSerialSupported = true
     isCheckingKioskAccess.value = false
@@ -212,6 +221,7 @@ describe('NfcStatus — promptActive (タッチ枠の中身の差し替え、Ref
     isConnected.value = false
     coreS3Connected.value = false
     atomS3Connected.value = false
+    arbitratedDeviceKind.value = null
     latestVersion.value = null
     webSerialSupported = true
     isCheckingKioskAccess.value = false
@@ -250,6 +260,45 @@ describe('NfcStatus — promptActive (タッチ枠の中身の差し替え、Ref
     // NFC 位置ガイドボタン (Kyocera 端末判定) は promptActive に関係なく出る
     expect(findButtonByText(wrapper, 'NFC 位置ガイド')).toBeTruthy()
     deviceModelForFingerprint.value = null
+    wrapper.unmount()
+  })
+})
+
+// 測定台かどうかは URL だけでなく端末の名乗りでも決まる (Refs ippoan/alc-app#368)。
+// 未接続案内が変わるのは「一度繋いで名乗りが決着したあとに抜線した」ときだけ —
+// 未接続のままなら probe が走らず名乗りも立たないので、(b) の CoreS3 のままが正しい。
+describe('NfcStatus — 測定台の判定は端末の名乗りも見る (Refs #368)', () => {
+  beforeEach(() => {
+    isConnected.value = false
+    coreS3Connected.value = false
+    atomS3Connected.value = false
+    arbitratedDeviceKind.value = null
+    latestVersion.value = null
+    webSerialSupported = true
+    isCheckingKioskAccess.value = false
+  })
+
+  it('(a) URL に station=bp が無くても、端末が bp-station と名乗れば ATOM S3 を名指しする', async () => {
+    arbitratedDeviceKind.value = 'bp-station'
+    const wrapper = await mountSuspended(NfcStatus, { route: '/' })
+    expect(wrapper.text()).toContain('測定台の ATOM S3 (VoiceS3R) が USB でつながっているか確認してください。')
+    expect(wrapper.text()).not.toContain('CoreS3')
+    wrapper.unmount()
+  })
+
+  it('(b) URL に station=bp が無く、名乗りが未決着 (null) なら CoreS3 のまま', async () => {
+    arbitratedDeviceKind.value = null
+    const wrapper = await mountSuspended(NfcStatus, { route: '/' })
+    expect(wrapper.text()).toContain('CoreS3 が USB でつながっているか確認してください。')
+    expect(wrapper.text()).not.toContain('ATOM S3')
+    wrapper.unmount()
+  })
+
+  it('(c) URL に station=bp があれば、名乗りが未決着でも従来どおり ATOM S3 を名指しする', async () => {
+    arbitratedDeviceKind.value = null
+    const wrapper = await mountSuspended(NfcStatus, { route: '/?role=driver&tab=bp&station=bp' })
+    expect(wrapper.text()).toContain('測定台の ATOM S3 (VoiceS3R) が USB でつながっているか確認してください。')
+    expect(wrapper.text()).not.toContain('CoreS3')
     wrapper.unmount()
   })
 })

@@ -28,9 +28,10 @@ const canUseSerial = isWebSerialSupported()
 // USB 直結で NFC リーダーが繋がっているか。ブリッジの接続状態とは別 (下の案内の条件)。
 // 測定台に CoreS3 は挿さらず Atom S3 だけが挿さる (Refs ippoan/alc-app#353)
 const isDirectConnected = computed(() => coreS3.isConnected.value || atomS3.isConnected.value)
-// 血圧測定台として開いた画面か (`pages/index.vue` の `?station=bp` と同じ判定)。
+// 血圧測定台として開いた画面か。判定は `useBpStationMode` 1 か所 (Refs ippoan/alc-app#368) —
+// URL の `?station=bp` だけでなく端末の名乗り (`DEVICE bp-station`) も見る。
 // 未接続案内で名指しする端末が違うので、ここで出し分ける
-const isBpStation = useRoute().query.station === 'bp'
+const { isBpStation } = useBpStationMode()
 const isRequestingPort = ref(false)
 async function requestSerialPort() {
   isRequestingPort.value = true
