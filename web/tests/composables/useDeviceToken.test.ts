@@ -10,6 +10,13 @@ async function load(): Promise<Mod['useDeviceToken']> {
   return mod.useDeviceToken
 }
 
+// ボンド状態は機種に依らない 1 か所 (`useSignedBpBond`) が持つ (Refs ippoan/alc-app#353)。
+// `load()` と同じ reset 後に読み込むので、useDeviceToken.ts が書き込む実体と同一になる
+async function loadSignedBpBond() {
+  const mod = await import('~/composables/useSignedBpBond')
+  return mod.useSignedBpBond()
+}
+
 const ID = 'dev-abc'
 const SECRET = 'sec-xyz'
 
@@ -1198,8 +1205,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
       }
 
       it('★ 未試行なら null だが hasProbedBpBond は false (「未取得」と「不明」を分ける)', async () => {
-        const useDeviceToken = await load()
-        const { signedBpBonded, hasProbedBpBond } = useDeviceToken()
+        await load()
+        const { signedBpBonded, hasProbedBpBond } = await loadSignedBpBond()
         expect(signedBpBonded.value).toBeNull()
         expect(hasProbedBpBond.value).toBe(false)
       })
@@ -1209,7 +1216,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', vi.fn())
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, hasProbedBpBond, signedBpBonded } = useDeviceToken()
+        const { getDeviceJwt } = useDeviceToken()
+        const { hasProbedBpBond, signedBpBonded } = await loadSignedBpBond()
 
         expect(hasProbedBpBond.value).toBe(false)
         expect(await getDeviceJwt()).toBeNull()
@@ -1224,11 +1232,12 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', routeFetch(tokenRoutes))
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded } = useDeviceToken()
+        const { getDeviceJwt } = useDeviceToken()
+        const { signedBpBonded, hasProbedBpBond } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signedBpBonded.value).toBe(true)
-        expect(useDeviceToken().hasProbedBpBond.value).toBe(true)
+        expect(hasProbedBpBond.value).toBe(true)
       })
 
       it('★ BP=0 → false (血圧計が無いと確認できた)。null (不明) と混ぜない', async () => {
@@ -1237,7 +1246,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', routeFetch(tokenRoutes))
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded } = useDeviceToken()
+        const { getDeviceJwt } = useDeviceToken()
+        const { signedBpBonded } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signedBpBonded.value).toBe(false)
@@ -1250,12 +1260,13 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', routeFetch(tokenRoutes))
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded } = useDeviceToken()
+        const { getDeviceJwt } = useDeviceToken()
+        const { signedBpBonded, hasProbedBpBond } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signedBpBonded.value).toBeNull()
         // 「古いファームに聞いた結果、分からなかった」= 試し終えている
-        expect(useDeviceToken().hasProbedBpBond.value).toBe(true)
+        expect(hasProbedBpBond.value).toBe(true)
       })
 
       it('CoreS3 が繋がっていない → null (不明)', async () => {
@@ -1263,7 +1274,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', vi.fn())
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded, lastFailureStage } = useDeviceToken()
+        const { getDeviceJwt, lastFailureStage } = useDeviceToken()
+        const { signedBpBonded } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBeNull()
         expect(lastFailureStage.value).toBe('no-core-s3')
@@ -1279,12 +1291,13 @@ describe('useDeviceToken (#434 step 3c)', () => {
         }))
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded, lastFailureStage } = useDeviceToken()
+        const { getDeviceJwt, lastFailureStage } = useDeviceToken()
+        const { signedBpBonded, hasProbedBpBond } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBeNull()
         expect(lastFailureStage.value).toBe('token-exchange')
         expect(signedBpBonded.value).toBeNull()
-        expect(useDeviceToken().hasProbedBpBond.value).toBe(true)
+        expect(hasProbedBpBond.value).toBe(true)
       })
 
       it('★ refreshSignedBpBonded: cache が生きていても署名からやり直して確定させる', async () => {
@@ -1295,7 +1308,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', routeFetch(tokenRoutes))
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded, refreshSignedBpBonded } = useDeviceToken()
+        const { getDeviceJwt, refreshSignedBpBonded } = useDeviceToken()
+        const { signedBpBonded } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBe('s3r-jwt')
         expect(signedBpBonded.value).toBeNull()
@@ -1315,7 +1329,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
         }))
 
         const useDeviceToken = await load()
-        const { getDeviceJwt, signedBpBonded, refreshSignedBpBonded, coreS3BackoffUntil } = useDeviceToken()
+        const { getDeviceJwt, refreshSignedBpBonded, coreS3BackoffUntil } = useDeviceToken()
+        const { signedBpBonded } = await loadSignedBpBond()
 
         expect(await getDeviceJwt()).toBeNull()
         expect(coreS3BackoffUntil.value).toBeGreaterThan(0)
@@ -1331,7 +1346,8 @@ describe('useDeviceToken (#434 step 3c)', () => {
         vi.stubGlobal('fetch', vi.fn())
 
         const useDeviceToken = await load()
-        const { refreshSignedBpBonded, signedBpBonded } = useDeviceToken()
+        const { refreshSignedBpBonded } = useDeviceToken()
+        const { signedBpBonded } = await loadSignedBpBond()
 
         expect(await refreshSignedBpBonded()).toBeNull()
         expect(signedBpBonded.value).toBeNull()

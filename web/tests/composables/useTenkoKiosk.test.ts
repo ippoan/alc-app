@@ -15,7 +15,10 @@ const refreshSignedBpBonded = vi.fn(async () => {
   hasProbedBpBond.value = true
   return signedBpBonded.value
 })
-mockNuxtImport('useDeviceToken', () => () => ({ signedBpBonded, hasProbedBpBond, refreshSignedBpBonded }))
+// 値の置き場所は機種に依らない 1 か所 (`useSignedBpBond`、Refs ippoan/alc-app#353)。
+// 取り直しだけが CoreS3 の再探索なので `useDeviceToken` 側に残る
+mockNuxtImport('useSignedBpBond', () => () => ({ signedBpBonded, hasProbedBpBond }))
+mockNuxtImport('useDeviceToken', () => () => ({ refreshSignedBpBonded }))
 
 // 血圧を出せる見込み (BleStatus の showBpUi と同じ 2 つ)。既定は「出せない端末」
 const bpEnabled = ref(false)
