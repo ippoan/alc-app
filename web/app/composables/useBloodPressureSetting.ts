@@ -78,18 +78,23 @@ export function useBloodPressureSetting() {
  * - `hasBpHardware` の元になる gateway の `bp_bond` 通知は**値が変わった瞬間に 1 行**
  *   しか出ない。画面が後から読み込み直すと取りこぼす (pull で問い合わせる口が無い)
  *
- * そこで**署名つきでサーバへ渡した値** `signedBpBonded` (`useDeviceToken`) を 3 本目の
+ * そこで**署名つきでサーバへ渡した値** `signedBpBonded` (`useSignedBpBond`) を 3 本目の
  * 材料に足す — サーバの判断と一致するのはこれだけ。`hasProbedBpBond` で
  * 「まだ取りに行っていない」を分け、**試す前に「未使用」と断じない**
- * (`useDeviceToken.ts` の `hasProbedBpBond` の doc と同じ流儀)。
+ * (`useSignedBpBond.ts` の `hasProbedBpBond` の doc と同じ流儀)。
+ *
+ * **読む先は機種に依らない 1 か所** (Refs ippoan/alc-app#353) — CoreS3 キオスク
+ * (`useDeviceToken`) も血圧測定台の ATOM S3 も、同じ値へ書き込む。読み手がここと
+ * `useTenkoKiosk.isBpRequirementUnknown` の 2 つに分かれているので、**値を機種ごとに
+ * 分けると片方だけ直す事故**になる。
  *
  * **`refreshSignedBpBonded()` はここから呼ばない (読むだけ)** — あれは backoff を
  * 解くので、自動点呼の入口ガード (`useTenkoKiosk.isBpRequirementUnknown`) の
  * 「試す前に止めない」判定と競合する。
  *
- * `useBloodPressureSetting()` の戻り値には足していない。中で `useDeviceToken()` /
- * `useBleGateway()` を呼ぶと、血圧の段を持たない画面 (端末設定・通常点呼・血圧測定)
- * にも CoreS3 の副作用が広がるため、**必要な画面だけが呼ぶ 2 本目の口**にした。
+ * `useBloodPressureSetting()` の戻り値には足していない。中で `useBleGateway()` を
+ * 呼ぶと、血圧の段を持たない画面 (端末設定・通常点呼・血圧測定) にも gateway の
+ * 副作用が広がるため、**必要な画面だけが呼ぶ 2 本目の口**にした。
  */
 export type BpUiState =
   /** 血圧を使う (入力欄・測定値カードを出す) */
@@ -106,7 +111,7 @@ export type BpUiState =
 export function useBpUiEnabled() {
   const { bpEnabled, bpConfirmed } = useBloodPressureSetting()
   const { hasBpHardware } = useBleGateway()
-  const { signedBpBonded, hasProbedBpBond } = useDeviceToken()
+  const { signedBpBonded, hasProbedBpBond } = useSignedBpBond()
   const { deviceId } = useAuth()
 
   const bpUiState = computed<BpUiState>(() => {

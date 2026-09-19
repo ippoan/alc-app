@@ -157,28 +157,11 @@ const lastFailureStatus = ref<number | null>(null)
 const lastFailureDetail = ref<string | null>(null)
 
 /**
- * 直近の署名で分かった血圧計のボンド状態 (Refs ippoan/alc-app#336)。
- * **3 状態を潰さない** — `true` = ボンドあり (血圧が必須) / `false` = 血圧計が無いと
- * 確認できた (血圧なしで通る) / `null` = **不明** (`AUTH SIGNBP` が通らなかった・
- * CoreS3 が居ない・署名まで届かなかった)。サーバは「不明」を安全側 (血圧必須) に
- * 倒すので、画面はこの値で「この端末で血圧が必須になるか」を先に知れる。
- *
- * `useBleGateway.bpBonded` (gateway の `bp_bond` 通知) とは**別物**。あちらは署名の
- * 無い表示用のヒントで、サーバは見ない。ここは `/device/alarm-token` へ**署名つきで
- * 渡した値**そのもの — サーバの判断と一致するのはこちらだけ。
+ * 血圧計のボンド状態は **`useSignedBpBond.ts` が持つ 1 か所** に移した
+ * (Refs ippoan/alc-app#353)。ここは CoreS3 経路の**書き手**として
+ * `setSignedBpBond()` を呼ぶだけで、値は持たない —
+ * ATOM S3 (血圧測定台) 経路も同じ 1 か所へ書き込めるようにするため。
  */
-const signedBpBonded = ref<boolean | null>(null)
-/**
- * ボンド状態を**一度でも取りに行ったか** (Refs ippoan/alc-app#336)。
- * `signedBpBonded` の `null` には「まだ署名を試していない」(起動直後・探索中) と
- * 「試したが分からなかった」(古いファーム・CoreS3 が居ない) の 2 つが乗るので、
- * **その 2 つを分ける印**。`isStartupJwtPending` と同じ流儀の「決まったかどうか」で、
- * `useBloodPressureSetting` の `bpConfirmed` (= `applied`) と同じ役どころ。
- *
- * **試す前に端末を締め出さない**ために要る — 画面はこれが false のあいだ判定しない。
- * 署名を試し終えたら (成功・失敗・CoreS3 が居ない のいずれでも) true になる。
- */
-const hasProbedBpBond = ref(false)
 
 const ERR_AUTH_PREFIX = 'ERR AUTH: '
 
@@ -401,8 +384,7 @@ export function useDeviceToken() {
         lastFailureDetail.value = null
         // 署名を頼む相手が居ない = ボンド状態は「不明」(「未ボンド」ではない)。
         // 探索まではしたので「試した」= 判定してよい (#336)
-        signedBpBonded.value = null
-        hasProbedBpBond.value = true
+        setSignedBpBond(null)
         warnCoreS3Failure('no-core-s3', null, '-', null, Date.now() - nowMs, 0)
         return null
       }
@@ -481,8 +463,7 @@ export function useDeviceToken() {
       cachedExpMs = nowMs + ttl * 1000
       // いま発行された JWT に乗っているボンド状態 (#336)。`AUTH SIGN` へ落ちた回は
       // `bpBonded` を持たない = 「不明」なので null にする
-      signedBpBonded.value = signed.bpBonded ?? null
-      hasProbedBpBond.value = true
+      setSignedBpBond(signed.bpBonded ?? null)
       console.info(`[useDeviceToken] 端末の署名に成功 stage=ok elapsed=${Date.now() - nowMs}ms`)
       return cachedJwt.value
     }
@@ -492,8 +473,7 @@ export function useDeviceToken() {
       lastFailureStatus.value = status
       lastFailureDetail.value = extractFailureDetail(stage, lastError.value)
       // 署名が JWT まで届かなかった回は、サーバにボンド状態が渡っていない = 「不明」(#336)
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
+      setSignedBpBond(null)
       coreS3BackoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
       warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, CORE_S3_BACKOFF_MS / 1000)
       return null
@@ -511,6 +491,7 @@ export function useDeviceToken() {
    * credential 経路には触れない (CoreS3 が居なければ従来どおり何も変わらない)。
    */
   async function refreshSignedBpBonded(): Promise<boolean | null> {
+    const { signedBpBonded } = useSignedBpBond()
     coreS3BackoffUntil.value = 0
     await tryCoreS3Jwt(Date.now())
     return signedBpBonded.value
@@ -607,11 +588,10 @@ export function useDeviceToken() {
     lastFailureDetail: readonly(lastFailureDetail),
     /** CoreS3 署名経路を抑止している期限 (ms epoch)。0 なら抑止していない (#135) */
     coreS3BackoffUntil: readonly(coreS3BackoffUntil),
-    /** 直近の署名で分かった血圧計のボンド状態 (#336)。true=あり / false=無いと確認できた / null=不明 */
-    signedBpBonded: readonly(signedBpBonded),
-    /** ボンド状態を一度でも取りに行ったか (#336)。false のあいだは `signedBpBonded` の null が「未取得」を意味する */
-    hasProbedBpBond: readonly(hasProbedBpBond),
-    /** ボンド状態を取り直す (#336)。抑止を解き、CoreS3 の再探索から署名をやり直す */
+    /**
+     * ボンド状態を取り直す (#336)。抑止を解き、CoreS3 の再探索から署名をやり直す。
+     * **値そのものは返さない** — 読むのは `useSignedBpBond()` の 1 か所だけ (#353)。
+     */
     refreshSignedBpBonded,
   }
 }

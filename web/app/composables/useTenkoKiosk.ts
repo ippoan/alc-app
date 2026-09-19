@@ -124,8 +124,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    * CoreS3 端末では `devices` に行が無いので**構造的に常に空**。
    */
   const { deviceId } = useAuth()
-  /** 署名つきで auth-worker へ渡したボンド状態 (#336)。null = 不明 */
-  const { signedBpBonded, hasProbedBpBond, refreshSignedBpBonded } = useDeviceToken()
+  /**
+   * 署名つきで auth-worker へ渡したボンド状態 (#336)。null = 不明。
+   * **読む先は機種に依らない 1 か所** (`useSignedBpBond`、Refs ippoan/alc-app#353) —
+   * CoreS3 キオスクも血圧測定台の ATOM S3 も、同じ値へ書き込む。
+   * 取り直し (`refreshSignedBpBonded`) は CoreS3 の再探索そのものなので `useDeviceToken` 側。
+   */
+  const { signedBpBonded, hasProbedBpBond } = useSignedBpBond()
+  const { refreshSignedBpBonded } = useDeviceToken()
   /**
    * この端末で血圧を出せる見込みがあるか。**入口ガード専用の 2 材料**で、
    * `BleStatus` の表示判定 (`useBpUiEnabled`) とは**意図的に別**

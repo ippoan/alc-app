@@ -13,7 +13,7 @@ mockNuxtImport('useBleGateway', () => () => ({ hasBpHardware: readonly(hasBpHard
 // 署名つきでサーバへ渡したボンド状態 (Refs ippoan/alc-app#336 / #347)
 const signedBpBonded = ref<boolean | null>(null)
 const hasProbedBpBond = ref(false)
-mockNuxtImport('useDeviceToken', () => () => ({
+mockNuxtImport('useSignedBpBond', () => () => ({
   signedBpBonded: readonly(signedBpBonded),
   hasProbedBpBond: readonly(hasProbedBpBond),
 }))
