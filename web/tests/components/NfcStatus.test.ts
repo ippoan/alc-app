@@ -16,8 +16,9 @@ mockNuxtImport('useNfcReader', () => () => ({
   onLicenseRead: vi.fn(),
 }))
 
+const latestVersion = ref<string | null>(null)
 mockNuxtImport('useNfcBridgeUpdate', () => () => ({
-  latestVersion: ref<string | null>(null),
+  latestVersion,
   checkLatestVersion: vi.fn(async () => {}),
   isUpdateAvailable: vi.fn(() => false),
 }))
@@ -29,6 +30,12 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   requestPort: requestPortMock,
   startupProbe: vi.fn(async () => false),
   isStartupProbing: ref(false),
+}))
+
+// 血圧測定台の Atom S3 (Refs ippoan/alc-app#353)
+const atomS3Connected = ref(false)
+mockNuxtImport('useAtomS3Serial', () => () => ({
+  isConnected: readonly(atomS3Connected),
 }))
 
 const deviceModelForFingerprint = ref<string | null>(null)
@@ -53,6 +60,8 @@ describe('NfcStatus — serial ブロックの表示条件 (Refs #234)', () => {
   beforeEach(() => {
     isConnected.value = false
     coreS3Connected.value = false
+    atomS3Connected.value = false
+    latestVersion.value = null
     webSerialSupported = true
     isCheckingKioskAccess.value = false
     requestPortMock.mockClear()
@@ -130,11 +139,80 @@ describe('NfcStatus — serial ブロックの表示条件 (Refs #234)', () => {
   })
 })
 
+// 測定台 (`?station=bp`) は CoreS3 ではなく Atom S3 が挿さる (Refs ippoan/alc-app#353)。
+// 「カードは読めるのに赤ランプ + CoreS3 を確認しろ」と出さない
+describe('NfcStatus — 血圧測定台の未接続案内 (Refs #353)', () => {
+  beforeEach(() => {
+    isConnected.value = false
+    coreS3Connected.value = false
+    atomS3Connected.value = false
+    latestVersion.value = null
+    webSerialSupported = true
+    isCheckingKioskAccess.value = false
+  })
+
+  it('CoreS3 キオスク: 未接続案内は従来どおり CoreS3 を名指しし、ATOM S3 は出ない', async () => {
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).toContain('CoreS3 が USB でつながっているか確認してください。')
+    expect(wrapper.text()).toContain('初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。')
+    expect(wrapper.text()).not.toContain('ATOM S3')
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('測定台: 未接続案内は ATOM S3 (VoiceS3R) を名指しし、CoreS3 は出ない', async () => {
+    const wrapper = await mountSuspended(NfcStatus, { route: '/?role=driver&tab=bp&station=bp' })
+    expect(wrapper.text()).toContain('測定台の ATOM S3 (VoiceS3R) が USB でつながっているか確認してください。')
+    expect(wrapper.text()).toContain('初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。')
+    expect(wrapper.text()).not.toContain('CoreS3')
+    // 許可ボタンは測定台でも要る (初回の USB 許可はユーザー操作)
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('測定台: ATOM S3 が繋がっていれば未接続案内も USB 許可ボタンも出さない', async () => {
+    atomS3Connected.value = true
+    const wrapper = await mountSuspended(NfcStatus, { route: '/?role=driver&tab=bp&station=bp' })
+    expect(wrapper.text()).not.toContain('が USB でつながっているか確認してください')
+    expect(wrapper.text()).not.toContain('CoreS3')
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeFalsy()
+    wrapper.unmount()
+  })
+
+  it('ATOM S3 が USB 直結なら NFC ブリッジの更新案内は出さない', async () => {
+    isConnected.value = true
+    latestVersion.value = '9.9.9'
+    atomS3Connected.value = true
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).not.toContain('NFC ブリッジの新しいバージョン')
+    wrapper.unmount()
+  })
+
+  it('CoreS3 が USB 直結でも NFC ブリッジの更新案内は出さない (従来どおり)', async () => {
+    isConnected.value = true
+    latestVersion.value = '9.9.9'
+    coreS3Connected.value = true
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).not.toContain('NFC ブリッジの新しいバージョン')
+    wrapper.unmount()
+  })
+
+  it('USB 直結が無くブリッジだけが繋がっていれば、NFC ブリッジの更新案内を出す (従来どおり)', async () => {
+    isConnected.value = true
+    latestVersion.value = '9.9.9'
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).toContain('NFC ブリッジの新しいバージョン')
+    wrapper.unmount()
+  })
+})
+
 // IC カードの打刻案内ボタンをタッチ枠の中に出す (Refs ippoan/rust-alc-api#644)
 describe('NfcStatus — promptActive (タッチ枠の中身の差し替え、Refs #644)', () => {
   beforeEach(() => {
     isConnected.value = false
     coreS3Connected.value = false
+    atomS3Connected.value = false
+    latestVersion.value = null
     webSerialSupported = true
     isCheckingKioskAccess.value = false
   })

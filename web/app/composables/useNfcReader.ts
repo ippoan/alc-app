@@ -170,11 +170,26 @@ export function useNfcReader() {
 
   // --- 状態 ---
 
+  /**
+   * USB 直結で繋がっている端末の名前。無ければ null (= ブリッジの状態を見せる)。
+   *
+   * 測定台には CoreS3 が挿さらず、Atom S3 だけが挿さる。ここで拾わないと、カードは
+   * 読めているのに `isConnected` が false のまま = 「未接続」と出る (Refs ippoan/alc-app#353)。
+   * 両方とは繋がらない前提だが、万一重なったら従来どおり CoreS3 を優先する
+   */
+  function directReader(): string | null {
+    if (core.isConnected.value) return 'CoreS3'
+    if (atom.isConnected.value) return 'ATOM S3'
+    return null
+  }
+
   function sync(): void {
-    if (core.isConnected.value) {
+    const direct = directReader()
+    if (direct) {
       isConnected.value = true
-      readers.value = ['CoreS3']
+      readers.value = [direct]
       // 直結が生きているあいだはブリッジの再接続エラーを見せない
+      // (測定台にブリッジは無いので、Atom S3 が正常でも常に出てしまう)
       error.value = null
       bridgeVersion.value = null
       return
@@ -191,9 +206,9 @@ export function useNfcReader() {
     else if (wantConnected) ws.connect()
   })
 
-  // immediate: 既に接続済みの CoreS3 / ブリッジへ再 mount した時点で local ref に
+  // immediate: 既に接続済みの CoreS3 / Atom S3 / ブリッジへ再 mount した時点で local ref に
   // 反映する (タブを戻すたびに local isConnected が false から作り直されるため)。
-  watch([core.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
+  watch([core.isConnected, atom.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
 
   function connect(): void {
     wantConnected = true
