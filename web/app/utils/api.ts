@@ -45,10 +45,15 @@ let getManagerDeviceJwt: (() => Promise<string | null>) | null = null
 // 血圧測定台 (ATOM S3) の device JWT getter (Refs #353)。**上の 2 つとは別物**で、
 // `scope: 'bp-station'` を渡した呼び出しだけがこちらを使う。admin JWT が無いときだけ動く。
 //
-// ★ **測定台として開いた画面だけがこの getter を渡す** (`pages/index.vue` の `?station=bp`)。
-// `scope: 'bp-station'` を付けた 4 本は**キオスクの点呼と共用**の口なので、CoreS3 の
-// キオスクでは getter が未設定のまま = 下の `&& getBpStationDeviceJwt` で素通りし、
-// 従来どおりキオスクの鍵へ進む (キオスクの挙動は 1 ミリも変わらない)。
+// ★ **測定台と決着した画面だけがこの getter を入れる**。`scope: 'bp-station'` を付けた
+// 4 本は**キオスクの点呼と共用**の口なので、CoreS3 のキオスクでは getter が未設定のまま
+// = 下の `&& getBpStationDeviceJwt` で素通りし、従来どおりキオスクの鍵へ進む
+// (キオスクの挙動は 1 ミリも変わらない)。
+//
+// 入れ方は 2 つある (Refs ippoan/alc-app#368):
+//   - `initApi` の引数 … `?station=bp` 付きで開いた画面 (起動の時点で分かっている)
+//   - {@link setBpStationJwtGetter} … 端末の名乗り (`DEVICE bp-station`) で決着した画面。
+//     **決着は起動の数秒後**なので、`initApi` (起動時 1 回きり) では間に合わない
 let getBpStationDeviceJwt: (() => Promise<string | null>) | null = null
 
 // JSON 経路の transport (ヘッダー付与 + 401→refresh→retry single-flight) は
@@ -104,6 +109,30 @@ export function initApi(
   })
 }
 
+/**
+ * 測定台の device JWT getter を**後から**入れ替える (Refs ippoan/alc-app#368)。
+ *
+ * # なぜ後入れの口が要るか
+ *
+ * `initApi` は**起動時 1 回きり**だが、「この PC が測定台か」が決まるのはその数秒後 —
+ * 端末の名乗り (`DEVICE bp-station`) は `useSerialArbiter` の probe が 1 秒ごとに
+ * 最大 8 回撃って決着する (`arbitratedDeviceKind`)。`?station=bp` を付けない URL で
+ * 開いた画面 (ハンバーガーの「血圧測定」から入った画面) は、決着した時点でここから
+ * getter を入れる (呼ぶのは `pages/index.vue`)。
+ *
+ * # 未確定のあいだは入れないこと
+ *
+ * `scope: 'bp-station'` の 4 本は**キオスクの点呼と共用**で、getter が在るのに JWT が
+ * 取れなければ `request()` は**投げる** (暗黙のフォールバックを作らない、Refs #337)。
+ * ⇒ **未確定のまま入れると、CoreS3 キオスクの点呼 4 本が全部落ちる。**
+ * 入れるのは「測定台と決着したとき」だけで、未確定・キオスクのときは入れない。
+ *
+ * `null` を渡せば外せる (従来どおりキオスクの鍵へ進む形に戻る)。
+ */
+export function setBpStationJwtGetter(getter: (() => Promise<string | null>) | null): void {
+  getBpStationDeviceJwt = getter
+}
+
 /** 認証ヘッダーを構築 */
 // proxyRawFetch の fallback (= admin/device JWT が無い経路) でだけ使う。JWT がある場合は
 // proxyRawFetch が proxy 経由にするためここには来ない。残るは X-Tenant-ID kiosk fallback のみ。
@@ -130,14 +159,20 @@ function buildAuthHeaders(): Record<string, string> {
  *   `POST /api/measurements/start` / `PUT /api/measurements/{id}`。
  *   **1 本でも付け忘れると、その口だけ下の `authFetch` (X-Tenant-ID 直 fetch) に落ちる** —
  *   測定台は admin JWT も キオスクの鍵も持たないので、付け忘れた口は必ず無認証経路になる。
- *   4 本は点呼と共用なので、**getter を渡すのは測定台として開いた画面だけ**
- *   (`pages/index.vue` の `?station=bp`)。キオスクでは getter が無く素通りする
+ *   4 本は点呼と共用なので、**getter を入れるのは測定台と決着した画面だけ**
+ *   (`?station=bp` 付きの URL なら `initApi` で、端末の名乗りで決着したなら
+ *   {@link setBpStationJwtGetter} で。どちらも `pages/index.vue`)。**未確定のあいだと
+ *   キオスクでは getter が無く素通りする** (Refs ippoan/alc-app#368)
  *
  * **暗黙のフォールバックを作らない**のが肝。`'manager-device'` の呼び出しが
  * キオスクの鍵へ落ちると、サーバは `device-kiosk` の許可表で弾いて 403 を返すだけで、
  * 画面には理由が出ない (= #337 の症状そのもの)。だから落とさずに理由を投げる。
  * `'bp-station'` も同じ — getter が在るのに JWT が取れなければ**投げる**。キオスクの鍵や
  * 無認証 fetch へ落とすと、サーバは 403 を返すか tenant だけで通してしまう。
+ *
+ * **だから getter は「測定台と決着したとき」にしか入れない** — 未確定のまま入れると、
+ * この fail-closed がそのままキオスクの点呼 4 本を落とす
+ * ({@link setBpStationJwtGetter}、Refs ippoan/alc-app#368)。
  */
 export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station'
 

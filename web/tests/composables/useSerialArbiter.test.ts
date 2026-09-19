@@ -1451,4 +1451,137 @@ describe('useSerialArbiter 診断ログ', () => {
       expect(() => mod.closeArbitratedPortsForUnload()).not.toThrow()
     })
   })
+
+  // ---------- 決着した機種の公開 (Refs ippoan/alc-app#368) ----------
+  //
+  // 「測定台かどうか」を `?station=bp` という長い URL で人に書かせるのをやめ、端末の
+  // 名乗り (`DEVICE bp-station`) で決めるための口。ここで固定するのは 3 つ:
+  //
+  //   1. **未確定 (`null`) を潰さない** — probe する前に「測定台ではない」へ倒れない
+  //   2. 利用側を登録していなくても名乗りは控える (預かるかどうかより前に決まる)
+  //   3. CoreS3 と両方挿さっている PC は CoreS3 優先 (`useNfcReader` と同じ向き)
+
+  describe('arbitratedDeviceKind (名乗りで決着した機種)', () => {
+    const BP_STATION = 'bp-station'
+
+    it('★ probe が決着するまでは null (未確定) — 真偽 2 値にせず「測定台ではない」へ倒さない', async () => {
+      // 応答を返さないポート。8 秒のプローブ窓を使い切っても名乗りは 1 つも来ない
+      const silent = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [silent.port]) })
+      await load()
+
+      // ポートを開く前
+      expect(arbiter.arbitratedDeviceKind.value).toBeNull()
+
+      const { claimant } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      // DEVICE は撃ったが応答はまだ無い = 未確定のまま
+      expect(silent.writes[0]).toBe('DEVICE\n')
+      expect(arbiter.arbitratedDeviceKind.value).toBeNull()
+
+      // プローブ窓 (8 秒) を使い切っても、名乗りが無い以上決まらない
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(arbiter.arbitratedDeviceKind.value).toBeNull()
+    })
+
+    it('★ DEVICE bp-station を名乗れば bp-station — 利用側を登録していなくても控える (見送ったポートでも)', async () => {
+      // 測定台の ATOM S3 を挿した PC で、まだ誰も `bp-station` を register していない状態。
+      // 預かるのは useBpStationDeviceToken が atom.connect() を呼んでからで、**その判断
+      // 材料がこの値**なので、預かる前に決まっていなければ順序が回らない
+      const station = createMockPort()
+      station.emit('DEVICE bp-station VER=0.0.0+test\n')
+      installSerialMock({ getPorts: vi.fn(async () => [station.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      // 誰も名乗り出ていない (= 見送られた) のに、機種は分かっている
+      expect(seen.opened).toBe(0)
+      expect(station.port.close).toHaveBeenCalledTimes(1)
+      expect(arbiter.arbitratedDeviceKind.value).toBe(BP_STATION)
+    })
+
+    it('測定台の利用側が預かった場合も bp-station', async () => {
+      const station = createMockPort()
+      station.emit('DEVICE bp-station VER=0.0.0+test\n')
+      installSerialMock({ getPorts: vi.fn(async () => [station.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register(BP_STATION, claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      expect(arbiter.arbitratedDeviceKind.value).toBe(BP_STATION)
+      await arbiter.unregister(BP_STATION)
+    })
+
+    it('測定台以外の名乗り (DEVICE core) は other — キオスクとして扱う', async () => {
+      const core = createMockPort()
+      core.emit('DEVICE core LAN=up\n')
+      installSerialMock({ getPorts: vi.fn(async () => [core.port]) })
+      await load()
+
+      const { claimant } = createClaimant()
+      arbiter.register('core', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(arbiter.arbitratedDeviceKind.value).toBe('other')
+    })
+
+    it('★ 両方挿さっている PC は CoreS3 優先で other (測定台を先に名乗られても)', async () => {
+      const station = createMockPort()
+      station.emit('DEVICE bp-station VER=0.0.0+test\n')
+      const core = createMockPort()
+      core.emit('DEVICE core LAN=up\n')
+      installSerialMock({ getPorts: vi.fn(async () => [station.port, core.port]) })
+      await load()
+
+      const { claimant } = createClaimant()
+      arbiter.register('core', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(arbiter.arbitratedDeviceKind.value).toBe('other')
+    })
+
+    it('★ 両方挿さっている PC は CoreS3 優先で other (CoreS3 を先に名乗られても、あとから bp-station に戻らない)', async () => {
+      const core = createMockPort()
+      core.emit('DEVICE core LAN=up\n')
+      const station = createMockPort()
+      station.emit('DEVICE bp-station VER=0.0.0+test\n')
+      installSerialMock({ getPorts: vi.fn(async () => [core.port, station.port]) })
+      await load()
+
+      const { claimant } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(arbiter.arbitratedDeviceKind.value).toBe('other')
+    })
+
+    it('旧い名乗り (legacyClaim) で決着した機も other — 登録名がそのまま機種になる', async () => {
+      // `DEVICE` に答えない配備済みファーム (本番の CoreS3)。`DEVICE` 行が 1 本も無いので
+      // resolveDevice は legacyClaim の枝へ行く
+      const legacy = createMockPort()
+      legacy.emit('STATUS BOARD=cores3 LAN=up\n')
+      installSerialMock({ getPorts: vi.fn(async () => [legacy.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      const legacyClaimant = { ...claimant, legacyClaim: (lines: string[]) => lines.some(l => l.includes('BOARD=cores3')) }
+      arbiter.register('core', legacyClaimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      expect(arbiter.arbitratedDeviceKind.value).toBe('other')
+    })
+
+    it('決着の語彙は useAtomS3Serial が register する名前と同じ 1 本 (BP_STATION_DEVICE_KIND)', async () => {
+      await load()
+      expect(mod.BP_STATION_DEVICE_KIND).toBe(BP_STATION)
+    })
+  })
 })

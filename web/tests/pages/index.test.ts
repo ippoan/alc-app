@@ -81,6 +81,9 @@ mockNuxtImport('useAuth', () => () => ({
 // initApi は**本物をそのまま呼ぶ**が、渡された getter の顔ぶれだけ控える
 // (測定台の getter を通常端末に渡していないことを固定する。Refs ippoan/alc-app#353)
 const initApiSpy = vi.hoisted(() => vi.fn())
+// 測定台の getter を**後から**入れる口 (Refs ippoan/alc-app#368)。名乗りで決着した
+// 時点でだけ呼ばれていること / 未確定とキオスクでは呼ばれないことを固定する
+const setBpStationJwtGetterSpy = vi.hoisted(() => vi.fn())
 
 vi.mock('~/utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('~/utils/api')>()
@@ -89,6 +92,10 @@ vi.mock('~/utils/api', async (importOriginal) => {
     initApi: (...args: Parameters<typeof actual.initApi>) => {
       initApiSpy(...args)
       return actual.initApi(...args)
+    },
+    setBpStationJwtGetter: (...args: Parameters<typeof actual.setBpStationJwtGetter>) => {
+      setBpStationJwtGetterSpy(...args)
+      return actual.setBpStationJwtGetter(...args)
     },
     getEmployeeByNfcId: vi.fn(async () => ({ id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' })),
     getEmployeeByCode: vi.fn(async () => ({ id: 'emp-1', name: '山田太郎', face_approval_status: 'approved' })),
@@ -172,6 +179,36 @@ mockNuxtImport('useNfcReader', () => () => ({
   connect: vi.fn(),
   onRead: vi.fn(),
   onLicenseRead: vi.fn(),
+}))
+
+// 端末の名乗りで決着した機種 (Refs ippoan/alc-app#368)。既定は `null` (未確定) —
+// 他の describe は URL だけで測定台を判定していた従来どおりの状態で回る
+const arbiterState = {
+  arbitratedDeviceKind: ref<'bp-station' | 'other' | null>(null),
+}
+mockNuxtImport('useSerialArbiter', () => () => ({
+  isSupported: false,
+  isArbitratedPort: () => false,
+  arbitratedDeviceKind: readonly(arbiterState.arbitratedDeviceKind),
+  register: vi.fn(),
+  unregister: vi.fn(async () => {}),
+  release: vi.fn(async () => {}),
+  request: vi.fn(async () => ''),
+  start: vi.fn(),
+  requestPort: vi.fn(async () => false),
+}))
+
+// 測定台の device JWT。実物は ATOM S3 へ `AUTH SIGNBP` を撃つので、呼ばれた回数だけ見る
+const bpStationToken = { jwtCalls: 0 }
+mockNuxtImport('useBpStationDeviceToken', () => () => ({
+  getBpStationJwt: async () => {
+    bpStationToken.jwtCalls += 1
+    return 'bp-station.jwt'
+  },
+  lastError: ref<string | null>(null),
+  lastFailureStage: ref<string | null>(null),
+  lastFailureStatus: ref<number | null>(null),
+  backoffUntil: ref(0),
 }))
 
 mockNuxtImport('useNfcBridgeUpdate', () => () => ({
@@ -422,6 +459,135 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
     // 血圧測定タブは切り替わって消える
     expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
+  })
+})
+
+describe('pages/index — 測定台かどうかを端末の名乗りで決める (Refs ippoan/alc-app#368)', () => {
+  // 「測定台はこの長い URL で開いてください」を配る運用をやめるのが目的。端末は
+  // `DEVICE bp-station` と自分で名乗っているので、ハンバーガーの「血圧測定」から入った
+  // 画面 (= `?station=bp` 無し) でも測定台として動く。ここで固定するのは 4 つ:
+  //
+  //   1. `station` 無しの URL でも、名乗りで決着したら測定台の鍵を使う
+  //   2. **未確定のあいだは入れない** (キオスクへ倒れない = 点呼 4 本を落とさない)
+  //   3. CoreS3 キオスク (`other`) では入れない
+  //   4. `?station=bp` 付きの既存 URL は従来どおり起動時から測定台
+
+  let wrapper: VueWrapper | null = null
+
+  beforeEach(() => {
+    arbiterState.arbitratedDeviceKind.value = null
+    bpStationToken.jwtCalls = 0
+    initApiSpy.mockClear()
+    setBpStationJwtGetterSpy.mockClear()
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    arbiterState.arbitratedDeviceKind.value = null
+  })
+
+  it('★ ?station=bp の無い URL (/?role=driver&tab=bp) でも、ATOM S3 が名乗れば測定台の鍵を使う', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=bp')
+    // 起動時は未確定 — initApi にも渡さず、後入れもしない
+    expect(initApiSpy.mock.calls[0]![6]).toBeUndefined()
+    expect(setBpStationJwtGetterSpy).not.toHaveBeenCalled()
+
+    // 数秒後、ATOM S3 が `DEVICE bp-station` と名乗って決着する
+    arbiterState.arbitratedDeviceKind.value = 'bp-station'
+    await nextTick()
+
+    expect(setBpStationJwtGetterSpy).toHaveBeenCalledTimes(1)
+    expect(typeof setBpStationJwtGetterSpy.mock.calls[0]![0]).toBe('function')
+    // 入れた getter は測定台の device JWT (ATOM S3 の署名) を返すものであること
+    await expect(setBpStationJwtGetterSpy.mock.calls[0]![0]()).resolves.toBe('bp-station.jwt')
+    // 決着した時点で 1 本取りに行く (ボンド状態が来ないと血圧の画面が checking のまま止まる)
+    expect(bpStationToken.jwtCalls).toBeGreaterThan(0)
+  })
+
+  it('★ ハンバーガーの「血圧測定」から入った画面 (URL に印が無い) でも測定台になる', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    const hamburger = wrapper.findAll('button').find(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))
+    await hamburger!.trigger('click')
+    await nextTick()
+    const item = wrapper.findAll('button').find(b => b.text() === '血圧測定')
+    await item!.trigger('click')
+    await nextTick()
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+
+    arbiterState.arbitratedDeviceKind.value = 'bp-station'
+    await nextTick()
+    expect(setBpStationJwtGetterSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ 未確定のあいだは測定台の getter を入れない (probe する前にキオスク扱いへ倒さない)', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=bp')
+    await nextTick()
+
+    // getter が入っていない = `scope: 'bp-station'` の 4 本は従来どおりキオスクの鍵へ素通り。
+    // 未確定で入れると fail-closed (#337) がそのまま効いて点呼 4 本が全部落ちる
+    expect(setBpStationJwtGetterSpy).not.toHaveBeenCalled()
+    expect(initApiSpy.mock.calls[0]![6]).toBeUndefined()
+    expect(bpStationToken.jwtCalls).toBe(0)
+  })
+
+  it('★ CoreS3 キオスク (other と決着) では測定台の getter を入れない (キオスクは不変)', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=bp')
+    arbiterState.arbitratedDeviceKind.value = 'other'
+    await nextTick()
+
+    expect(setBpStationJwtGetterSpy).not.toHaveBeenCalled()
+    expect(bpStationToken.jwtCalls).toBe(0)
+  })
+
+  it('?station=bp 付きの既存 URL は従来どおり — 名乗りを待たずに起動時から測定台', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=bp&station=bp')
+
+    // initApi に渡す経路は変えていない (既存 URL は 1 ミリも変わらない)
+    expect(typeof initApiSpy.mock.calls[0]![6]).toBe('function')
+    // 名乗りが `null` (未確定) のままでも測定台として起動している
+    expect(arbiterState.arbitratedDeviceKind.value).toBeNull()
+    expect(setBpStationJwtGetterSpy).toHaveBeenCalledTimes(1)
+    expect(bpStationToken.jwtCalls).toBeGreaterThan(0)
+  })
+
+  it('★ 名乗りで測定台になっても URL には station=bp を焼き付けない', async () => {
+    // 焼き付けると、ATOM S3 を抜いたあとのリロードで「測定台として開いた」と名乗り続け、
+    // ATOM S3 の無い端末で点呼と共用の 4 本が落ちる
+    const replaceState = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {})
+    try {
+      wrapper = await mountIndex('/?role=driver')
+      arbiterState.arbitratedDeviceKind.value = 'bp-station'
+      await nextTick()
+
+      const hamburger = wrapper.findAll('button').find(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))
+      await hamburger!.trigger('click')
+      await nextTick()
+      const item = wrapper.findAll('button').find(b => b.text() === '血圧測定')
+      await item!.trigger('click')
+      await nextTick()
+
+      expect(replaceState).toHaveBeenCalled()
+      for (const call of replaceState.mock.calls) {
+        expect(String(call[2])).not.toContain('station')
+      }
+    }
+    finally {
+      replaceState.mockRestore()
+    }
+  })
+
+  it('?station=bp 付きの URL では従来どおり station を引き継ぐ (印が消えない)', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {})
+    try {
+      wrapper = await mountIndex('/?role=driver&tab=bp&station=bp')
+      await clickRole(wrapper, '運行管理者')
+
+      expect(String(replaceState.mock.calls.at(-1)![2])).toContain('station=bp')
+    }
+    finally {
+      replaceState.mockRestore()
+    }
   })
 })
 

@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   initApi,
+  setBpStationJwtGetter,
   BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployeeByNfcId, getFaceData, startMeasurement, updateMeasurement,
   getEmployees, startTenkoSession, submitAlcohol, listSchedules,
@@ -53,6 +54,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // getter は module スコープなので次のテストへ持ち越さない (Refs ippoan/alc-app#368)
+  setBpStationJwtGetter(null)
 })
 
 /** admin JWT 無し + 3 つの getter (= 本番の測定台と同じ状態)。 */
@@ -160,5 +163,78 @@ describe('api.ts — 測定台の getter を渡さない端末は無変更 (#353
     await expect(listSchedules()).resolves.toBeDefined()
     expect(bearerOf(fetchMock.mock.calls.at(-1)!)).toBe(`Bearer ${MANAGER_JWT}`)
     expect(bpGetter).toHaveBeenCalledTimes(1) // 点呼・予定では 1 度も呼ばれていない
+  })
+})
+
+// `initApi` は起動時 1 回きりだが、「この PC が測定台か」は端末の名乗り (`DEVICE bp-station`)
+// で**数秒後**に決まる (`useSerialArbiter.arbitratedDeviceKind`)。`?station=bp` を付けない
+// URL で開いた画面のために、getter を**後から**入れる口を見る (Refs ippoan/alc-app#368)。
+//
+// ここで固定するのは 2 つ:
+//   1. 後から入れれば 4 本とも測定台の鍵で通る (`initApi` に渡していなくても)
+//   2. **入れていないあいだは 1 ミリも変わらない** — キオスクの鍵へ素通りし、点呼も落ちない
+describe('api.ts — 測定台の getter は後から入れられる (#368)', () => {
+  /** 名乗りが決着する前の状態 = 起動時は測定台の getter を渡していない */
+  function initUndecided() {
+    initApi(API_BASE, undefined, () => 'test-tenant', undefined, kioskGetter, managerGetter)
+  }
+
+  it.each(BP_STATION_CALLS)(
+    '%s は後から入れた getter で測定台の鍵に載る (`?station=bp` の無い URL で開いた測定台)',
+    async (_name, call) => {
+      initUndecided()
+      // 名乗りで測定台と決着した時点で入れる
+      setBpStationJwtGetter(bpGetter)
+      await call()
+
+      expect(bpGetter).toHaveBeenCalledTimes(1)
+      expect(kioskGetter).not.toHaveBeenCalled()
+      const [url] = fetchMock.mock.calls[0] as [string]
+      expect(url).toContain('/api/proxy/')
+      expect(bearerOf(fetchMock.mock.calls[0]!)).toBe(`Bearer ${BP_JWT}`)
+    },
+  )
+
+  it('★ 未確定のあいだ (getter 未設定) は測定台の 4 本もキオスクの鍵で通る — 投げない', async () => {
+    // 未確定で入れてしまうと fail-closed がそのまま効き、**キオスクの点呼 4 本が全部落ちる**。
+    // 入れないのが正で、その間は従来どおりキオスクの鍵へ素通りする
+    initUndecided()
+
+    for (const [, call] of BP_STATION_CALLS) await expect(call()).resolves.toBeDefined()
+    expect(bpGetter).not.toHaveBeenCalled()
+    expect(kioskGetter).toHaveBeenCalledTimes(BP_STATION_CALLS.length)
+    for (const call of fetchMock.mock.calls) {
+      expect(bearerOf(call)).toBe(`Bearer ${KIOSK_JWT}`)
+    }
+  })
+
+  it('★ 未確定のあいだは点呼・予定の口も 1 本も落ちない (CoreS3 キオスクは不変)', async () => {
+    initUndecided()
+
+    await expect(getEmployees()).resolves.toBeDefined()
+    await expect(startTenkoSession({ employee_id: 'e1', tenko_type: 'pre_operation' } as never)).resolves.toBeDefined()
+    await expect(submitAlcohol('s1', {} as never)).resolves.toBeDefined()
+    await expect(listSchedules()).resolves.toBeDefined()
+    expect(bpGetter).not.toHaveBeenCalled()
+  })
+
+  it('null を渡せば外れて、従来どおりキオスクの鍵へ戻る', async () => {
+    initUndecided()
+    setBpStationJwtGetter(bpGetter)
+    setBpStationJwtGetter(null)
+    await startMeasurement('emp-1')
+
+    expect(bpGetter).not.toHaveBeenCalled()
+    expect(bearerOf(fetchMock.mock.calls[0]!)).toBe(`Bearer ${KIOSK_JWT}`)
+  })
+
+  it('後から入れた getter でも fail-closed は同じ — 取れなければ投げる', async () => {
+    bpGetter.mockResolvedValue(null)
+    initUndecided()
+    setBpStationJwtGetter(bpGetter)
+
+    await expect(startMeasurement('emp-1')).rejects.toThrow(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(kioskGetter).not.toHaveBeenCalled()
   })
 })
