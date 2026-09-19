@@ -27,8 +27,8 @@
  *
  * ## 署名を頼む相手 — VoiceS3R は既に `AUTH SIGN` に答える
  *
- * #214 の管理者 device-login がまさに VoiceS3R で署名させている経路で、
- * `signAlarmDeviceNonce` (`useDeviceLogin.ts`) は **#234-2 で送り先が引数化済み**、
+ * #214 の旧管理者ログイン (#353-8 で廃止) がまさに VoiceS3R で署名させている経路で、
+ * `utils/alarm-sign.ts` の共有署名関数は **#234-2 で送り先が引数化済み**、
  * かつ**既定値が `useAlarmDevice().request` (= VoiceS3R)**。だからここは既定値のまま使う
  * — **新しいシリアル経路も firmware 変更も要らない**。
  *
@@ -45,7 +45,7 @@
  * storage には一切書かない (VoiceS3R を抜けば期限切れとともに消える)。
  */
 import { ref, readonly } from 'vue'
-import { signAlarmDeviceNonce } from '~/composables/useDeviceLogin'
+import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 
 /** auth-worker#573 が運行管理者席の鍵に割り当てた用途。nonce (query) と token (body) の両方で使う。 */
@@ -87,7 +87,7 @@ function warnFailure(stage: ManagerTokenFailureStage, status: number | null): vo
 
 export function useManagerDeviceToken() {
   const config = useRuntimeConfig()
-  // nuxt.config が既定値を持つので fallback は置かない (useDeviceLogin.ts と同じ流儀)
+  // nuxt.config が既定値を持つので fallback は置かない (旧管理者ログイン #353-8 で廃止、と同じ流儀)
   const authWorkerUrl = (config.public.authWorkerUrl as string).replace(/\/$/, '')
   const alarm = useAlarmDevice()
 

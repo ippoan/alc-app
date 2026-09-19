@@ -39,10 +39,6 @@ path = "app/composables/useAuth.ts"
 branches = true
 
 [[files]]
-path = "app/composables/useDeviceLogin.ts"
-branches = true
-
-[[files]]
 path = "app/composables/useDemoMode.ts"
 branches = true
 
@@ -189,10 +185,6 @@ path = "app/utils/employee-lookup-messages.ts"
 branches = true
 
 [[files]]
-path = "app/utils/device-login-messages.ts"
-branches = true
-
-[[files]]
 path = "app/utils/face-db.ts"
 branches = true
 
@@ -250,6 +242,10 @@ branches = true
 
 [[files]]
 path = "app/utils/app-update-gate.ts"
+branches = true
+
+[[files]]
+path = "app/utils/alarm-sign.ts"
 branches = true
 
 [[files]]
