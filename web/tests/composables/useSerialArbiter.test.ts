@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
-import { staleHeadChunk } from '../helpers/serial-stale-head'
 
 // --- Mock SerialPort (useAlarmDevice.test.ts と同形) ---
 
@@ -24,11 +23,6 @@ function createMockPort(options?: {
   signalsError?: boolean
   /** 1 回目の setSignals (RTS) だけ失敗するポートを模す */
   firstSignalsError?: boolean
-  /**
-   * 開いた直後の断片 (`STALE_HEAD`) を積まない。先頭 chunk のバイト列を
-   * テスト自身が厳密に決めたいとき (断片の破棄そのものを検証するテスト) だけ使う
-   */
-  rawStream?: boolean
 }): MockPortHandle {
   const queue: Array<{ value?: Uint8Array; done: boolean }> = []
   let pending: ((chunk: { value?: Uint8Array; done: boolean }) => void) | null = null
@@ -88,16 +82,7 @@ function createMockPort(options?: {
     close: vi.fn(async () => {
       calls.push('close')
     }),
-    readable: options?.readable === false
-      ? null
-      : {
-          getReader: vi.fn(() => {
-            // 開いた直後の断片 (helpers/serial-stale-head.ts)。積まないと各テストが渡す
-            // 先頭の行が断片として捨てられる
-            if (options?.rawStream !== true) queue.unshift(staleHeadChunk())
-            return reader
-          }),
-        },
+    readable: options?.readable === false ? null : { getReader: vi.fn(() => reader) },
     writable: options?.writable === false ? null : { getWriter: vi.fn(() => writer) },
     getInfo: vi.fn(() => ({ usbVendorId: options?.vid ?? 0x303A, usbProductId: 0x1001 })),
   }
@@ -324,12 +309,12 @@ describe('useSerialArbiter', () => {
     })
   })
 
-  // ---------- 開いた直後の断片 ----------
+  // ---------- 行頭に無い DEVICE (直前のログ行に連結) ----------
 
-  describe('開いた直後の断片', () => {
-    it('断片と応答が 1 チャンクで届いても、断片だけ捨てて応答は届く', async () => {
-      const dev = createMockPort({ rawStream: true })
-      dev.emit('partial line\nDEVICE alarm state=idle\n')
+  describe('DEVICE が行頭に無い', () => {
+    it('直前のログ行が途中で切れて連結されていても、機種を識別して claim する', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT NFC_READY port=0DEVICE alarm state=idle\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
@@ -338,56 +323,22 @@ describe('useSerialArbiter', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       expect(seen.opened).toBe(1)
-      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
+      // onOpen へ渡す行は受信したまま (加工しない)
+      expect(seen.backlog).toEqual(['EVT NFC_READY port=0DEVICE alarm state=idle'])
     })
 
-    it('断片が改行なしで chunk をまたいでも、最初の改行までを 1 つの断片として捨てる', async () => {
-      const dev = createMockPort({ rawStream: true })
-      dev.emit('EVT NFC_READ')
+    it('連結されていても kind が別なら、名乗り出ずに見送る', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT NFC_READY port=0DEVICE core LAN=up\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
       const { claimant, seen } = createClaimant()
       arbiter.register('alarm', claimant)
       await vi.advanceTimersByTimeAsync(0)
-      // 断片の続きと応答。ここまで改行が無かったので、まだ破棄の途中
+
       expect(seen.opened).toBe(0)
-
-      dev.emit('Y port=0\nDEVICE alarm state=idle\n')
-      await vi.advanceTimersByTimeAsync(0)
-
-      expect(seen.opened).toBe(1)
-      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
-    })
-
-    it('先頭の行は完全な行に見えても捨てる (行の途中から読み始めたかは区別できない)', async () => {
-      const dev = createMockPort({ rawStream: true })
-      // 捨てなければ core が名乗って alarm 側は reject される
-      dev.emit('DEVICE core LAN=up\nDEVICE alarm state=idle\n')
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-
-      const { claimant, seen } = createClaimant()
-      arbiter.register('alarm', claimant)
-      await vi.advanceTimersByTimeAsync(0)
-
-      expect(seen.opened).toBe(1)
-      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
-    })
-
-    it('最初の改行を過ぎたあとの行は捨てない (破棄は 1 回だけ)', async () => {
-      const dev = createMockPort({ rawStream: true })
-      dev.emit('partial line\nDEVICE alarm state=idle\n')
-      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
-      await load()
-
-      const { claimant, seen } = createClaimant()
-      arbiter.register('alarm', claimant)
-      await vi.advanceTimersByTimeAsync(0)
-
-      dev.emit('OK FOO\nEVT BAR\n')
-      await vi.advanceTimersByTimeAsync(0)
-      expect(seen.lines).toEqual(['OK FOO', 'EVT BAR'])
+      expect(dev.port.close).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1038,6 +989,60 @@ describe('useSerialArbiter', () => {
       await vi.advanceTimersByTimeAsync(0)
 
       await assertion
+    })
+
+    // 起動直後は USB CDC が詰まり、直前のログ行が途中で切れて応答が連結される。
+    // 接頭辞は行頭とは限らない (Refs ippoan/alc-app#353)
+    it('接頭辞が行頭に無い応答 (直前のログ行に連結) も、見つけた位置から後ろで resolve する', async () => {
+      const { dev, seen } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('EVT NFC_READY port=0AUTH SIGBP xxx yyy BP=1\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await expect(p).resolves.toBe('AUTH SIGBP xxx yyy BP=1')
+      // 行の配送は変えない — claimant には受信した行がそのまま届く
+      expect(seen.lines).toContain('EVT NFC_READY port=0AUTH SIGBP xxx yyy BP=1')
+    })
+
+    it('ERR も行頭に無ければ、見つけた位置から後ろで reject する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      const assertion = expect(p).rejects.toThrow(/^ERR AUTH: no key$/)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('EVT NFC_READY port=0ERR AUTH: no key\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('ERR の行が matchPrefix を含んでいても、先に現れた ERR で reject する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      const assertion = expect(p).rejects.toThrow('ERR AUTH SIGBP unsupported')
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('ERR AUTH SIGBP unsupported\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('応答のあとに ERR の文字列が現れても、先に現れた matchPrefix で resolve する', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'AUTH SIGNBP n1', 'AUTH SIGBP ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('AUTH SIGBP xxx yyy BP=1 note=ERR AUTH\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await expect(p).resolves.toBe('AUTH SIGBP xxx yyy BP=1 note=ERR AUTH')
     })
 
     it('無関係な行では resolve も reject もせず、timeoutMs で reject する', async () => {

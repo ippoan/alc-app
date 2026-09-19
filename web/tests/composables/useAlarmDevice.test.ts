@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { staleHeadChunk } from '../helpers/serial-stale-head'
 
 // --- Mock SerialPort ---
 
@@ -72,15 +71,7 @@ function createMockPort(options?: {
     close: vi.fn(async () => {
       if (options?.closeError) throw new Error('close failed')
     }),
-    readable: options?.readable === false
-      ? null
-      : {
-          getReader: vi.fn(() => {
-            // 開いた直後の断片 (helpers/serial-stale-head.ts)
-            queue.unshift(staleHeadChunk())
-            return reader
-          }),
-        },
+    readable: options?.readable === false ? null : { getReader: vi.fn(() => reader) },
     writable: options?.writable === false ? null : { getWriter: vi.fn(() => writer) },
     getInfo: vi.fn(() => ({ usbVendorId: options?.vid ?? 0x303A, usbProductId: 0x1001 })),
   }

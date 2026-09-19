@@ -158,8 +158,6 @@ interface PortSession {
   /** プローブ中に集まった行。採用後の行は onLine へ流すのでここには積まない */
   lines: string[]
   buffer: string
-  /** ポートを開いた後の最初の改行をまだ見ていない (それまでの受信は行の途中からの断片) */
-  awaitingFirstNewline: boolean
   active: boolean
   owner: Owner | null
 }
@@ -382,12 +380,6 @@ export function useSerialArbiter() {
         while ((newlineIdx = s.buffer.indexOf('\n')) !== -1) {
           const line = s.buffer.substring(0, newlineIdx).trim()
           s.buffer = s.buffer.substring(newlineIdx + 1)
-          // 開いた直後の最初の改行までは、端末に溜まっていた出力の切れ端 (行の途中から
-          // 読み始めている) なので行として扱わず 1 回だけ捨てる
-          if (s.awaitingFirstNewline) {
-            s.awaitingFirstNewline = false
-            continue
-          }
           if (line) onLine(line)
         }
       }
@@ -405,10 +397,14 @@ export function useSerialArbiter() {
 
   // --- 機種判定 ---
 
-  /** `DEVICE <kind> ...` の `kind` を取り出す。`DEVICE` で始まらない行は null */
+  /**
+   * `DEVICE <kind> ...` の `kind` を取り出す。`DEVICE ` を含まない行は null。
+   * 行頭とは限らない (直前のログ行が途中で切れて連結されうる。request の照合と同じ理由)
+   */
   function deviceKind(line: string): string | null {
-    if (!line.startsWith('DEVICE ')) return null
-    const rest = line.slice('DEVICE '.length)
+    const at = line.indexOf('DEVICE ')
+    if (at === -1) return null
+    const rest = line.slice(at + 'DEVICE '.length)
     const sp = rest.indexOf(' ')
     return sp === -1 ? rest : rest.slice(0, sp)
   }
@@ -464,8 +460,14 @@ export function useSerialArbiter() {
           // resolve/reject 自体が pendingRequests から自分を消すので delete は不要)
           const pendingRequest = pendingRequests.get(s)
           if (pendingRequest) {
-            if (line.startsWith(pendingRequest.matchPrefix)) pendingRequest.resolve(line)
-            else if (line.startsWith(pendingRequest.errPrefix)) pendingRequest.reject(new Error(line))
+            // 接頭辞は行頭とは限らない: 起動直後は USB CDC が詰まり、直前のログ行が途中で
+            // 切れて応答が連結される (`EVT NFC_READY port=0` + `AUTH SIGBP ...`)。
+            // 落ちたバイトは復元できないので、行の中から探して見つけた位置から後ろを使う。
+            // 先に現れた方を採る (`ERR AUTH ...` は `AUTH ...` を含みうるため)
+            const matchAt = line.indexOf(pendingRequest.matchPrefix)
+            const errAt = line.indexOf(pendingRequest.errPrefix)
+            if (matchAt >= 0 && (errAt < 0 || matchAt < errAt)) pendingRequest.resolve(line.slice(matchAt))
+            else if (errAt >= 0) pendingRequest.reject(new Error(line.slice(errAt)))
           }
           s.owner.claimant.onLine(line)
           return
@@ -519,7 +521,6 @@ export function useSerialArbiter() {
       writer: candidate.writable.getWriter(),
       lines: [],
       buffer: '',
-      awaitingFirstNewline: true,
       active: true,
       owner: null,
     }

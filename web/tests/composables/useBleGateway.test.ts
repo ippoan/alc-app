@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { staleHeadChunk } from '../helpers/serial-stale-head'
 
 // --- Mock WebSocket ---
 
@@ -117,14 +116,7 @@ function createMockPort(options?: { vid?: number }): MockPortHandle {
     open: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     // 掴み直しでも同じ reader を使い回す (前回の cancel を持ち越さない)
-    readable: {
-      getReader: vi.fn(() => {
-        cancelled = false
-        // 開いた直後の断片 (helpers/serial-stale-head.ts)
-        queue.unshift(staleHeadChunk())
-        return reader
-      }),
-    },
+    readable: { getReader: vi.fn(() => { cancelled = false; return reader }) },
     writable: { getWriter: vi.fn(() => writer) },
     getInfo: vi.fn(() => ({ usbVendorId: options?.vid ?? 0x303A, usbProductId: 0x1001 })),
   }
