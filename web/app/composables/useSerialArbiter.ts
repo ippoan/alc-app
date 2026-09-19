@@ -158,6 +158,8 @@ interface PortSession {
   /** プローブ中に集まった行。採用後の行は onLine へ流すのでここには積まない */
   lines: string[]
   buffer: string
+  /** ポートを開いた後の最初の改行をまだ見ていない (それまでの受信は行の途中からの断片) */
+  awaitingFirstNewline: boolean
   active: boolean
   owner: Owner | null
 }
@@ -380,6 +382,12 @@ export function useSerialArbiter() {
         while ((newlineIdx = s.buffer.indexOf('\n')) !== -1) {
           const line = s.buffer.substring(0, newlineIdx).trim()
           s.buffer = s.buffer.substring(newlineIdx + 1)
+          // 開いた直後の最初の改行までは、端末に溜まっていた出力の切れ端 (行の途中から
+          // 読み始めている) なので行として扱わず 1 回だけ捨てる
+          if (s.awaitingFirstNewline) {
+            s.awaitingFirstNewline = false
+            continue
+          }
           if (line) onLine(line)
         }
       }
@@ -511,6 +519,7 @@ export function useSerialArbiter() {
       writer: candidate.writable.getWriter(),
       lines: [],
       buffer: '',
+      awaitingFirstNewline: true,
       active: true,
       owner: null,
     }

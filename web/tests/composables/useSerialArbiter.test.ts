@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
+import { staleHeadChunk } from '../helpers/serial-stale-head'
 
 // --- Mock SerialPort (useAlarmDevice.test.ts と同形) ---
 
@@ -23,6 +24,11 @@ function createMockPort(options?: {
   signalsError?: boolean
   /** 1 回目の setSignals (RTS) だけ失敗するポートを模す */
   firstSignalsError?: boolean
+  /**
+   * 開いた直後の断片 (`STALE_HEAD`) を積まない。先頭 chunk のバイト列を
+   * テスト自身が厳密に決めたいとき (断片の破棄そのものを検証するテスト) だけ使う
+   */
+  rawStream?: boolean
 }): MockPortHandle {
   const queue: Array<{ value?: Uint8Array; done: boolean }> = []
   let pending: ((chunk: { value?: Uint8Array; done: boolean }) => void) | null = null
@@ -82,7 +88,16 @@ function createMockPort(options?: {
     close: vi.fn(async () => {
       calls.push('close')
     }),
-    readable: options?.readable === false ? null : { getReader: vi.fn(() => reader) },
+    readable: options?.readable === false
+      ? null
+      : {
+          getReader: vi.fn(() => {
+            // 開いた直後の断片 (helpers/serial-stale-head.ts)。積まないと各テストが渡す
+            // 先頭の行が断片として捨てられる
+            if (options?.rawStream !== true) queue.unshift(staleHeadChunk())
+            return reader
+          }),
+        },
     writable: options?.writable === false ? null : { getWriter: vi.fn(() => writer) },
     getInfo: vi.fn(() => ({ usbVendorId: options?.vid ?? 0x303A, usbProductId: 0x1001 })),
   }
@@ -306,6 +321,73 @@ describe('useSerialArbiter', () => {
 
       expect(alarmSide.seen.opened).toBe(1)
       expect(coreSide.seen.opened).toBe(0)
+    })
+  })
+
+  // ---------- 開いた直後の断片 ----------
+
+  describe('開いた直後の断片', () => {
+    it('断片と応答が 1 チャンクで届いても、断片だけ捨てて応答は届く', async () => {
+      const dev = createMockPort({ rawStream: true })
+      dev.emit('partial line\nDEVICE alarm state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
+    })
+
+    it('断片が改行なしで chunk をまたいでも、最初の改行までを 1 つの断片として捨てる', async () => {
+      const dev = createMockPort({ rawStream: true })
+      dev.emit('EVT NFC_READ')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+      // 断片の続きと応答。ここまで改行が無かったので、まだ破棄の途中
+      expect(seen.opened).toBe(0)
+
+      dev.emit('Y port=0\nDEVICE alarm state=idle\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
+    })
+
+    it('先頭の行は完全な行に見えても捨てる (行の途中から読み始めたかは区別できない)', async () => {
+      const dev = createMockPort({ rawStream: true })
+      // 捨てなければ core が名乗って alarm 側は reject される
+      dev.emit('DEVICE core LAN=up\nDEVICE alarm state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(seen.opened).toBe(1)
+      expect(seen.backlog).toEqual(['DEVICE alarm state=idle'])
+    })
+
+    it('最初の改行を過ぎたあとの行は捨てない (破棄は 1 回だけ)', async () => {
+      const dev = createMockPort({ rawStream: true })
+      dev.emit('partial line\nDEVICE alarm state=idle\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant, seen } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      dev.emit('OK FOO\nEVT BAR\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(seen.lines).toEqual(['OK FOO', 'EVT BAR'])
     })
   })
 
