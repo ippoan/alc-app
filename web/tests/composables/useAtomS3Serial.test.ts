@@ -147,7 +147,17 @@ describe('useAtomS3Serial', () => {
   // ---------- claim / reject ----------
 
   describe('claim', () => {
-    it('ERR UNSUPPORTED (nfc) — 測定台の tag が付いていれば claim する', async () => {
+    it('STATUS nfc … (正規の名乗り) なら claim する', async () => {
+      const dev = createMockPort()
+      dev.emit('STATUS nfc VER=0.1.0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      expect(await connect()).toBe(true)
+      expect(atom.isConnected.value).toBe(true)
+    })
+
+    it('ERR UNSUPPORTED (nfc) — STATUS 未対応の初版ファームでも claim する (後方互換)', async () => {
       const dev = createMockPort()
       dev.emit('ERR UNSUPPORTED (nfc)\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })

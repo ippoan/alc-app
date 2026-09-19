@@ -13,21 +13,21 @@
  * useSerialArbiter が 1 本で行い、ここは「これは Atom S3 の測定台だ」と名乗り出る述語と、
  * 預かったポートの使い方だけを持つ (useCoreS3Serial.ts:1-45 の doc、Refs ippoan/alc-app#182)。
  *
- * この機は `STATUS` に応答できない — ホストリンクを持たないベンチ専用機なので、
- * コンソールは機種固有の分岐を持たない共通入口 (`alc_hub_drivers::console::start_common`)
- * だけを回し、`STATUS` は未対応コマンドとして `ERR UNSUPPORTED (<tag>)` を返す
- * (ippoan/alc-app-s3 の `crates/hub-drivers/src/console.rs` の `start_common` の doc 参照)。
- * `<tag>` は測定台 (`atoms3-nfc`) が渡す `"nfc"` 固定 (`crates/atoms3-nfc/src/main.rs`)。
- * CoreS3 が `STATUS ... BOARD=cores3` で、警告デバイスが `STATUS alarm ...` で名乗るのに
- * 対し、この機は「`STATUS` に応答できないこと」そのものが名乗りの根拠になる。
+ * 機種識別の正規の形は「`STATUS` 応答の先頭 2 トークン」— `atoms3-alarm/src/console.rs`
+ * の doc (★ `STATUS` 応答の先頭 2 トークン `STATUS alarm` は変えないこと。ブラウザ側は
+ * これで機種を識別する) の通り、CoreS3 は `STATUS ... BOARD=cores3`、警告デバイスは
+ * `STATUS alarm ...` で名乗る。測定台 (`atoms3-nfc`) は `STATUS nfc ...` で名乗る
+ * (`start_common` が `STATUS <tag> ...` を返す。`<tag>` は `"nfc"` 固定、
+ * `crates/atoms3-nfc/src/main.rs`)。
  *
- * **タグまで見る**: `ERR UNSUPPORTED` 自体は測定台の専売ではなく、`STATUS` を自前で
- * 捌かない機の catch-all (`start_common` を使う機) 全部が返しうる (`crates/atoms3-timecard`
- * `crates/atoms3-alarm` `crates/atoms3-print` は自前の `console.rs` で `STATUS` を捌くので
- * 今のところ衝突しないが、それは「他機が STATUS を実装し続ける」ことに寄りかかった条件)。
- * `<tag>` まで確かめれば、`STATUS` を持たない機が増えても取り違えない。
+ * **後方互換**: `STATUS` に無応答で `ERR UNSUPPORTED (<tag>)` を返す初版ファーム
+ * (`start_common` が `STATUS` を返す前の版) が Pages で配布済み
+ * (ippoan/alc-app-s3#260、`https://ippoan.github.io/alc-app-s3/atoms3-nfc.html`) なので、
+ * それを焼いた個体のために `ERR UNSUPPORTED (nfc)` も claim 信号に残す。裸の
+ * `ERR UNSUPPORTED` は `start_common` を使う機 (atoms3-timecard / atoms3-alarm /
+ * atoms3-print) 全部の catch-all なので使わない — tag まで見て測定台に限定する。
  *
- * BLE の測定値 (JSON) が `STATUS` への無応答より先に届くこともあるため、JSON の先着も
+ * BLE の測定値 (JSON) が `STATUS` の応答より先に届くこともあるため、JSON の先着も
  * claim 信号に含める (useCoreS3Serial.ts の「ready まで無言のファームウェアを取りこぼさない」
  * 流儀と同じフォールバック)。
  */
@@ -41,11 +41,11 @@ const CLAIMANT_NAME = 'atoms3'
 /** connect() が claim を待つ上限 (useCoreS3Serial と同じ値・同じ意味) */
 const CLAIM_TIMEOUT = 3000
 
-/** measurements stand (`atoms3-nfc`) が `start_common` に渡す tag。ここ限定で名乗る */
-const UNSUPPORTED_TAG = 'ERR UNSUPPORTED (nfc)'
+/** 測定台 (`atoms3-nfc`) が `start_common` に渡す tag。ここ限定で名乗る */
+const NFC_TAG = 'nfc'
 
 /** 行の素性。自分のものか、他の 2 機 (CoreS3 / 警告デバイス) のものか、どちらとも言えないか */
-type LineKind = 'alarm' | 'cores3' | 'unsupported' | 'json' | 'unknown'
+type LineKind = 'alarm' | 'cores3' | 'nfc' | 'unsupported' | 'json' | 'unknown'
 
 /**
  * 行の接頭辞から素性を決める。
@@ -54,14 +54,15 @@ type LineKind = 'alarm' | 'cores3' | 'unsupported' | 'json' | 'unknown'
  * CoreS3 が起動時に出す `EVT ALARM_RESTORED` を警告デバイスの行と取り違えないため
  * (useCoreS3Serial.ts の `classify()` と同じ注意、Refs ippoan/alc-app#225)。
  *
- * `ERR UNSUPPORTED` は tag (`(nfc)`) まで見る — 接頭辞だけだと `atoms3-timecard` /
- * `atoms3-alarm` / `atoms3-print` が **将来** `STATUS` を自前で捌かなくなったときに
- * 取り違える (doc 冒頭の注意参照)。
+ * `STATUS nfc` / `ERR UNSUPPORTED (nfc)` はどちらも tag (`nfc`) まで見る — 接頭辞だけだと
+ * `atoms3-timecard` / `atoms3-alarm` / `atoms3-print` の `STATUS` 応答や
+ * `ERR UNSUPPORTED` (どの機も catch-all で返しうる) と取り違える (doc 冒頭の注意参照)。
  */
 function classify(line: string): LineKind {
   if (line.startsWith('STATUS alarm') || line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
   if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'cores3'
-  if (line.startsWith(UNSUPPORTED_TAG)) return 'unsupported'
+  if (line.startsWith(`STATUS ${NFC_TAG}`)) return 'nfc'
+  if (line.startsWith(`ERR UNSUPPORTED (${NFC_TAG})`)) return 'unsupported'
   if (line.startsWith('{')) return 'json'
   return 'unknown'
 }
@@ -98,10 +99,11 @@ export function useAtomS3Serial() {
   // --- arbiter に預ける述語とハンドラ ---
 
   const claimant: SerialClaimant = {
-    // `STATUS` に無応答 (`ERR UNSUPPORTED`) か、JSON が先着したら自分のもの
+    // `STATUS nfc` (正規の名乗り) か `ERR UNSUPPORTED (nfc)` (初版ファームの後方互換)、
+    // あるいは JSON が先着したら自分のもの
     claim: lines => lines.some((line) => {
       const kind = classify(line)
-      return kind === 'unsupported' || kind === 'json'
+      return kind === 'nfc' || kind === 'unsupported' || kind === 'json'
     }),
     // 警告デバイスか CoreS3 の名乗りが来たら自分のものではないと確定
     reject: lines => lines.some((line) => {
