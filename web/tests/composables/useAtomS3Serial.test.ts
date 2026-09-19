@@ -115,7 +115,7 @@ describe('useAtomS3Serial', () => {
   async function connectUnsupported(dev: MockPortHandle) {
     installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
     await load()
-    dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+    dev.emit('ERR UNSUPPORTED (nfc)\n')
     expect(await connect()).toBe(true)
   }
 
@@ -147,14 +147,28 @@ describe('useAtomS3Serial', () => {
   // ---------- claim / reject ----------
 
   describe('claim', () => {
-    it('STATUS に未対応 (ERR UNSUPPORTED) なら claim する', async () => {
+    it('ERR UNSUPPORTED (nfc) — 測定台の tag が付いていれば claim する', async () => {
       const dev = createMockPort()
-      dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+      dev.emit('ERR UNSUPPORTED (nfc)\n')
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
       await load()
 
       expect(await connect()).toBe(true)
       expect(atom.isConnected.value).toBe(true)
+    })
+
+    it('ERR UNSUPPORTED (alarm) — 他機 (警告デバイス) の tag では claim しない (8 秒で見送り)', async () => {
+      // ERR UNSUPPORTED 自体は start_common を使う機の catch-all で、測定台の専売ではない
+      // (doc 冒頭の注意)。tag まで見ているので他機の tag には反応しないことを確かめる
+      const dev = createMockPort()
+      dev.emit('ERR UNSUPPORTED (alarm)\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const p = atom.connect(0)
+      await vi.advanceTimersByTimeAsync(8000)
+      await expect(p).resolves.toBe(false)
+      expect(atom.isConnected.value).toBe(false)
     })
 
     it('JSON 行が先着したら STATUS の応答を待たずに claim する', async () => {
@@ -210,7 +224,7 @@ describe('useAtomS3Serial', () => {
       // 警告デバイスと取り違えて見送っていない
       expect(dev.port.close).not.toHaveBeenCalled()
 
-      dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+      dev.emit('ERR UNSUPPORTED (nfc)\n')
       await vi.advanceTimersByTimeAsync(0)
       await expect(p).resolves.toBe(true)
     })
@@ -265,7 +279,7 @@ describe('useAtomS3Serial', () => {
       const seen: unknown[] = []
       atom.onJson(msg => seen.push(msg))
 
-      dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+      dev.emit('ERR UNSUPPORTED (nfc)\n')
       dev.emit('PONG\n')
       await vi.advanceTimersByTimeAsync(0)
 
@@ -287,7 +301,7 @@ describe('useAtomS3Serial', () => {
       expect(atom.isConnected.value).toBe(false)
 
       // 諦めたあとでも、遅れて来た ERR UNSUPPORTED で採用される
-      dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+      dev.emit('ERR UNSUPPORTED (nfc)\n')
       await vi.advanceTimersByTimeAsync(0)
       expect(atom.isConnected.value).toBe(true)
     })
@@ -333,7 +347,7 @@ describe('useAtomS3Serial', () => {
       atom.onOpen(() => opened.push(1))
       expect(opened).toEqual([])
 
-      dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+      dev.emit('ERR UNSUPPORTED (nfc)\n')
       await connect()
       expect(opened).toEqual([1])
     })
@@ -401,7 +415,7 @@ describe('useAtomS3Serial', () => {
     const getPorts = vi.fn(async () => [dev.port])
     installSerialMock({ getPorts })
     await load()
-    dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+    dev.emit('ERR UNSUPPORTED (nfc)\n')
     await connect()
 
     // 探索 1 回。プローブは arbiter が撃つ

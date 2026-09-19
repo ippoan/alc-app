@@ -15,13 +15,21 @@
  *
  * この機は `STATUS` に応答できない — ホストリンクを持たないベンチ専用機なので、
  * コンソールは機種固有の分岐を持たない共通入口 (`alc_hub_drivers::console::start_common`)
- * だけを回し、`STATUS` は未対応コマンドとして `ERR UNSUPPORTED (...)` を返す
- * (ippoan/alc-app-s3 の `crates/atoms3-nfc/src/main.rs` の doc 参照)。CoreS3 が
- * `STATUS ... BOARD=cores3` で、警告デバイスが `STATUS alarm ...` で名乗るのに対し、
- * この機は「`STATUS` に応答できないこと」そのものが名乗りの根拠になる。BLE の測定値
- * (JSON) が `STATUS` への無応答より先に届くこともあるため、JSON の先着も claim 信号に
- * 含める (useCoreS3Serial.ts の「ready まで無言のファームウェアを取りこぼさない」流儀と
- * 同じフォールバック)。
+ * だけを回し、`STATUS` は未対応コマンドとして `ERR UNSUPPORTED (<tag>)` を返す
+ * (ippoan/alc-app-s3 の `crates/hub-drivers/src/console.rs` の `start_common` の doc 参照)。
+ * `<tag>` は測定台 (`atoms3-nfc`) が渡す `"nfc"` 固定 (`crates/atoms3-nfc/src/main.rs`)。
+ * CoreS3 が `STATUS ... BOARD=cores3` で、警告デバイスが `STATUS alarm ...` で名乗るのに
+ * 対し、この機は「`STATUS` に応答できないこと」そのものが名乗りの根拠になる。
+ *
+ * **タグまで見る**: `ERR UNSUPPORTED` 自体は測定台の専売ではなく、`STATUS` を自前で
+ * 捌かない機の catch-all (`start_common` を使う機) 全部が返しうる (`crates/atoms3-timecard`
+ * `crates/atoms3-alarm` `crates/atoms3-print` は自前の `console.rs` で `STATUS` を捌くので
+ * 今のところ衝突しないが、それは「他機が STATUS を実装し続ける」ことに寄りかかった条件)。
+ * `<tag>` まで確かめれば、`STATUS` を持たない機が増えても取り違えない。
+ *
+ * BLE の測定値 (JSON) が `STATUS` への無応答より先に届くこともあるため、JSON の先着も
+ * claim 信号に含める (useCoreS3Serial.ts の「ready まで無言のファームウェアを取りこぼさない」
+ * 流儀と同じフォールバック)。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
@@ -33,6 +41,9 @@ const CLAIMANT_NAME = 'atoms3'
 /** connect() が claim を待つ上限 (useCoreS3Serial と同じ値・同じ意味) */
 const CLAIM_TIMEOUT = 3000
 
+/** measurements stand (`atoms3-nfc`) が `start_common` に渡す tag。ここ限定で名乗る */
+const UNSUPPORTED_TAG = 'ERR UNSUPPORTED (nfc)'
+
 /** 行の素性。自分のものか、他の 2 機 (CoreS3 / 警告デバイス) のものか、どちらとも言えないか */
 type LineKind = 'alarm' | 'cores3' | 'unsupported' | 'json' | 'unknown'
 
@@ -42,11 +53,15 @@ type LineKind = 'alarm' | 'cores3' | 'unsupported' | 'json' | 'unknown'
  * 警告デバイスの行を先に見る: `EVT ALARM` は `EVT ` にも当てはまるため。空白まで見る —
  * CoreS3 が起動時に出す `EVT ALARM_RESTORED` を警告デバイスの行と取り違えないため
  * (useCoreS3Serial.ts の `classify()` と同じ注意、Refs ippoan/alc-app#225)。
+ *
+ * `ERR UNSUPPORTED` は tag (`(nfc)`) まで見る — 接頭辞だけだと `atoms3-timecard` /
+ * `atoms3-alarm` / `atoms3-print` が **将来** `STATUS` を自前で捌かなくなったときに
+ * 取り違える (doc 冒頭の注意参照)。
  */
 function classify(line: string): LineKind {
   if (line.startsWith('STATUS alarm') || line === 'EVT ALARM' || line.startsWith('EVT ALARM ')) return 'alarm'
   if (line.startsWith('STATUS ') && line.includes('BOARD=cores3')) return 'cores3'
-  if (line.startsWith('ERR UNSUPPORTED')) return 'unsupported'
+  if (line.startsWith(UNSUPPORTED_TAG)) return 'unsupported'
   if (line.startsWith('{')) return 'json'
   return 'unknown'
 }

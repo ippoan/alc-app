@@ -765,7 +765,7 @@ describe('useBleGateway', () => {
       async function connectAtomS3(dev: MockPortHandle) {
         installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
         await load()
-        dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+        dev.emit('ERR UNSUPPORTED (nfc)\n')
         const p = gw.autoConnect()
         await vi.advanceTimersByTimeAsync(3000)
         expect(await p).toBe(true)
@@ -805,7 +805,7 @@ describe('useBleGateway', () => {
         const requestPort = vi.fn(async () => dev.port)
         installSerialMock({ getPorts: vi.fn(async () => [dev.port]), requestPort })
         await load()
-        dev.emit('ERR UNSUPPORTED (atoms3-nfc)\n')
+        dev.emit('ERR UNSUPPORTED (nfc)\n')
 
         const p = gw.connect()
         await vi.advanceTimersByTimeAsync(3000)
