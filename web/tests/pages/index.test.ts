@@ -348,7 +348,22 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
   })
 
-  it('(manifest) 血圧端末の manifest で開くと、点呼まわりの部品を出さない (Refs ippoan/alc-app#353)', async () => {
+  it('通常端末がハンバーガーで血圧測定タブを選んでからリロードしても (?tab=bp のみ、station 無し) 点呼まわりの部品は消えない (Refs ippoan/alc-app#353、裏取りで発覚)', async () => {
+    // URL 同期が書く `?tab=bp` はどの端末でも起きる。`station` が無ければ測定台とは判定しない
+    wrapper = await mountIndex('/?role=driver&tab=bp')
+    expect(wrapper.findAll('button').some(b => b.text() === '運行管理者')).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.text() === '通常点呼')).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.text() === '自動点呼')).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.text() === '遠隔点呼')).toBe(true)
+    expect(wrapper.findAll('button').some(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))).toBe(true)
+    expect(wrapper.findComponent(DeviceUnregisteredBanner).exists()).toBe(true)
+    expect(wrapper.findComponent(ScreenShareSender).exists()).toBe(true)
+    expect(wrapper.findComponent(MeasurementLog).exists()).toBe(true)
+    // tab=bp のとおり血圧測定タブ自体は出る (通常端末の1タブとして)
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
+  })
+
+  it('(manifest) 血圧端末の manifest (?tab=bp&station=bp) で開くと、点呼まわりの部品を出さない (Refs ippoan/alc-app#353)', async () => {
     wrapper = await mountIndex(bpManifest().start_url)
     // ロールタブ (運行者/運行管理者/システム管理者/汎用管理) のボタンが出ない
     expect(wrapper.findAll('button').some(b => b.text() === '運行管理者')).toBe(false)

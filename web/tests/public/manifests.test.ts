@@ -50,9 +50,11 @@ describe('public/manifest-*.webmanifest', () => {
     expect(driver.start_url).toBe('/?role=driver')
     expect(manager.id).toBe('/?role=manager')
     expect(manager.start_url).toBe('/?role=manager')
-    // 血圧端末は運行者ロールの血圧測定タブ (`?tab=bp`) を直接開く
-    expect(bp.id).toBe('/?role=driver&tab=bp')
-    expect(bp.start_url).toBe('/?role=driver&tab=bp')
+    // 血圧端末は運行者ロールの血圧測定タブ (`?tab=bp`) を直接開く。`station=bp` は
+    // 「測定台として起動したか」の印 — `?tab=bp` だけだと通常端末が血圧測定タブを
+    // 選んでリロードしたときにも同じ形になり誤爆する (Refs ippoan/alc-app#353、裏取りで発覚)
+    expect(bp.id).toBe('/?role=driver&tab=bp&station=bp')
+    expect(bp.start_url).toBe('/?role=driver&tab=bp&station=bp')
   })
 
   it('start_url は相対パス (public repo に実ホスト名を書かない)', () => {
