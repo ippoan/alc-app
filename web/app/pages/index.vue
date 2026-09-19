@@ -92,11 +92,12 @@ const isBpStation = route.query.station === 'bp'
 
 // URL クエリ同期。`?station=bp` (測定台として起動した印) が元々付いていれば引き継ぐ —
 // 落としても測定台の判定自体 (起動時の 1 回評価) は変わらないので詰まりはしないが、
-// リロードするたびに測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)
+// リロードするたびに測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)。
+// `isBpStation` は起動時の 1 回評価から変わらないので、ここで参照しても等価
 watch(activeRole, (role) => {
   const params = new URLSearchParams()
   if (role !== 'driver') params.set('role', role)
-  if (route.query.station === 'bp') params.set('station', 'bp')
+  if (isBpStation) params.set('station', 'bp')
   const qs = params.toString()
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
@@ -105,7 +106,7 @@ watch(driverSubTab, (tab) => {
   if (activeRole.value !== 'driver') return
   const params = new URLSearchParams()
   if (tab !== 'normal') params.set('tab', tab)
-  if (route.query.station === 'bp') params.set('station', 'bp')
+  if (isBpStation) params.set('station', 'bp')
   const qs = params.toString()
   window.history.replaceState({}, '', qs ? `/?${qs}` : '/')
 })
