@@ -42,6 +42,14 @@ let getKioskDeviceJwt: (() => Promise<string | null>) | null = null
 // 運行管理者席 (VoiceS3R) の device JWT getter (Refs #337)。**キオスクの getter とは別物**で、
 // `scope: 'manager-device'` を渡した呼び出しだけがこちらを使う。admin JWT が無いときだけ動く。
 let getManagerDeviceJwt: (() => Promise<string | null>) | null = null
+// 血圧測定台 (ATOM S3) の device JWT getter (Refs #353)。**上の 2 つとは別物**で、
+// `scope: 'bp-station'` を渡した呼び出しだけがこちらを使う。admin JWT が無いときだけ動く。
+//
+// ★ **測定台として開いた画面だけがこの getter を渡す** (`pages/index.vue` の `?station=bp`)。
+// `scope: 'bp-station'` を付けた 4 本は**キオスクの点呼と共用**の口なので、CoreS3 の
+// キオスクでは getter が未設定のまま = 下の `&& getBpStationDeviceJwt` で素通りし、
+// 従来どおりキオスクの鍵へ進む (キオスクの挙動は 1 ミリも変わらない)。
+let getBpStationDeviceJwt: (() => Promise<string | null>) | null = null
 
 // JSON 経路の transport (ヘッダー付与 + 401→refresh→retry single-flight) は
 // @ippoan/auth-client の createAuthFetch に集約 (Refs ippoan/auth-worker#257)。
@@ -64,6 +72,7 @@ export function initApi(
   refresher?: () => Promise<void>,
   deviceJwtGetter?: () => Promise<string | null>,
   managerDeviceJwtGetter?: () => Promise<string | null>,
+  bpStationDeviceJwtGetter?: () => Promise<string | null>,
 ) {
   apiBase = baseUrl.replace(/\/$/, '')
   getAccessToken = tokenGetter || null
@@ -71,6 +80,7 @@ export function initApi(
   tokenRefresher = refresher || null
   getKioskDeviceJwt = deviceJwtGetter || null
   getManagerDeviceJwt = managerDeviceJwtGetter || null
+  getBpStationDeviceJwt = bpStationDeviceJwtGetter || null
   // authFetch は **admin JWT が無い fallback 経路専用** (admin は proxyAuthFetch へ行く)。
   // よって token は常に付けず、X-Tenant-ID kiosk fallback だけ載せる。
   authFetch = apiBase
@@ -112,12 +122,24 @@ function buildAuthHeaders(): Record<string, string> {
  * - `'manager-device'` … **運行管理者席 (VoiceS3R) の鍵で通す口**。auth-worker#573 が
  *   role `device-tenko-manager` に許した**予定の口だけ**に付ける。admin JWT があれば
  *   従来どおりそちらが優先 (admin タブは今までと 1 ミリも変わらない)
+ * - `'bp-station'` … **血圧測定台 (ATOM S3 を挿した PC) の鍵で通す口** (Refs #353)。
+ *   測定台は `devices` に行を持たず `deviceId` が構造的に空なので、admin JWT も
+ *   キオスクの device JWT も持たない。auth-worker の `BP_STATION_ROUTES` が role
+ *   `device-bp-station` に許した**4 本すべて**に付ける:
+ *   `POST /api/employees/lookup` / `GET /api/employees/face-data` /
+ *   `POST /api/measurements/start` / `PUT /api/measurements/{id}`。
+ *   **1 本でも付け忘れると、その口だけ下の `authFetch` (X-Tenant-ID 直 fetch) に落ちる** —
+ *   測定台は admin JWT も キオスクの鍵も持たないので、付け忘れた口は必ず無認証経路になる。
+ *   4 本は点呼と共用なので、**getter を渡すのは測定台として開いた画面だけ**
+ *   (`pages/index.vue` の `?station=bp`)。キオスクでは getter が無く素通りする
  *
  * **暗黙のフォールバックを作らない**のが肝。`'manager-device'` の呼び出しが
  * キオスクの鍵へ落ちると、サーバは `device-kiosk` の許可表で弾いて 403 を返すだけで、
  * 画面には理由が出ない (= #337 の症状そのもの)。だから落とさずに理由を投げる。
+ * `'bp-station'` も同じ — getter が在るのに JWT が取れなければ**投げる**。キオスクの鍵や
+ * 無認証 fetch へ落とすと、サーバは 403 を返すか tenant だけで通してしまう。
  */
-export type RequestTokenScope = 'default' | 'manager-device'
+export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station'
 
 /**
  * 運行管理者席の端末で認証できなかったときの文言 (#338 と同じ趣旨 —
@@ -127,6 +149,15 @@ export type RequestTokenScope = 'default' | 'manager-device'
 export const MANAGER_DEVICE_AUTH_FAILED_MESSAGE
   = '運行管理者席の端末で認証できませんでした。この席の警告デバイス (VoiceS3R) が USB でつながっていて、'
     + '用途「運行管理者席」で鍵が登録されているか確認してください'
+
+/**
+ * 血圧測定台で認証できなかったときの文言 (Refs #353)。**無言で 403 にも
+ * 無認証 fetch にも落とさない** — `/device/setup` で用途「測定台」の登録がまだの鍵も、
+ * auth-worker が 401 を返すのでこのメッセージになる。
+ */
+export const BP_STATION_DEVICE_AUTH_FAILED_MESSAGE
+  = '血圧測定台の端末で認証できませんでした。この測定台の ATOM S3 が USB でつながっていて、'
+    + '用途「測定台」で鍵が登録されているか確認してください'
 
 async function request<T>(
   path: string,
@@ -157,6 +188,15 @@ async function request<T>(
       const managerJwt = await getManagerDeviceJwt()
       if (!managerJwt) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
       return await proxyRequest<T>(path, managerJwt, opts)
+    }
+    // 血圧測定台: admin JWT が無く、この呼び出しが測定台の口なら **測定台の鍵**で通す
+    // (#353)。**キオスクの鍵にも無認証 fetch にも落とさない** — 落としても
+    // auth-worker の許可表で 403 になるか、tenant だけの無認証経路になるため。
+    // getter 自体が未設定の環境 (= 測定台として開いていない画面) は従来どおり下へ抜ける。
+    if (scope === 'bp-station' && getBpStationDeviceJwt) {
+      const bpJwt = await getBpStationDeviceJwt()
+      if (!bpJwt) throw new Error(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+      return await proxyRequest<T>(path, bpJwt, opts)
     }
     // キオスク: admin JWT が無く device JWT があれば same-origin proxy 経由。
     // proxy が device JWT を検証して X-Tenant-ID に変換する。
@@ -277,20 +317,26 @@ export async function saveMeasurement(result: MeasurementResult, facePhotoBlob?:
   })
 }
 
-/** 測定を開始 (status: started) */
+/**
+ * 測定を開始 (status: started)。
+ *
+ * **血圧測定台の 4 本のうちの 1 本** (`scope: 'bp-station'`、Refs #353)。測定台として
+ * 開いた画面だけが測定台の鍵で通り、キオスクの点呼では getter が無いので従来どおり
+ * キオスクの鍵へ進む。
+ */
 export async function startMeasurement(employeeId: string): Promise<ApiMeasurement> {
   return request<ApiMeasurement>('/api/measurements/start', {
     method: 'POST',
     body: JSON.stringify({ employee_id: employeeId }),
-  })
+  }, 'bp-station')
 }
 
-/** 測定レコードを更新 */
+/** 測定レコードを更新 (血圧測定台の 4 本のうちの 1 本、Refs #353) */
 export async function updateMeasurement(id: string, data: Record<string, unknown>): Promise<ApiMeasurement> {
   return request<ApiMeasurement>(`/api/measurements/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
-  })
+  }, 'bp-station')
 }
 
 /** 測定履歴を取得 */
@@ -324,12 +370,15 @@ export async function getEmployees(): Promise<ApiEmployee[]> {
  * API / Cloud Run の各層のアクセスログと devtools に平文で残るのを避ける
  * (`lookupCarInspection` と同じ判断)。NFC ID は console に出さない
  * (simplify-reviewer の検査点)
+ *
+ * **血圧測定台が最初に叩く口** (`scope: 'bp-station'`、Refs #353) — ここが素通りすると
+ * 測定台は 1 本目から無認証経路に落ちる。
  */
 export async function getEmployeeByNfcId(nfcId: string): Promise<ApiEmployee> {
   return request<ApiEmployee>('/api/employees/lookup', {
     method: 'POST',
     body: JSON.stringify({ nfc_id: nfcId }),
-  })
+  }, 'bp-station')
 }
 
 /** 社員番号で乗務員を検索 */
@@ -392,9 +441,9 @@ export async function rejectFace(employeeId: string): Promise<ApiEmployee> {
   return request<ApiEmployee>(`/api/employees/${employeeId}/face/reject`, { method: 'PUT' })
 }
 
-/** 全乗務員の顔特徴量を取得 (同期用) */
+/** 全乗務員の顔特徴量を取得 (同期用。血圧測定台の 4 本のうちの 1 本、Refs #353) */
 export async function getFaceData(): Promise<FaceDataEntry[]> {
-  return request<FaceDataEntry[]>('/api/employees/face-data')
+  return request<FaceDataEntry[]>('/api/employees/face-data', {}, 'bp-station')
 }
 
 /** 乗務員の NFC ID を更新 */
