@@ -6,6 +6,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { identifyVeinEmployee, syncVeinTemplates, VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -277,6 +278,62 @@ async function onManualSubmit() {
   }
 }
 
+// --- 指静脈 (Refs ippoan/vein-match#20) ---
+// 本人確認の主は指静脈、顔認証はサブ。NFC・社員番号と並ぶ 3 つ目の手段で、当たったあとは
+// NFC と同じ手順 (applyFaceApproval → identifyEmployee) に合流する — 顔の記録・顔認証は変えない。
+// 指静脈が使えないとき (端末が無い・外れ・読み取り失敗) は NFC と社員番号がそのまま逃げ道になる。
+const veinSerial = useVeinSerial()
+const veinBusy = ref(false)
+const veinError = ref<string | null>(null)
+
+/** ボタンを押せない理由。`null` なら押せる */
+const veinDisabledReason = computed<string | null>(() =>
+  veinSerial.isConnected.value ? null : 'Vein Station (指静脈読み取り端末) が接続されていません',
+)
+
+onMounted(() => {
+  void veinSerial.connect()
+  // キオスクの起動時: オフラインの照合に使う写しを取る
+  void syncVeinTemplates()
+})
+
+// 点呼の開始時 (最初の画面に戻ったとき): 前回の同期から時間がたっていれば取り直す
+watch(step, (s) => {
+  if (s === 'nfc') void syncVeinTemplates({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
+})
+
+/** 指静脈で乗務員を特定する。失敗したら画面に出す理由を返す */
+async function identifyByVein(): Promise<string | null> {
+  let chara: string
+  try {
+    await veinSerial.say('PLACE')
+    chara = await veinSerial.capture()
+  }
+  catch (e) {
+    return `指静脈を読み取れませんでした (${(e as Error).message})`
+  }
+  const outcome = await identifyVeinEmployee(chara)
+  if (outcome.kind === 'miss') return VEIN_NO_MATCH_MESSAGE
+  if (outcome.kind === 'error') return outcome.message
+  // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る
+  if (!applyFaceApproval(outcome.employee)) return null
+  await identifyEmployee(outcome.employee.id, outcome.employee.name)
+  return null
+}
+
+async function onVeinIdentify() {
+  if (veinDisabledReason.value || veinBusy.value) return
+  veinBusy.value = true
+  veinError.value = null
+  const failure = await identifyByVein()
+  if (failure) {
+    veinError.value = failure
+    // 案内の失敗は握り潰す (画面の理由が主)
+    await veinSerial.say('FAILED').catch(() => {})
+  }
+  veinBusy.value = false
+}
+
 // --- 顔認証結果 ---
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) {
@@ -380,6 +437,7 @@ function handleReset() {
   manualIdInput.value = ''
   manualError.value = null
   useManualInput.value = false
+  veinError.value = null
   faceSkippable.value = false
   faceSkipNotice.value = null
   medicalInputSource.value = null
@@ -587,6 +645,20 @@ onUnmounted(() => {
             >
               NFC で読み取る
             </button>
+          </div>
+
+          <!-- 指静脈 (Refs ippoan/vein-match#20)。WebSerial が無い端末 (Android 等) には出さない -->
+          <div v-if="!isDemoMode && veinSerial.isSupported" class="mt-4 pt-4 border-t border-gray-100">
+            <button
+              data-testid="vein-identify"
+              :disabled="!!veinDisabledReason || veinBusy"
+              class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+              @click="onVeinIdentify"
+            >
+              {{ veinBusy ? '指を置いてください…' : '指静脈で本人確認' }}
+            </button>
+            <p v-if="veinDisabledReason" class="mt-2 text-xs text-gray-500">{{ veinDisabledReason }}</p>
+            <p v-if="veinError" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ veinError }}</p>
           </div>
         </div>
       </div>

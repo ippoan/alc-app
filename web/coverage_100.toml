@@ -271,3 +271,21 @@ branches = true
 [[files]]
 path = "app/composables/useSignedBpBond.ts"
 branches = true
+
+# --- 指静脈 (Refs ippoan/vein-match#20) ---
+
+[[files]]
+path = "app/utils/idb.ts"
+branches = true
+
+[[files]]
+path = "app/utils/vein-db.ts"
+branches = true
+
+[[files]]
+path = "app/utils/vein-match.ts"
+branches = true
+
+[[files]]
+path = "app/utils/vein-identify.ts"
+branches = true

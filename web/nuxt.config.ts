@@ -111,6 +111,21 @@ export default defineNuxtConfig({
           },
         },
         {
+          // 指静脈照合の wasm (`public/vein/`、Refs ippoan/vein-match#20)。キオスクが
+          // オフラインのときにブラウザで照合するため、起動時 (オンライン) に 1 度読んだものを
+          // キャッシュしておく。precache (globPatterns) にしないのは、この SW の precache が
+          // app shell も配っていない (生成物は JSON 2 本だけ) ため。CacheFirst にしないのは、
+          // URL に版が入っていないので、更新後も古い wasm を掴み続けるのを避けるため
+          urlPattern: /\/vein\/[^/]+\.wasm$/,
+          handler: 'NetworkFirst',
+          options: {
+            cacheName: 'vein-wasm',
+            expiration: { maxEntries: 4, maxAgeSeconds: 365 * 24 * 60 * 60 },
+            cacheableResponse: { statuses: [0, 200] },
+            networkTimeoutSeconds: 5,
+          },
+        },
+        {
           // 顔写真 (Cloud Storage signed URL)
           urlPattern: /storage\.googleapis\.com/,
           handler: 'CacheFirst',

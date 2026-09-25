@@ -532,6 +532,37 @@ export async function putVeinTemplate(
 }
 
 /**
+ * 指静脈で 1:N 照合する (キオスクの本人確認、Refs ippoan/vein-match#20,
+ * ippoan/rust-alc-api#678)。当たりは `employee_id` と `name`、外れは `employee_id: null`
+ * (どちらも 200)。当たるとサーバー側で学習してテンプレートを書き戻す。
+ *
+ * 422 (`unsupported_chara_format` など) は呼び出し側が {@link apiErrorMessage} で読める。
+ */
+export async function identifyVein(
+  chara: string,
+): Promise<{ employee_id: string | null; name?: string }> {
+  return request<{ employee_id: string | null; name?: string }>('/api/vein/identify', {
+    method: 'POST',
+    body: JSON.stringify({ chara }),
+  })
+}
+
+/** 指静脈テンプレートの一覧 (1 件分)。`template` は base64 */
+export interface ApiVeinTemplate {
+  employee_id: string
+  template: string
+  updated_at: string
+}
+
+/**
+ * 指静脈テンプレートを全件取る (キオスクがオフラインの照合用に手元へ写す、
+ * Refs ippoan/vein-match#20)。`logic_version` はサーバーの照合ロジックの版。
+ */
+export async function getVeinTemplates(): Promise<{ logic_version: string; templates: ApiVeinTemplate[] }> {
+  return request<{ logic_version: string; templates: ApiVeinTemplate[] }>('/api/vein/templates')
+}
+
+/**
  * 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
  * rust-alc-api ではなく alc-app 自身の server route `/api/driver-master/run` を
  * same-origin で叩く (proxy 経由にしない)。route が admin browser JWT を introspect
