@@ -91,6 +91,41 @@ function punchViaHttp(tenantId: string, deviceId: string, body: unknown) {
   });
 }
 
+/**
+ * シリアル OTA の合図を送る内部 API (auth-worker /device/setup の recorderFetch と同じ形、
+ * Refs ippoan/alc-app-s3#279)。認証は `Authorization: <INTERNAL_SHARED_SECRET>`。
+ * **`authHeader: null` は「ヘッダーを付けない」の意** (`undefined` は default param に
+ * 吸われて区別できないため)。
+ */
+function serialOtaViaHttp(
+  tenantId: string,
+  body: unknown,
+  authHeader: string | null = SHARED_SECRET,
+) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authHeader !== null) headers.Authorization = authHeader;
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/serial-ota`, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+/**
+ * `/watch-timecard` に接続しつつ、クライアント側から偽の
+ * `X-Recorder-Watcher-Kind` ヘッダーを付ける (詐称できないことの確認用)。
+ */
+async function connectWatcherWithForgedKind(token: string, forgedKind: string) {
+  const res = await SELF.fetch(`${BASE}/watch-timecard`, {
+    headers: {
+      Upgrade: "websocket",
+      "Sec-WebSocket-Protocol": `alc.timecard.v1, ${token}`,
+      "X-Recorder-Watcher-Kind": forgedKind,
+    },
+  });
+  return { res, ws: res.webSocket ?? null };
+}
+
 /** 接続 + `connected` 受信までを行うヘルパー。 */
 async function connectAccepted(token: string) {
   const { res, ws } = await connect(token);
@@ -702,6 +737,7 @@ describe("decideWatcherAuth", () => {
     expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" })).toEqual({
       status: 101,
       tenantId: "t",
+      watcherKind: "kiosk",
     });
     expect(decideWatcherAuth({ active: true, role: "admin", tenant_id: "t" }).status).toBe(101);
     expect(decideWatcherAuth({ active: true, role: "manager", tenant_id: "t" }).status).toBe(101);
@@ -733,6 +769,18 @@ describe("decideWatcherAuth", () => {
     // sub を要求すると、DO の attachment に deviceId を載せたくなる。
     // 載せると currentDeviceIds() が拾い、キオスクが「接続中デバイス」に現れる
     expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" }).status).toBe(101);
+  });
+
+  it("watcherKind: キオスクは kiosk、admin/manager は user (DO の KIOSK_TAG 付与に使う、#279)", () => {
+    expect(
+      decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" }).watcherKind,
+    ).toBe("kiosk");
+    expect(decideWatcherAuth({ active: true, role: "admin", tenant_id: "t" }).watcherKind).toBe(
+      "user",
+    );
+    expect(decideWatcherAuth({ active: true, role: "manager", tenant_id: "t" }).watcherKind).toBe(
+      "user",
+    );
   });
 });
 
@@ -983,6 +1031,93 @@ describe("/watch-timecard の振る舞い", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { devices: string[] };
     expect(body.devices).not.toContain("device-kiosk-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// シリアル OTA の合図 (POST /tenants/:tenantId/serial-ota、Refs ippoan/alc-app-s3#279)
+//
+// **専用テナント (`tenant-ota`)** — isolatedStorage: false なので他 test の
+// kiosk 購読が KIOSK_TAG に混ざると「キオスクにだけ届く」を判定できない。
+// ---------------------------------------------------------------------------
+
+describe("serial-ota の合図", () => {
+  it("キオスクの購読は KIOSK_TAG 付き、admin の購読は付かない", async () => {
+    const { ws: kioskWs } = await connectWatcher("kiosk-token-ota");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const { ws: adminWs } = await connectWatcher("admin-token-ota");
+    expect(adminWs).not.toBeNull();
+    openSockets.push(adminWs!);
+
+    const stub = hubStub(env, "tenant-ota");
+    await runInDurableObject(stub, (_instance, state) => {
+      // キオスクだけ KIOSK_TAG が付く。admin も含めて両方 WATCH_TAG は付く
+      // (打刻更新の合図は従来どおり両方に届く)。
+      expect(state.getWebSockets("watch:kiosk").length).toBe(1);
+      expect(state.getWebSockets("watch:timecard").length).toBe(2);
+    });
+  });
+
+  it("★ KIOSK_TAG の購読にだけ送る。admin の購読と device の socket には届かない", async () => {
+    const { ws: kioskWs } = await connectWatcher("kiosk-token-ota-2");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const kiosk = messageQueue(kioskWs!);
+
+    const { ws: adminWs } = await connectWatcher("admin-token-ota-2");
+    expect(adminWs).not.toBeNull();
+    openSockets.push(adminWs!);
+    const admin = messageQueue(adminWs!);
+
+    const device = await connectAccepted("hub-token-ota-2");
+    openSockets.push(device.ws);
+
+    const res = await serialOtaViaHttp("tenant-ota-2", { target: "timecard-station" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sent: 1 });
+
+    expect(await kiosk.next()).toEqual({ type: "serial_ota", target: "timecard-station" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(admin.pending()).toBe(0);
+    expect(device.messages.pending()).toBe(0);
+  });
+
+  it("内部認証なしは 401 (requireInternalAuth と同じ挙動)", async () => {
+    expect((await serialOtaViaHttp("tenant-ota", { target: "timecard-station" }, null)).status).toBe(
+      401,
+    );
+    expect(
+      (await serialOtaViaHttp("tenant-ota", { target: "timecard-station" }, "wrong-secret")).status,
+    ).toBe(401);
+  });
+
+  it("target が allowlist 外 / 欠落 / JSON 不正は 400", async () => {
+    const other = await serialOtaViaHttp("tenant-ota", { target: "not-allowed" });
+    expect(other.status).toBe(400);
+    expect(await other.json()).toEqual({ error: "invalid_target" });
+
+    const missing = await serialOtaViaHttp("tenant-ota", {});
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({ error: "invalid_target" });
+
+    const badJson = await serialOtaViaHttp("tenant-ota", "not-json{");
+    expect(badJson.status).toBe(400);
+    expect(await badJson.json()).toEqual({ error: "invalid_json" });
+  });
+
+  it("★ クライアントが付けた区分ヘッダーは効かない (admin が kiosk を騙っても KIOSK_TAG は付かない)", async () => {
+    const forged = await connectWatcherWithForgedKind("admin-token-ota-3", "kiosk");
+    expect(forged.res.status).toBe(101);
+    expect(forged.ws).not.toBeNull();
+    openSockets.push(forged.ws!);
+    const forgedQueue = messageQueue(forged.ws!);
+
+    const res = await serialOtaViaHttp("tenant-ota-3", { target: "timecard-station" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sent: 0 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(forgedQueue.pending()).toBe(0);
   });
 });
 
