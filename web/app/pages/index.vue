@@ -590,10 +590,11 @@ function onRoleTabClick(role: RoleTab) {
               />
             </template>
             <template #below-card>
-              <!-- 縦画面では NormalMeasurement 側の flex-wrap 2列レイアウトに乗せる (幅が無ければ自動で1列)。
-                   横画面 (isAndroidLandscape) は既存の3カラム flex の見た目を変えないため mt-4/mx-auto のまま -->
+              <!-- 縦画面では NormalMeasurement 側の tenko-below-card-area に乗る (縦の余裕が無いときだけ
+                   横並び2列、幅は CSS 側で上書きされる)。横画面 (isAndroidLandscape) は既存の3カラム flex
+                   の見た目を変えないため mt-4/mx-auto のまま -->
               <TodayPunchHistory
-                :class="isAndroidLandscape ? 'w-full max-w-md mx-auto mt-4' : 'w-full max-w-md flex-1'"
+                :class="isAndroidLandscape ? 'w-full max-w-md mx-auto mt-4' : 'w-full max-w-md'"
                 @latest="setLatestPunchFromServer"
                 @employees="employeeNames = $event"
               />
