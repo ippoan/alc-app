@@ -8,7 +8,7 @@
 
 ## 出どころ
 
-- ippoan/vein-match の tag `v0.1.1` (private repo)
+- ippoan/vein-match の tag `v0.1.2` (private repo)
 - `bash scripts/build-web.sh <出力ディレクトリ>` で作った 4 ファイルのうち 3 つを置いている
   (`vein_match_wasm_bg.wasm.d.ts` は使わないので入れていない)
 
@@ -16,7 +16,7 @@
 |---|---|---|
 | `vein_match_wasm.js` | `web/app/vendor/vein-match/` (Vite が bundle する) | `17cad6ab0454737e5d55e68d2b0c289550224ef25eedb8fa6feb4bb821078312` |
 | `vein_match_wasm.d.ts` | `web/app/vendor/vein-match/` | `8567bec4ba71951371ddbdeda4e2f425efbbc60cd55d91d25d8e9f2e9012fb74` |
-| `vein_match_wasm_bg.wasm` | `web/public/vein/` (static asset。`/vein/vein_match_wasm_bg.wasm` で配る) | `b082aea696f76b9778a20e862cb3aadcc6e225872b187e21fb7a512666bce674` |
+| `vein_match_wasm_bg.wasm` | `web/public/vein/` (static asset。`/vein/vein_match_wasm_bg.wasm` で配る) | `4f8e7badc073dde5452f9ffb7fa961fb5ddfcf57d7e8ebcf611a4bafe675d012` |
 
 `logic_version()` は `0.1.1`。サーバーの `GET /api/vein/templates` が返す `logic_version` と
 食い違うと、キオスクはオフラインの照合を止める (`app/utils/vein-match.ts`)。
