@@ -67,6 +67,16 @@ const ARBITRATED_VID = 0x303A
  */
 export const BP_STATION_DEVICE_KIND = 'bp-station'
 
+/**
+ * Vein Station (指静脈読み取り端末、Atom VoiceS3R の `vein` build) が名乗る kind
+ * (`DEVICE timecard`、Refs ippoan/vein-match#20)。alc-app-s3
+ * `crates/hub-core/src/protocol.rs` の `HostKind::Timecard` と同じ語彙 — NFC タイムカード
+ * 端末と同一の kind で名乗る (指静脈は timecard 端末に `--features vein` を足した build)。
+ * `useVeinSerial` が arbiter へ登録する名前もここから引く (2 か所に書く事故を避ける、
+ * `BP_STATION_DEVICE_KIND` と同じ理由)。
+ */
+export const TIMECARD_DEVICE_KIND = 'timecard'
+
 const SERIAL_OPTIONS: SerialOptions = {
   baudRate: 115200,
   dataBits: 8,
