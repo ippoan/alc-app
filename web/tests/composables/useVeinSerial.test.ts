@@ -310,4 +310,47 @@ describe('useVeinSerial', () => {
       await assertion
     })
   })
+
+  // ---------- request (シリアル OTA の口、Refs ippoan/alc-app-s3#279) ----------
+
+  describe('request', () => {
+    it('行を預かったポートへ撃ち、errPrefix 付きで応答を待つ', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+
+      const p = vein.request('OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'OTA ERR')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('OTA CONFIRM\n')
+
+      dev.emit('OTA CONFIRMED\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('OTA CONFIRMED')
+    })
+
+    it('errPrefix を省くと ERR <先頭トークン> で失敗を拾う', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+
+      const p = vein.request('DEVICE', 'DEVICE ', 5_000)
+      const assertion = expect(p).rejects.toThrow('ERR DEVICE busy')
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('ERR DEVICE busy\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await assertion
+    })
+
+    it('バイト列は改行を足さずに書き、OTA ERR で reject する', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+
+      const p = vein.request(new Uint8Array([0x41, 0x42, 0x43]), 'OTA ACK', 5_000, 'OTA ERR')
+      const assertion = expect(p).rejects.toThrow('OTA ERR write')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('ABC')
+
+      dev.emit('OTA ERR write\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await assertion
+    })
+  })
 })

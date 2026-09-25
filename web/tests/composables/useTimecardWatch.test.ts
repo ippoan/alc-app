@@ -324,4 +324,69 @@ describe('useTimecardWatch', () => {
     await vi.advanceTimersByTimeAsync(120_000)
     expect(onChange).not.toHaveBeenCalled()
   })
+
+  // ---------- シリアル OTA の合図 (Refs ippoan/alc-app-s3#279) ----------
+
+  describe('serial_ota', () => {
+    it('serial_ota を受けたら target の語だけを onSerialOta に渡す (打刻の引き直しはしない)', async () => {
+      const onSerialOta = vi.fn()
+      const { watch, onChange } = make({ onSerialOta })
+      await watch.connect()
+      lastWs().open()
+      onChange.mockClear()
+
+      lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'timecard-station', url: 'https://evil.example/x.bin' }))
+      expect(onSerialOta).toHaveBeenCalledTimes(1)
+      expect(onSerialOta).toHaveBeenCalledWith('timecard-station')
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it('target が文字列でない serial_ota は無視する', async () => {
+      const onSerialOta = vi.fn()
+      const { watch } = make({ onSerialOta })
+      await watch.connect()
+      lastWs().open()
+
+      lastWs().message(JSON.stringify({ type: 'serial_ota' }))
+      lastWs().message(JSON.stringify({ type: 'serial_ota', target: 1 }))
+      expect(onSerialOta).not.toHaveBeenCalled()
+    })
+
+    it('onSerialOta を渡していなければ serial_ota は従来どおり無視する', async () => {
+      const { watch, onChange } = make()
+      await watch.connect()
+      lastWs().open()
+      onChange.mockClear()
+
+      expect(() => lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'timecard-station' }))).not.toThrow()
+      expect(onChange).not.toHaveBeenCalled()
+    })
+  })
+
+  // ---------- onChange 無し (打刻一覧を持たない TenkoKiosk) ----------
+
+  describe('onChange を渡さない', () => {
+    it('切断中もポーリングしない / onopen と timecard_punch でも落ちない', async () => {
+      const onSerialOta = vi.fn()
+      const watch = mod.useTimecardWatch({ getToken: () => 'jwt-1', onSerialOta })
+      await watch.connect()
+      // 繋がる前 (未接続のあいだ) もポーリングのタイマーを立てない
+      expect(vi.getTimerCount()).toBe(0)
+
+      lastWs().open()
+      expect(watch.isConnected.value).toBe(true)
+      expect(() => lastWs().message(JSON.stringify({ type: 'timecard_punch' }))).not.toThrow()
+
+      // 切れても再接続の予約だけ (ポーリングは回さない)
+      lastWs().close()
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(wsInstances).toHaveLength(2)
+
+      lastWs().open()
+      lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'timecard-station' }))
+      expect(onSerialOta).toHaveBeenCalledWith('timecard-station')
+      watch.stop()
+    })
+  })
 })

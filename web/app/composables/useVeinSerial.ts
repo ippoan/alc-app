@@ -150,6 +150,21 @@ export function useVeinSerial() {
     }
   }
 
+  /**
+   * 預かったポートで `arbiter.request()` をそのまま撃つ (シリアル OTA 用の口、
+   * Refs ippoan/alc-app-s3#279)。station も vein も `DEVICE timecard` でこの claimant が
+   * 握るので、`useSerialOta` はここ経由でポートを使う (2 本目の claimant を立てない)。
+   * 同時に 1 件しか待てないのは capture/say と同じ — 呼び出し側 (キオスク) が待機画面で
+   * 指静脈を読んでいないときだけ使う。
+   */
+  function request(line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
+  function request(bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  function request(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
+    // 実装側の引数は union なので、arbiter のどちらの overload にも当てはまるよう
+    // バイト列 overload (errPrefix 必須) の形に寄せて渡す
+    return arbiter.request(CLAIMANT_NAME, payload as Uint8Array, matchPrefix, timeoutMs, errPrefix as string)
+  }
+
   return {
     isSupported,
     isConnected: readonly(isConnected),
@@ -157,5 +172,6 @@ export function useVeinSerial() {
     disconnect,
     capture,
     say,
+    request,
   }
 }

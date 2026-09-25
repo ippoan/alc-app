@@ -143,6 +143,10 @@ path = "app/composables/useVeinSerial.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useSerialOta.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useCoreS3Stage.ts"
 branches = true
 
