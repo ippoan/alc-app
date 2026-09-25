@@ -687,10 +687,10 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
         免許証の有効期限が近づいています ({{ formatExpiryDate(licenseExpiryDate) }})
       </div>
 
-      <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-6']">
+      <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-3']">
         <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">アルコールチェッカー</h1>
         <!-- ステップインジケーター -->
-        <div :class="['flex items-center mt-3', landscape ? 'flex-wrap gap-1 justify-center' : 'justify-center']">
+        <div :class="['flex items-center mt-2', landscape ? 'flex-wrap gap-1 justify-center' : 'justify-center']">
           <template v-for="(s, i) in steps" :key="i">
             <div
               class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap"
@@ -738,8 +738,12 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       </div>
     </div>
 
-    <!-- 右列 (横画面) / メインコンテンツ (縦画面) -->
-    <main :class="['w-full flex-1', landscape ? 'min-h-0 overflow-y-auto' : 'max-w-md']">
+    <!-- 右列 (横画面) / メインコンテンツ (縦画面)。縦画面では below-card スロット (本日の打刻履歴等) と
+         flex-wrap で横並び2列にできるようにする — 幅が足りなければ自動で1列に戻る (固定ブレークポイントより
+         低解像度/高倍率での破綻に強い)。横画面時は display:contents で透過し、既存の3カラム flex
+         (左列/main/below-card) をそのまま保つ -->
+    <div :class="landscape ? 'contents' : 'w-full flex flex-wrap items-start justify-center gap-4'">
+    <main :class="['flex-1', landscape ? 'w-full min-h-0 overflow-y-auto' : 'max-w-md']">
       <!-- Step 1: NFC / 手動入力 -->
       <div v-if="step === 'nfc'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
@@ -1037,9 +1041,11 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       </div>
     </main>
 
-    <!-- 呼び出し元がカードの下に足したい内容 (例: 本日の打刻履歴)。空なら何も出ない。
+    <!-- 呼び出し元がカードの下 (縦画面・幅が無いとき) / 横2列目 (縦画面・幅があるとき) に足したい内容
+         (例: 本日の打刻履歴)。空なら何も出ない。
          直後のナビゲーションより上に出すことで、リンクの塊を画面最下部に保つ (Refs #238) -->
     <slot name="below-card" />
+    </div>
 
     <!-- ナビゲーション (縦画面時のみ。横画面時は左列に配置) -->
     <footer v-if="!landscape" class="w-full max-w-md py-4">

@@ -98,9 +98,9 @@ const actionGuidance = computed(() => {
   <div
     v-if="!hasKioskAccess && !isCheckingKioskAccess"
     data-testid="device-unregistered-banner"
-    class="w-full max-w-lg mx-auto px-4 mt-2"
+    class="w-full max-w-lg mx-auto px-4 mt-1"
   >
-    <div class="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+    <div class="bg-red-50 border border-red-200 rounded-xl p-2 text-sm text-red-700">
       {{ deviceUnregisteredMessage }}。<span data-testid="device-unregistered-guidance">{{ actionGuidance }}</span>
       <div data-testid="device-unregistered-diagnostics" class="mt-2 text-xs">
         {{ diagnosticLine }}
