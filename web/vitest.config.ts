@@ -20,6 +20,8 @@ export default defineVitestConfig({
         'app/types/**',
         'app/workers/**',
         'app/web-serial.d.ts',
+        // 同梱した wasm の glue (生成物。出どころは app/vendor/vein-match/README.md)
+        'app/vendor/**',
       ],
     },
   },

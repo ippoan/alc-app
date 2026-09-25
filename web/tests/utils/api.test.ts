@@ -64,6 +64,8 @@ import {
   runDriverMasterSync,
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
+  identifyVein,
+  getVeinTemplates,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -712,6 +714,7 @@ describe('api', () => {
       ['getDriverInfo', () => getDriverInfo(TEST_EMPLOYEE_ID), `/api/tenko/driver-info/${TEST_EMPLOYEE_ID}`],
       ['getDtakoDrivers', () => getDtakoDrivers(), '/api/drivers'],
       ['getVehicleCategories', () => getVehicleCategories(), '/api/car-inspections/vehicle-categories'],
+      ['getVeinTemplates', () => getVeinTemplates(), '/api/vein/templates'],
     ] as [string, () => Promise<unknown>, string][])(
       '%s → GET %s',
       async (_name, fn, expectedPath) => {
@@ -852,6 +855,7 @@ describe('api', () => {
       ['createCarryingItem', () => createCarryingItem(createCarryingItemBody as any), '/api/carrying-items'],
       ['createGuidanceRecord', () => createGuidanceRecord(createGuidanceRecordBody as any), '/api/guidance-records'],
       ['createCommunicationItem', () => createCommunicationItem(createCommunicationItemBody as any), '/api/communication-items'],
+      ['identifyVein', () => identifyVein('AABBCC'), '/api/vein/identify'],
     ] as [string, () => Promise<unknown>, string][])(
       '%s → POST %s',
       async (_name, fn, expectedPath) => {
@@ -1051,6 +1055,15 @@ describe('api', () => {
         expect(body.face_photo_url).toBeNull()
         expect(body.face_embedding).toBeNull()
         expect(body.face_model_version).toBeNull()
+      })
+    })
+
+    it('identifyVein sends chara in body', async () => {
+      stubOk({ employee_id: null })
+      await callApi(() => identifyVein('AABBCC'))
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body).toEqual({ chara: 'AABBCC' })
       })
     })
 
