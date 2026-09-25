@@ -66,6 +66,68 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  // シリアル OTA の合図 (POST /serial-ota、Refs ippoan/alc-app-s3#279) 専用。
+  // **専用テナント** — isolatedStorage: false なので他 test の kiosk 購読が
+  // KIOSK_TAG に混ざると「キオスクにだけ届く」を判定できない。
+  "kiosk-token-ota": {
+    active: true,
+    tenant_id: "tenant-ota",
+    role: "device-kiosk",
+    sub: "device-kiosk-ota",
+    email: "",
+    exp: 9999999999,
+  },
+  "admin-token-ota": {
+    active: true,
+    tenant_id: "tenant-ota",
+    role: "admin",
+    sub: "",
+    email: "",
+    exp: 9999999999,
+  },
+  "hub-token-ota": {
+    active: true,
+    tenant_id: "tenant-ota",
+    role: "device-hub",
+    sub: "device-hub-ota",
+    email: "",
+    exp: 9999999999,
+  },
+  // 上と別テナント — hibernatable WS の close は非同期なので、同じテナントを
+  // 跨いで socket 数を厳密に数える test を連続させると前 test の close が
+  // 間に合わず数が汚染される (isolatedStorage: false の既知の罠)。
+  "kiosk-token-ota-2": {
+    active: true,
+    tenant_id: "tenant-ota-2",
+    role: "device-kiosk",
+    sub: "device-kiosk-ota-2",
+    email: "",
+    exp: 9999999999,
+  },
+  "admin-token-ota-2": {
+    active: true,
+    tenant_id: "tenant-ota-2",
+    role: "admin",
+    sub: "",
+    email: "",
+    exp: 9999999999,
+  },
+  "hub-token-ota-2": {
+    active: true,
+    tenant_id: "tenant-ota-2",
+    role: "device-hub",
+    sub: "device-hub-ota-2",
+    email: "",
+    exp: 9999999999,
+  },
+  "admin-token-ota-3": {
+    active: true,
+    tenant_id: "tenant-ota-3",
+    role: "admin",
+    sub: "",
+    email: "",
+    exp: 9999999999,
+  },
   // 期限切れ / 署名不正 / ACL 不許可テナントは実物では区別なく active:false になる。
   "expired-token": { active: false },
 };

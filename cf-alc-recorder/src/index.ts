@@ -21,7 +21,12 @@
  *   - GET  /tenants/:tenantId/events                    … 接続中デバイス一覧の SSE push
  *     (auth-worker /device/setup/events が透過。接続/切断のたびに `devices` event を配信)
  *   - GET  /tenants/:tenantId/commands/:id/result       … command_result の取得
- *     (`/tenants/...` の 5 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
+ *   - POST /tenants/:tenantId/serial-ota                … キオスクへシリアル OTA の合図
+ *       (auth-worker /device/setup の「Vein Station を最新にする」から呼ばれる。
+ *        body は `{ target }` で allowlist ["timecard-station"] のみ許可。宛先は
+ *        テナント内の購読キオスク全員 (`KIOSK_TAG`)、応答は `{ sent }` のみで
+ *        結果は返さない。Refs ippoan/alc-app-s3#279)
+ *     (`/tenants/...` の 6 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
  *      内部 API。auth-worker /auth/introspect と同じ server-to-server shared secret
  *      認証で、呼び手は alc-app の server route など Worker 間に限られる)
  *
@@ -186,11 +191,21 @@ async function handleWatchTimecard(request: Request, env: Env, url: URL): Promis
   fwd.headers.set("X-Recorder-Tenant-Id", decision.tenantId);
   // device 経路のヘッダーが混ざらないよう明示的に落とす
   fwd.headers.delete("X-Recorder-Device-Id");
+  // 購読者の区分は introspect 済み判定からのみ。`new Request(url, request)` は
+  // 元リクエストのヘッダーをコピーするので、クライアントが同名ヘッダーを付けて
+  // いても **必ず上書きする** (X-Recorder-Tenant-Id と同じ不変条件、Refs #279)。
+  fwd.headers.set("X-Recorder-Watcher-Kind", decision.watcherKind);
   return hubStub(env, decision.tenantId).fetch(fwd);
 }
 
 /** POST /measurements 1 リクエストの item 数上限 (WS の 64KB message 上限に相当する暴走ガード)。 */
 const MAX_BATCH_ITEMS = 100;
+
+/**
+ * POST /tenants/:tenantId/serial-ota で受け付ける target の allowlist (#279)。
+ * URL・版・自由文字列は運ばない — allowlist の 1 語だけ。
+ */
+const SERIAL_OTA_TARGETS: ReadonlySet<string> = new Set(["timecard-station"]);
 
 /**
  * POST /measurements — Wi-Fi 客の上りバッチ (Refs ippoan/alc-app#109)。
@@ -320,6 +335,28 @@ export default {
         body: request.body,
       });
       return hubStub(env, decodeURIComponent(commandMatch[1])).fetch(fwd);
+    }
+
+    const serialOtaMatch = url.pathname.match(/^\/tenants\/([^/]+)\/serial-ota$/);
+    if (serialOtaMatch && request.method === "POST") {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      let body: { target?: unknown };
+      try {
+        body = (await request.json()) as { target?: unknown };
+      } catch {
+        return json({ error: "invalid_json" }, 400);
+      }
+      const target = typeof body.target === "string" ? body.target : "";
+      if (!SERIAL_OTA_TARGETS.has(target)) {
+        return json({ error: "invalid_target" }, 400);
+      }
+      const fwd = new Request("https://recorder-hub.internal/serial-ota", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target }),
+      });
+      return hubStub(env, decodeURIComponent(serialOtaMatch[1])).fetch(fwd);
     }
 
     const devicesMatch = url.pathname.match(/^\/tenants\/([^/]+)\/devices$/);

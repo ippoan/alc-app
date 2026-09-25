@@ -89,6 +89,13 @@ const DEVICE_TAG_PREFIX = "device:";
 const WATCH_TAG = "watch:timecard";
 
 /**
+ * シリアル OTA の合図 (`POST /serial-ota`) を受けるキオスク購読者だけの tag。
+ * **別 tag にしておけば、キオスク以外の購読者と device には構造的に届かない**
+ * (Refs ippoan/alc-app-s3#279)。
+ */
+const KIOSK_TAG = "watch:kiosk";
+
+/**
  * 購読 WS のサブプロトコル名。ブラウザは `["alc.timecard.v1", "<jwt>"]` を送り、
  * サーバはこちらだけを echo し返す (トークンを応答ヘッダーに乗せない)。
  */
@@ -173,6 +180,9 @@ export class RecorderHub extends DurableObject<Env> {
     if (url.pathname === "/watch") {
       return this.handleWatch(request);
     }
+    if (url.pathname === "/serial-ota" && request.method === "POST") {
+      return this.handleSerialOta(request);
+    }
     if (url.pathname === "/timecard-punch" && request.method === "POST") {
       return this.handleTimecardPunch(request);
     }
@@ -214,8 +224,11 @@ export class RecorderHub extends DurableObject<Env> {
     if (!tenantId) {
       return json({ error: "missing_identity" }, 400);
     }
+    // worker (src/index.ts) が introspect 済み判定から必ず上書きして付けるヘッダー
+    // (Refs #279)。kiosk だけ `KIOSK_TAG` を足す — シリアル OTA の合図の宛先になる。
+    const isKiosk = request.headers.get("X-Recorder-Watcher-Kind") === "kiosk";
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], [WATCH_TAG]);
+    this.ctx.acceptWebSocket(pair[1], isKiosk ? [WATCH_TAG, KIOSK_TAG] : [WATCH_TAG]);
     pair[1].serializeAttachment({ tenantId } satisfies WsAttachment);
     // サブプロトコルを 1 つも返さないとブラウザが即座に閉じる。
     // **トークン側を返してはいけない** (応答ヘッダーに秘密が乗る)
@@ -250,6 +263,31 @@ export class RecorderHub extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets(WATCH_TAG)) {
       this.send(ws, { type: "timecard_punch" });
     }
+  }
+
+  /**
+   * シリアル OTA の合図 (内部 route `POST /serial-ota`、worker 側で
+   * `INTERNAL_SHARED_SECRET` 認証 + target allowlist を検査済み)。
+   *
+   * **`KIOSK_TAG` の購読者にだけ**送る — device の下り command 経路
+   * (`DEVICE_TAG_PREFIX`) にも admin/manager の watcher にも届かない。
+   * ユーザー決定により宛先はテナント内の全キオスクへ一斉、結果はサーバに
+   * 返さない (送った本数だけ返す。Refs ippoan/alc-app-s3#279)。
+   */
+  private async handleSerialOta(request: Request): Promise<Response> {
+    let body: { target?: unknown } = {};
+    try {
+      body = (await request.json()) as { target?: unknown };
+    } catch {
+      // worker 側で JSON validity は検査済みだが、内部呼び出しの保険として fail-closed
+      return json({ error: "invalid_json" }, 400);
+    }
+    const target = typeof body.target === "string" ? body.target : "";
+    const sockets = this.ctx.getWebSockets(KIOSK_TAG);
+    for (const ws of sockets) {
+      this.send(ws, { type: "serial_ota", target });
+    }
+    return json({ sent: sockets.length });
   }
 
   private handleConnect(request: Request): Response {

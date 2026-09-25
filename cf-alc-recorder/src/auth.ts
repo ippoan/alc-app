@@ -66,6 +66,11 @@ export const RECORDER_DEVICE_ROLES: ReadonlySet<string> = new Set([
  * **`RECORDER_DEVICE_ROLES` には入れない。** あれは「下り command を受け取って
  * よいデバイス」の allowlist なので、足すとキオスクが遠隔コマンドの対象になる。
  * キオスクに要るのは読み取り専用の購読だけ。
+ *
+ * キオスクは下り command の宛先にしない (`RECORDER_DEVICE_ROLES` に入れない) 方針は
+ * 変えない。ただし `serial_ota` の合図だけは `KIOSK_TAG` (recorder-hub.ts) で受ける。
+ * 運ぶのは target の allowlist 1 語だけで、URL・版・自由文字列は運ばない
+ * (Refs ippoan/alc-app-s3#279)。
  */
 export const DEVICE_ROLE_KIOSK = "device-kiosk";
 
@@ -84,6 +89,11 @@ export interface WatcherAuthDecision {
   status: 101 | 401 | 403;
   /** accept 時のみ非空。DO id (テナント単位) に使う。 */
   tenantId: string;
+  /**
+   * 購読者の区分。DO 側の tag 付け (`KIOSK_TAG` 追加の可否) に使う
+   * (Refs ippoan/alc-app-s3#279)。**101 以外では意味を持たない** (`"user"` 固定)。
+   */
+  watcherKind: "kiosk" | "user";
 }
 
 /**
@@ -103,14 +113,17 @@ export function decideWatcherAuth(
   result: IntrospectResult | null | undefined,
 ): WatcherAuthDecision {
   if (!result || result.active !== true || !result.tenant_id) {
-    return { status: 401, tenantId: "" };
+    return { status: 401, tenantId: "", watcherKind: "user" };
   }
   const role = result.role;
-  if (typeof role !== "string") return { status: 403, tenantId: "" };
-  if (!WATCHER_USER_ROLES.has(role) && !WATCHER_DEVICE_ROLES.has(role)) {
-    return { status: 403, tenantId: "" };
+  if (typeof role !== "string") return { status: 403, tenantId: "", watcherKind: "user" };
+  if (WATCHER_DEVICE_ROLES.has(role)) {
+    return { status: 101, tenantId: result.tenant_id, watcherKind: "kiosk" };
   }
-  return { status: 101, tenantId: result.tenant_id };
+  if (WATCHER_USER_ROLES.has(role)) {
+    return { status: 101, tenantId: result.tenant_id, watcherKind: "user" };
+  }
+  return { status: 403, tenantId: "", watcherKind: "user" };
 }
 
 /**
