@@ -738,12 +738,13 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       </div>
     </div>
 
-    <!-- 右列 (横画面) / メインコンテンツ (縦画面)。縦画面では below-card スロット (本日の打刻履歴等) と
-         flex-wrap で横並び2列にできるようにする — 幅が足りなければ自動で1列に戻る (固定ブレークポイントより
-         低解像度/高倍率での破綻に強い)。横画面時は display:contents で透過し、既存の3カラム flex
-         (左列/main/below-card) をそのまま保つ -->
-    <div :class="landscape ? 'contents' : 'w-full flex flex-wrap items-start justify-center gap-4'">
-    <main :class="['flex-1', landscape ? 'w-full min-h-0 overflow-y-auto' : 'max-w-md']">
+    <!-- 右列 (横画面) / メインコンテンツ (縦画面)。縦画面では below-card スロット (本日の打刻履歴等) を
+         「縦の余白が足りるか」で判定して並べる (下の <style> の @media (max-height) 参照) — 低解像度
+         や高倍率で縦が窮屈になったときだけ横並び2列にして全体の高さを縮め、縦に余裕があるときは
+         従来どおり縦積みのまま (幅で判定すると横幅は広いのに縦が窮屈、というケースを拾えないため)。
+         横画面時は display:contents で透過し、既存の3カラム flex (左列/main/below-card) をそのまま保つ -->
+    <div :class="landscape ? 'contents' : 'tenko-below-card-area'">
+    <main :class="['flex-1', landscape ? 'w-full min-h-0 overflow-y-auto' : 'w-full max-w-md']">
       <!-- Step 1: NFC / 手動入力 -->
       <div v-if="step === 'nfc'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
@@ -1068,3 +1069,32 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
     </footer>
   </div>
 </template>
+
+<style scoped>
+/* 縦画面のメインカード + below-card スロット (本日の打刻履歴等)。
+   既定は縦積み (自然な読み順)。ビューポートの縦が窮屈なとき (低解像度・高倍率) だけ
+   横並び2列にして全体の高さを縮める。幅ではなく高さで判定する (幅は広いのに縦だけ
+   窮屈、というケースを拾うため) */
+.tenko-below-card-area {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+@media (max-height: 820px) {
+  .tenko-below-card-area {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  /* 縦積み用の w-full (幅100%) は横並びだと1列を占領してしまうので、この高さでは
+     基準幅を持たせて可変にする。max-w-md (Tailwind) はそのまま上限として効く */
+  .tenko-below-card-area > * {
+    width: auto;
+    flex: 1 1 320px;
+  }
+}
+</style>
