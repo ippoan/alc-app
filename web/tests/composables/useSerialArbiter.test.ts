@@ -909,6 +909,23 @@ describe('useSerialArbiter', () => {
     })
   })
 
+  // ---------- writeBytes (シリアル OTA、Refs ippoan/alc-app-s3#279) ----------
+
+  describe('writeBytes', () => {
+    it('バイト列をそのまま書き (改行を足さない)、失敗したら false', async () => {
+      const ok = createMockPort()
+      const ng = createMockPort({ writeError: true })
+      await load()
+
+      const okWriter = ok.port.writable.getWriter()
+      expect(await mod.writeBytes(okWriter, new Uint8Array([0x41, 0x42]))).toBe(true)
+      expect(ok.writes).toEqual(['AB'])
+
+      const ngWriter = ng.port.writable.getWriter()
+      expect(await mod.writeBytes(ngWriter, new Uint8Array([0x41]))).toBe(false)
+    })
+  })
+
   // ---------- request (#213 CoreS3 自動端末登録 / 後続の VoiceS3R 認証) ----------
 
   describe('request', () => {
@@ -1071,6 +1088,44 @@ describe('useSerialArbiter', () => {
       await load()
       await expect(arbiter.request('core', 'AUTH TICKET', 'AUTH TICKET ', 10_000))
         .rejects.toThrow('ポートを預かっていません')
+    })
+
+    it('errPrefix を渡すと、その接頭辞の行で reject する (`OTA ERR <reason>` の形)', async () => {
+      const { dev } = await claimAsCore()
+
+      const p = arbiter.request('core', 'OTA SERIAL 300000 timecard-station', 'OTA READY', 10_000, 'OTA ERR')
+      const assertion = expect(p).rejects.toThrow(/^OTA ERR flavor$/)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('OTA SERIAL 300000 timecard-station\n')
+
+      dev.emit('OTA ERR flavor\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await assertion
+    })
+
+    it('バイト列を渡すと改行を足さずに書き、同じ仕組みで応答を待つ (OTA のチャンク → OTA ACK)', async () => {
+      const { dev, seen } = await claimAsCore()
+
+      const p = arbiter.request('core', new Uint8Array([0x00, 0x01, 0x02]), 'OTA ACK', 10_000, 'OTA ERR')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.port.writable.getWriter().write).toHaveBeenLastCalledWith(new Uint8Array([0x00, 0x01, 0x02]))
+
+      // 間に混ざる EVT 行は横取りせず、そのまま onLine へ
+      dev.emit('EVT TICK\nOTA ACK 3\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await expect(p).resolves.toBe('OTA ACK 3')
+      expect(seen.lines).toEqual(expect.arrayContaining(['EVT TICK', 'OTA ACK 3']))
+    })
+
+    it('バイト列の書き込みに失敗したら reject する', async () => {
+      const { seen } = await claimAsCore()
+      ;(seen.writer as unknown as { write: ReturnType<typeof vi.fn> }).write
+        = vi.fn().mockRejectedValueOnce(new Error('write failed'))
+
+      const p = arbiter.request('core', new Uint8Array([1]), 'OTA ACK', 10_000, 'OTA ERR')
+      await expect(p).rejects.toThrow('write failed')
     })
 
     it('待っている間にポートを失ったら reject する (抜線・release)', async () => {

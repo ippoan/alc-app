@@ -9,12 +9,15 @@
  *
  * **管理画面 (TimecardManager) と運行者タブの打刻履歴 (TodayPunchHistory) で共有する。**
  * どちらも「打刻が入ったら一覧を引き直す」だけなので、2 実装目を作らない。
+ * 点呼キオスク (TenkoKiosk) は打刻一覧を持たず、同じ WS でシリアル OTA の合図
+ * (`serial_ota`、Refs ippoan/alc-app-s3#279) だけを受ける。TodayPunchHistory とは同時に
+ * 出ないので、キオスク 1 台の購読は 1 本のまま。
  *
  * # 取りこぼさないための 3 点
  *
  * - **`onopen` で無条件に 1 回引き直す。** 切断中に入った打刻は合図が届かない
  * - **WS が繋がっていない間だけポーリングする** (既定 30 秒)。繋がったら止める
- *   ので二重取得にならない
+ *   ので二重取得にならない (`onChange` を渡さない画面ではポーリングしない)
  * - **トークンが取れなくても画面を壊さない** (未ペアリングのキオスク)。
  *   WS を張らずポーリングだけで動く
  *
@@ -53,8 +56,17 @@ export interface TimecardWatchOptions {
    * 未ペアリング) — その場合は WS を張らずポーリングに落ちる。
    */
   getToken: () => string | null | Promise<string | null>
-  /** 引き直しの実処理 (打刻一覧の再取得)。 */
-  onChange: () => unknown
+  /**
+   * 引き直しの実処理 (打刻一覧の再取得)。**打刻一覧を持たない画面 (TenkoKiosk) は渡さない** —
+   * その場合は切断中のポーリングも回さない (引き直す先が無い)。
+   */
+  onChange?: () => unknown
+  /**
+   * `{"type":"serial_ota","target":…}` を受けたときに呼ぶ (Refs ippoan/alc-app-s3#279)。
+   * 渡すのは `target` の語だけ — URL や版はメッセージから読まない (`useSerialOta` が
+   * 自前の allowlist で引く)。未指定なら従来どおり無視する。
+   */
+  onSerialOta?: (target: string) => void
 }
 
 /**
@@ -84,8 +96,9 @@ export function useTimecardWatch(options: TimecardWatchOptions) {
   let connecting = false
 
   function startPolling() {
-    if (pollTimer) return
-    pollTimer = setInterval(() => { options.onChange() }, POLL_INTERVAL_MS)
+    const onChange = options.onChange
+    if (pollTimer || !onChange) return
+    pollTimer = setInterval(() => { onChange() }, POLL_INTERVAL_MS)
   }
 
   function stopPolling() {
@@ -149,15 +162,16 @@ export function useTimecardWatch(options: TimecardWatchOptions) {
       reconnectDelay = RECONNECT_BASE_MS
       // **切断中の打刻は合図が届かない。** 繋がった時点で必ず 1 回引き直す
       stopPolling()
-      options.onChange()
+      options.onChange?.()
       pingTimer = setInterval(() => sock.send(PING_FRAME), PING_INTERVAL_MS)
     }
 
     sock.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data as string) as { type?: string }
+        const data = JSON.parse(event.data as string) as { type?: string, target?: unknown }
         // 合図以外 (pong 等) は無視する
-        if (data.type === 'timecard_punch') options.onChange()
+        if (data.type === 'timecard_punch') options.onChange?.()
+        else if (data.type === 'serial_ota' && typeof data.target === 'string') options.onSerialOta?.(data.target)
       }
       catch {
         // 非 JSON は無視

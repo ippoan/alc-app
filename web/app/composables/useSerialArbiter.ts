@@ -299,6 +299,23 @@ export async function writeLine(
 }
 
 /**
+ * 生のバイト列を書く (シリアル OTA のイメージ、Refs ippoan/alc-app-s3#279)。
+ * {@link writeLine} と同じく、失敗を例外ではなく false で返す
+ */
+export async function writeBytes(
+  w: WritableStreamDefaultWriter<Uint8Array>,
+  bytes: Uint8Array,
+): Promise<boolean> {
+  try {
+    await w.write(bytes)
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
+/**
  * ポートを閉じる。ESP32-S3 の USB-Serial-JTAG は「DTR=0 かつ RTS=1」で chip reset が
  * かかる (自動書き込み回路の模倣) ため、close の直前に DTR と RTS を落とす。
  * S3 にはこれを無効化するレジスタが無く、firmware 側では直せない。
@@ -738,8 +755,23 @@ export function useSerialArbiter() {
    * `matchPrefix`/`errPrefix` のどちらにも当てはまらない行は横取りせず、判定だけして
    * そのまま `onLine` へ流す。**待っている間も `writeLine` 自体は塞がない**
    * (`useCoreS3Serial.write` の `HB` heartbeat 等、無関係な書き込みは通る)。
+   *
+   * `payload` に `Uint8Array` を渡すと、行ではなく生のバイト列を ({@link writeBytes} で)
+   * 書いて同じ仕組みで応答を待つ (シリアル OTA のチャンク → `OTA ACK`、
+   * Refs ippoan/alc-app-s3#279)。応答待ちのために別の reader は立てない
+   * (1 ポートに reader は 1 つ)。失敗行の接頭辞が `ERR <先頭トークン>` の形でない
+   * コマンド (`OTA …` は `OTA ERR <reason>`) は `errPrefix` で明示する。バイト列を送るときは
+   * 先頭トークンが無いので必ず渡す (型で強制している)。
    */
-  function request(name: string, line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+  function request(name: string, line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
+  function request(name: string, bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  function request(
+    name: string,
+    payload: string | Uint8Array,
+    matchPrefix: string,
+    timeoutMs: number,
+    errPrefix?: string,
+  ): Promise<string> {
     const held_ = held.get(name)
     if (!held_) return Promise.reject(new Error(`request(${name}): ポートを預かっていません`))
     if (pendingRequests.has(held_)) return Promise.reject(new Error(`request(${name}): 既に応答待ちです`))
@@ -767,9 +799,16 @@ export function useSerialArbiter() {
         reject(e)
       }
 
-      pendingRequests.set(s, { matchPrefix, errPrefix: `ERR ${line.split(' ')[0]}`, resolve: doResolve, reject: doReject })
+      pendingRequests.set(s, {
+        matchPrefix,
+        // バイト列は型の上で errPrefix 必須なので、既定値を作るのは行のときだけ
+        errPrefix: errPrefix ?? `ERR ${String(payload).split(' ')[0]}`,
+        resolve: doResolve,
+        reject: doReject,
+      })
 
-      void writeLine(s.writer, line).then((ok) => {
+      const written = typeof payload === 'string' ? writeLine(s.writer, payload) : writeBytes(s.writer, payload)
+      void written.then((ok) => {
         if (!ok) doReject(new Error(`request(${name}): write failed`))
       })
     })
