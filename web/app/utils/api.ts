@@ -514,6 +514,24 @@ export async function clearEmployeeLicense(id: string): Promise<ApiEmployee> {
 }
 
 /**
+ * 指静脈テンプレートを登録 (登録画面から 2 回分の特徴量をまとめて PUT、
+ * Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)。
+ *
+ * 422 (`{"error": "…", "message": "…"}`) は呼び出し側が {@link apiErrorCode} /
+ * {@link apiErrorMessage} で読める。404 (`employee_not_found`) は `apiErrorCode` が
+ * そのまま拾う (本文が `{"error":"employee_not_found"}` 形式のため)。
+ */
+export async function putVeinTemplate(
+  employeeId: string,
+  charas: string[],
+): Promise<{ employee_id: string; updated_at: string }> {
+  return request<{ employee_id: string; updated_at: string }>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ charas }),
+  })
+}
+
+/**
  * 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
  * rust-alc-api ではなく alc-app 自身の server route `/api/driver-master/run` を
  * same-origin で叩く (proxy 経由にしない)。route が admin browser JWT を introspect
@@ -812,27 +830,41 @@ export async function selfResumeTenkoSession(sessionId: string, data: ResumeSess
 }
 
 /**
- * rust-alc-api が 400 で返す body (`{"error": "…", "message": "…"}`) の `error` を取り出す。
+ * rust-alc-api が 4xx で返す body (`{"error": "…", "message": "…"}`) を Error.message から
+ * 取り出す ({@link apiErrorCode} / {@link apiErrorMessage} の共通実装)。
  *
  * この層は失敗を `API エラー (400): <body>` という **Error の文言**にして投げるので、
- * 呼び出し側が分岐したい「どの 400 か」はそこからしか読めない。文言の作り方を知っているのは
+ * 呼び出し側が分岐したい「どの 4xx か」はそこからしか読めない。文言の作り方を知っているのは
  * この module なので、**取り出しもここに置く** (呼び出し側に書式を写さない)。
  *
- * `error` が読めなければ `null` — 呼び出し側は「分からない失敗」として扱う
- * (**分からない失敗を既知の 1 つに丸めない**)。
+ * 本文が JSON として読めなければ (プロキシの HTML エラーページ等) `null` —
+ * 呼び出し側は「分からない失敗」として扱う (**分からない失敗を既知の 1 つに丸めない**)。
  */
-export function apiErrorCode(e: unknown): string | null {
-  const message = e instanceof Error ? e.message : ''
-  const start = message.indexOf('{')
+function parseApiErrorBody(e: unknown): { error?: unknown; message?: unknown } | null {
+  const text = e instanceof Error ? e.message : ''
+  const start = text.indexOf('{')
   if (start < 0) return null
   try {
-    const body = JSON.parse(message.slice(start)) as { error?: unknown }
-    return typeof body.error === 'string' ? body.error : null
+    return JSON.parse(text.slice(start)) as { error?: unknown; message?: unknown }
   }
   catch {
-    // body が JSON でない (プロキシの HTML エラーページ等) ときは分からない失敗にする
     return null
   }
+}
+
+/** {@link parseApiErrorBody} の `error` (コード) だけを取り出す。読めなければ `null`。 */
+export function apiErrorCode(e: unknown): string | null {
+  const body = parseApiErrorBody(e)
+  return body && typeof body.error === 'string' ? body.error : null
+}
+
+/**
+ * {@link parseApiErrorBody} の `message` (表示用文言) だけを取り出す。読めなければ `null`
+ * (指静脈テンプレート登録の 422 表示用、Refs ippoan/rust-alc-api#678)。
+ */
+export function apiErrorMessage(e: unknown): string | null {
+  const body = parseApiErrorBody(e)
+  return body && typeof body.message === 'string' ? body.message : null
 }
 
 // --- レコード ---

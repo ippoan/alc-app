@@ -139,6 +139,10 @@ path = "app/composables/useAtomS3Serial.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useVeinSerial.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useCoreS3Stage.ts"
 branches = true
 

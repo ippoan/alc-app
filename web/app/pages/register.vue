@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiEmployee } from '~/types'
-import { initApi, getEmployees, getEmployeeByNfcId, uploadFacePhoto, updateEmployeeFace } from '~/utils/api'
+import { initApi, getEmployees, getEmployeeByNfcId, uploadFacePhoto, updateEmployeeFace, putVeinTemplate, apiErrorMessage } from '~/utils/api'
 import { getFaceDescriptor } from '~/utils/face-db'
 import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 import { FACE_MODEL_VERSION } from '~/composables/useFaceDetection'
@@ -76,9 +76,58 @@ function reset() {
   lookupError.value = null
   uploadError.value = null
   registered.value = false
+  veinError.value = null
+  veinRegistered.value = false
 }
 
 onMounted(() => fetchEmployees())
+
+// --- 指静脈登録 (Refs ippoan/vein-match#20) -----------------------------------------
+//
+// 端末は Vein Station (kind `timecard` の vein build)。CoreS3/警告デバイス/測定台と
+// 同じ調停 (useSerialArbiter) を通るので、ここでは接続だけ持てば足りる — ポートの探索・
+// `DEVICE timecard` の判定は arbiter 側。unmount で release/disconnect しないのは
+// NfcStatus.vue と同じ理由 (Refs ippoan/rust-alc-api#644): 画面遷移のたびに開き直すと
+// ESP32-S3 を再起動させうる。
+
+const veinSerial = useVeinSerial()
+const veinRegistering = ref(false)
+const veinError = ref<string | null>(null)
+const veinRegistered = ref(false)
+
+onMounted(() => veinSerial.connect())
+
+/** ボタンを押せない理由。`null` なら押せる */
+const veinDisabledReason = computed<string | null>(() => {
+  if (!veinSerial.isSupported) return 'この端末は WebSerial に対応していません'
+  if (!veinSerial.isConnected.value) return 'Vein Station (指静脈読み取り端末) が接続されていません'
+  return null
+})
+
+/** ERR VEIN の理由 (useVeinSerial が message に載せる) / 422 の message (apiErrorMessage) を拾う */
+function veinErrorMessage(e: unknown): string {
+  return apiErrorMessage(e) ?? (e instanceof Error ? e.message : '指静脈登録エラー')
+}
+
+async function registerVein() {
+  if (!selectedEmployee.value || veinDisabledReason.value || veinRegistering.value) return
+  veinRegistering.value = true
+  veinError.value = null
+  try {
+    await veinSerial.say('PLACE')
+    const first = await veinSerial.capture()
+    await veinSerial.say('AGAIN')
+    const second = await veinSerial.capture()
+    await putVeinTemplate(selectedEmployee.value.id, [first, second])
+    await veinSerial.say('ENROLLED')
+    veinRegistered.value = true
+  } catch (e) {
+    veinError.value = veinErrorMessage(e)
+    try { await veinSerial.say('FAILED') } catch { /* 案内の失敗は握り潰す (登録失敗の表示が主) */ }
+  } finally {
+    veinRegistering.value = false
+  }
+}
 </script>
 
 <template>
@@ -132,6 +181,29 @@ onMounted(() => fetchEmployees())
             <p v-if="uploadError" class="mt-3 text-sm text-amber-600 text-center">
               写真アップロードに失敗しましたが、顔認証は利用できます
             </p>
+          </div>
+
+          <!-- 指静脈登録 -->
+          <div v-if="selectedEmployee" class="mt-4 border-t border-gray-200 pt-4">
+            <label class="block text-sm font-medium text-gray-700 mb-2">指静脈の登録</label>
+            <p v-if="veinRegistered" class="text-sm text-green-700 text-center">
+              指静脈を登録しました
+            </p>
+            <template v-else>
+              <button
+                class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                :disabled="!!veinDisabledReason || veinRegistering"
+                @click="registerVein"
+              >
+                {{ veinRegistering ? '指静脈を読み取り中... (端末の案内に従ってください)' : '指静脈を登録' }}
+              </button>
+              <p v-if="veinDisabledReason && !veinRegistering" class="mt-2 text-sm text-gray-500 text-center">
+                {{ veinDisabledReason }}
+              </p>
+              <p v-if="veinError" class="mt-2 text-sm text-red-600 text-center">
+                {{ veinError }}
+              </p>
+            </template>
           </div>
         </div>
       </div>

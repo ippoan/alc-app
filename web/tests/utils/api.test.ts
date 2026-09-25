@@ -20,7 +20,7 @@ import {
   cancelTenkoSession, listTenkoSessions, getTenkoDashboard,
   escalateTenkoSessionToRemote,
   submitManagerJudgment,
-  interruptTenkoSession, resumeTenkoSession, selfResumeTenkoSession, apiErrorCode,
+  interruptTenkoSession, resumeTenkoSession, selfResumeTenkoSession, apiErrorCode, apiErrorMessage,
   // Tenko records
   downloadTenkoRecordsCsv,
   // Webhooks
@@ -62,6 +62,8 @@ import {
   listHubMeasurements,
   // Driver master sync (theearth 乗務員マスタ、Refs ippoan/alc-app-s3#125)
   runDriverMasterSync,
+  // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
+  putVeinTemplate,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -1028,6 +1030,7 @@ describe('api', () => {
       ['updateCommunicationItem', () => updateCommunicationItem(SEED_COMM_ITEM_ID, { title: 'Updated' }), `/api/communication-items/${SEED_COMM_ITEM_ID}`],
       ['updateDeviceCallSettings', () => updateDeviceCallSettings(SEED_DEVICE_ID, true), `/api/devices/${SEED_DEVICE_ID}/call-settings`],
       ['updateDeviceLastLogin', () => updateDeviceLastLogin(SEED_DEVICE_ID, TEST_EMPLOYEE_ID, 'name', []), '/api/devices/update-last-login'],
+      ['putVeinTemplate', () => putVeinTemplate(TEST_EMPLOYEE_ID, ['AA', 'BB']), `/api/vein/templates/${TEST_EMPLOYEE_ID}`],
     ] as [string, () => Promise<unknown>, string][])(
       '%s → PUT %s',
       async (_name, fn, expectedPath) => {
@@ -1048,6 +1051,15 @@ describe('api', () => {
         expect(body.face_photo_url).toBeNull()
         expect(body.face_embedding).toBeNull()
         expect(body.face_model_version).toBeNull()
+      })
+    })
+
+    it('putVeinTemplate sends charas array in body', async () => {
+      stubOk({ employee_id: TEST_EMPLOYEE_ID, updated_at: '2026-09-25T00:00:00Z' })
+      await callApi(() => putVeinTemplate(TEST_EMPLOYEE_ID, ['AABBCC', 'DDEEFF']))
+      assertMock(() => {
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+        expect(body.charas).toEqual(['AABBCC', 'DDEEFF'])
       })
     })
 
@@ -2643,5 +2655,46 @@ describe.skipIf(isLive)('apiErrorCode (Refs ippoan/alc-app#351)', () => {
   it('JSON でも error が文字列でなければ null', () => {
     expect(apiErrorCode(new Error('API エラー (400): {"message":"理由だけ"}'))).toBeNull()
     expect(apiErrorCode(new Error('API エラー (400): {"error":42}'))).toBeNull()
+  })
+})
+
+// --- 4xx の `message` (表示用文言) の取り出し (指静脈テンプレート登録の 422、
+// Refs ippoan/rust-alc-api#678) — apiErrorCode と同じ抽出を共有する ---
+describe.skipIf(isLive)('apiErrorMessage (Refs ippoan/rust-alc-api#678)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('★ 422 の body から message を取り出す', () => {
+    const e = new Error('API エラー (422): {"error":"invalid_chara_hex","message":"特徴量が16進数ではありません"}')
+    expect(apiErrorMessage(e)).toBe('特徴量が16進数ではありません')
+  })
+
+  it('★ putVeinTemplate が実際に投げた Error から取り出せる (文言の作り方と揃っている)', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(
+      errResponse(422, '{"error":"too_many_templates","message":"登録できる指静脈テンプレートの上限に達しています"}'),
+    )
+    const err = await putVeinTemplate(TEST_EMPLOYEE_ID, ['AA', 'BB']).catch((e: Error) => e)
+    expect(apiErrorCode(err)).toBe('too_many_templates')
+    expect(apiErrorMessage(err)).toBe('登録できる指静脈テンプレートの上限に達しています')
+  })
+
+  it('Error でないものは null', () => {
+    expect(apiErrorMessage('boom')).toBeNull()
+  })
+
+  it('body が載っていない文言は null', () => {
+    expect(apiErrorMessage(new Error('Failed to fetch'))).toBeNull()
+  })
+
+  it('JSON でも message が文字列でなければ null', () => {
+    expect(apiErrorMessage(new Error('API エラー (422): {"error":"invalid_chara"}'))).toBeNull()
+    expect(apiErrorMessage(new Error('API エラー (422): {"message":42}'))).toBeNull()
   })
 })
