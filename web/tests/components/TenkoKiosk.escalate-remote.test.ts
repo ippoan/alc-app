@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
@@ -34,6 +34,15 @@ vi.mock('~/utils/api', () => ({
   getCarryingItems: vi.fn(async () => []),
   submitCarryingItemChecks: vi.fn(),
   listTenkoSessions: vi.fn(async () => ({ sessions: [], total: 0, page: 1, per_page: 50 })),
+}))
+
+// 指静脈の照合データ同期は mount 時に `void` で走る (TenkoKiosk.vue の onMounted)。この test の
+// 関心事ではなく、api mock に getVeinTemplates も無いので、本物のまま走らせると同期失敗の
+// console.warn が mount ごとに出る。その warn は完了を待たれず、テストの後片付けと競って
+// `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending` になりうる (#385)
+vi.mock('~/utils/vein-identify', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/utils/vein-identify')>()),
+  syncVeinTemplates: vi.fn(async () => false),
 }))
 
 const webRtcConnect = vi.fn(async () => {})
@@ -169,13 +178,37 @@ async function mountAtMedicalStep(props: { remoteMode?: boolean } = {}) {
   return wrapper
 }
 
+/**
+ * このファイルで出てよい console.warn。**ここに無い warn は失敗にする** (黙らせない)。
+ * - Vue warn: mock の useWebRtc が返す ref を shallow stub が prop として受けられない
+ * - useDeviceToken: CoreS3 の無い環境では端末の署名が取れない (点呼の流れには関係しない)
+ */
+const KNOWN_WARNINGS = [
+  /^\[Vue warn\]: Failed setting prop "isConnected" on <tenko-video-call-stub>/,
+  /^\[useDeviceToken\] 端末の署名に失敗 stage=no-core-s3 /,
+]
+
 describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替える (Refs ippoan/alc-app-s3#135)', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
   beforeEach(() => {
     vi.clearAllMocks()
+    // console.warn を vitest の rpc に流さず自分で受ける。unmount 後に遅れて届く warn が
+    // teardown と競らないようにするのと、想定外の warn を afterEach で検出するため
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     getEmployeeByNfcId.mockResolvedValue(EMPLOYEE)
     getPendingSchedules.mockResolvedValue([makeSchedule()])
     startTenkoSession.mockResolvedValue(makeSession())
     escalateTenkoSessionToRemote.mockResolvedValue({ ...makeSession(), escalated_to_remote_at: '2026-09-16T08:05:00Z' })
+  })
+
+  afterEach(() => {
+    // unmount 後に遅れて出た warn もここで拾える (spy は各ケースの後まで生きている)
+    const unexpected = warnSpy.mock.calls
+      .map(args => String(args[0]))
+      .filter(msg => !KNOWN_WARNINGS.some(re => re.test(msg)))
+    warnSpy.mockRestore()
+    expect(unexpected).toEqual([])
   })
 
   it('切り替えの理由は選択肢から選ばせる (自由入力にしない)', async () => {
