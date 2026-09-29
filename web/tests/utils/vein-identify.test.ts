@@ -6,6 +6,9 @@ import type { VeinTemplateSnapshot } from '~/utils/vein-db'
 // オンラインはサーバー、オフライン (navigator.onLine === false / fetch のネットワーク失敗) は
 // 手元の写しを wasm で照合する。照合そのものは vein-match.test.ts が見る
 
+// 同期そのものを見るテスト: tests/setup.ts が既定で止めている syncVeinTemplates を本物に戻す (Refs #385)
+vi.unmock('~/utils/vein-identify')
+
 const api = vi.hoisted(() => ({
   identifyVein: vi.fn(),
   getEmployeeById: vi.fn(),

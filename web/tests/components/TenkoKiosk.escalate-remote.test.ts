@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
-import { guardConsole, KNOWN_DEVICE_TOKEN_WARN } from '../helpers/console-guard'
 import type { TenkoSchedule, TenkoSession } from '~/types'
 
 // 血圧を必須にすると血圧計が壊れた日に全車が出庫できなくなるため、測れないときは
@@ -36,9 +35,6 @@ vi.mock('~/utils/api', () => ({
   submitCarryingItemChecks: vi.fn(),
   listTenkoSessions: vi.fn(async () => ({ sessions: [], total: 0, page: 1, per_page: 50 })),
 }))
-
-// 指静脈の照合データ同期 (mount ごとに走る) はこのテストの関心事ではない (Refs ippoan/alc-app#385)
-vi.mock('~/utils/vein-identify', async orig => (await import('../helpers/console-guard')).veinSyncMock(orig))
 
 const webRtcConnect = vi.fn(async () => {})
 const webRtcDisconnect = vi.fn()
@@ -172,16 +168,6 @@ async function mountAtMedicalStep(props: { remoteMode?: boolean } = {}) {
 
   return wrapper
 }
-
-/**
- * このファイルで出てよい console 出力 (これ以外が出たら afterEach で落ちる)。
- * - Vue warn: mock の useWebRtc が返す ref を shallow stub が prop として受けられない
- * - useDeviceToken: CoreS3 の無い環境では端末の署名が取れない
- */
-guardConsole([
-  /^\[Vue warn\]: Failed setting prop "isConnected" on <tenko-video-call-stub>/,
-  KNOWN_DEVICE_TOKEN_WARN,
-])
 
 describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替える (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
