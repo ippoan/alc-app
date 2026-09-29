@@ -179,23 +179,27 @@ async function mountAtMedicalStep(props: { remoteMode?: boolean } = {}) {
 }
 
 /**
- * このファイルで出てよい console.warn。**ここに無い warn は失敗にする** (黙らせない)。
+ * このファイルで出てよい console 出力。**ここに無いものは失敗にする** (黙らせない)。
  * - Vue warn: mock の useWebRtc が返す ref を shallow stub が prop として受けられない
  * - useDeviceToken: CoreS3 の無い環境では端末の署名が取れない (点呼の流れには関係しない)
+ * 既知の 2 種は**出なくなっても落ちない** (後で直したときにこのテストが壊れないように)。
  */
 const KNOWN_WARNINGS = [
   /^\[Vue warn\]: Failed setting prop "isConnected" on <tenko-video-call-stub>/,
   /^\[useDeviceToken\] 端末の署名に失敗 stage=no-core-s3 /,
 ]
 
-describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替える (Refs ippoan/alc-app-s3#135)', () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>
+// console を vitest の rpc (onUserConsoleLog) へ流さず、このファイルの中で受ける。
+// unmount 後に遅れて出る出力が、worker の後片付けと競って
+// `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending` になるのを防ぐ (#385)。
+// **ファイルの最後まで戻さない** — afterEach で戻すと、最後のケースの後に遅れて出た分が
+// 実 console に流れて同じ競合になる。vitest はファイルごとに module を分けるので他へは漏れない
+const consoleSpies = (['warn', 'error', 'info', 'log', 'debug'] as const)
+  .map(m => vi.spyOn(console, m).mockImplementation(() => {}))
 
+describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替える (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // console.warn を vitest の rpc に流さず自分で受ける。unmount 後に遅れて届く warn が
-    // teardown と競らないようにするのと、想定外の warn を afterEach で検出するため
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     getEmployeeByNfcId.mockResolvedValue(EMPLOYEE)
     getPendingSchedules.mockResolvedValue([makeSchedule()])
     startTenkoSession.mockResolvedValue(makeSession())
@@ -203,11 +207,11 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
   })
 
   afterEach(() => {
-    // unmount 後に遅れて出た warn もここで拾える (spy は各ケースの後まで生きている)
-    const unexpected = warnSpy.mock.calls
+    // 各ケースの後に、出た console 出力が既知の warn だけであることを確かめる
+    const unexpected = consoleSpies
+      .flatMap(spy => spy.mock.calls)
       .map(args => String(args[0]))
       .filter(msg => !KNOWN_WARNINGS.some(re => re.test(msg)))
-    warnSpy.mockRestore()
     expect(unexpected).toEqual([])
   })
 
