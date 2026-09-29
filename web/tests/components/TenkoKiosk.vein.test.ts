@@ -11,9 +11,6 @@ import { VEIN_NO_MATCH_MESSAGE, VEIN_OFFLINE_STALE_MESSAGE } from '~/utils/vein-
 // 当たったら NFC と同じく applyFaceApproval → identifyEmployee に合流する。
 // オンライン/オフラインの振り分けは実物の vein-identify を通し、その先 (API・IndexedDB・wasm) を差し替える
 
-// 同期そのものを見るテスト: tests/setup.ts が既定で止めている syncVeinTemplates を本物に戻す (Refs #385)
-vi.unmock('~/utils/vein-identify')
-
 const api = vi.hoisted(() => ({
   identifyVein: vi.fn(),
   getEmployeeById: vi.fn(),
