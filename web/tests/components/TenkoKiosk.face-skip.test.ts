@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
+import { guardConsole, KNOWN_DEVICE_TOKEN_WARN, KNOWN_VIDEO_STORE_LOG } from '../helpers/console-guard'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 
 // 乗務員の点呼は、顔を登録していない人を止めない (Refs ippoan/alc-app-s3#135)。
@@ -14,6 +15,12 @@ const employee = ref<{ id: string, name: string, face_approval_status?: string }
   name: 'テスト太郎',
   face_approval_status: 'none',
 })
+// 指静脈の照合データ同期 (mount ごとに走る) はこのテストの関心事ではない (Refs ippoan/alc-app#385)
+vi.mock('~/utils/vein-identify', async orig => (await import('../helpers/console-guard')).veinSyncMock(orig))
+
+// 出てよい出力: 端末の署名 (CoreS3 が無い環境)・録画の掃除ログ。これ以外が出たら各ケースで落ちる
+guardConsole([KNOWN_DEVICE_TOKEN_WARN, KNOWN_VIDEO_STORE_LOG])
+
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: vi.fn(async () => employee.value),
   getEmployeeByCode: vi.fn(async () => employee.value),

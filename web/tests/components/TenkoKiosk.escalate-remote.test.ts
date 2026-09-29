@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
+import { guardConsole, KNOWN_DEVICE_TOKEN_WARN } from '../helpers/console-guard'
 import type { TenkoSchedule, TenkoSession } from '~/types'
 
 // 血圧を必須にすると血圧計が壊れた日に全車が出庫できなくなるため、測れないときは
@@ -36,14 +37,8 @@ vi.mock('~/utils/api', () => ({
   listTenkoSessions: vi.fn(async () => ({ sessions: [], total: 0, page: 1, per_page: 50 })),
 }))
 
-// 指静脈の照合データ同期は mount 時に `void` で走る (TenkoKiosk.vue の onMounted)。この test の
-// 関心事ではなく、api mock に getVeinTemplates も無いので、本物のまま走らせると同期失敗の
-// console.warn が mount ごとに出る。その warn は完了を待たれず、テストの後片付けと競って
-// `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending` になりうる (#385)
-vi.mock('~/utils/vein-identify', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('~/utils/vein-identify')>()),
-  syncVeinTemplates: vi.fn(async () => false),
-}))
+// 指静脈の照合データ同期 (mount ごとに走る) はこのテストの関心事ではない (Refs ippoan/alc-app#385)
+vi.mock('~/utils/vein-identify', async orig => (await import('../helpers/console-guard')).veinSyncMock(orig))
 
 const webRtcConnect = vi.fn(async () => {})
 const webRtcDisconnect = vi.fn()
@@ -179,23 +174,14 @@ async function mountAtMedicalStep(props: { remoteMode?: boolean } = {}) {
 }
 
 /**
- * このファイルで出てよい console 出力。**ここに無いものは失敗にする** (黙らせない)。
+ * このファイルで出てよい console 出力 (これ以外が出たら afterEach で落ちる)。
  * - Vue warn: mock の useWebRtc が返す ref を shallow stub が prop として受けられない
- * - useDeviceToken: CoreS3 の無い環境では端末の署名が取れない (点呼の流れには関係しない)
- * 既知の 2 種は**出なくなっても落ちない** (後で直したときにこのテストが壊れないように)。
+ * - useDeviceToken: CoreS3 の無い環境では端末の署名が取れない
  */
-const KNOWN_WARNINGS = [
+guardConsole([
   /^\[Vue warn\]: Failed setting prop "isConnected" on <tenko-video-call-stub>/,
-  /^\[useDeviceToken\] 端末の署名に失敗 stage=no-core-s3 /,
-]
-
-// console を vitest の rpc (onUserConsoleLog) へ流さず、このファイルの中で受ける。
-// unmount 後に遅れて出る出力が、worker の後片付けと競って
-// `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending` になるのを防ぐ (#385)。
-// **ファイルの最後まで戻さない** — afterEach で戻すと、最後のケースの後に遅れて出た分が
-// 実 console に流れて同じ競合になる。vitest はファイルごとに module を分けるので他へは漏れない
-const consoleSpies = (['warn', 'error', 'info', 'log', 'debug'] as const)
-  .map(m => vi.spyOn(console, m).mockImplementation(() => {}))
+  KNOWN_DEVICE_TOKEN_WARN,
+])
 
 describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替える (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
@@ -204,15 +190,6 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     getPendingSchedules.mockResolvedValue([makeSchedule()])
     startTenkoSession.mockResolvedValue(makeSession())
     escalateTenkoSessionToRemote.mockResolvedValue({ ...makeSession(), escalated_to_remote_at: '2026-09-16T08:05:00Z' })
-  })
-
-  afterEach(() => {
-    // 各ケースの後に、出た console 出力が既知の warn だけであることを確かめる
-    const unexpected = consoleSpies
-      .flatMap(spy => spy.mock.calls)
-      .map(args => String(args[0]))
-      .filter(msg => !KNOWN_WARNINGS.some(re => re.test(msg)))
-    expect(unexpected).toEqual([])
   })
 
   it('切り替えの理由は選択肢から選ばせる (自由入力にしない)', async () => {

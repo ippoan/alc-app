@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
+import { guardConsole, KNOWN_DEVICE_TOKEN_WARN } from '../helpers/console-guard'
 
 // 遠隔点呼では点呼種別が常に「業務前」に固定され業務後の点呼を開始できなかった (#309 は
 // 本番に予定を持つ社員が 0 人のため発火しなかった)。予定に依存せず画面で選べるようにする
@@ -15,6 +16,12 @@ import TenkoKiosk from '~/components/TenkoKiosk.vue'
 
 const getEmployeeByNfcId = vi.fn()
 const getPendingSchedules = vi.fn()
+
+// 指静脈の照合データ同期 (mount ごとに走る) はこのテストの関心事ではない (Refs ippoan/alc-app#385)
+vi.mock('~/utils/vein-identify', async orig => (await import('../helpers/console-guard')).veinSyncMock(orig))
+
+// 出てよい出力: 端末の署名 (CoreS3 が無い環境)。これ以外が出たら各ケースで落ちる
+guardConsole([KNOWN_DEVICE_TOKEN_WARN])
 
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: (...args: unknown[]) => getEmployeeByNfcId(...args),

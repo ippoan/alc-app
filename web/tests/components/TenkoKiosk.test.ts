@@ -3,10 +3,18 @@ import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
+import { guardConsole, KNOWN_DEVICE_TOKEN_WARN, KNOWN_VIDEO_STORE_LOG } from '../helpers/console-guard'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import type { TenkoSession, TenkoType } from '~/types'
 
 // 測定レコードの 2 本 (start / update) だけ差し替える。他の api は素のまま
+// 指静脈の照合データ同期 (mount ごとに走る) はこのテストの関心事ではない (Refs ippoan/alc-app#385)
+vi.mock('~/utils/vein-identify', async orig => (await import('../helpers/console-guard')).veinSyncMock(orig))
+
+// 出てよい出力: 端末の署名 (CoreS3 が無い環境)・録画の掃除ログ。これ以外が出たら各ケースで落ちる。
+// 失敗しても続ける経路の warn は、そのケースの中で takeOutput して assert する
+const consoleGuard = guardConsole([KNOWN_DEVICE_TOKEN_WARN, KNOWN_VIDEO_STORE_LOG])
+
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   startMeasurement: vi.fn(),
@@ -420,6 +428,8 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
 
     expect(updateMeasurement).not.toHaveBeenCalled()
     expect(onAlcoholResultMock).toHaveBeenCalledWith('pass', 0.0, undefined)
+    // best-effort で握りつぶす経路 (TenkoKiosk.vue の startAlcoholMeasurement): 警告を 1 度だけ出す
+    expect(consoleGuard.takeOutput(/^\[TenkoKiosk\] startMeasurement failed:/)).toHaveLength(1)
     wrapper.unmount()
   })
 
@@ -435,6 +445,8 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     await flushPromises()
 
     expect(onAlcoholResultMock).toHaveBeenCalledWith('pass', 0.0, 'meas-1')
+    // best-effort で握りつぶす経路 (TenkoKiosk.vue の completeAlcoholMeasurement): 警告を 1 度だけ出す
+    expect(consoleGuard.takeOutput(/^\[TenkoKiosk\] updateMeasurement failed:/)).toHaveLength(1)
     wrapper.unmount()
   })
 
