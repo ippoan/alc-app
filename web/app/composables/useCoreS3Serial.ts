@@ -46,6 +46,8 @@
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { HEARTBEAT_INTERVAL, RELOAD_GRACE_SEC } from '~/composables/useAlarmDevice'
 import { writeLine } from '~/composables/useSerialArbiter'
+import { parseDeviceLine } from '~/utils/device-line'
+import type { DeviceLine } from '~/utils/device-line'
 import { appendDiag, readDiag } from '~/utils/serialDiagLog'
 
 /** arbiter に登録する名前 */
@@ -99,6 +101,13 @@ type LineKind = 'json' | 'event' | 'alarm' | 'status' | 'unknown'
 
 // シングルトン: 1 台の PC につながる CoreS3 は 1 台
 const isConnected = ref(false)
+
+/**
+ * 繋がっている機体の名乗り (`DEVICE cores3 VER=… BOARD=… FLAVOR=…` の欄)。未接続と、
+ * `DEVICE` に答えない旧いファーム (`legacyClaim` で拾われた機体) は null
+ * (Refs ippoan/alc-app#403)
+ */
+const deviceInfo = ref<DeviceLine | null>(null)
 
 const jsonHandlers = new Set<(msg: unknown) => void>()
 const eventHandlers = new Set<(name: string, args: string[]) => void>()
@@ -184,6 +193,15 @@ export function evtArg(args: string[], key: string): string {
   const prefix = `${key}=`
   const hit = args.find(arg => arg.startsWith(prefix))
   return hit === undefined ? '' : hit.slice(prefix.length)
+}
+
+/**
+ * プローブ中に集まった行から機体の名乗りを拾う。`DEVICE ` は行頭とは限らない (直前のログ行が
+ * 途中で切れて連結されうる。arbiter の機種判定と同じ見方) ので、見つけた位置から後ろを読む
+ */
+function findDeviceLine(lines: string[]): DeviceLine | null {
+  const line = lines.find(l => l.includes('DEVICE '))
+  return line === undefined ? null : parseDeviceLine(line.slice(line.indexOf('DEVICE ')))
 }
 
 export function useCoreS3Serial() {
@@ -300,6 +318,8 @@ export function useCoreS3Serial() {
 
     onOpen(_port, _reader, w, lines) {
       held = w
+      // 利用側の onOpen の cb から読めるように、配る前に入れる
+      deviceInfo.value = findDeviceLine(lines)
       isConnected.value = true
       // 利用側の transport を先に立ててから、プローブ中に来ていた行を配る
       for (const cb of [...openHandlers]) cb()
@@ -313,6 +333,7 @@ export function useCoreS3Serial() {
     onClose() {
       stopHeartbeat()
       held = null
+      deviceInfo.value = null
       isConnected.value = false
       for (const cb of [...closeHandlers]) cb()
     },
@@ -405,6 +426,7 @@ export function useCoreS3Serial() {
   return {
     isSupported,
     isConnected: readonly(isConnected),
+    deviceInfo: readonly(deviceInfo),
     onJson,
     onEvent,
     onOpen,

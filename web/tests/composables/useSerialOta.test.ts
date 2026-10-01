@@ -442,14 +442,4 @@ describe('useSerialOta', () => {
     await ota.runQueued()
     expect(dev.log).toEqual(['DEVICE'])
   })
-
-  // ---------- parseDeviceLine ----------
-
-  it('parseDeviceLine は VER と FLAVOR を取り出し、無ければ null', () => {
-    expect(mod.parseDeviceLine('DEVICE timecard VER=0.1.0+abc FLAVOR=timecard-station'))
-      .toEqual({ ver: '0.1.0+abc', flavor: 'timecard-station' })
-    expect(mod.parseDeviceLine('DEVICE timecard VER=0.1.0')).toEqual({ ver: '0.1.0', flavor: null })
-    // 他のトークンの一部 (XVER=) は拾わない
-    expect(mod.parseDeviceLine('DEVICE timecard XVER=1')).toEqual({ ver: null, flavor: null })
-  })
 })

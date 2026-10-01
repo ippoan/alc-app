@@ -29,6 +29,8 @@
  * claimant も reader も立てない。
  */
 
+import { parseDeviceLine } from '~/utils/device-line'
+
 /** 対象の端末 1 種の固定情報 */
 interface SerialOtaTarget {
   manifestUrl: string
@@ -79,15 +81,6 @@ export type SerialOtaState =
   | { kind: 'confirming' }
   | { kind: 'done', ver: string }
   | { kind: 'failed', reason: string }
-
-/** `DEVICE timecard VER=… FLAVOR=…` から VER と FLAVOR を取り出す (無ければ null) */
-export function parseDeviceLine(line: string): { ver: string | null, flavor: string | null } {
-  const field = (key: string): string | null => {
-    const m = line.match(new RegExp(`(?:^|\\s)${key}=(\\S+)`))
-    return m ? m[1]! : null
-  }
-  return { ver: field('VER'), flavor: field('FLAVOR') }
-}
 
 // シングルトン: 1 台の PC で同時に走る OTA は 1 本
 const state = ref<SerialOtaState>({ kind: 'idle' })

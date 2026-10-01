@@ -155,6 +155,10 @@ path = "app/composables/useCoreS3Stage.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useFirmwareReport.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useHubClaim.ts"
 branches = true
 
@@ -259,6 +263,10 @@ branches = true
 
 [[files]]
 path = "app/utils/it-tenko.ts"
+branches = true
+
+[[files]]
+path = "app/utils/device-line.ts"
 branches = true
 
 [[files]]
