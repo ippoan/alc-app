@@ -27,7 +27,7 @@ describe('ItTenkoGuide', () => {
   })
 
   it('「印刷する」で iframe の contentWindow.print が 1 回呼ばれる', async () => {
-    const wrapper = await mountSuspended(ItTenkoGuide, { attachTo: document.body })
+    const wrapper = await mountSuspended(ItTenkoGuide)
     const print = vi.fn()
     const iframe = wrapper.find('iframe').element as HTMLIFrameElement
     Object.defineProperty(iframe, 'contentWindow', { value: { print }, configurable: true })
@@ -38,7 +38,7 @@ describe('ItTenkoGuide', () => {
   })
 
   it('contentWindow が取れないときに「印刷する」を押しても例外を出さない', async () => {
-    const wrapper = await mountSuspended(ItTenkoGuide, { attachTo: document.body })
+    const wrapper = await mountSuspended(ItTenkoGuide)
     const iframe = wrapper.find('iframe').element as HTMLIFrameElement
     Object.defineProperty(iframe, 'contentWindow', { value: null, configurable: true })
 

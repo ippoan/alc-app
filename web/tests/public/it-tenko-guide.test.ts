@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 // IT点呼 の試験の手順書 (静的ファイル、Refs ippoan/alc-app#387)。
 // public/ は認証なしで URL から直接読めるので、外部への参照が無いこと・原稿が欠けていないことを固定する
-const html = readFileSync(resolve(__dirname, '../../public/it-tenko-guide.html'), 'utf8')
+const html = readFileSync(resolve(import.meta.dirname!, '../../public/it-tenko-guide.html'), 'utf8')
 
 describe('public/it-tenko-guide.html', () => {
   it('外部への参照が無い (http:// も https:// も含まない)', () => {
