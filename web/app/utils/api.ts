@@ -458,6 +458,21 @@ export async function getEmployeeByNfcId(nfcId: string): Promise<ApiEmployee> {
   }, 'bp-station')
 }
 
+/**
+ * カード (社員証の IC カード / 運転免許証) の id で社員を引く (Refs ippoan/alc-app#387)。
+ * **読み取り専用で、打刻はしない**。打刻用の台帳に在ればその社員、無ければ社員の NFC ID と
+ * 一致する社員が返る。未登録・退職は 404。
+ *
+ * id は body に載せる (URL = 各層のアクセスログに残さない。{@link getEmployeeByNfcId} と同じ判断)。
+ * console にも出さない。口は呼び手が選ぶ — IT点呼 の受け画面は `'manager-device'` (席の鍵)。
+ */
+export async function lookupEmployeeByCard(cardId: string, scope: RequestTokenScope): Promise<ApiEmployee> {
+  return request<ApiEmployee>('/api/timecard/cards/lookup', {
+    method: 'POST',
+    body: JSON.stringify({ card_id: cardId }),
+  }, scope)
+}
+
 /** 社員番号で乗務員を検索 */
 export async function getEmployeeByCode(code: string, scope: RequestTokenScope = 'default'): Promise<ApiEmployee> {
   return request<ApiEmployee>(`/api/employees/by-code/${encodeURIComponent(code)}`, {}, scope)

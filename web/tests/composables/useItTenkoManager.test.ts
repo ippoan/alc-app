@@ -5,16 +5,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const getEmployeeByIdMock = vi.fn()
 const getEmployeeByCodeMock = vi.fn()
+const lookupEmployeeByCardMock = vi.fn()
 
 vi.mock('~/utils/api', async importOriginal => ({
   // 席の鍵が取れないときに `request()` が投げる文言。実物の定数をそのまま使う
   MANAGER_DEVICE_AUTH_FAILED_MESSAGE: (await importOriginal<typeof import('~/utils/api')>()).MANAGER_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployeeById: (...args: unknown[]) => getEmployeeByIdMock(...args),
   getEmployeeByCode: (...args: unknown[]) => getEmployeeByCodeMock(...args),
+  lookupEmployeeByCard: (...args: unknown[]) => lookupEmployeeByCardMock(...args),
 }))
 
 import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import {
+  IT_TENKO_CARD_LOOKUP_FAILED_MESSAGE,
+  IT_TENKO_CARD_NOT_REGISTERED_MESSAGE,
   IT_TENKO_MANAGER_STORAGE_KEY,
   clearStoredItTenkoManager,
   useItTenkoManager,
@@ -213,6 +217,136 @@ describe('useItTenkoManager', () => {
       await registerByCode('001')
       const res = await registerByCode('003')
       expect(res).toEqual({ ok: false, message: '山田 太郎さんには運行管理者の権限がありません' })
+      expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
+      expect(localStorage.getItem(KEY)).toBe('mgr-1')
+    })
+  })
+
+  // 警告デバイスにタッチしたカード (社員証の IC カード / 運転免許証) で登録する。打刻はしない
+  describe('registerByCardId', () => {
+    const CARD = '0123456789abcdef'
+
+    it('文言は固定 (カードの id を入れる場所が無い)', () => {
+      expect(IT_TENKO_CARD_NOT_REGISTERED_MESSAGE).toBe('このカードは登録されていません。社員番号で登録してください')
+      expect(IT_TENKO_CARD_LOOKUP_FAILED_MESSAGE).toBe('カードを確認できませんでした。もう一度タッチしてください')
+    })
+
+    it('manager を席の鍵の口 (manager-device) で引いて登録し、社員の id だけを保存する', async () => {
+      lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+      const { manager, registerByCardId } = useItTenkoManager()
+      expect(await registerByCardId(CARD)).toEqual({ ok: true })
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledWith(CARD, 'manager-device')
+      expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
+      expect(localStorage.getItem(KEY)).toBe('mgr-1')
+      // カードの id は保存しない
+      expect(localStorage.length).toBe(1)
+      expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
+    })
+
+    it('admin も登録できる', async () => {
+      lookupEmployeeByCardMock.mockResolvedValue(ADMIN)
+      const { manager, registerByCardId } = useItTenkoManager()
+      expect(await registerByCardId(CARD)).toEqual({ ok: true })
+      expect(manager.value).toEqual({ id: 'adm-1', name: '管理 者' })
+    })
+
+    it('登録済みの席でも、別の人のカードでそのまま切り替わる', async () => {
+      getEmployeeByCodeMock.mockResolvedValue(MANAGER)
+      lookupEmployeeByCardMock.mockResolvedValue(ADMIN)
+      const { manager, registerByCode, registerByCardId } = useItTenkoManager()
+      await registerByCode('001')
+      expect(await registerByCardId(CARD)).toEqual({ ok: true })
+      expect(manager.value).toEqual({ id: 'adm-1', name: '管理 者' })
+      expect(localStorage.getItem(KEY)).toBe('adm-1')
+    })
+
+    it('404 (未登録・退職) は「登録されていません」。登録も保存もしない', async () => {
+      lookupEmployeeByCardMock.mockRejectedValue(apiError(404))
+      const { manager, registerByCardId } = useItTenkoManager()
+      expect(await registerByCardId(CARD)).toEqual({ ok: false, message: IT_TENKO_CARD_NOT_REGISTERED_MESSAGE })
+      expect(manager.value).toBeNull()
+      expect(localStorage.getItem(KEY)).toBeNull()
+    })
+
+    it('manager / admin でなければ権限なしの文言を返し、前の登録を変えない', async () => {
+      lookupEmployeeByCardMock.mockResolvedValueOnce(MANAGER).mockResolvedValueOnce(DRIVER)
+      const { manager, registerByCardId } = useItTenkoManager()
+      await registerByCardId(CARD)
+      expect(await registerByCardId('04a1b2c3')).toEqual({
+        ok: false,
+        message: '山田 太郎さんには運行管理者の権限がありません',
+      })
+      expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
+      expect(localStorage.getItem(KEY)).toBe('mgr-1')
+    })
+
+    it('席の鍵が取れなかったら、その文言をそのまま返す', async () => {
+      lookupEmployeeByCardMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+      const { manager, registerByCardId } = useItTenkoManager()
+      expect(await registerByCardId(CARD)).toEqual({ ok: false, message: MANAGER_DEVICE_AUTH_FAILED_MESSAGE })
+      expect(manager.value).toBeNull()
+    })
+
+    it.each([
+      ['500', apiError(500)],
+      ['status の無い失敗 (通信)', apiError()],
+      ['Error でない値', 'boom'],
+      ['null', null],
+    ])('そのほかの失敗 (%s) は「確認できませんでした」', async (_label, error) => {
+      lookupEmployeeByCardMock.mockRejectedValue(error)
+      const { manager, registerByCardId } = useItTenkoManager()
+      expect(await registerByCardId(CARD)).toEqual({ ok: false, message: IT_TENKO_CARD_LOOKUP_FAILED_MESSAGE })
+      expect(manager.value).toBeNull()
+      expect(localStorage.getItem(KEY)).toBeNull()
+    })
+
+    it('★ どの失敗の文言にもカードの id が入らない', async () => {
+      const { registerByCardId } = useItTenkoManager()
+      const failures = [apiError(404), apiError(500), new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE), 'boom']
+      for (const failure of failures) {
+        lookupEmployeeByCardMock.mockRejectedValueOnce(failure)
+        expect(JSON.stringify(await registerByCardId(CARD))).not.toContain(CARD)
+      }
+      lookupEmployeeByCardMock.mockResolvedValueOnce(DRIVER)
+      expect(JSON.stringify(await registerByCardId(CARD))).not.toContain(CARD)
+    })
+
+    it('★ 応答が返った時点で「もう要らない」なら登録しない (前の登録も保存も変えない)', async () => {
+      getEmployeeByCodeMock.mockResolvedValue(MANAGER)
+      lookupEmployeeByCardMock.mockResolvedValue(ADMIN)
+      const { manager, registerByCode, registerByCardId } = useItTenkoManager()
+      await registerByCode('001')
+      const stillWanted = vi.fn(() => false)
+      expect((await registerByCardId(CARD, stillWanted)).ok).toBe(false)
+      expect(stillWanted).toHaveBeenCalledTimes(1)
+      expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
+      expect(localStorage.getItem(KEY)).toBe('mgr-1')
+    })
+
+    it('応答が返った時点でまだ要るなら登録する。照会が失敗したときは聞かない', async () => {
+      lookupEmployeeByCardMock.mockResolvedValueOnce(MANAGER).mockRejectedValueOnce(apiError(404))
+      const { manager, registerByCardId } = useItTenkoManager()
+      const stillWanted = vi.fn(() => true)
+      expect(await registerByCardId(CARD, stillWanted)).toEqual({ ok: true })
+      expect(stillWanted).toHaveBeenCalledTimes(1)
+      expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
+
+      await registerByCardId(CARD, stillWanted)
+      expect(stillWanted).toHaveBeenCalledTimes(1)
+    })
+
+    it('待つあいだの古い取り直し (load) の結果は、カードの登録の後では捨てる', async () => {
+      localStorage.setItem(KEY, 'emp-1')
+      let resolve!: (v: unknown) => void
+      getEmployeeByIdMock.mockImplementation(() => new Promise((r) => { resolve = r }))
+      lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+      const { manager, loading, load, registerByCardId } = useItTenkoManager()
+      const done = load()
+      await registerByCardId(CARD)
+      expect(loading.value).toBe(false)
+
+      resolve(DRIVER)
+      await done
       expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
       expect(localStorage.getItem(KEY)).toBe('mgr-1')
     })

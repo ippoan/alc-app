@@ -16,6 +16,9 @@
  * 登録すると席 (localStorage) が id を覚え、「変更」を押すまで残る。運行管理者タブ・遠隔点呼が
  * 共有する ID (`useManagerAuth`) は引き継がないし、そこへ書き込みもしない。
  *
+ * 警告デバイスに社員証か運転免許証をタッチしても登録できる (打刻はしない)。登録済みの席では
+ * 確認なしでその人に切り替わる。受けるのは、点呼を開いていないときだけ。
+ *
  * 通話の手順は `TenkoRemoteAdminView.vue` からの複製 (あちらは本番で動いている
  * 経路なので触らない。共通化は IT点呼 を通常の点呼へ統合するときに行う)。
  */
@@ -37,8 +40,11 @@ const {
   loading: managerLoading,
   load: loadManager,
   registerByCode,
+  registerByCardId,
   clear: clearManager,
 } = useItTenkoManager()
+// 警告デバイス (本体のボタンの押下と、NFC で読んだカード)
+const alarmDevice = useAlarmDevice()
 const webRtc = useWebRtc('admin')
 const camera = useCamera()
 
@@ -320,13 +326,41 @@ watch(activeRooms, () => void loadPending())
 // この画面が開いているときだけ効く (mount より前の押下は拾わない)。対象は**着信として数えている
 // 部屋** (`callingRooms`) の IT点呼 で、判定済みでまだ消えていない部屋を含む `itRooms` は使わない。
 // 遠隔点呼の着信だけのとき・点呼を開いている / 繋いでいる途中・社員番号を聞いている間は何もしない
-watch(useAlarmDevice().buttonPressCount, () => {
+watch(alarmDevice.buttonPressCount, () => {
   if (opened.value || connecting.value || waiting.value) return
   const roomId = splitRooms(callingRooms.value).it[0]
   if (roomId) requestCall(roomId)
 })
 
+// 警告デバイスへのカードのタッチ (社員証の IC カード / 運転免許証) = その人をこの席の運行管理者に
+// 登録する。**打刻はしない。** この画面が開いているときだけ効く (mount より前のタッチは拾わない)。
+// 入力欄が出ていなくても (登録済みで着信待ちでも) 受け、登録済みなら確認なしで切り替える。
+// 点呼を開いている / 繋いでいる途中は受けない (判定者が途中で替わる)
+let unmounted = false
+watch(alarmDevice.cardRead, async (read) => {
+  if (!read) return
+  // 受けてよいのは「画面が開いていて、点呼を開いておらず、繋いでいる途中でもなく、これより新しい
+  // タッチが無い」あいだ。照会の応答が返った時点でもう一度確かめ、外れていたら結果ごと捨てる
+  const wanted = () => !unmounted && !opened.value && !connecting.value
+    && alarmDevice.cardRead.value?.seq === read.seq
+  if (!wanted()) return
+  cardError.value = null
+  idError.value = null
+  const res = await registerByCardId(read.lookupId, wanted)
+  if (!wanted()) return
+  if (!res.ok) {
+    // モーダルが出ていればモーダルに、無ければ上部の枠に出す
+    (waiting.value ? idError : cardError).value = res.message
+    return
+  }
+  // 社員番号を打ったときと同じ: 入力を片付け、モーダルで待っていた対象が在ればそのまま開く
+  cardInput.value = ''
+  idInput.value = ''
+  if (waiting.value) await open(waiting.value)
+})
+
 onUnmounted(() => {
+  unmounted = true
   close()
   stopWatchingRooms()
 })
@@ -379,8 +413,9 @@ onUnmounted(() => {
             登録
           </button>
         </div>
-        <p v-if="cardError" class="text-sm text-red-700" data-testid="it-manager-card-error">{{ cardError }}</p>
       </div>
+      <!-- 登録の失敗。カードのタッチは登録済みのときも受けるので、どちらの表示でも出す -->
+      <p v-if="cardError" class="mt-2 text-sm text-red-700" data-testid="it-manager-card-error">{{ cardError }}</p>
     </div>
 
     <div v-if="callError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700" data-testid="it-call-error">

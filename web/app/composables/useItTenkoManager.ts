@@ -1,5 +1,5 @@
 import type { ApiEmployee } from '~/types'
-import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployeeByCode, getEmployeeById } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployeeByCode, getEmployeeById, lookupEmployeeByCard } from '~/utils/api'
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 /**
@@ -8,7 +8,7 @@ import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
  * 運行管理者タブの入口・遠隔点呼モニターが共有する `useManagerAuth` とは**別の状態** —
  * あちらの ID は引き継がないし、ここからあちらへも書き込まない。顔認証もしない。
  *
- * 席 (ブラウザ) に覚えさせるのは**社員の id だけ** (名前・社員番号は保存しない)。
+ * 席 (ブラウザ) に覚えさせるのは**社員の id だけ** (名前・社員番号・カードの id は保存しない)。
  * 登録は「変更」(`clear`) を押すまで残り、名前と権限は `load` のたびにサーバから取り直す。
  *
  * 照会は `'manager-device'` の口 (運行管理者席の鍵) で送る — 受け画面はログインなしで開くので、
@@ -24,6 +24,11 @@ export interface ItTenkoManager {
 
 /** 登録の結果。失敗のときは画面にそのまま出せる文言を返す */
 export type ItTenkoManagerRegisterResult = { ok: true } | { ok: false, message: string }
+
+/** カードで引けなかったとき (未登録・退職)。**カードの id は文に入れない** */
+export const IT_TENKO_CARD_NOT_REGISTERED_MESSAGE = 'このカードは登録されていません。社員番号で登録してください'
+/** カードの照会がそのほかの理由で失敗したとき */
+export const IT_TENKO_CARD_LOOKUP_FAILED_MESSAGE = 'カードを確認できませんでした。もう一度タッチしてください'
 
 function readStored(): string | null {
   try {
@@ -103,6 +108,18 @@ export function useItTenkoManager() {
     loading.value = false
   }
 
+  /** 引けた社員に運行管理者の権限があれば登録して席に覚えさせる (社員番号・カードの共通の成功処理) */
+  function accept(emp: ApiEmployee): ItTenkoManagerRegisterResult {
+    if (!canJudge(emp)) {
+      return { ok: false, message: `${emp.name}さんには運行管理者の権限がありません` }
+    }
+    generation += 1
+    loading.value = false
+    manager.value = { id: emp.id, name: emp.name }
+    writeStored(emp.id)
+    return { ok: true }
+  }
+
   /** 社員番号で運行管理者を登録し、席に覚えさせる */
   async function registerByCode(code: string): Promise<ItTenkoManagerRegisterResult> {
     let emp: ApiEmployee
@@ -116,14 +133,37 @@ export function useItTenkoManager() {
       }
       return { ok: false, message: employeeNotFoundByCode(code) }
     }
-    if (!canJudge(emp)) {
-      return { ok: false, message: `${emp.name}さんには運行管理者の権限がありません` }
+    return accept(emp)
+  }
+
+  /**
+   * 警告デバイスにタッチしたカード (社員証の IC カード / 運転免許証) で運行管理者を登録し、
+   * 席に覚えさせる。`lookupId` は `useAlarmDevice().cardRead` の id (打刻はしない)。
+   *
+   * `stillWanted` は照会の応答が返った時点で聞く — false なら登録しない (待つあいだに点呼を
+   * 開いた・新しいタッチが来た、を呼び手が判定する)。そのときの戻りは呼び手が捨てる
+   */
+  async function registerByCardId(
+    lookupId: string,
+    stillWanted: () => boolean = () => true,
+  ): Promise<ItTenkoManagerRegisterResult> {
+    let emp: ApiEmployee
+    try {
+      emp = await lookupEmployeeByCard(lookupId, 'manager-device')
     }
-    generation += 1
-    loading.value = false
-    manager.value = { id: emp.id, name: emp.name }
-    writeStored(emp.id)
-    return { ok: true }
+    catch (e) {
+      // 席の鍵が取れなかったときは、その理由をそのまま返す
+      if (e instanceof Error && e.message === MANAGER_DEVICE_AUTH_FAILED_MESSAGE) {
+        return { ok: false, message: e.message }
+      }
+      const notFound = (e as { status?: number } | null)?.status === 404
+      return {
+        ok: false,
+        message: notFound ? IT_TENKO_CARD_NOT_REGISTERED_MESSAGE : IT_TENKO_CARD_LOOKUP_FAILED_MESSAGE,
+      }
+    }
+    if (!stillWanted()) return { ok: false, message: IT_TENKO_CARD_LOOKUP_FAILED_MESSAGE }
+    return accept(emp)
   }
 
   return {
@@ -132,6 +172,7 @@ export function useItTenkoManager() {
     loading: readonly(loading),
     load,
     registerByCode,
+    registerByCardId,
     clear,
   }
 }

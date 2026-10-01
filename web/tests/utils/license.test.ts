@@ -9,12 +9,36 @@ import {
   expiryTone,
   EXPIRY_TONE_CLASS,
   daysUntilExpiry,
+  LICENSE_DATE_LEN,
+  licenseNfcId,
 } from '~/utils/license'
 
 describe('license', () => {
   // EF 2F01 サンプル: Tag(45) Len(0B) Ver(3bytes) Issue(20250115) Expiry(20280115) Tag46+data
   // hex: "450B 303030 20250115 20280115 46030000FF"
   const sampleHex = '450B30303020250115202801154603000000'
+
+  // 端末 (`EVT NFC_LICENSE issue=… expiry=…`) の 2 つの日付から、社員の照会に使う id を作る式。
+  // 免許証の読み取り口と警告デバイスが同じ関数を使う (Refs ippoan/alc-app#387)
+  describe('licenseNfcId', () => {
+    it('日付 1 つぶんは 8 桁', () => {
+      expect(LICENSE_DATE_LEN).toBe(8)
+    })
+
+    it('交付日 + 有効期限の 16 桁を返す', () => {
+      expect(licenseNfcId('20250115', '20280115')).toBe('2025011520280115')
+    })
+
+    it.each([
+      ['交付日が短い', '2025011', '20280115'],
+      ['交付日が長い', '202501150', '20280115'],
+      ['有効期限が短い', '20250115', '2028'],
+      ['有効期限が長い', '20250115', '202801150'],
+      ['両方とも空', '', ''],
+    ])('%s → null', (_label, issue, expiry) => {
+      expect(licenseNfcId(issue, expiry)).toBeNull()
+    })
+  })
 
   describe('parseLicenseIssueDate', () => {
     it('有効な hex から交付年月日を抽出', () => {

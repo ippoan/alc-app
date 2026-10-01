@@ -424,11 +424,12 @@ describe('useAlarmDevice', () => {
   // ---------- 公開 API の形 ----------
 
   describe('公開 API', () => {
-    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン、#387) だけ', async () => {
+    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン) + cardRead (読んだカード、どちらも #387) だけ', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
       expect(Object.keys(alarm).sort()).toEqual([
         'buttonPressCount',
+        'cardRead',
         'connect',
         'deviceState',
         'disconnect',
@@ -620,6 +621,186 @@ describe('useAlarmDevice', () => {
       const dev = await connectDevice()
       await feed(dev, 'I (1) boot: state=alarming cause=call')
       expect(alarm.deviceState.value).toBeNull()
+    })
+  })
+
+  // ---------- カードの読み取り ----------
+
+  /**
+   * NFC を持つ機体は、社員証の IC カードで `EVT NFC_LOGIN`、運転免許証で `EVT NFC_LICENSE` を出す
+   * (機体は打刻しない)。ここは行を検査して「読んだカード」の合図 (連番 + 照会に送る id) を出すだけ
+   * (Refs ippoan/alc-app#387)。読む側 (IT点呼 の受け画面) は watch する
+   */
+  describe('カードの読み取り (cardRead)', () => {
+    const IDM = '0123456789abcdef'
+    const UID = '04A1B2C3'
+    const ISSUE = '20200401'
+    const EXPIRY = '20250501'
+
+    async function connectDevice(dev = createMockPort()) {
+      dev.emit('DEVICE alarm VER=0.1.0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(true)
+      return dev
+    }
+
+    async function feed(dev: MockPortHandle, ...lines: string[]) {
+      for (const line of lines) {
+        dev.emit(`${line}\n`)
+        await vi.advanceTimersByTimeAsync(0)
+      }
+    }
+
+    it('まだ 1 枚も読んでいなければ null', async () => {
+      await connectDevice()
+      expect(alarm.cardRead.value).toBeNull()
+    })
+
+    it('EVT NFC_LOGIN で合図を出す (lookupId は card_id そのまま・連番は読むたびに増える)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: IDM })
+
+      await feed(dev, `EVT NFC_LOGIN card_id=${UID} card_kind=nfca_uid`)
+      expect(alarm.cardRead.value).toEqual({ seq: 2, lookupId: UID })
+    })
+
+    it('card_id は 16 進の 8〜20 桁を受ける (両端)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, 'EVT NFC_LOGIN card_id=0a1b2c3d card_kind=nfca_uid')
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: '0a1b2c3d' })
+      await feed(dev, 'EVT NFC_LOGIN card_id=0a1b2c3d4e5f60718293 card_kind=nfca_uid')
+      expect(alarm.cardRead.value).toEqual({ seq: 2, lookupId: '0a1b2c3d4e5f60718293' })
+    })
+
+    it.each([
+      ['card_kind が知らない語', `EVT NFC_LOGIN card_id=${IDM} card_kind=mifare_x`],
+      ['card_kind が無い (途中で切れた行)', `EVT NFC_LOGIN card_id=${IDM}`],
+      ['card_kind が途中で切れた', `EVT NFC_LOGIN card_id=${IDM} card_kind=felica`],
+      ['card_id が無い', 'EVT NFC_LOGIN card_kind=felica_idm'],
+      ['card_id が 16 進でない', 'EVT NFC_LOGIN card_id=0123456789abcdeg card_kind=felica_idm'],
+      ['card_id が 7 桁', 'EVT NFC_LOGIN card_id=0123456 card_kind=nfca_uid'],
+      ['card_id が 21 桁', 'EVT NFC_LOGIN card_id=0123456789abcdef01234 card_kind=nfca_uid'],
+      ['次の行が card_kind の後ろに連結された', `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idmEVT ALARM state=idle cause=none`],
+      ['引数が 1 つも無い', 'EVT NFC_LOGIN'],
+      ['別の名前の行', `EVT NFC_LOGINX card_id=${IDM} card_kind=felica_idm`],
+      ['EVT でない行', `NFC_LOGIN card_id=${IDM} card_kind=felica_idm`],
+    ])('%s → 合図を出さない', async (_label, line) => {
+      const dev = await connectDevice()
+      await feed(dev, line)
+      expect(alarm.cardRead.value).toBeNull()
+    })
+
+    it('EVT NFC_LICENSE で issue + expiry の 16 桁を出す (順不同)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, `EVT NFC_LICENSE issue=${ISSUE} expiry=${EXPIRY}`)
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: ISSUE + EXPIRY })
+      expect(alarm.cardRead.value!.lookupId).toHaveLength(16)
+
+      await feed(dev, `EVT NFC_LICENSE expiry=${EXPIRY} issue=${ISSUE}`)
+      expect(alarm.cardRead.value).toEqual({ seq: 2, lookupId: ISSUE + EXPIRY })
+    })
+
+    it.each([
+      ['expiry が途中で切れた', `EVT NFC_LICENSE issue=${ISSUE} expiry=2025`],
+      ['expiry が無い', `EVT NFC_LICENSE issue=${ISSUE}`],
+      ['issue が無い', `EVT NFC_LICENSE expiry=${EXPIRY}`],
+      ['issue が 9 桁', `EVT NFC_LICENSE issue=${ISSUE}0 expiry=${EXPIRY}`],
+      ['次の行が expiry の後ろに連結された', `EVT NFC_LICENSE issue=${ISSUE} expiry=${EXPIRY}EVT ALARM state=idle cause=none`],
+    ])('免許証: %s → 合図を出さない', async (_label, line) => {
+      const dev = await connectDevice()
+      await feed(dev, line)
+      expect(alarm.cardRead.value).toBeNull()
+    })
+
+    it('★ 行の途中に連結されていても拾う (IC カード・免許証)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, `I (1234) nfc: polEVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: IDM })
+      await feed(dev, `I (5678) hb: age_ms=12EVT NFC_LICENSE issue=${ISSUE} expiry=${EXPIRY}`)
+      expect(alarm.cardRead.value).toEqual({ seq: 2, lookupId: ISSUE + EXPIRY })
+    })
+
+    it('連結された行は、見つけた位置から後ろだけを読む (手前の card_id は採らない)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, `dbg card_id=ffffffffffffffff card_kind=nfca_uid tailEVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: IDM })
+    })
+
+    it('状態行の後ろにカードの行が連結されたら、状態もカードも読む', async () => {
+      const dev = await connectDevice()
+      await feed(dev, `EVT ALARM state=idle cause=noEVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(alarm.deviceState.value).toEqual({ state: 'idle', cause: 'noEVT' })
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: IDM })
+    })
+
+    it('★ プローブ中に溜まっていた行 (繋ぐ前のタッチ) では合図を出さない。状態行は今までどおり畳む', async () => {
+      const dev = createMockPort()
+      // 名乗りより前に届いていた行 = arbiter がプローブ中の行として onOpen に渡す
+      dev.emit(`EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm\n`)
+      dev.emit(`EVT NFC_LICENSE issue=${ISSUE} expiry=${EXPIRY}\n`)
+      dev.emit('EVT ALARM state=muted cause=silence\n')
+      await connectDevice(dev)
+      expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'silence' })
+      expect(alarm.cardRead.value).toBeNull()
+
+      // 繋いだ後のタッチは合図になる
+      await feed(dev, `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: IDM })
+    })
+
+    it('同じ行が 2 回来たら 2 回出る (重複を抑えるのは機体の役目)', async () => {
+      const dev = await connectDevice()
+      const line = `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`
+      await feed(dev, line)
+      const first = alarm.cardRead.value
+      await feed(dev, line)
+      expect(alarm.cardRead.value).toEqual({ seq: 2, lookupId: IDM })
+      expect(alarm.cardRead.value).not.toBe(first)
+    })
+
+    it('カードの行では状態も押下も動かない。状態行では合図が動かない (回帰)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, 'EVT ALARM state=alarming cause=call')
+      await feed(dev, `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(alarm.deviceState.value).toEqual({ state: 'alarming', cause: 'call' })
+      expect(alarm.buttonPressCount.value).toBe(0)
+
+      await feed(dev, 'EVT ALARM state=muted cause=call')
+      expect(alarm.buttonPressCount.value).toBe(1)
+      expect(alarm.cardRead.value).toEqual({ seq: 1, lookupId: IDM })
+    })
+
+    it('heartbeat の送り方は変わらない (カードを読んでも機体へは何も送らない)', async () => {
+      const dev = await connectDevice()
+      const before = [...dev.writes]
+      await feed(dev, `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`)
+      expect(dev.writes).toEqual(before)
+    })
+
+    it('★ カードの id を console に出さない (採った行・捨てた行・プローブ中の行のどれでも)', async () => {
+      const spies = (['warn', 'error', 'info', 'debug'] as const)
+        .map(level => vi.spyOn(console, level).mockImplementation(() => {}))
+      const dev = createMockPort()
+      dev.emit(`EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm\n`)
+      await connectDevice(dev)
+      await feed(dev,
+        `EVT NFC_LOGIN card_id=${IDM} card_kind=felica_idm`,
+        `EVT NFC_LOGIN card_id=${UID} card_kind=mifare_x`,
+        `EVT NFC_LICENSE issue=${ISSUE} expiry=${EXPIRY}`,
+        `EVT NFC_LICENSE issue=${ISSUE} expiry=2025`,
+      )
+      expect(alarm.cardRead.value).toEqual({ seq: 2, lookupId: ISSUE + EXPIRY })
+      expect(alarmLogs().filter(l => l === 'card read')).toHaveLength(2)
+
+      const printed = [logSpy, ...spies].flatMap(spy => spy.mock.calls).map(args => JSON.stringify(args))
+      for (const secret of [IDM, UID, ISSUE, EXPIRY]) {
+        expect(printed.filter(text => text.includes(secret))).toEqual([])
+      }
+      spies.forEach(spy => spy.mockRestore())
     })
   })
 
