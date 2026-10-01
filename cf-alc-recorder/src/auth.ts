@@ -17,7 +17,37 @@ export interface IntrospectResult {
   sub?: string;
   email?: string;
   exp?: number;
+  /**
+   * 開発用の鍵 (「dev端末」) で発行された device JWT なら `true`
+   * (auth-worker の claim `dev_device`、Refs ippoan/alc-app#387)。
+   * 読むときは必ず `isDevIntrospect` を通す。
+   */
+  dev_device?: unknown;
 }
+
+/**
+ * introspect 結果が dev端末のものか (Refs ippoan/alc-app#387)。
+ *
+ * **dev かどうかを決めるのはここだけ。** 端末が frame / body / ヘッダーで
+ * 名乗った値は使わない。`=== true` 以外 (欄なし / `"true"` / `1`) は本番扱い —
+ * 取り違えたときに本番の記録が dev 側へ隠れる方が、dev の記録が本番に出るより
+ * 見つけにくいので、曖昧な値を dev に倒さない。
+ */
+export function isDevIntrospect(result: IntrospectResult | null | undefined): boolean {
+  return result?.dev_device === true;
+}
+
+/**
+ * worker 間で dev を運ぶヘッダーの値 (auth-worker `/alc-internal-proxy` と同じ作法)。
+ * **ちょうどこの文字列のときだけ** dev として扱う (`true` / `0` / 空は本番)。
+ */
+export const DEV_HEADER_VALUE = "1";
+
+/** backend (rust-alc-api) と caller (alc-app の server route) の間で使うヘッダー名。 */
+export const DEVICE_DEV_HEADER = "X-Device-Dev";
+
+/** worker → DO の内部ヘッダー名 (`X-Recorder-Tenant-Id` と同じく worker が必ず上書きする)。 */
+export const RECORDER_DEV_HEADER = "X-Recorder-Dev";
 
 /** WS ハンドシェイクの判定結果。`status === 101` の時だけ DO に routing する。 */
 export interface RecorderAuthDecision {

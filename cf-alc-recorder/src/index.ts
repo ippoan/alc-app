@@ -10,12 +10,17 @@
  *   - GET  /ws                                         … WS 受口 (Upgrade 必須)。
  *       `Authorization: Bearer <device JWT>` を auth-worker /auth/introspect で検証し、
  *       role=device-hub のみ accept → テナント単位の RecorderHub DO へ routing。
+ *
+ * dev端末 (Refs ippoan/alc-app#387): introspect の `dev_device === true` の端末が
+ * 送った測定・打刻は backend へ `X-Device-Dev: 1` を付けて転送し、打刻の合図は
+ * dev の購読者にだけ配る。**端末の申告 (frame / body / ヘッダー) は見ない。**
  *   - POST /measurements                                … Wi-Fi 客の上りバッチ (#109)。
  *       認証は /ws と同じ device JWT introspect。body は measurement の配列
  *       (WS measurement frame と同形)。下りが無いためステートレス (DO 不要、Worker 直)。
  *   - POST /tenants/:tenantId/devices/:deviceId/timecard-punch … ブラウザ打刻の受口
  *       (alc-app の server route から RECORDER binding 経由。kind はサーバが
- *        `timecard` を立て、DO で ingest 転送 + 購読者への合図を行う)
+ *        `timecard` を立て、DO で ingest 転送 + 購読者への合図を行う。
+ *        caller の `X-Device-Dev: 1` で dev端末の打刻として扱う)
  *   - POST /tenants/:tenantId/devices/:deviceId/command … 接続中デバイスへの下り push
  *   - GET  /tenants/:tenantId/devices                   … 接続中デバイス一覧 (debug)
  *   - GET  /tenants/:tenantId/events                    … 接続中デバイス一覧の SSE push
@@ -38,7 +43,11 @@ import {
   constantTimeEquals,
   decideRecorderAuth,
   decideWatcherAuth,
+  DEVICE_DEV_HEADER,
+  DEV_HEADER_VALUE,
   introspectToken,
+  isDevIntrospect,
+  RECORDER_DEV_HEADER,
   resolveSecret,
 } from "./auth";
 import {
@@ -97,6 +106,20 @@ interface DeviceAuth {
   tenantId: string;
   deviceId: string;
   sharedSecret: string;
+  /** dev端末か (introspect の `dev_device === true` のみ、Refs ippoan/alc-app#387)。 */
+  dev: boolean;
+}
+
+/**
+ * DO へ渡す内部リクエストに dev の区別を載せる (Refs ippoan/alc-app#387)。
+ *
+ * `new Request(url, request)` は元リクエストのヘッダーをコピーするので、
+ * **dev でないときは必ず消す** — クライアントが同名ヘッダーを付けていても
+ * DO には届かない (X-Recorder-Tenant-Id と同じ不変条件)。
+ */
+function setRecorderDev(fwd: Request, dev: boolean): void {
+  if (dev) fwd.headers.set(RECORDER_DEV_HEADER, DEV_HEADER_VALUE);
+  else fwd.headers.delete(RECORDER_DEV_HEADER);
 }
 
 /**
@@ -126,7 +149,12 @@ async function authenticateDevice(
   if (decision.status !== 101) {
     return json({ error: decision.status === 403 ? "forbidden_role" : "invalid_token" }, decision.status);
   }
-  return { tenantId: decision.tenantId, deviceId: decision.deviceId, sharedSecret };
+  return {
+    tenantId: decision.tenantId,
+    deviceId: decision.deviceId,
+    sharedSecret,
+    dev: isDevIntrospect(result),
+  };
 }
 
 /** WS ハンドシェイク: introspect → role/tenant 判定 → DO routing。 */
@@ -144,6 +172,7 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   const fwd = new Request("https://recorder-hub.internal/connect", request);
   fwd.headers.set("X-Recorder-Tenant-Id", auth.tenantId);
   fwd.headers.set("X-Recorder-Device-Id", auth.deviceId);
+  setRecorderDev(fwd, auth.dev);
   return hubStub(env, auth.tenantId).fetch(fwd);
 }
 
@@ -195,6 +224,8 @@ async function handleWatchTimecard(request: Request, env: Env, url: URL): Promis
   // 元リクエストのヘッダーをコピーするので、クライアントが同名ヘッダーを付けて
   // いても **必ず上書きする** (X-Recorder-Tenant-Id と同じ不変条件、Refs #279)。
   fwd.headers.set("X-Recorder-Watcher-Kind", decision.watcherKind);
+  // 購読者の dev も同じ — dev端末は dev の打刻の合図だけを受ける (Refs ippoan/alc-app#387)
+  setRecorderDev(fwd, isDevIntrospect(result));
   return hubStub(env, decision.tenantId).fetch(fwd);
 }
 
@@ -272,6 +303,7 @@ async function handleMeasurementsPost(request: Request, env: Env, url: URL): Pro
       auth.tenantId,
       auth.deviceId,
       forwardItems,
+      auth.dev,
     );
     if (!result.ok) {
       // 詳細 (上流 body) は echo しない。端末は同じ batch を再送できる。
@@ -304,6 +336,8 @@ export default {
     // ブラウザ打刻 (Refs ippoan/alc-app-s3#134)。alc-app の server route が
     // browser/kiosk JWT を introspect して tenant_id / device_id を決めた後に
     // 呼ぶ。**body は `{ card_id }` だけ** — kind も seq も DO 側が立てる。
+    // dev端末の打刻かどうかは caller が introspect の結果から `X-Device-Dev: 1` で
+    // 伝える (Refs ippoan/alc-app#387)。**ちょうど "1" のときだけ** dev として扱う。
     const punchMatch = url.pathname.match(
       /^\/tenants\/([^/]+)\/devices\/([^/]+)\/timecard-punch$/,
     );
@@ -319,6 +353,7 @@ export default {
         },
         body: request.body,
       });
+      setRecorderDev(fwd, request.headers.get(DEVICE_DEV_HEADER) === DEV_HEADER_VALUE);
       return hubStub(env, decodeURIComponent(punchMatch[1])).fetch(fwd);
     }
 

@@ -7,6 +7,7 @@ import {
   decideWatcherAuth,
   RECORDER_DEVICE_ROLES,
   DEVICE_ROLE_KIOSK,
+  isDevIntrospect,
   resolveSecret,
 } from "../src/auth";
 import { closeCodeForEcho } from "../src/recorder-hub";
@@ -136,9 +137,16 @@ async function connectAccepted(token: string) {
   return { ws: ws!, messages };
 }
 
-async function spyIngest(): Promise<Array<{ tenantId: string; items: Array<Record<string, unknown>> }>> {
+interface IngestCall {
+  tenantId: string;
+  /** backend への要求に付いた `X-Device-Dev` (無ければ null)。 */
+  dev: string | null;
+  items: Array<Record<string, unknown>>;
+}
+
+async function spyIngest(): Promise<IngestCall[]> {
   const res = await env.AUTH_WORKER.fetch("https://auth-worker.internal/__spy/ingest");
-  return (await res.json()) as Array<{ tenantId: string; items: Array<Record<string, unknown>> }>;
+  return (await res.json()) as IngestCall[];
 }
 
 const openSockets: WebSocket[] = [];
@@ -1247,5 +1255,269 @@ describe("resolveSecret", () => {
   it("undefined を返す binding は null に倒す (未設定と同じ扱い)", async () => {
     const binding = { async get() { return undefined as unknown as string; } };
     expect(await resolveSecret(binding)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dev端末の区別 (Refs ippoan/alc-app#387)
+//
+// **dev かどうかは introspect の `dev_device === true` だけで決まる。** 端末の
+// 申告 (frame / body / ヘッダー) は見ない。dev のときだけ backend への転送に
+// `X-Device-Dev: 1` が付き、打刻の合図は dev の購読者にだけ届く。
+//
+// **専用テナント (`tenant-dev`)** — isolatedStorage: false なので他 test の
+// 購読が混ざると「どちらの側に届いたか」を判定できない。
+// ---------------------------------------------------------------------------
+
+describe("dev端末の区別", () => {
+  const timecardFrame = (seq: number, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      type: "measurement",
+      seq,
+      kind: "timecard",
+      payload: { card_id: `CARD-${seq}`, card_kind: "felica_idm" },
+      ...extra,
+    });
+
+  /** dev の購読者 (キオスク) と本番の購読者 (管理者) を 1 本ずつ張る。 */
+  async function connectBothWatchers() {
+    const dev = await connectWatcher("kiosk-token-dev");
+    expect(dev.res.status).toBe(101);
+    openSockets.push(dev.ws!);
+    const prod = await connectWatcher("admin-token-dev-prod");
+    expect(prod.res.status).toBe(101);
+    openSockets.push(prod.ws!);
+    return { dev: messageQueue(dev.ws!), prod: messageQueue(prod.ws!) };
+  }
+
+  function punchWithDevHeader(value: string | null) {
+    const headers: Record<string, string> = {
+      Authorization: SHARED_SECRET,
+      "Content-Type": "application/json",
+    };
+    if (value !== null) headers["X-Device-Dev"] = value;
+    return SELF.fetch(`${BASE}/tenants/tenant-dev/devices/device-kiosk-dev/timecard-punch`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ card_id: "BROWSER" }),
+    });
+  }
+
+  it("isDevIntrospect: `=== true` のときだけ dev (欄なし / false / 文字列 / 数値は本番)", () => {
+    expect(isDevIntrospect({ active: true, dev_device: true })).toBe(true);
+    expect(isDevIntrospect({ active: true, dev_device: false })).toBe(false);
+    expect(isDevIntrospect({ active: true })).toBe(false);
+    expect(isDevIntrospect({ active: true, dev_device: "true" })).toBe(false);
+    expect(isDevIntrospect({ active: true, dev_device: 1 })).toBe(false);
+    expect(isDevIntrospect(null)).toBe(false);
+    expect(isDevIntrospect(undefined)).toBe(false);
+  });
+
+  it("★ WS: dev端末の測定は X-Device-Dev: 1 付きで転送される", async () => {
+    const { ws, messages } = await connectAccepted("hub-token-dev");
+    openSockets.push(ws);
+    ws.send(JSON.stringify({ type: "measurement", seq: 1, kind: "alcohol", payload: { value: 0 } }));
+    expect(await messages.next()).toEqual({ type: "ack", seq: 1 });
+
+    const calls = await spyIngest();
+    expect(calls.length).toBe(1);
+    expect(calls[0].dev).toBe("1");
+    expect(calls[0].tenantId).toBe("tenant-dev");
+    expect(calls[0].items[0].device_id).toBe("device-dev");
+  });
+
+  it("★ WS: dev でない端末 (false / 欄なし / 文字列の \"true\") はヘッダー自体が付かない", async () => {
+    for (const token of ["hub-token-dev-prod", "hub-token-1", "hub-token-dev-string"]) {
+      const { ws, messages } = await connectAccepted(token);
+      openSockets.push(ws);
+      ws.send(JSON.stringify({ type: "measurement", seq: 2, kind: "alcohol", payload: { value: 0 } }));
+      expect(await messages.next()).toEqual({ type: "ack", seq: 2 });
+    }
+    const calls = await spyIngest();
+    expect(calls.length).toBe(3);
+    expect(calls.map((c) => c.dev)).toEqual([null, null, null]);
+  });
+
+  it("★ WS: 端末が frame やヘッダーで dev を名乗っても、introspect が dev でなければ付かない", async () => {
+    const res = await SELF.fetch(`${BASE}/ws`, {
+      headers: {
+        Upgrade: "websocket",
+        Authorization: "Bearer hub-token-dev-prod",
+        // worker → DO の内部ヘッダーと、backend 向けのヘッダーの両方を騙る
+        "X-Recorder-Dev": "1",
+        "X-Device-Dev": "1",
+      },
+    });
+    expect(res.status).toBe(101);
+    const ws = res.webSocket!;
+    openSockets.push(ws);
+    const messages = messageQueue(ws);
+    expect(await messages.next()).toEqual({ type: "connected" });
+
+    ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 3,
+        kind: "alcohol",
+        dev: true,
+        dev_device: true,
+        payload: { value: 0, dev_device: true },
+      }),
+    );
+    expect(await messages.next()).toEqual({ type: "ack", seq: 3 });
+
+    const calls = await spyIngest();
+    expect(calls.length).toBe(1);
+    expect(calls[0].dev).toBeNull();
+  });
+
+  it("★ POST /measurements: dev端末は X-Device-Dev: 1、dev でなければ無い (body の申告は効かない)", async () => {
+    const post = (token: string, extraHeaders: Record<string, string> = {}) =>
+      SELF.fetch(`${BASE}/measurements`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...extraHeaders,
+        },
+        body: JSON.stringify([
+          { seq: 4, kind: "alcohol", dev_device: true, payload: { value: 0, dev_device: true } },
+        ]),
+      });
+
+    expect((await post("hub-token-dev")).status).toBe(200);
+    expect((await post("hub-token-dev-prod", { "X-Device-Dev": "1" })).status).toBe(200);
+    expect((await post("hub-token-1")).status).toBe(200);
+
+    const calls = await spyIngest();
+    expect(calls.map((c) => c.dev)).toEqual(["1", null, null]);
+  });
+
+  it("crash_log は dev端末でも従来どおり R2 に保存し、backend へは転送しない", async () => {
+    const { ws, messages } = await connectAccepted("hub-token-dev");
+    openSockets.push(ws);
+    ws.send(
+      JSON.stringify({
+        type: "measurement",
+        seq: 55,
+        kind: "crash_log",
+        payload: { reset_reason: "panic", log: "PANIC\n" },
+      }),
+    );
+    expect(await messages.next()).toEqual({ type: "ack", seq: 55 });
+    expect(await spyIngest()).toEqual([]);
+    expect(await env.CRASH_LOGS.get("tenant-dev/device-dev/000000000055.json")).not.toBeNull();
+  });
+
+  it("★ 合図: dev端末の打刻は dev の購読者にだけ届く", async () => {
+    const watchers = await connectBothWatchers();
+    const device = await connectAccepted("hub-token-dev");
+    openSockets.push(device.ws);
+
+    device.ws.send(timecardFrame(10));
+    expect(await device.messages.next()).toEqual({ type: "ack", seq: 10 });
+    expect(await watchers.dev.next()).toEqual({ type: "timecard_punch" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watchers.prod.pending()).toBe(0);
+
+    expect((await spyIngest())[0].dev).toBe("1");
+  });
+
+  it("★ 合図: 本番の端末の打刻は本番の購読者にだけ届く (frame で dev を名乗っても同じ)", async () => {
+    const watchers = await connectBothWatchers();
+    const device = await connectAccepted("hub-token-dev-prod");
+    openSockets.push(device.ws);
+
+    device.ws.send(timecardFrame(11, { dev: true, dev_device: true }));
+    expect(await device.messages.next()).toEqual({ type: "ack", seq: 11 });
+    expect(await watchers.prod.next()).toEqual({ type: "timecard_punch" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watchers.dev.pending()).toBe(0);
+
+    expect((await spyIngest())[0].dev).toBeNull();
+  });
+
+  it("★ ブラウザ打刻: X-Device-Dev: 1 付きは dev 側 (転送にもヘッダーが付く)", async () => {
+    const watchers = await connectBothWatchers();
+    const res = await punchWithDevHeader("1");
+    expect(res.status).toBe(202);
+    expect(await watchers.dev.next()).toEqual({ type: "timecard_punch" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watchers.prod.pending()).toBe(0);
+
+    const calls = await spyIngest();
+    expect(calls.length).toBe(1);
+    expect(calls[0].dev).toBe("1");
+  });
+
+  it("★ ブラウザ打刻: ヘッダー無し / \"true\" / \"0\" は本番側 (ちょうど \"1\" だけが dev)", async () => {
+    const watchers = await connectBothWatchers();
+    for (const value of [null, "true", "0"]) {
+      const res = await punchWithDevHeader(value);
+      expect(res.status).toBe(202);
+      expect(await watchers.prod.next()).toEqual({ type: "timecard_punch" });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    expect(watchers.dev.pending()).toBe(0);
+
+    const calls = await spyIngest();
+    expect(calls.map((c) => c.dev)).toEqual([null, null, null]);
+  });
+
+  it("★ 購読者がヘッダーで dev を騙っても、introspect が dev でなければ本番側のまま", async () => {
+    const forged = await SELF.fetch(`${BASE}/watch-timecard`, {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": "alc.timecard.v1, admin-token-dev-prod",
+        "X-Recorder-Dev": "1",
+        "X-Device-Dev": "1",
+      },
+    });
+    expect(forged.status).toBe(101);
+    openSockets.push(forged.webSocket!);
+    const queue = messageQueue(forged.webSocket!);
+
+    // dev の打刻は届かない
+    expect((await punchWithDevHeader("1")).status).toBe(202);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(queue.pending()).toBe(0);
+    // 本番の打刻は届く
+    expect((await punchWithDevHeader(null)).status).toBe(202);
+    expect(await queue.next()).toEqual({ type: "timecard_punch" });
+  });
+
+  it("dev は WS attachment に持つ (hibernation をまたいで残る)。本番の attachment には欄が無い", async () => {
+    await connectBothWatchers();
+    const devDevice = await connectAccepted("hub-token-dev");
+    openSockets.push(devDevice.ws);
+    const prodDevice = await connectAccepted("hub-token-dev-prod");
+    openSockets.push(prodDevice.ws);
+
+    const stub = hubStub(env, "tenant-dev");
+    await runInDurableObject(stub, (_instance, state) => {
+      // 購読者: tag は dev / 本番のどちらか片方、attachment にも同じ区別が残る
+      const devWatchers = state.getWebSockets("watch:timecard:dev");
+      expect(devWatchers.length).toBeGreaterThan(0);
+      for (const ws of devWatchers) {
+        expect(ws.deserializeAttachment()).toEqual({ tenantId: "tenant-dev", dev: true });
+        expect(state.getTags(ws)).not.toContain("watch:timecard");
+      }
+      const prodWatchers = state.getWebSockets("watch:timecard");
+      expect(prodWatchers.length).toBeGreaterThan(0);
+      for (const ws of prodWatchers) {
+        expect(ws.deserializeAttachment()).toEqual({ tenantId: "tenant-dev" });
+        expect(state.getTags(ws)).not.toContain("watch:timecard:dev");
+      }
+      // 端末: webSocketMessage は毎回この attachment から dev を読む
+      expect(state.getWebSockets("device:device-dev")[0].deserializeAttachment()).toEqual({
+        tenantId: "tenant-dev",
+        deviceId: "device-dev",
+        dev: true,
+      });
+      expect(state.getWebSockets("device:device-dev-prod")[0].deserializeAttachment()).toEqual({
+        tenantId: "tenant-dev",
+        deviceId: "device-dev-prod",
+      });
+    });
   });
 });

@@ -6,6 +6,8 @@
  * 同名 field は信用しない (WS 経路と同じ原則)。
  */
 
+import { DEVICE_DEV_HEADER, DEV_HEADER_VALUE } from "./auth";
+
 /** 上り measurement 1 件 (JSON parse 後、field は全て untrusted)。 */
 export interface MeasurementInput {
   seq?: unknown;
@@ -270,6 +272,11 @@ export type ForwardResult = { ok: true } | { ok: false; error: string };
  * `POST /api/hub/measurements` へ転送する。tenant_id は X-Tenant-ID ヘッダー、
  * device_id は item に注入する。
  * 失敗時の詳細 (body) は caller の response に echo しない。log にのみ残す。
+ *
+ * `dev` が true のときだけ `X-Device-Dev: 1` を付ける (Refs ippoan/alc-app#387)。
+ * **本番ではヘッダー自体を付けない** — auth-worker `/alc-internal-proxy` は
+ * ちょうど `"1"` のときだけ backend へ転送する。`dev` は introspect 済みの判定
+ * (`isDevIntrospect`) か、内部 API の caller が立てた値で、端末の申告ではない。
  */
 export async function forwardMeasurements(
   authWorker: Fetcher,
@@ -277,6 +284,7 @@ export async function forwardMeasurements(
   tenantId: string,
   deviceId: string,
   items: ParsedMeasurement[],
+  dev: boolean,
 ): Promise<ForwardResult> {
   const body = items.map((item) => ({
     device_id: deviceId,
@@ -286,15 +294,17 @@ export async function forwardMeasurements(
     session_id: item.session_id,
     payload: item.payload,
   }));
+  const headers: Record<string, string> = {
+    "X-Alc-Proxy-Secret": sharedSecret,
+    "X-Tenant-ID": tenantId,
+    "Content-Type": "application/json",
+  };
+  if (dev) headers[DEVICE_DEV_HEADER] = DEV_HEADER_VALUE;
   let res: Response;
   try {
     res = await authWorker.fetch(INGEST_URL, {
       method: "POST",
-      headers: {
-        "X-Alc-Proxy-Secret": sharedSecret,
-        "X-Tenant-ID": tenantId,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
     });
   } catch (e) {
