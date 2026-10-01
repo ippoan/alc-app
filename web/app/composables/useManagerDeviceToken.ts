@@ -186,8 +186,26 @@ export function useManagerDeviceToken() {
     return inFlight
   }
 
+  /**
+   * 運行管理者用 device JWT を先に取っておく (警告デバイスが繋がったときに `useAlarmWatch` が呼ぶ。
+   * Refs ippoan/alc-app#387)。開発用の印は鍵のトークンを 1 度取ったときに立つが、Google ログイン
+   * 済みの席は管理者のトークンで足りてしまい、取りに行く引き金が他に無い。
+   *
+   * **例外は外へ出さない。** 繋がった直後は警告デバイスの準備が間に合わずに失敗することがある。
+   * 失敗の抑止を残すと後続の本物の要求まで null になるので、取れなかったときは抑止の期限を
+   * 先取りの前の値へ戻す。
+   */
+  async function prefetchManagerJwt(): Promise<void> {
+    const before = backoffUntil.value
+    try {
+      if (await getManagerJwt() === null) backoffUntil.value = before
+    }
+    catch { /* 先取りは best effort */ }
+  }
+
   return {
     getManagerJwt,
+    prefetchManagerJwt,
     /** 直近の失敗理由。成功 / 未試行なら null */
     lastError: readonly(lastError),
     /** 直近の失敗がどの段で起きたか。成功 / 未試行なら null */
