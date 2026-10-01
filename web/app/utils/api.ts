@@ -617,6 +617,78 @@ export async function runDriverMasterSync(): Promise<DriverMasterSyncResult> {
   return bearerRequest<DriverMasterSyncResult>('/api/driver-master/run', jwt, { method: 'POST' })
 }
 
+// --- CoreS3 のファームの更新 (Refs ippoan/alc-app#403) ---
+// 3 つとも alc-app 自身の server route (`/api/firmware/*`) を same-origin で叩く
+// (`runDriverMasterSync` と同型。proxy 経由にしない)。tenant_id は route が token から
+// 決めるので、ここからは送らない。
+
+/** 機体の更新の状態。値は cf-alc-recorder の `OTA_PHASES` と同じ。 */
+export type FirmwarePhase =
+  | 'idle' | 'downloading' | 'writing' | 'rebooting' | 'confirming' | 'done' | 'failed' | 'skipped'
+
+/** キオスクが送る報告 (繋がっている機体の版・更新の状態)。 */
+export interface FirmwareReport {
+  device_id: string
+  kind: 'cores3'
+  board?: string
+  flavor?: string
+  version?: string
+  phase: FirmwarePhase
+  pct?: number
+  reason?: string
+  target_version?: string
+}
+
+/** 管理者の一覧の 1 行。報告に無かった値は key ごと無い。`label` は登録簿に無ければ null。 */
+export interface FirmwareDevice {
+  device_id: string
+  label: string | null
+  kind: string
+  board?: string
+  flavor?: string
+  version?: string
+  target_version?: string
+  phase: FirmwarePhase
+  pct?: number
+  reason?: string
+  reported_at_ms: number
+}
+
+/** 管理者の一覧 (報告の新しい順)。admin の token が要る。 */
+export async function listFirmwareDevices(): Promise<{ devices: FirmwareDevice[] }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ devices: FirmwareDevice[] }>('/api/firmware/devices', jwt, { method: 'GET' })
+}
+
+/**
+ * 指定した 1 台を更新する合図を出す。admin の token が要る。
+ * `sent` は合図を送ったキオスクの数 (0 でも成功 — 購読中のキオスクが居ないだけ)。
+ */
+export async function updateFirmware(deviceId: string): Promise<{ sent: number }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ sent: number }>('/api/firmware/update', jwt, {
+    method: 'POST',
+    body: JSON.stringify({ device_id: deviceId }),
+  })
+}
+
+/**
+ * キオスクが、繋がっている機体の状態を報告する。
+ *
+ * **キオスクの端末の token だけで送る** (`selectSendToken` を通さない)。利用者が
+ * ログインしていると利用者の token が選ばれることがあり、route はそれを 403 にする。
+ */
+export async function reportFirmware(report: FirmwareReport): Promise<void> {
+  const jwt = await getKioskDeviceJwt?.()
+  if (!jwt) throw new Error('端末の登録が必要です')
+  await bearerRequest<unknown>('/api/firmware/report', jwt, {
+    method: 'POST',
+    body: JSON.stringify(report),
+  })
+}
+
 /** 認証付きプロキシ経由でバイナリを取得し、object URL にする (顔写真・録画動画で共用)。 */
 async function fetchObjectUrl(path: string): Promise<string | null> {
   if (!apiBase) return null

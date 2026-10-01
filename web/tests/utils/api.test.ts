@@ -62,6 +62,10 @@ import {
   listHubMeasurements,
   // Driver master sync (theearth 乗務員マスタ、Refs ippoan/alc-app-s3#125)
   runDriverMasterSync,
+  // CoreS3 のファームの更新 (Refs ippoan/alc-app#403)
+  listFirmwareDevices,
+  updateFirmware,
+  reportFirmware,
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
   identifyVein,
@@ -2356,6 +2360,97 @@ describe.skipIf(isLive)('runDriverMasterSync (#125)', () => {
     initApi(API_BASE, () => 'viewer-jwt')
     mockFetch.mockResolvedValueOnce(errResponse(403, '乗務員マスタ同期は管理者のみ実行できます'))
     await expect(runDriverMasterSync()).rejects.toThrow('API エラー (403): 乗務員マスタ同期は管理者のみ実行できます')
+  })
+})
+
+// CoreS3 のファームの更新 (Refs ippoan/alc-app#403)。alc-app 自身の server route
+// (/api/firmware/*) を same-origin で叩くので mock 専用 (live の rust-alc-api には無い)。
+describe.skipIf(isLive)('ファームの更新 (#403)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('listFirmwareDevices: admin JWT を Bearer に載せて /api/firmware/devices を GET (proxy 経由にしない)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const payload = {
+      devices: [{ device_id: 'd1', label: null, kind: 'cores3', phase: 'idle', reported_at_ms: 1 }],
+    }
+    mockFetch.mockResolvedValueOnce(okJson(payload))
+    expect(await listFirmwareDevices()).toEqual(payload)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/firmware/devices')
+    expect(init.method).toBe('GET')
+    expect(init.body).toBeUndefined()
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer admin-jwt')
+    expect(h.get('X-Tenant-ID')).toBeNull()
+  })
+
+  it('updateFirmware: admin JWT で /api/firmware/update に {device_id} だけを POST', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson({ sent: 1 }))
+    expect(await updateFirmware('d1')).toEqual({ sent: 1 })
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/firmware/update')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe('{"device_id":"d1"}')
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer admin-jwt')
+    expect(h.get('Content-Type')).toBe('application/json')
+  })
+
+  it('listFirmwareDevices / updateFirmware: admin JWT が無ければ fetch せずに throw (端末の token には落とさない)', async () => {
+    initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
+    await expect(listFirmwareDevices()).rejects.toThrow('ログインが必要です')
+    await expect(updateFirmware('d1')).rejects.toThrow('ログインが必要です')
+    initApi(API_BASE)
+    await expect(listFirmwareDevices()).rejects.toThrow('ログインが必要です')
+    await expect(updateFirmware('d1')).rejects.toThrow('ログインが必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('updateFirmware: route の 403 は status 付きの API エラーとして throw', async () => {
+    initApi(API_BASE, () => 'dev-jwt')
+    mockFetch.mockResolvedValueOnce(errResponse(403, 'dev_token_write_forbidden'))
+    await expect(updateFirmware('d1')).rejects.toMatchObject({
+      message: 'API エラー (403): dev_token_write_forbidden',
+      status: 403,
+    })
+  })
+
+  it('★ reportFirmware: 利用者がログインしていても、キオスクの端末の token で送る', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ ok: true }))
+    const report = { device_id: 'd1', kind: 'cores3' as const, phase: 'writing' as const, pct: 40, version: '1.2.3' }
+    expect(await reportFirmware(report)).toBeUndefined()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/firmware/report')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify(report))
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer kiosk-jwt')
+    expect(h.get('Content-Type')).toBe('application/json')
+  })
+
+  it('reportFirmware: 端末の token が取れなければ (getter 無し / null) fetch せずに throw', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    await expect(reportFirmware({ device_id: 'd1', kind: 'cores3', phase: 'idle' })).rejects.toThrow('端末の登録が必要です')
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => null)
+    await expect(reportFirmware({ device_id: 'd1', kind: 'cores3', phase: 'idle' })).rejects.toThrow('端末の登録が必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('reportFirmware: route の 503 (登録簿が取れない) は status 付きの API エラーとして throw', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, async () => 'kiosk-jwt')
+    mockFetch.mockResolvedValueOnce(errResponse(503, '端末の一覧を取得できません'))
+    await expect(reportFirmware({ device_id: 'd1', kind: 'cores3', phase: 'idle' })).rejects.toMatchObject({
+      message: 'API エラー (503): 端末の一覧を取得できません',
+      status: 503,
+    })
   })
 })
 
