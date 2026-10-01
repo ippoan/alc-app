@@ -34,17 +34,24 @@ vi.mock('~/utils/api', () => ({
 // --- composable のモック ---
 
 const activeRoomsRef = ref<string[]>([])
+// 着信として数える部屋 (実物は activeRooms から判定済みの部屋を除いた一覧)。本体のボタンの応答だけが読む
+const callingRoomsRef = ref<string[]>([])
 const startWatchingMock = vi.fn()
 const stopWatchingMock = vi.fn()
 const setJoinedMock = vi.fn()
 const reloadRoomsMock = vi.fn(async () => true)
 mockNuxtImport('useActiveRooms', () => () => ({
   activeRooms: activeRoomsRef,
+  callingRooms: callingRoomsRef,
   start: startWatchingMock,
   stop: stopWatchingMock,
   setJoined: setJoinedMock,
   reload: reloadRoomsMock,
 }))
+
+// 警告デバイス本体のボタンの押下の回数 (実物はシリアルの行から数える module の ref)
+const buttonPressCountRef = ref(0)
+mockNuxtImport('useAlarmDevice', () => () => ({ buttonPressCount: buttonPressCountRef }))
 
 const connectMock = vi.fn(async (..._args: unknown[]) => {})
 const startStreamingMock = vi.fn(async () => {})
@@ -142,6 +149,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   webRtcRoles.length = 0
   activeRoomsRef.value = []
+  callingRoomsRef.value = []
   // 既定: この席には運行管理者 mgr-1 が登録済み
   localStorage.clear()
   localStorage.setItem(MANAGER_KEY, 'mgr-1')
@@ -678,5 +686,137 @@ describe('TenkoItAdminView — 判定', () => {
     // 判定の後も監視は止めない (止めるのは unmount の 1 回だけ)
     expect(stopWatchingMock).not.toHaveBeenCalled()
     w.unmount()
+  })
+})
+
+// 警告デバイス本体のボタン (着信で鳴っている間に押された) で、着信の先頭の IT点呼 に応答する。
+// 受け画面が開いているときだけ効き、遠隔点呼の着信では何もしない
+describe('TenkoItAdminView — 警告デバイス本体のボタン', () => {
+  async function press(w: Wrapper) {
+    buttonPressCountRef.value += 1
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  it('押下で、着信として数えている部屋のうち先頭の it- の部屋に応答する', async () => {
+    activeRoomsRef.value = ['session-9', 'it-session-1', 'it-session-2']
+    callingRoomsRef.value = ['session-9', 'it-session-1', 'it-session-2']
+    const w = await mountView()
+    await press(w)
+
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    expect(setJoinedMock).toHaveBeenLastCalledWith('it-session-1')
+    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-1', 'tenko-monitor')
+    expect(w.find('[data-testid="it-opened"]').text()).toContain('通話中の IT点呼')
+    w.unmount()
+  })
+
+  it('★ 判定済みで残っている it- の部屋 + 遠隔点呼の着信だけ → 何もしない', async () => {
+    // 一覧 (activeRooms) には判定済みの it- の部屋がまだ在るが、着信 (callingRooms) には無い
+    activeRoomsRef.value = ['it-session-1', 'session-9']
+    callingRoomsRef.value = ['session-9']
+    const w = await mountView()
+    expect(incoming(w).findAll('button')).toHaveLength(1)
+    await press(w)
+
+    expect(cameraStartMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(idModal(w).exists()).toBe(false)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('着信が無ければ何もしない', async () => {
+    const w = await mountView()
+    await press(w)
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(idModal(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('点呼を開いている間は無視する (通話中・通話なしで開いている)', async () => {
+    activeRoomsRef.value = ['it-session-1', 'it-session-2']
+    callingRoomsRef.value = ['it-session-1', 'it-session-2']
+    const w = await mountView()
+    await press(w)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+
+    // 通話中にもう一度押しても、別の部屋へ繋ぎ替えない
+    callingRoomsRef.value = ['it-session-2']
+    await press(w)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="it-opened"]').text()).toContain('通話中の IT点呼')
+    w.unmount()
+
+    // 通話なしで開いている間 (参加中の部屋は立たないので、着信は数えられたまま)
+    vi.clearAllMocks()
+    activeRoomsRef.value = ['it-session-2']
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-1')], total: 1, page: 1, per_page: 50 })
+    const w2 = await mountView()
+    await click(pendingRows(w2)[0]!.find('button'), w2)
+    expect(w2.find('[data-testid="it-opened"]').text()).toContain('通話なしで確定する IT点呼')
+    await press(w2)
+    expect(connectMock).not.toHaveBeenCalled()
+    w2.unmount()
+  })
+
+  it('繋いでいる途中は無視する', async () => {
+    activeRoomsRef.value = ['it-session-1', 'it-session-2']
+    callingRoomsRef.value = ['it-session-1', 'it-session-2']
+    let resolveConnect!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((resolve) => { resolveConnect = resolve }))
+    const w = await mountView()
+    await press(w)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+
+    await press(w)
+    expect(cameraStartMock).toHaveBeenCalledTimes(1)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+
+    resolveConnect()
+    await flush()
+    w.unmount()
+  })
+
+  it('席の運行管理者が未登録なら社員番号のモーダルが出る。出ている間の押下は無視し、登録すればそのまま通話へ進む', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    getEmployeeByCodeMock.mockResolvedValue(MANAGER)
+    activeRoomsRef.value = ['it-session-1', 'it-session-2']
+    callingRoomsRef.value = ['it-session-1', 'it-session-2']
+    const w = await mountView()
+    await press(w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(connectMock).not.toHaveBeenCalled()
+
+    // モーダルが出ている間にもう一度押されても、対象を差し替えない
+    callingRoomsRef.value = ['it-session-2']
+    await press(w)
+    expect(connectMock).not.toHaveBeenCalled()
+
+    await submitManagerCode(w, '001')
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    w.unmount()
+  })
+
+  it('mount より前の押下は拾わない (画面を開いた時点では応答しない)', async () => {
+    buttonPressCountRef.value += 3
+    activeRoomsRef.value = ['it-session-1']
+    callingRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('画面を閉じた後の押下では何も起きない', async () => {
+    activeRoomsRef.value = ['it-session-1']
+    callingRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    w.unmount()
+    buttonPressCountRef.value += 1
+    await flush()
+    expect(connectMock).not.toHaveBeenCalled()
   })
 })

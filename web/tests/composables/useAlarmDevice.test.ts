@@ -424,10 +424,11 @@ describe('useAlarmDevice', () => {
   // ---------- 公開 API の形 ----------
 
   describe('公開 API', () => {
-    it('返すキーは #182 の前後で変わらない (呼び出し元は触らない)', async () => {
+    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン、#387) だけ', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
       expect(Object.keys(alarm).sort()).toEqual([
+        'buttonPressCount',
         'connect',
         'deviceState',
         'disconnect',
@@ -453,6 +454,172 @@ describe('useAlarmDevice', () => {
       // 許可 1 回 + 探索 1 回。プローブは arbiter が撃つ
       expect(requestPort).toHaveBeenCalledTimes(1)
       expect(getPorts).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ---------- 本体のボタン ----------
+
+  /**
+   * 本体のボタンは専用の行を持たない。着信で鳴っていた (alarming/call) → 黙った (muted/call) の
+   * 遷移を押下として数える (Refs ippoan/alc-app#387)。読む側 (IT点呼 の受け画面) は watch する
+   */
+  describe('本体のボタンの押下 (buttonPressCount)', () => {
+    async function connectDevice(dev = createMockPort()) {
+      dev.emit('DEVICE alarm VER=0.1.0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(true)
+      return dev
+    }
+
+    async function feed(dev: MockPortHandle, ...lines: string[]) {
+      for (const line of lines) {
+        dev.emit(`${line}\n`)
+        await vi.advanceTimersByTimeAsync(0)
+      }
+    }
+
+    it('alarming/call → muted/call の遷移で 1 回だけ増える。押し直して鳴動に戻し、もう一度押せばまた増える', async () => {
+      const dev = await connectDevice()
+      expect(alarm.buttonPressCount.value).toBe(0)
+
+      await feed(dev, 'EVT ALARM state=alarming cause=call')
+      expect(alarm.buttonPressCount.value).toBe(0)
+      await feed(dev, 'EVT ALARM state=muted cause=call')
+      expect(alarm.buttonPressCount.value).toBe(1)
+      expect(alarmLogs()).toContain('button pressed while calling')
+
+      // muted でもう一度押すと鳴動に戻る (firmware のトグル)。これは押下に数えない
+      await feed(dev, 'EVT ALARM state=alarming cause=call')
+      expect(alarm.buttonPressCount.value).toBe(1)
+      await feed(dev, 'EVT ALARM state=muted cause=call')
+      expect(alarm.buttonPressCount.value).toBe(2)
+    })
+
+    it('5 秒ごとの再送 (同じ state) では増えない', async () => {
+      const dev = await connectDevice()
+      await feed(dev,
+        'EVT ALARM state=alarming cause=call',
+        'EVT ALARM state=alarming cause=call',
+        'EVT ALARM state=muted cause=call',
+        'EVT ALARM state=muted cause=call',
+        'EVT ALARM state=muted cause=call',
+      )
+      expect(alarm.buttonPressCount.value).toBe(1)
+    })
+
+    it('STATUS alarm の応答で状態が同じなら増えない', async () => {
+      const dev = await connectDevice()
+      await feed(dev,
+        'EVT ALARM state=alarming cause=call',
+        'STATUS alarm state=alarming cause=call hb_age_ms=1200 VER=0.1.0',
+      )
+      expect(alarm.buttonPressCount.value).toBe(0)
+      await feed(dev,
+        'EVT ALARM state=muted cause=call',
+        'STATUS alarm state=muted cause=call hb_age_ms=1200 VER=0.1.0',
+      )
+      expect(alarm.buttonPressCount.value).toBe(1)
+    })
+
+    it('前の cause が call でなければ増えない (沈黙や NG で鳴っていたのを黙らせた)', async () => {
+      const dev = await connectDevice()
+      await feed(dev,
+        'EVT ALARM state=alarming cause=silence',
+        'EVT ALARM state=muted cause=call',
+      )
+      expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'call' })
+      expect(alarm.buttonPressCount.value).toBe(0)
+    })
+
+    it('新しい cause が call でなければ増えない', async () => {
+      const dev = await connectDevice()
+      await feed(dev,
+        'EVT ALARM state=alarming cause=call',
+        'EVT ALARM state=muted cause=silence',
+      )
+      expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'silence' })
+      expect(alarm.buttonPressCount.value).toBe(0)
+    })
+
+    it('alarming → idle・muted → idle・muted → alarming では増えない', async () => {
+      const dev = await connectDevice()
+      await feed(dev,
+        'EVT ALARM state=alarming cause=call',
+        'EVT ALARM state=idle cause=none',
+      )
+      expect(alarm.buttonPressCount.value).toBe(0)
+
+      await feed(dev,
+        'EVT ALARM state=alarming cause=call',
+        'EVT ALARM state=muted cause=call',
+      )
+      expect(alarm.buttonPressCount.value).toBe(1)
+      await feed(dev, 'EVT ALARM state=idle cause=none')
+      expect(alarm.buttonPressCount.value).toBe(1)
+
+      await feed(dev,
+        'EVT ALARM state=alarming cause=call',
+        'EVT ALARM state=muted cause=call',
+        'EVT ALARM state=alarming cause=call',
+      )
+      expect(alarm.buttonPressCount.value).toBe(2)
+    })
+
+    it('接続直後 (前の状態なし) の muted では増えない', async () => {
+      const dev = await connectDevice()
+      expect(alarm.deviceState.value).toBeNull()
+      await feed(dev, 'STATUS alarm state=muted cause=call hb_age_ms=1200 VER=0.1.0')
+      expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'call' })
+      expect(alarm.buttonPressCount.value).toBe(0)
+    })
+
+    it('切断 → 再接続で前の状態を持ち越さない (切断前の alarming と再接続後の muted を繋げない)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, 'EVT ALARM state=alarming cause=call')
+
+      // 抜線 → 10 秒後の再スキャンで挿し直した機体を掴む
+      const next = createMockPort()
+      next.emit('DEVICE alarm VER=0.1.0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [next.port]) })
+      dev.push({ value: undefined, done: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(false)
+      expect(alarm.deviceState.value).toBeNull()
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(alarm.isConnected.value).toBe(true)
+
+      await feed(next, 'EVT ALARM state=muted cause=call')
+      expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'call' })
+      expect(alarm.buttonPressCount.value).toBe(0)
+    })
+
+    it('★ 行の途中に連結された EVT ALARM / STATUS alarm も拾う (状態の更新と押下の両方)', async () => {
+      const dev = await connectDevice()
+      // 直前のログ行が途中で切れて、状態行が後ろに繋がって届く
+      await feed(dev, 'I (1234) hb: age_ms=12EVT ALARM state=alarming cause=call')
+      expect(alarm.deviceState.value).toEqual({ state: 'alarming', cause: 'call' })
+      await feed(dev, 'I (5678) btn: preSTATUS alarm state=muted cause=call hb_age_ms=40 VER=0.1.0')
+      expect(alarm.deviceState.value).toEqual({ state: 'muted', cause: 'call' })
+      expect(alarm.buttonPressCount.value).toBe(1)
+    })
+
+    it('連結された行は、見つけた位置から後ろだけを読む (手前のトークンは状態にしない)', async () => {
+      const dev = await connectDevice()
+      await feed(dev, 'dbg state=muted cause=call tailEVT ALARM state=alarming')
+      expect(alarm.deviceState.value).toEqual({ state: 'alarming', cause: 'none' })
+      // 手前にだけ state= が在り、状態行の側に無ければ更新しない
+      await feed(dev, 'dbg state=idle cause=none tailEVT ALARM')
+      expect(alarm.deviceState.value).toEqual({ state: 'alarming', cause: 'none' })
+      expect(alarm.buttonPressCount.value).toBe(0)
+    })
+
+    it('状態行を含まない行は読まない', async () => {
+      const dev = await connectDevice()
+      await feed(dev, 'I (1) boot: state=alarming cause=call')
+      expect(alarm.deviceState.value).toBeNull()
     })
   })
 
