@@ -343,7 +343,8 @@ async function onVeinIdentify() {
 // 点呼の途中では走らせず、待機画面 (NFC 待ち・指静脈の読み取り中でない) のときだけ走らせる。
 // 途中で受けた合図は預けておき、待機画面へ戻ったときに走らせる。
 // 購読 WS は打刻一覧の画面 (TodayPunchHistory) と同じもの — 両者は driverSubTab の v-if で
-// 同時に出ないので、キオスク 1 台の購読は 1 本のまま (`serialOta` は上の `track` の前で定義)
+// 同時に出ない。CoreS3 を繋いだキオスクでは FirmwareOtaHost の購読 (CoreS3 の合図用) が別に
+// 1 本在るので、合わせて 2 本になる (`serialOta` は上の `track` の前で定義)
 const isKioskIdle = computed(() => step.value === 'nfc' && !veinBusy.value)
 const otaWatch = useTimecardWatch({
   getToken: () => useDeviceToken().getDeviceJwt(),

@@ -50,7 +50,7 @@ function resetHubMocks(): void {
   fw.deviceId = ref<string | null>(null)
   fw.report = vi.fn(async (phase: string) => { events.push(`report:${phase}`) })
   fw.hold = vi.fn(() => { events.push('hold') })
-  fw.release = vi.fn(async () => { events.push('release') })
+  fw.release = vi.fn(() => { events.push('release') })
 }
 
 /** `fetch` の 2 つ目の引数 (取得の時間切れ付き) */
@@ -911,17 +911,20 @@ describe('useSerialOta (cores3)', () => {
 
     expect(hub.ota.begin).not.toHaveBeenCalled()
     expect(sent()).toEqual(['DEVICE'])
-    // 失敗の幕も、失敗・対象外の報告も出ない
+    // 失敗の幕も、失敗・対象外の報告も出ない。一覧の「更新中」は、保留を解いてから待機へ戻す
     expect(ota.state.value).toEqual({ kind: 'idle' })
-    expect(reports()).toEqual(['downloading'])
-    expect(fw.release).toHaveBeenCalledTimes(1)
+    expect(reports()).toEqual(['downloading', 'idle'])
+    expect(fw.report).toHaveBeenLastCalledWith('idle', {})
+    expect(order().slice(-4)).toEqual(['release', 'report:idle', 'end', 'release'])
 
     // 空いた → 受けが runQueued を呼ぶ
     busy = false
     await finish(ota.runQueued())
     expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
     expect(sent()).toContain('OTA CONFIRM')
-    expect(fw.release).toHaveBeenCalledTimes(2)
+    // 走り切った回は結果 (done) を残す: idle を送り直さない
+    expect(reports().filter(r => r === 'idle')).toHaveLength(1)
+    expect(reports().at(-1)).toBe('done')
     // 預かりは 1 回で消費する
     await ota.runQueued()
     expect(hub.ota.begin).toHaveBeenCalledTimes(1)
@@ -945,6 +948,8 @@ describe('useSerialOta (cores3)', () => {
     expect(chunks()).toBe(0)
     expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'busy' })
     expect(events.indexOf('end')).toBeLessThan(events.indexOf('report:skipped'))
+    // 結果 (skipped) を idle で上書きしない
+    expect(reports()).not.toContain('idle')
     expectUnlockedAndReleased()
   })
 
@@ -1087,7 +1092,7 @@ describe('useSerialOta (cores3)', () => {
     ota = mod.useSerialOta()
     const p = ota.run('cores3', OPTS)
     while (!events.includes('report:confirming')) await vi.advanceTimersByTimeAsync(1_000)
-    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(25_000)
 
     expect(order().at(-1)).toBe('report:confirming')
     expect(sent()).not.toContain('AUTH STATUS')
@@ -1097,6 +1102,23 @@ describe('useSerialOta (cores3)', () => {
     await finish(p)
     expect(sent().slice(-3)).toEqual(['AUTH STATUS', 'DEVICE', 'OTA CONFIRM'])
     expect(ota.state.value.kind).toBe('done')
+  })
+
+  it('★ report(confirming) が固まっても、30 秒で打ち切って確定まで進む (機体の確定を逃さない)', async () => {
+    fw.report = vi.fn((phase: string) => {
+      events.push(`report:${phase}`)
+      return phase === 'confirming' ? new Promise<void>(() => {}) : Promise.resolve()
+    })
+    ota = mod.useSerialOta()
+    const p = ota.run('cores3', OPTS)
+    while (!events.includes('report:confirming')) await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(28_000)
+    expect(sent()).not.toContain('AUTH STATUS')
+
+    await finish(p)
+    expect(sent().slice(-3)).toEqual(['AUTH STATUS', 'DEVICE', 'OTA CONFIRM'])
+    expect(reports().at(-1)).toBe('done')
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
   })
 
   it('★ 錠の間の報告は待たない: report(writing) が解決しなくても、チャンクの送信が進んで確定する', async () => {
@@ -1119,8 +1141,6 @@ describe('useSerialOta (cores3)', () => {
     fw.release = vi.fn(() => {
       events.push('release')
       if (!nested) nested = ota.run('cores3', OPTS)
-      // 送信が終わらない (POST を待っている)
-      return new Promise<void>(() => {})
     })
     ota = mod.useSerialOta()
     await runToEnd()

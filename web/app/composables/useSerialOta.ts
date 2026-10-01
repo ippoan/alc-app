@@ -56,10 +56,12 @@
  *    **再起動を待つ前に `ota.end()`**。錠を掛けたまま再接続すると、端末の token の取り直しの
  *    署名が reject され、以後の報告とキオスクの端末 token が落ちる。**錠の間の報告は await しない**
  *    (報告は token の取得と POST を伴い、機体の 10 秒の無受信に掛かりうる)
- * 5. 再起動後は **`await report('confirming')` を先に** (中で走る署名の要求を待ち切る) →
+ * 5. 再起動後は **`await report('confirming')` を先に** (中で走る署名の要求を待ち切る。報告が
+ *    固まっても機体の確定を逃さないよう、30 秒で打ち切って先へ進む) →
  *    `AUTH STATUS` で id を聞き直し、始めたときと違えば `OTA CONFIRM` を送らない (差し替えの検出) →
  *    `DEVICE` → `OTA CONFIRM`。この 3 つは「既に応答待ち」の reject のときだけ間を置いて再試行する
- * 6. 終わりは必ず `running = false` → `ota.end()` → `release()` の順
+ * 6. 終わりは必ず `running = false` → `ota.end()` → `release()` の順。`release()` は `idle` を
+ *    送らない (一覧に結果を残す)。預け直したときだけ、結果の報告が無いので `idle` を 1 回送る
  *
  * # 受容している制約 (直さない)
  *
@@ -78,6 +80,8 @@
  * - 更新の実行は 1 台の PC で 1 本 (`running` は共有)。CoreS3 の更新中に来た Vein Station の合図
  *   (逆も) は黙って捨てられる
  * - 配布ページの URL の表は、auth-worker の `DEVICE_KINDS` (別 repo) と 2 か所に在る
+ * - 結果の幕 (5 秒) が出ている間に次の合図が来て、更新が要るかを調べる段で例外になると、
+ *   「失敗の幕 + `failed` の報告」になる (画面に出さない判定が「state が idle か」のため)
  */
 
 import { parseDeviceLine } from '~/utils/device-line'
@@ -121,6 +125,8 @@ const CONFIRM_TIMEOUT_MS = 10_000
 const HB_OFF_TIMEOUT_MS = 5_000
 /** 再起動後の `AUTH STATUS` の応答待ち (CoreS3 だけ) */
 const AUTH_STATUS_TIMEOUT_MS = 3_000
+/** 再起動後の `confirming` の報告を待つ上限 (CoreS3 だけ)。機体は確定を 10 分しか待たない */
+const CONFIRMING_REPORT_TIMEOUT_MS = 30_000
 /** 再起動後の要求が「既に応答待ち」で弾かれたときの再試行の間隔と、合計の上限 (CoreS3 だけ) */
 const BUSY_RETRY_INTERVAL_MS = 2_000
 const BUSY_RETRY_TOTAL_MS = 60_000
@@ -320,6 +326,9 @@ export function useSerialOta() {
     if (opts.isBusy?.()) {
       queued = { target, opts }
       state.value = { kind: 'idle' }
+      // 結果の報告が無い経路なので、一覧の「更新中」(downloading) を待機へ戻しておく
+      firmware.release()
+      tell('idle', {})
       return
     }
 
@@ -380,8 +389,12 @@ export function useSerialOta() {
     let ask: (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string) => Promise<string> = port.request
     if (hub) {
       // 機体へ聞く前に待ち切る: 再起動で端末の token は捨てられており、報告の中の取り直しが
-      // 機体への署名の要求を走らせる。先に聞くと、こちらの応答待ちが署名を reject させる
-      await firmware.report('confirming', progress)
+      // 機体への署名の要求を走らせる。先に聞くと、こちらの応答待ちが署名を reject させる。
+      // 報告 (POST) が固まっても確定を逃さないよう、上限で打ち切って先へ進む
+      await Promise.race([
+        firmware.report('confirming', progress),
+        new Promise(resolve => setTimeout(resolve, CONFIRMING_REPORT_TIMEOUT_MS)),
+      ])
       const deadline = Date.now() + BUSY_RETRY_TOTAL_MS
       ask = (...args) => requestWhenFree(port, deadline, ...args)
       // 再起動を待っている間に別の機体へ差し替えられていたら確定しない
@@ -433,12 +446,11 @@ export function useSerialOta() {
       }
     }
     finally {
-      // この順を変えない。`running` を先に下ろす (`release()` の送信を待つ間に来た `runQueued` が
-      // 預かりだけ消費して黙って戻らないように)。`end()` は錠が掛かっていなければ、`release()` は
-      // 保留していなければ何もしないので、無条件に呼ぶ
+      // この順を変えない。`end()` は錠が掛かっていなければ、`release()` は保留していなければ
+      // 何もしないので、無条件に呼ぶ
       running = false
       coreS3.ota.end()
-      void firmware.release()
+      firmware.release()
     }
   }
 

@@ -489,7 +489,7 @@ describe('useFirmwareReport', () => {
       expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd1', version: '0.2.0', phase: 'confirming' }))
     })
 
-    it('release() で idle を 1 回送り、以後は周期と繋がったときの idle が戻り、ポートを失ったら id を捨てる', async () => {
+    it('release() 自身は idle を送らず (更新の結果を上書きしない)、以後は周期と繋がったときの idle が戻り、ポートを失ったら id を捨てる', async () => {
       await started()
       fw.hold()
       close()
@@ -497,7 +497,12 @@ describe('useFirmwareReport', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(reportFirmware).toHaveBeenCalledTimes(1)
 
-      await fw.release()
+      fw.release()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+
+      // 周期が戻る (更新後の版が一覧に載る)
+      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
       expect(reportFirmware).toHaveBeenCalledTimes(2)
       expect(reportFirmware).toHaveBeenLastCalledWith({
         device_id: 'd1',
@@ -508,10 +513,6 @@ describe('useFirmwareReport', () => {
         phase: 'idle',
       })
 
-      // 周期が戻る
-      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
-      expect(reportFirmware).toHaveBeenCalledTimes(3)
-
       // ポートを失ったら id を捨て、繋がったら聞き直して送る
       close()
       expect(fw.deviceId.value).toBeNull()
@@ -519,27 +520,29 @@ describe('useFirmwareReport', () => {
       open()
       await vi.advanceTimersByTimeAsync(0)
       expect(sentLines()).toEqual(['AUTH STATUS', 'AUTH STATUS'])
-      expect(reportFirmware).toHaveBeenCalledTimes(4)
+      expect(reportFirmware).toHaveBeenCalledTimes(3)
       expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd2', phase: 'idle' }))
     })
 
     it('保留していないときの release() は何も送らない', async () => {
       await started()
 
-      await fw.release()
+      fw.release()
+      await vi.advanceTimersByTimeAsync(0)
 
       expect(reportFirmware).toHaveBeenCalledTimes(1)
       expect(deviceToken.getDeviceJwt).toHaveBeenCalledTimes(1)
     })
 
-    it('hold() を 2 回呼んでも、release() 1 回で解け、2 回目の release() は何も送らない', async () => {
+    it('hold() を 2 回呼んでも、release() 1 回で解ける (周期の idle が戻る)', async () => {
       await started()
 
       fw.hold()
       fw.hold()
-      await fw.release()
-      await fw.release()
+      fw.release()
+      fw.release()
 
+      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
       expect(reportFirmware).toHaveBeenCalledTimes(2)
     })
 
@@ -547,11 +550,11 @@ describe('useFirmwareReport', () => {
       await started()
 
       fw.hold()
-      await mod.useFirmwareReport().release()
+      mod.useFirmwareReport().release()
 
-      expect(reportFirmware).toHaveBeenCalledTimes(2)
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
-      expect(reportFirmware).toHaveBeenCalledTimes(3)
+      expect(reportFirmware).toHaveBeenCalledTimes(2)
     })
 
     // ---------- 更新の後に古い id を残さない (Refs ippoan/alc-app#403) ----------
@@ -563,9 +566,8 @@ describe('useFirmwareReport', () => {
       close()
       expect(fw.deviceId.value).toBe('d1')
 
-      await fw.release()
+      fw.release()
       expect(fw.deviceId.value).toBeNull()
-      // 未接続なので idle は送れない
       expect(reportFirmware).toHaveBeenCalledTimes(1)
 
       // 故障機を交換して繋いだ: 古い id を使わず、機体に聞き直す
@@ -577,15 +579,16 @@ describe('useFirmwareReport', () => {
       expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd2', phase: 'idle' }))
     })
 
-    it('保留を解いたとき繋がっていれば、id を持ったまま idle を送る (聞き直さない)', async () => {
+    it('保留を解いたとき繋がっていれば、id を持ったまま (聞き直さず、次の周期の idle もその id で送る)', async () => {
       await started()
       fw.hold()
       close()
       open({ ver: '0.2.0', board: 'cores3', flavor: 'cores3' })
 
-      await fw.release()
+      fw.release()
 
       expect(fw.deviceId.value).toBe('d1')
+      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
       expect(sentLines()).toEqual(['AUTH STATUS'])
       expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd1', version: '0.2.0', phase: 'idle' }))
     })

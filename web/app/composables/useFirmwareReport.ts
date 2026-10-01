@@ -4,7 +4,8 @@
  *
  * 管理者の画面 (`GET /api/firmware/devices`) は、この報告を一覧にして 1 台ずつ更新の合図を
  * 出す。報告が無い機体は一覧に現れないので、繋がったときと 5 分ごとに `idle` を送り続ける。
- * ファームの更新中だけは `hold()` でこの待機の報告を保留し、終わったら `release()` で戻す。
+ * ファームの更新中だけは `hold()` でこの待機の報告を保留し、終わったら `release()` で戻す
+ * (`release()` 自身は何も送らない — 更新の結果の報告を `idle` で上書きしないため)。
  *
  * **ここは機体に何も書き込まない。** 機体へ送るのは `AUTH STATUS` の 1 行だけ
  * (応答 `AUTH PAIRED <tenant> <id>` / `AUTH UNPAIRED`。alc-app-s3 の
@@ -133,16 +134,16 @@ export function useFirmwareReport() {
   }
 
   /**
-   * 保留を解き、`idle` を 1 回送る (更新後の版が一覧に載る)。保留していなければ何もしない。
+   * 保留を解く。保留していなければ何もしない。**ここでは `idle` を送らない** — 直前に送った
+   * 更新の結果 (done / failed / skipped) を一覧に残すため (次の周期の `idle` が更新後の版を載せる)。
    * 解いた時点で繋がっていなければ id を捨てる — 保留中はポートを失っても id を持ったままなので、
    * 未接続のまま終わると古い id が残り、交換後の機体をその id の機体として扱ってしまう
    * (次に繋がったときに `AUTH STATUS` を聞き直す)
    */
-  async function release(): Promise<void> {
+  function release(): void {
     if (!onHold) return
     onHold = false
     if (!coreS3.isConnected.value) deviceId.value = null
-    await report('idle')
   }
 
   return {
