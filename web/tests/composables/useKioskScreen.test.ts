@@ -189,4 +189,94 @@ describe('composables/useKioskScreen', () => {
       expect(safeNow()).toBe(false)
     })
   })
+
+  describe('declareDeviceBusy (機体を使用中の申告、Refs ippoan/alc-app#403)', () => {
+    it('申告が 1 つも無ければ使用中ではない', () => {
+      expect(useKioskScreen().isDeviceBusy.value).toBe(false)
+    })
+
+    it('1 つ真なら使用中になり、偽に戻ると (次の tick を待たずに) 解除される', () => {
+      const scope = effectScope()
+      const measuring = ref(false)
+      scope.run(() => { useKioskScreen().declareDeviceBusy(measuring) })
+      const { isDeviceBusy } = useKioskScreen()
+
+      expect(isDeviceBusy.value).toBe(false)
+
+      measuring.value = true
+      expect(isDeviceBusy.value).toBe(true)
+
+      measuring.value = false
+      expect(isDeviceBusy.value).toBe(false)
+
+      scope.stop()
+    })
+
+    it('読む口は watch できる (申告が動くと通知される)', async () => {
+      const scope = effectScope()
+      const measuring = ref(false)
+      const seen: boolean[] = []
+      scope.run(() => {
+        const { declareDeviceBusy, isDeviceBusy } = useKioskScreen()
+        declareDeviceBusy(measuring)
+        watch(isDeviceBusy, (busy) => { seen.push(busy) })
+      })
+
+      measuring.value = true
+      await nextTick()
+      measuring.value = false
+      await nextTick()
+
+      expect(seen).toEqual([true, false])
+      scope.stop()
+    })
+
+    it('2 つの component が申告し、片方の scope が破棄されても、もう片方の申告は残る', () => {
+      const first = effectScope()
+      const second = effectScope()
+      first.run(() => { useKioskScreen().declareDeviceBusy(() => true) })
+      second.run(() => { useKioskScreen().declareDeviceBusy(() => true) })
+      const { isDeviceBusy } = useKioskScreen()
+      expect(isDeviceBusy.value).toBe(true)
+
+      first.stop()
+      expect(isDeviceBusy.value).toBe(true)
+
+      second.stop()
+      expect(isDeviceBusy.value).toBe(false)
+    })
+
+    it('resetReloadContext で空になる', () => {
+      const scope = effectScope()
+      scope.run(() => { useKioskScreen().declareDeviceBusy(() => true) })
+      expect(useKioskScreen().isDeviceBusy.value).toBe(true)
+
+      resetReloadContext()
+      expect(useKioskScreen().isDeviceBusy.value).toBe(false)
+      scope.stop()
+    })
+
+    it('リロードの判定に混ざらない (readReloadContext と isSafeToReload が申告の有無で変わらない)', () => {
+      const safeScope = effectScope()
+      safeScope.run(() => { useKioskScreen().declareSafeToReload(() => true) })
+      const before = readReloadContext()
+      expect(before).toEqual({ screen: null, safe: 1, blocked: 0 })
+      expect(safeNow()).toBe(true)
+
+      const busyScope = effectScope()
+      busyScope.run(() => { useKioskScreen().declareDeviceBusy(() => true) })
+      expect(useKioskScreen().isDeviceBusy.value).toBe(true)
+      expect(readReloadContext()).toEqual(before)
+      expect(safeNow()).toBe(true)
+
+      // 安全の申告が無い側でも同じ (機体の申告だけでは安全にも拒否にもならない)
+      safeScope.stop()
+      expect(readReloadContext()).toEqual({ screen: null, safe: 0, blocked: 0 })
+      expect(safeNow()).toBe(false)
+
+      busyScope.stop()
+      expect(readReloadContext()).toEqual({ screen: null, safe: 0, blocked: 0 })
+      expect(safeNow()).toBe(false)
+    })
+  })
 })

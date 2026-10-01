@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly, defineComponent } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
+import { useKioskScreen } from '~/composables/useKioskScreen'
 import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 import { updateMeasurement, startMeasurement } from '~/utils/api'
 
@@ -1160,6 +1161,21 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
     expect(wrapper.find('[data-testid="punch-skipped"]').exists()).toBe(false)
     expect(exposed(wrapper).isIdle).toBe(false)
     wrapper.unmount()
+  })
+
+  it('待機 (免許証のタッチ待ち) を離れている間だけ「機体を使用中」を申告する (Refs ippoan/alc-app#403)', async () => {
+    const wrapper = await mountNfcStep()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(exposed(wrapper).isIdle).toBe(true)
+    expect(isDeviceBusy.value).toBe(false)
+
+    await exposed(wrapper).startForEmployee('emp-9', '佐藤花子')
+    await wrapper.vm.$nextTick()
+    expect(exposed(wrapper).isIdle).toBe(false)
+    expect(isDeviceBusy.value).toBe(true)
+
+    wrapper.unmount()
+    expect(isDeviceBusy.value).toBe(false)
   })
 
   it('IC カードで始めると点呼の種別は normal になる (完了の PUT に載る)', async () => {

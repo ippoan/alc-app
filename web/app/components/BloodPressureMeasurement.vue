@@ -31,6 +31,8 @@ const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
 
 const step = ref<BpStep>('nfc')
+// ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。カード待ちでなければ機体を使用中
+useKioskScreen().declareDeviceBusy(() => step.value !== 'nfc')
 const employeeId = ref('')
 const employeeName = ref('')
 const error = ref<string | null>(null)

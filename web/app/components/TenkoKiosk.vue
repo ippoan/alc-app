@@ -345,6 +345,8 @@ const isKioskIdle = computed(() => step.value === 'nfc' && !veinBusy.value)
 const otaWatch = useTimecardWatch({
   getToken: () => useDeviceToken().getDeviceJwt(),
   onSerialOta: (target) => {
+    // この画面が預かるのは Vein Station の合図だけ (CoreS3 の合図は FirmwareOtaHost の側。Refs ippoan/alc-app#403)
+    if (target !== 'timecard-station') return
     serialOta.enqueue(target)
     if (isKioskIdle.value) void serialOta.runQueued()
   },
@@ -356,20 +358,9 @@ onMounted(() => {
   // デモは実機が無いので購読しない
   if (!isDemoMode.value) void otaWatch.connect()
 })
-
-/** 画面全体に出す OTA の表示 (`null` なら出さない) */
-const serialOtaMessage = computed<string | null>(() => {
-  const s = serialOta.state.value
-  switch (s.kind) {
-    case 'idle': return null
-    case 'downloading': return '端末を更新しています 0%'
-    case 'writing': return `端末を更新しています ${s.pct}%`
-    case 'rebooting':
-    case 'confirming': return '端末を再起動しています…'
-    case 'done': return `更新しました ${s.ver}`
-    case 'failed': return '更新できませんでした (元の版のまま)'
-  }
-})
+// 「更新中」の幕は FirmwareOtaHost.vue が描く (タブに関係なく常に在る。Refs ippoan/alc-app#403)。
+// 更新を始めてよいかの材料として、この画面が機体を使っている間を申告する
+useKioskScreen().declareDeviceBusy(() => !isKioskIdle.value)
 
 // --- 顔認証結果 ---
 function onFaceAuthResult(result: FaceAuthResult) {
@@ -494,16 +485,6 @@ onUnmounted(() => {
     'w-full flex-1 overflow-y-auto p-4',
     landscape ? 'flex gap-4 max-w-4xl mx-auto' : 'flex flex-col items-center'
   ]">
-    <!-- 端末のシリアル OTA (Refs ippoan/alc-app-s3#279)。実行中は画面全体を覆って操作させない -->
-    <div
-      v-if="serialOtaMessage"
-      data-testid="serial-ota-overlay"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
-    >
-      <p class="bg-white rounded-2xl px-8 py-6 text-2xl font-bold text-gray-800 text-center shadow-xl">
-        {{ serialOtaMessage }}
-      </p>
-    </div>
     <!-- 左列 (横画面) / 上部 (縦画面): バナー + ステップ -->
     <div :class="landscape ? 'w-2/5 flex flex-col shrink-0' : 'w-full flex flex-col items-center'">
       <!-- 遠隔点呼 ビデオ通話 -->

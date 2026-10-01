@@ -377,6 +377,8 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
 
 /** 待機中 (免許証のタッチ待ち) か。呼び出し元が別の導線を出してよいのはこの間だけ */
 const isIdle = computed(() => step.value === 'nfc')
+// ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。待機中でなければ機体を使用中
+useKioskScreen().declareDeviceBusy(() => !isIdle.value)
 
 /**
  * **社員を指定して**測定へ入る (Refs ippoan/rust-alc-api#644)。

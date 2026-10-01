@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
+import { useKioskScreen } from '~/composables/useKioskScreen'
 
 // 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
 // カードをかざす → 顔認証 → 血圧を測る → 完了 だけを行い、**点呼の記録は作らない**。
@@ -109,6 +110,19 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
 
     wrapper.unmount()
+  })
+
+  it('BloodPressureMeasurement — カード待ちを離れている間だけ「機体を使用中」を申告する (Refs ippoan/alc-app#403)', async () => {
+    const wrapper = await mountBp()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    await tapCard(wrapper)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(isDeviceBusy.value).toBe(true)
+
+    wrapper.unmount()
+    expect(isDeviceBusy.value).toBe(false)
   })
 
   it('BloodPressureMeasurement — 顔が未登録ならスキップできる', async () => {
