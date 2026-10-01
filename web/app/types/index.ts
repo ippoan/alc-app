@@ -1,4 +1,5 @@
 import type { CardKind } from '~/utils/card-kind'
+import type { ManagerJudgmentMethod } from '~/utils/it-tenko'
 
 /** 顔認証結果 */
 export interface FaceAuthResult {
@@ -515,6 +516,13 @@ export interface TenkoSession {
    * null / 未定義 = 切り替えていない。**サーバ側で埋めるのは別 PR** なので optional。
    */
   escalated_to_remote_at?: string | null
+  /** 点呼の方法 (`IT_TENKO_METHOD` なら IT点呼。Refs ippoan/alc-app#387) */
+  tenko_method?: string
+  /**
+   * IT点呼 の判定を、通話で確認して付けたか対面で確認して付けたか。null = まだ確定していない
+   * (IT点呼 の記録は、これが付くまで未完了)。IT点呼 でない記録では常に null
+   */
+  manager_judgment_method?: ManagerJudgmentMethod | null
 }
 
 export interface StartTenkoSession {
@@ -575,6 +583,8 @@ export interface SubmitManagerJudgment {
   judgment: 'ok' | 'ng'
   reason?: string
   judged_by_employee_id: string
+  /** IT点呼 の記録を確定するときの確認の方法。IT点呼 でない記録には送らない (400 になる) */
+  method?: ManagerJudgmentMethod
 }
 
 export interface InterruptSession {
@@ -593,6 +603,10 @@ export interface TenkoSessionFilter {
   date_to?: string
   page?: number
   per_page?: number
+  /** 点呼の方法で絞る (`IT_TENKO_METHOD`) */
+  tenko_method?: string
+  /** true のときだけ意味を持つ: 運行管理者の判定がまだ確定していない記録に絞る */
+  judgment_pending?: boolean
 }
 
 export interface TenkoSessionsResponse {

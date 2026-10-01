@@ -4,6 +4,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
+import { IT_TENKO_METHOD } from '~/utils/it-tenko'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
 
@@ -579,7 +580,7 @@ async function onMeasurementResult(result: MeasurementResult) {
         carins_vehicle_id: result.carinsVehicleId,
       }
       // **通常点呼では key ごと足さない** (body を今までと同一に保つ)
-      if (props.itMode) updateData.tenko_method = 'IT点呼'
+      if (props.itMode) updateData.tenko_method = IT_TENKO_METHOD
       // carins の番号は console に出さない (simplify-reviewer の検査点、Refs ippoan/alc-app-s3#110)
       const loggableUpdateData: Record<string, unknown> = { ...updateData }
       delete loggableUpdateData.carins_cert_no

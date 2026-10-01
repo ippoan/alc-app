@@ -21,12 +21,13 @@ const adminCombinedStream = ref<MediaStream | null>(null)  // 映像+音声 (Ten
 
 // シグナリングサーバーからアクティブなルーム(device接続中)一覧を購読 (アプリ全体で 1 本)
 const {
-  activeRooms,
+  activeRooms: allRooms,
   start: startWatchingRooms,
   stop: stopWatchingRooms,
   setJoined,
   reload: reloadActiveRooms,
 } = useActiveRooms()
+const activeRooms = computed(() => splitRooms(allRooms.value).remote)
 const selectedRoomId = ref<string | null>(null)
 const isCallActive = ref(false)
 const isLoading = ref(false)

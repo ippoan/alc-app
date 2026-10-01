@@ -1879,6 +1879,47 @@ restoreNativeApis()
       expect(result.sessions).toBeDefined()
     })
 
+    // IT点呼 の受け画面が使う絞り込み (Refs ippoan/alc-app#387)。
+    // ★ 新しい欄を渡さない呼び出しは、送る URL が今までと 1 文字も変わらない
+    it('listTenkoSessions(): 引数なしは query を付けない (今までと同じ URL)', async () => {
+      stubOk({ sessions: [], total: 0 })
+      await listTenkoSessions()
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/tenko/sessions')
+      })
+    })
+
+    it('listTenkoSessions: 既存の filter だけの呼び出しは今までと同じ URL (欄の順も同じ)', async () => {
+      stubOk({ sessions: [], total: 0 })
+      // live (実物の backend) でも走るので、date_from は backend が受ける日時の形で渡す
+      await listTenkoSessions({ status: 'completed', date_from: '2026-08-01T00:00:00Z', page: 2, per_page: 20 })
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe(
+          'https://api.example.com/api/tenko/sessions?status=completed&date_from=2026-08-01T00%3A00%3A00Z&page=2&per_page=20',
+        )
+      })
+    })
+
+    it('listTenkoSessions: tenko_method と judgment_pending: true が query に出る', async () => {
+      stubOk({ sessions: [], total: 0 })
+      await listTenkoSessions({ tenko_method: 'IT点呼', judgment_pending: true, per_page: 50 })
+      assertMock(() => {
+        const url = new URL(mockFetch.mock.calls[0][0])
+        expect(url.pathname).toBe('/api/tenko/sessions')
+        expect(Object.fromEntries(url.searchParams)).toEqual({
+          tenko_method: 'IT点呼', per_page: '50', judgment_pending: 'true',
+        })
+      })
+    })
+
+    it('listTenkoSessions: judgment_pending: false は query に出さない (true だけが意味を持つ)', async () => {
+      stubOk({ sessions: [], total: 0 })
+      await listTenkoSessions({ judgment_pending: false, per_page: 20 })
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/tenko/sessions?per_page=20')
+      })
+    })
+
     it('should get dashboard', async () => {
       stubOk({ total: 0 })
       const dashboard = await getTenkoDashboard()

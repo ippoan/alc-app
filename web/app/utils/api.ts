@@ -866,8 +866,14 @@ export async function submitManagerJudgment(
 
 // --- セッション (管理者) ---
 
-export async function listTenkoSessions(filter: TenkoSessionFilter = {}): Promise<TenkoSessionsResponse> {
-  return request<TenkoSessionsResponse>(`/api/tenko/sessions${toParams(filter)}`)
+export async function listTenkoSessions(
+  filter: TenkoSessionFilter = {},
+  scope: RequestTokenScope = 'default',
+): Promise<TenkoSessionsResponse> {
+  // `judgment_pending` は true だけが意味を持つので、false は query に出さない
+  const { judgment_pending: pending, ...rest } = filter
+  const query: TenkoSessionFilter = pending ? { ...rest, judgment_pending: true } : rest
+  return request<TenkoSessionsResponse>(`/api/tenko/sessions${toParams(query)}`, {}, scope)
 }
 
 export async function getTenkoDashboard(): Promise<TenkoDashboard> {

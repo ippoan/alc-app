@@ -7,13 +7,20 @@
  * **押し直し (再判定) を許可する** — 押し間違いは実運用で起きるため、サーバ側も
  * 上書きを許す作り。判定済みでも現在の判定を表示したまま OK/NG ボタンは出し続け、
  * 確認ダイアログは挟まない (親の判断、Refs ippoan/alc-app#315)。
+ *
+ * **`defaultMethod` を渡したときだけ** IT点呼 の「確認の方法」(通話で確認 / 対面で確認) を出し、
+ * 送信に `method` を足す (Refs ippoan/alc-app#387)。渡さなければ画面も送信も今までと同一 —
+ * 遠隔点呼モニターは渡さない (IT点呼 でない記録に `method` を送ると 400 になる)。
  */
 import type { TenkoSession, SubmitManagerJudgment } from '~/types'
 import { submitManagerJudgment } from '~/utils/api'
+import { MANAGER_JUDGMENT_METHOD, type ManagerJudgmentMethod } from '~/utils/it-tenko'
 
 const props = defineProps<{
   session: TenkoSession
   managerId: string | null
+  /** IT点呼 の受け画面だけが渡す。最初に選んでおく確認の方法 (既に確定していればそちらが先) */
+  defaultMethod?: ManagerJudgmentMethod
 }>()
 
 const emit = defineEmits<{
@@ -24,6 +31,13 @@ const ngMode = ref(false)
 const reason = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
+
+const METHOD_OPTIONS: { value: ManagerJudgmentMethod, label: string }[] = [
+  { value: MANAGER_JUDGMENT_METHOD.IT, label: 'IT点呼 (通話で確認)' },
+  { value: MANAGER_JUDGMENT_METHOD.IN_PERSON, label: '対面で確認' },
+]
+// `defaultMethod` が無ければ undefined のまま (欄を出さず、送信にも足さない)
+const method = ref(props.defaultMethod && (props.session.manager_judgment_method ?? props.defaultMethod))
 
 // NG 理由の入力中と送信中は、リロードで入力や送信結果が消えるので新版への載せ替えを止める
 // (Refs #345)。待機中の TenkoRemoteAdminView が出している「安全」の申告より拒否が優先される。
@@ -59,6 +73,7 @@ async function submit(judgment: 'ok' | 'ng') {
     const body: SubmitManagerJudgment = { judgment, judged_by_employee_id: props.managerId }
     const trimmed = reason.value.trim()
     if (judgment === 'ng' && trimmed) body.reason = trimmed
+    if (method.value) body.method = method.value
     const updated = await submitManagerJudgment(props.session.id, body, 'tenko-monitor')
     emit('judged', updated)
     ngMode.value = false
@@ -87,6 +102,17 @@ async function submit(judgment: 'ok' | 'ng') {
 
     <div v-if="error" class="mb-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
       {{ error }}
+    </div>
+
+    <!-- 確認の方法 (IT点呼 の受け画面が `defaultMethod` を渡したときだけ) -->
+    <div v-if="method" class="mb-2" data-testid="judgment-method">
+      <div class="text-xs text-gray-500 mb-1">確認の方法</div>
+      <div class="flex gap-3">
+        <label v-for="opt in METHOD_OPTIONS" :key="opt.value" class="flex items-center gap-1 text-sm text-gray-800">
+          <input v-model="method" type="radio" name="judgment-method" :value="opt.value" :disabled="submitting">
+          {{ opt.label }}
+        </label>
+      </div>
     </div>
 
     <!-- OK/NG ボタン (判定済みでも押し直せる) -->
