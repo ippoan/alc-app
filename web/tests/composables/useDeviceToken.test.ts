@@ -1665,3 +1665,68 @@ describe('auth-worker への HTTP の上限 (Refs ippoan/alc-app#338)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
+
+// dev端末の印 (Refs ippoan/alc-app#387)。送るトークンの選択 (`~/utils/token-selection`) が
+// 「この端末の鍵は dev」を同期で読めるよう、cache の書き換え・破棄のたびに印を更新する。
+// resetModules 後に同じ実体を掴むため、token-selection は load() の後で dynamic import する
+describe('useDeviceToken — dev端末の印 (#387)', () => {
+  const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+  const jwtOf = (payload: Record<string, unknown>) => `${seg({ alg: 'HS256' })}.${seg(payload)}.sig`
+  const DEV_JWT = jwtOf({ sub: 'd1', aud: 'device', dev_device: true })
+  const PLAIN_JWT = jwtOf({ sub: 'd1', aud: 'device' })
+
+  function stubCredentialToken(token: string) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ access_token: token, expires_in: 3600 }),
+    }))
+  }
+
+  it('dev の鍵でトークンが取れたらキオスクの印が立ち、credential を捨てたら下りる', async () => {
+    stubCredentialToken(DEV_JWT)
+    const useDeviceToken = await load()
+    const { isDevDevice } = await import('~/utils/token-selection')
+    const { storeKioskCredential, clearKioskCredential, getDeviceJwt } = useDeviceToken()
+    expect(isDevDevice('kiosk')).toBe(false)
+
+    storeKioskCredential(ID, SECRET)
+    expect(await getDeviceJwt()).toBe(DEV_JWT)
+    // 取れた直後に同期で読める (待ちを挟まない)
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(isDevDevice('manager-device')).toBe(false)
+    expect(isDevDevice('bp-station')).toBe(false)
+
+    clearKioskCredential()
+    expect(isDevDevice('kiosk')).toBe(false)
+  })
+
+  it('CoreS3 の署名で取れた dev のトークンでも印が立ち、抜線で下りる', async () => {
+    coreS3Mock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.endsWith('/device/alarm-nonce')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: DEV_JWT, expires_in: 900 }) })
+    }))
+    const useDeviceToken = await load()
+    const { isDevDevice } = await import('~/utils/token-selection')
+    const { getDeviceJwt } = useDeviceToken()
+
+    expect(await getDeviceJwt()).toBe(DEV_JWT)
+    expect(isDevDevice('kiosk')).toBe(true)
+
+    const closeCb = coreS3Mock.onClose.mock.calls[0]![0] as () => void
+    closeCb()
+    expect(isDevDevice('kiosk')).toBe(false)
+  })
+
+  it('dev でない鍵のトークンでは印は立たない', async () => {
+    stubCredentialToken(PLAIN_JWT)
+    const useDeviceToken = await load()
+    const { isDevDevice } = await import('~/utils/token-selection')
+    const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+
+    storeKioskCredential(ID, SECRET)
+    expect(await getDeviceJwt()).toBe(PLAIN_JWT)
+    expect(isDevDevice('kiosk')).toBe(false)
+  })
+})

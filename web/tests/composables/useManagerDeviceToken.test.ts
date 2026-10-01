@@ -268,3 +268,34 @@ describe('useManagerDeviceToken (#337 運行管理者席の鍵)', () => {
     expect(lines.join('\n')).toContain('status=-')
   })
 })
+
+// dev端末の印 (Refs ippoan/alc-app#387)。resetModules 後に同じ実体を掴むため、
+// token-selection は load() の後で dynamic import する
+describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
+  const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+  const jwtOf = (payload: Record<string, unknown>) => `${seg({ alg: 'HS256' })}.${seg(payload)}.sig`
+
+  it('dev の鍵でトークンが取れたら運行管理者席の印だけが立つ (同期で読める)', async () => {
+    const devJwt = jwtOf({ sub: 'm1', aud: 'device', dev_device: true })
+    stubHappyPath({ access_token: devJwt, expires_in: 900 })
+    const useManagerDeviceToken = await load()
+    const { isDevDevice } = await import('~/utils/token-selection')
+    expect(isDevDevice('manager-device')).toBe(false)
+
+    expect(await useManagerDeviceToken().getManagerJwt()).toBe(devJwt)
+
+    expect(isDevDevice('manager-device')).toBe(true)
+    expect(isDevDevice('kiosk')).toBe(false)
+    expect(isDevDevice('bp-station')).toBe(false)
+  })
+
+  it('dev でない鍵のトークンでは印は立たない', async () => {
+    stubHappyPath({ access_token: jwtOf({ sub: 'm1', aud: 'device' }), expires_in: 900 })
+    const useManagerDeviceToken = await load()
+    const { isDevDevice } = await import('~/utils/token-selection')
+
+    await useManagerDeviceToken().getManagerJwt()
+
+    expect(isDevDevice('manager-device')).toBe(false)
+  })
+})

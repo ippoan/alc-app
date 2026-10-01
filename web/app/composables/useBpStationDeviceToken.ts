@@ -49,8 +49,9 @@
  * `useDeviceToken.ts` (キオスク) も 1 文字も触らない。storage には一切書かない
  * (ATOM S3 を抜けば期限切れとともに消える)。
  */
-import { ref, readonly } from 'vue'
+import { ref, readonly, watch } from 'vue'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
+import { noteDeviceToken } from '~/utils/token-selection'
 
 /** auth-worker が測定台の鍵に割り当てた用途。nonce (query) と token (body) の両方で使う。 */
 export const BP_STATION_KEY_USAGE = 'bp-station'
@@ -98,6 +99,10 @@ export function parseBpStationSigLine(line: string): BpStationSignature | null {
 // --- module スコープ (測定台の PC に 1 つ。運行管理者席・キオスクの cache とは別物) ---
 const cachedJwt = ref<string | null>(null)
 let cachedExpMs = 0
+// このトークンが dev端末のものかを、送るトークンの選択 (`~/utils/token-selection`) が**同期で**
+// 読めるようにする (Refs ippoan/alc-app#387)。cache の書き換え・破棄のすべてに追従する。
+// 取得の経路・タイミングは変えない (見ているだけ)
+watch(cachedJwt, token => noteDeviceToken('bp-station', token), { flush: 'sync' })
 let inFlight: Promise<string | null> | null = null
 const backoffUntil = ref(0)
 const lastError = ref<string | null>(null)

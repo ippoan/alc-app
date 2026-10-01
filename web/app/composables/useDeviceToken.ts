@@ -82,9 +82,10 @@
  * 絶対に保持しない** (理由の語だけ)。firmware が想定外に長い文字列を返しても画面が壊れないよう
  * `MAX_FAILURE_DETAIL_LEN` で切り詰める。coreS3-sign 以外の段では null。
  */
-import { ref, computed, readonly } from 'vue'
+import { ref, computed, readonly, watch } from 'vue'
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
+import { noteDeviceToken } from '~/utils/token-selection'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
 const KIOSK_DEVICE_SECRET_KEY = 'alc_kiosk_device_secret'
@@ -140,6 +141,10 @@ const kioskDeviceSecret = ref<string | null>(
 // ref にしてあるのは hasDeviceJwt (#234-2、兄弟 #p135-c234-3 が使う) から参照できるようにするため。
 const cachedJwt = ref<string | null>(null)
 let cachedExpMs = 0
+// このトークンが dev端末のものかを、送るトークンの選択 (`~/utils/token-selection`) が**同期で**
+// 読めるようにする (Refs ippoan/alc-app#387)。cache の書き換え・破棄のすべてに追従する。
+// 取得の経路・タイミングは変えない (見ているだけ)
+watch(cachedJwt, token => noteDeviceToken('kiosk', token), { flush: 'sync' })
 
 // getDeviceJwt() の single-flight。同時に何回呼ばれても実際の取得は 1 本にまとめる。
 let jwtInFlight: Promise<string | null> | null = null

@@ -367,3 +367,38 @@ describe('useBpStationDeviceToken (#353 測定台の鍵)', () => {
     expect(lines.join('\n')).toContain('status=-')
   })
 })
+
+// dev端末の印 (Refs ippoan/alc-app#387)。resetModules 後に同じ実体を掴むため、
+// token-selection は load() の後で dynamic import する
+describe('useBpStationDeviceToken — dev端末の印 (#387)', () => {
+  const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+  const jwtOf = (payload: Record<string, unknown>) => `${seg({ alg: 'HS256' })}.${seg(payload)}.sig`
+
+  it('dev の鍵でトークンが取れたら測定台の印だけが立ち、ATOM S3 を抜いたら下りる', async () => {
+    const devJwt = jwtOf({ sub: 'b1', aud: 'device', dev_device: true })
+    stubHappyPath({ access_token: devJwt, expires_in: 900 })
+    const t = (await load()).useBpStationDeviceToken()
+    const { isDevDevice } = await import('~/utils/token-selection')
+    expect(isDevDevice('bp-station')).toBe(false)
+
+    expect(await t.getBpStationJwt()).toBe(devJwt)
+
+    expect(isDevDevice('bp-station')).toBe(true)
+    expect(isDevDevice('kiosk')).toBe(false)
+    expect(isDevDevice('manager-device')).toBe(false)
+
+    const onClose = atomMock.onClose.mock.calls[0]![0] as () => void
+    onClose()
+    expect(isDevDevice('bp-station')).toBe(false)
+  })
+
+  it('dev でない鍵のトークンでは印は立たない', async () => {
+    stubHappyPath({ access_token: jwtOf({ sub: 'b1', aud: 'device' }), expires_in: 900 })
+    const t = (await load()).useBpStationDeviceToken()
+    const { isDevDevice } = await import('~/utils/token-selection')
+
+    await t.getBpStationJwt()
+
+    expect(isDevDevice('bp-station')).toBe(false)
+  })
+})
