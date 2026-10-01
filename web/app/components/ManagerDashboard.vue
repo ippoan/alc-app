@@ -1,5 +1,7 @@
 <script setup lang="ts">
-type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices'
+import { isDevDevice } from '~/utils/token-selection'
+
+type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'it_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices'
 
 const props = defineProps<{
   initialTab?: string
@@ -8,6 +10,39 @@ const props = defineProps<{
 
 const activeTab = ref<TabKey>((props.initialTab as TabKey) ?? 'tenko')
 const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
+
+// IT点呼 の受け画面 (Refs ippoan/alc-app#387)。**運行管理者席の鍵に開発用の印がある席にだけ**出す
+// (テストが済むまで本番の運行管理者には見せない)。印 (`isDevDevice`) は同期で読める代わりに
+// reactive ではないので、ここに写しを持ち、mount 時とタブを押すたびに読み直す
+// (`pages/index.vue` の `devKioskMark` と同じ流儀)
+const devManagerMark = ref(isDevDevice('manager-device'))
+function refreshDevManagerMark() {
+  devManagerMark.value = isDevDevice('manager-device')
+  // 印が消えたら、行き場の無くなった画面を点呼へ戻す
+  if (!devManagerMark.value && activeTab.value === 'it_tenko') activeTab.value = 'tenko'
+}
+onMounted(refreshDevManagerMark)
+
+const tabs = computed<{ key: TabKey, label: string }[]>(() => [
+  { key: 'employees', label: '乗務員' },
+  { key: 'license', label: '免許証' },
+  { key: 'tenko', label: '点呼' },
+  { key: 'remote_tenko', label: '遠隔点呼' },
+  ...(devManagerMark.value ? [{ key: 'it_tenko' as const, label: 'IT点呼' }] : []),
+  { key: 'screen_share', label: '画面共有' },
+  { key: 'schedules', label: '予定管理' },
+  { key: 'baselines', label: '健康基準' },
+  { key: 'failures', label: '故障記録' },
+  { key: 'carrying_items', label: '携行品' },
+  { key: 'work_hours', label: '労働時間' },
+  { key: 'timecard', label: 'タイムカード' },
+  { key: 'devices', label: 'デバイス管理' },
+])
+
+function selectTab(key: TabKey) {
+  activeTab.value = key
+  refreshDevManagerMark()
+}
 </script>
 
 <template>
@@ -15,24 +50,11 @@ const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
     <div class="px-4 pt-4 flex justify-center">
       <div class="flex flex-wrap gap-1 bg-blue-100 rounded-lg p-1 w-fit">
         <button
-          v-for="tab in [
-            { key: 'employees', label: '乗務員' },
-            { key: 'license', label: '免許証' },
-            { key: 'tenko', label: '点呼' },
-            { key: 'remote_tenko', label: '遠隔点呼' },
-            { key: 'screen_share', label: '画面共有' },
-            { key: 'schedules', label: '予定管理' },
-            { key: 'baselines', label: '健康基準' },
-            { key: 'failures', label: '故障記録' },
-            { key: 'carrying_items', label: '携行品' },
-            { key: 'work_hours', label: '労働時間' },
-            { key: 'timecard', label: 'タイムカード' },
-            { key: 'devices', label: 'デバイス管理' },
-          ]"
+          v-for="tab in tabs"
           :key="tab.key"
           class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
           :class="activeTab === tab.key ? 'bg-white text-blue-800 shadow-sm' : 'text-blue-700 hover:text-blue-900'"
-          @click="activeTab = tab.key as TabKey"
+          @click="selectTab(tab.key)"
         >
           {{ tab.label }}
         </button>
@@ -57,6 +79,9 @@ const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
       <div v-if="activeTab === 'remote_tenko'">
         <TenkoRemoteAdminView :initial-room-id="initialRoomId" />
       </div>
+
+      <!-- 印の写しも見る: 印の無い席は `it_tenko` が残っていても描画しない -->
+      <TenkoItAdminView v-if="devManagerMark && activeTab === 'it_tenko'" />
 
       <div v-if="activeTab === 'screen_share'">
         <ScreenShareAdminView />

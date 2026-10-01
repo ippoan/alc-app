@@ -155,3 +155,92 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     wrapper.unmount()
   })
 })
+
+// IT点呼 の「確認の方法」(Refs ippoan/alc-app#387)。**`defaultMethod` を渡さない遠隔点呼モニターは、
+// 画面も送信 body も今までと同一**であることをここで固定する (上の既存のテストは書き換えていない)。
+describe('TenkoManagerJudgmentPanel — 確認の方法 (defaultMethod)', () => {
+  beforeEach(() => {
+    submitManagerJudgmentMock.mockClear()
+  })
+
+  async function mountWithMethod(defaultMethod: 'it' | 'in_person' | undefined, session: any = SESSION_UNJUDGED) {
+    const wrapper = await mountSuspended(TenkoManagerJudgmentPanel, {
+      props: { session, managerId: MANAGER_ID, defaultMethod },
+    })
+    await flush()
+    await wrapper.vm.$nextTick()
+    return wrapper
+  }
+
+  async function clickOk(wrapper: Awaited<ReturnType<typeof mountWithMethod>>) {
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    await flush()
+  }
+
+  const checkedMethod = (wrapper: Awaited<ReturnType<typeof mountWithMethod>>) =>
+    wrapper.findAll<HTMLInputElement>('input[type="radio"]').find(r => r.element.checked)?.element.value
+
+  it('★ prop なし: 確認の方法の欄が無く、body は今までと同じ key だけ (method の key が無い)', async () => {
+    const wrapper = await mountPanel()
+    expect(wrapper.find('[data-testid="judgment-method"]').exists()).toBe(false)
+    expect(wrapper.findAll('input[type="radio"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('確認の方法')
+    await clickOk(wrapper)
+    const body = submitManagerJudgmentMock.mock.calls[0][1]
+    expect(body).toEqual({ judgment: 'ok', judged_by_employee_id: MANAGER_ID })
+    expect('method' in body).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ prop なし: 記録に manager_judgment_method が付いていても欄を出さず、method を送らない', async () => {
+    const wrapper = await mountPanel({ ...SESSION_UNJUDGED, manager_judgment_method: 'it' })
+    expect(wrapper.find('[data-testid="judgment-method"]').exists()).toBe(false)
+    await clickOk(wrapper)
+    expect('method' in submitManagerJudgmentMock.mock.calls[0][1]).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('prop あり: 欄が出て、初期値は prop。OK で method が body に載る', async () => {
+    const wrapper = await mountWithMethod('it')
+    expect(wrapper.find('[data-testid="judgment-method"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('IT点呼 (通話で確認)')
+    expect(wrapper.text()).toContain('対面で確認')
+    expect(checkedMethod(wrapper)).toBe('it')
+    await clickOk(wrapper)
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toEqual({
+      judgment: 'ok', judged_by_employee_id: MANAGER_ID, method: 'it',
+    })
+    wrapper.unmount()
+  })
+
+  it('prop あり (対面): 初期値は対面', async () => {
+    const wrapper = await mountWithMethod('in_person')
+    expect(checkedMethod(wrapper)).toBe('in_person')
+    wrapper.unmount()
+  })
+
+  it('切り替えた値が body に載る (NG でも同じ)', async () => {
+    const wrapper = await mountWithMethod('it')
+    await wrapper.find('input[type="radio"][value="in_person"]').setValue(true)
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toEqual({
+      judgment: 'ng', judged_by_employee_id: MANAGER_ID, method: 'in_person',
+    })
+    wrapper.unmount()
+  })
+
+  it('記録に既に確認の方法が付いていれば、prop よりそちらが初期値', async () => {
+    const wrapper = await mountWithMethod('it', { ...SESSION_UNJUDGED, manager_judgment: 'ok', manager_judgment_method: 'in_person' })
+    expect(checkedMethod(wrapper)).toBe('in_person')
+    wrapper.unmount()
+  })
+
+  it('記録の確認の方法が null なら prop が初期値', async () => {
+    const wrapper = await mountWithMethod('in_person', { ...SESSION_UNJUDGED, manager_judgment_method: null })
+    expect(checkedMethod(wrapper)).toBe('in_person')
+    wrapper.unmount()
+  })
+})

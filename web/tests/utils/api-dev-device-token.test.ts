@@ -17,6 +17,7 @@ import {
   initApi,
   MANAGER_DEVICE_AUTH_FAILED_MESSAGE, BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployees, getEmployeeByCode, getEmployeeById, getTenkoSession, submitManagerJudgment, getDriverInfo,
+  listTenkoSessions,
   startTenkoSession,
   listSchedules, createSchedule, deleteSchedule,
   startMeasurement,
@@ -307,7 +308,7 @@ describe('punchTimecard — ブラウザ打刻 (bearerRequest の直呼び)', ()
 // 遠隔点呼モニターの口 (`'tenko-monitor'`)。**運行管理者席の鍵が dev のときだけ**その鍵で送り、
 // dev でなければ `'default'` とまったく同じ送り方になる (本番の席の挙動を変えない)。
 describe("request() — scope 'tenko-monitor' (遠隔点呼モニター)", () => {
-  /** モニターが `'tenko-monitor'` を付けて呼ぶ 6 本。 */
+  /** モニターが `'tenko-monitor'` を付けて呼ぶ 6 本 + IT点呼 の受け画面が呼ぶ一覧。 */
   const MONITOR_CALLS: [string, () => Promise<unknown>, string][] = [
     ['getEmployees', () => getEmployees('tenko-monitor'), '/api/proxy/employees'],
     ['getEmployeeByCode', () => getEmployeeByCode('c 1', 'tenko-monitor'), '/api/proxy/employees/by-code/c%201'],
@@ -315,6 +316,7 @@ describe("request() — scope 'tenko-monitor' (遠隔点呼モニター)", () =>
     ['getTenkoSession', () => getTenkoSession('s1', 'tenko-monitor'), '/api/proxy/tenko/sessions/s1'],
     ['submitManagerJudgment', () => submitManagerJudgment('s1', { judgment: 'ok' } as never, 'tenko-monitor'), '/api/proxy/tenko/sessions/s1/judgment'],
     ['getDriverInfo', () => getDriverInfo('e1', 'tenko-monitor'), '/api/proxy/tenko/driver-info/e1'],
+    ['listTenkoSessions', () => listTenkoSessions({ judgment_pending: true }, 'tenko-monitor'), '/api/proxy/tenko/sessions?judgment_pending=true'],
   ]
 
   it('運行管理者席の印なし + admin JWT あり → admin JWT で送る (\'default\' と同じ)', async () => {
@@ -375,6 +377,7 @@ describe("request() — scope 'tenko-monitor' (遠隔点呼モニター)", () =>
       getTenkoSession: () => getTenkoSession('s1'),
       submitManagerJudgment: () => submitManagerJudgment('s1', { judgment: 'ok' } as never),
       getDriverInfo: () => getDriverInfo('e1'),
+      listTenkoSessions: () => listTenkoSessions({ judgment_pending: true }),
     }
 
     await plain[name]!()
