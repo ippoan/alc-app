@@ -643,11 +643,12 @@ describe('useAlarmDevice', () => {
       expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
     })
 
-    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 通話を抜けた %s の部屋が一覧に残っていても call は付けない', async (_label, roomId) => {
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 判定を保存した %s の部屋が、通話を抜けて一覧に残っていても call は付けない', async (_label, roomId) => {
       const dev = await connectDevice()
       setRooms({ rooms: [roomId] })
       const rooms = useActiveRooms()
       rooms.setJoined(roomId)
+      rooms.markHandled(roomId)
       rooms.setJoined(null)
 
       await vi.advanceTimersByTimeAsync(3000)
@@ -659,11 +660,15 @@ describe('useAlarmDevice', () => {
       expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
     })
 
-    it('通話に入らずに離れた部屋 (入っていないままの setJoined(null)) は call=1 のまま', async () => {
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 判定を保存せずに通話を抜けた %s の部屋 (自分で閉じた・通信が切れて落ちた) は、また call=1 になる', async (_label, roomId) => {
       const dev = await connectDevice()
-      setRooms({ rooms: ['it-s1'] })
-      useActiveRooms().setJoined(null)
+      setRooms({ rooms: [roomId] })
+      const rooms = useActiveRooms()
+      rooms.setJoined(roomId)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
 
+      rooms.setJoined(null)
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
     })

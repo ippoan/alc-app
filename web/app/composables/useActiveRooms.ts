@@ -22,9 +22,10 @@
  *
  * 「着信中か」の判定はここ 1 か所 (警告デバイスの `call=1` と `ManagerAlarmBar` の表示が読む)。
  * 管理者がどの部屋にも入っておらず、**対応を終えてもいない**部屋だけを数える。
- * 対応を終えた部屋 = 通話に入ってから抜けた部屋 (`setJoined(null)`)。相手が画面を閉じて部屋が
- * 消えるまで一覧に残るが、もう着信ではない。一覧から消えたら印も消えるので、同じ id の部屋が
- * 後で再び現れたら新しい着信として数える。通話に入らずに画面を離れただけの部屋は数え続ける。
+ * 対応を終えた部屋 = **運行管理者の判定を保存できた**点呼の部屋 (`markHandled`)。相手が画面を
+ * 閉じて部屋が消えるまで一覧に残るが、もう着信ではない。一覧から消えたら印も消えるので、同じ id の
+ * 部屋が後で再び現れたら新しい着信として数える。判定せずに通話を閉じた・画面を離れた・通信が
+ * 切れて落ちた部屋は、部屋が残っている限り数え続ける (判定が付いていないのに黙らせない)。
  */
 import { DEV_DEVICE_MARK_EVENT, devSignalingToken, isDevDevice } from '~/utils/token-selection'
 
@@ -54,7 +55,7 @@ export function useActiveRooms() {
   const isWatching = useState<boolean>('active-rooms-watching', () => false)
   /** 運行管理者が今どの room に入っているか (未参加は null) */
   const joinedRoomId = useState<string | null>('active-rooms-joined', () => null)
-  /** 対応を終えた部屋 (通話に入ってから抜けた)。常に一覧に在る id だけを持つ */
+  /** 対応を終えた部屋 (判定を保存できた)。常に一覧に在る id だけを持つ */
   const handledRooms = useState<string[]>('active-rooms-handled', () => [])
   const callingRooms = computed(() => joinedRoomId.value !== null
     ? []
@@ -200,17 +201,18 @@ export function useActiveRooms() {
     dropSocket()
   }
 
-  /**
-   * 管理者が入っている部屋を出し入れする。**通話を抜けた (`null` に戻した) とき、入っていた部屋は
-   * 「対応を終えた」として着信から外す** — 相手が画面を閉じて部屋が消えるまで鳴り続けないため。
-   * 入っていなかったときの `null` は何も外さない (通話に入らずに離れた部屋は着信のまま)。
-   */
   function setJoined(roomId: string | null) {
-    const left = joinedRoomId.value
     joinedRoomId.value = roomId
-    if (left === null || roomId !== null) return
-    if (activeRooms.value.includes(left) && !handledRooms.value.includes(left)) {
-      handledRooms.value = [...handledRooms.value, left]
+  }
+
+  /**
+   * その部屋を「対応を終えた」として着信から外す。**呼ぶのは判定の保存が成功したときだけ**
+   * (通話を抜けただけでは呼ばない)。一覧に無い id は印にしない — 残すと、同じ id の部屋が
+   * 後で現れたときに鳴らなくなる
+   */
+  function markHandled(roomId: string) {
+    if (activeRooms.value.includes(roomId) && !handledRooms.value.includes(roomId)) {
+      handledRooms.value = [...handledRooms.value, roomId]
     }
   }
 
@@ -222,6 +224,7 @@ export function useActiveRooms() {
     start,
     stop,
     setJoined,
+    markHandled,
     reload,
   }
 }

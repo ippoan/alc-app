@@ -471,29 +471,46 @@ describe('useActiveRooms', () => {
       expect(callingRooms.value).toEqual([])
     })
 
-    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('通話を抜けた %s の部屋は、一覧に残っていても数えない', (_label, roomId) => {
-      const { callingRooms, setJoined } = startWithRooms([roomId])
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 判定を保存した %s の部屋は、通話を抜けて一覧に残っていても数えない', (_label, roomId) => {
+      const { callingRooms, setJoined, markHandled } = startWithRooms([roomId])
 
       setJoined(roomId)
+      markHandled(roomId)
       setJoined(null)
 
       expect(callingRooms.value).toEqual([])
     })
 
-    it('通話を抜けた部屋が在っても、別の部屋が待っていれば数える', () => {
-      const { callingRooms, setJoined } = startWithRooms(['room-a'])
-      setJoined('room-a')
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 判定を保存せずに通話を抜けた %s の部屋 (自分で閉じた・通信が切れて落ちた) は数える', (_label, roomId) => {
+      const { callingRooms, setJoined } = startWithRooms([roomId])
+
+      setJoined(roomId)
       setJoined(null)
+
+      expect(callingRooms.value).toEqual([roomId])
+      expect(useState<string[]>('active-rooms-handled').value).toEqual([])
+    })
+
+    it('通話なしで判定を保存した部屋 (入らないままの markHandled) も数えない', () => {
+      const { callingRooms, markHandled } = startWithRooms(['it-s1'])
+
+      markHandled('it-s1')
+
+      expect(callingRooms.value).toEqual([])
+    })
+
+    it('判定を保存した部屋が在っても、別の部屋が待っていれば数える', () => {
+      const { callingRooms, markHandled } = startWithRooms(['room-a'])
+      markHandled('room-a')
 
       pushRooms(['room-a', 'room-b'])
 
       expect(callingRooms.value).toEqual(['room-b'])
     })
 
-    it('抜けた部屋が一覧から消え、同じ id が再び現れたら新しい着信として数える', () => {
-      const { callingRooms, setJoined } = startWithRooms(['room-a'])
-      setJoined('room-a')
-      setJoined(null)
+    it('判定を保存した部屋が一覧から消え、同じ id が再び現れたら新しい着信として数える', () => {
+      const { callingRooms, markHandled } = startWithRooms(['room-a'])
+      markHandled('room-a')
 
       pushRooms([])
       expect(callingRooms.value).toEqual([])
@@ -505,9 +522,9 @@ describe('useActiveRooms', () => {
     it('reload で取り直した一覧から消えていても、印は消える', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ rooms: [] }) })
       vi.stubGlobal('fetch', fetchMock)
-      const { callingRooms, setJoined, reload } = startWithRooms(['room-a'])
-      setJoined('room-a')
-      setJoined(null)
+      const { callingRooms, markHandled, reload } = startWithRooms(['room-a'])
+      markHandled('room-a')
+      expect(callingRooms.value).toEqual([])
 
       await reload()
       pushRooms(['room-a'])
@@ -515,44 +532,23 @@ describe('useActiveRooms', () => {
       expect(callingRooms.value).toEqual(['room-a'])
     })
 
-    it('通話に入らずに離れた部屋 (入っていないままの setJoined(null)) は数え続ける', () => {
-      const { callingRooms, setJoined } = startWithRooms(['it-s1'])
+    it('一覧に無い部屋は印にしない (後で同じ id が現れたら数える)', () => {
+      const { callingRooms, markHandled } = startWithRooms([])
 
-      setJoined(null)
-
-      expect(callingRooms.value).toEqual(['it-s1'])
-    })
-
-    it('一覧にもう無い部屋から抜けても印を残さない (後で同じ id が現れたら数える)', () => {
-      const { callingRooms, setJoined } = startWithRooms(['room-a'])
-      setJoined('room-a')
-      pushRooms([])
-
-      setJoined(null)
+      markHandled('room-a')
       expect(useState<string[]>('active-rooms-handled').value).toEqual([])
       pushRooms(['room-a'])
 
       expect(callingRooms.value).toEqual(['room-a'])
     })
 
-    it('同じ部屋に入り直して抜けても、印は 1 つだけ', () => {
-      const { setJoined } = startWithRooms(['room-a'])
+    it('同じ部屋の判定を押し直しても、印は 1 つだけ', () => {
+      const { markHandled } = startWithRooms(['room-a'])
 
-      setJoined('room-a')
-      setJoined(null)
-      setJoined('room-a')
-      setJoined(null)
+      markHandled('room-a')
+      markHandled('room-a')
 
       expect(useState<string[]>('active-rooms-handled').value).toEqual(['room-a'])
-    })
-
-    it('null を挟まずに別の部屋へ入り直しただけでは、前の部屋に印を付けない', () => {
-      const { setJoined } = startWithRooms(['room-a', 'room-b'])
-
-      setJoined('room-a')
-      setJoined('room-b')
-
-      expect(useState<string[]>('active-rooms-handled').value).toEqual([])
     })
   })
 

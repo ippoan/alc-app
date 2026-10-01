@@ -158,6 +158,89 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
 
 // IT点呼 の「確認の方法」(Refs ippoan/alc-app#387)。**`defaultMethod` を渡さない遠隔点呼モニターは、
 // 画面も送信 body も今までと同一**であることをここで固定する (上の既存のテストは書き換えていない)。
+// 判定を保存できた点呼の部屋だけを、着信 (警告デバイスの call=1) から外す (Refs ippoan/alc-app#387)
+describe('TenkoManagerJudgmentPanel — 判定を保存できた部屋は着信から外す', () => {
+  const rooms = () => useState<string[]>('active-rooms')
+  const handled = () => useState<string[]>('active-rooms-handled')
+  const calling = () => useActiveRooms().callingRooms.value
+
+  beforeEach(() => {
+    submitManagerJudgmentMock.mockClear()
+    rooms().value = []
+    handled().value = []
+    useState<string | null>('active-rooms-joined').value = null
+  })
+
+  async function pressOk(wrapper: Awaited<ReturnType<typeof mountPanel>>) {
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    await flush()
+  }
+
+  it.each([
+    ['遠隔点呼 (部屋の id = 記録の id)', SESSION_ID],
+    ['IT点呼 (部屋の id = it-<記録の id>)', `it-${SESSION_ID}`],
+  ])('★ %s: 保存に成功したら、その部屋は残っていても着信に数えない', async (_label, roomId) => {
+    rooms().value = [roomId, 'other-room']
+    const wrapper = await mountPanel()
+    expect(calling()).toEqual([roomId, 'other-room'])
+
+    await pressOk(wrapper)
+
+    expect(handled().value).toEqual([roomId])
+    // 別の部屋は待っているので数える
+    expect(calling()).toEqual(['other-room'])
+    wrapper.unmount()
+  })
+
+  it('NG の判定でも同じ (判定が付けば対応を終えた)', async () => {
+    rooms().value = [SESSION_ID]
+    const wrapper = await mountPanel()
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))!.trigger('click')
+    await flush()
+
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ng' })
+    expect(calling()).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('★ 保存に失敗したら、対応を終えたことにしない (鳴り続ける)', async () => {
+    rooms().value = [`it-${SESSION_ID}`]
+    submitManagerJudgmentMock.mockRejectedValueOnce(new Error('403'))
+    const wrapper = await mountPanel()
+
+    await pressOk(wrapper)
+
+    expect(wrapper.text()).toContain('判定の送信に失敗しました')
+    expect(handled().value).toEqual([])
+    expect(calling()).toEqual([`it-${SESSION_ID}`])
+    wrapper.unmount()
+  })
+
+  it('運行管理者が特定できず送信しなかったときも、対応を終えたことにしない', async () => {
+    rooms().value = [SESSION_ID]
+    const wrapper = await mountPanel(SESSION_UNJUDGED, null)
+
+    await pressOk(wrapper)
+
+    expect(submitManagerJudgmentMock).not.toHaveBeenCalled()
+    expect(calling()).toEqual([SESSION_ID])
+    wrapper.unmount()
+  })
+
+  it('★ 回帰: その点呼の部屋が一覧に無ければ (通話なしで確定・相手は既に閉じた) 何も印にしない', async () => {
+    rooms().value = ['other-room']
+    const wrapper = await mountPanel()
+
+    await pressOk(wrapper)
+
+    expect(handled().value).toEqual([])
+    expect(calling()).toEqual(['other-room'])
+    wrapper.unmount()
+  })
+})
+
 describe('TenkoManagerJudgmentPanel — 確認の方法 (defaultMethod)', () => {
   beforeEach(() => {
     submitManagerJudgmentMock.mockClear()
