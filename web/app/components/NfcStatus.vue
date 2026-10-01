@@ -13,8 +13,11 @@ const emit = defineEmits<{
   /**
    * `source` は「誰が読んだか」(Refs ippoan/rust-alc-api#644)。
    * `'cores3'` ならサーバ側で打刻が既に記録されているので、受け手は重ねて打たない。
+   *
+   * `cardType` は**免許証イベントから作られた読み取りにだけ**載る (Refs ippoan/alc-app#387)。
+   * その read 自身の値で、前の読み取りのものではない。
    */
-  read: [employeeId: string, expiryDate?: Date, source?: NfcReadSource]
+  read: [employeeId: string, expiryDate?: Date, source?: NfcReadSource, cardType?: NfcReadEvent['card_type']]
 }>()
 
 const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRead } = useNfcReader()
@@ -98,7 +101,7 @@ onLicenseRead((event: NfcLicenseReadEvent) => {
 onRead((event: NfcReadEvent) => {
   lastReadId.value = event.employee_id
   readAnimation.value = true
-  emit('read', event.employee_id, licenseExpiryDate.value ?? undefined, event.source)
+  emit('read', event.employee_id, licenseExpiryDate.value ?? undefined, event.source, event.card_type)
 
   setTimeout(() => {
     readAnimation.value = false

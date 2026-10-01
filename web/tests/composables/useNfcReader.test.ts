@@ -241,7 +241,7 @@ describe('useNfcReader', () => {
       atr: '',
     })
     // **CoreS3 直結の読み取りは source: 'cores3'** = サーバ側で打刻が既に入っている
-    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'cores3' })
+    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'cores3', card_type: 'driver_license' })
   })
 
   it('組み立てた 26 桁は utils/license.ts の桁の契約を満たす', async () => {
@@ -318,7 +318,7 @@ describe('useNfcReader', () => {
     })
     // **測定台のファームは打刻を送らない** (uplink を持たない) ので 'cores3' とは
     // 名乗らない — 'cores3' にすると受け手が「ハブが既に打った」と読んで打刻が消える
-    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'bp-station' })
+    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'bp-station', card_type: 'driver_license' })
   })
 
   it('測定台からの 26 桁にできない NFC_LICENSE は捨てる', async () => {
@@ -340,7 +340,7 @@ describe('useNfcReader', () => {
 
     emitAtomEvent('NFC_LICENSE', [`issue=${ISSUE}`, `expiry=${EXPIRY}`])
 
-    expect(seen).toEqual([{ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'bp-station' }])
+    expect(seen).toEqual([{ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'bp-station', card_type: 'driver_license' }])
   })
 
   it('測定台の unmount 後は配らない / 2 つ目の component にも配る', async () => {
@@ -598,5 +598,49 @@ describe('useNfcReader', () => {
 
     expect(reader.isConnected.value).toBe(true)
     expect(reader.readers.value).toEqual(['CoreS3'])
+  })
+  // ---------- read に載る card_type (IT点呼 の本人確認、Refs ippoan/alc-app#387) ----------
+
+  /** ブリッジから read が 1 件届いた体にする (card_type は read 自身が持つ値) */
+  function emitBridgeRead(event: NfcReadEvent) {
+    for (const cb of [...wsCallbacks.read]) cb(event)
+  }
+
+  it('ブリッジの素の read には card_type の key ごと載らない', async () => {
+    const reader = await load()
+    const seen: NfcReadEvent[] = []
+    reader.onRead(e => seen.push(e))
+
+    emitBridgeRead({ type: 'nfc_read', employee_id: 'EMP001', source: 'bridge' })
+
+    expect(seen).toEqual([{ type: 'nfc_read', employee_id: 'EMP001', source: 'bridge' }])
+    expect('card_type' in seen[0]!).toBe(false)
+  })
+
+  it.each(['driver_license', 'car_inspection', 'other'] as const)(
+    'ブリッジの免許証イベント由来の read (%s) は、その read が持つ card_type をそのまま運ぶ',
+    async (cardType) => {
+      const reader = await load()
+      const seen: NfcReadEvent[] = []
+      reader.onRead(e => seen.push(e))
+
+      emitBridgeRead({ type: 'nfc_read', employee_id: 'CARD', source: 'bridge', card_type: cardType })
+
+      expect(seen).toEqual([{ type: 'nfc_read', employee_id: 'CARD', source: 'bridge', card_type: cardType }])
+    },
+  )
+
+  it('★ 免許証 (CoreS3) → 素の read (ブリッジ) の順に来ても、2 件目に card_type が付かない', async () => {
+    const reader = await load()
+    const seen: NfcReadEvent[] = []
+    reader.onRead(e => seen.push(e))
+
+    emitCoreEvent('NFC_LICENSE', [`issue=${ISSUE}`, `expiry=${EXPIRY}`])
+    emitBridgeRead({ type: 'nfc_read', employee_id: 'EMP001', source: 'bridge' })
+
+    expect(seen.map(e => [e.employee_id, e.card_type])).toEqual([
+      [ISSUE + EXPIRY, 'driver_license'],
+      ['EMP001', undefined],
+    ])
   })
 })

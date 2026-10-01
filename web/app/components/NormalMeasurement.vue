@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadSource } from '~/types'
+import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadEvent, NfcReadSource } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, lookupCarInspection, punchTimecard } from '~/utils/api'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
@@ -13,9 +13,30 @@ const props = defineProps<{
   /** IC カード打刻のアルコールチェック案内ボタンが表示中か。`NfcStatus` へ素通しする
    * だけで、ここで判定は持たない (Refs ippoan/rust-alc-api#644) */
   icPromptActive?: boolean
+  /**
+   * IT点呼 として動かす (Refs ippoan/alc-app#387)。通常点呼との違いは 3 つだけ:
+   *
+   * - 本人確認は**免許証だけ** (手入力・IC カード・免許証でないカードは受けない)
+   * - 完了の PUT に `tenko_method: 'IT点呼'` を足す
+   * - 保存のあと運行管理者と通話し、**運行管理者の判定が付いたら完了**
+   *
+   * 画面を複製せず prop にしてあるのは、通常点呼へ統合するときに既定値を変えるだけで
+   * 済ませるため。**指定しなければ今までの通常点呼と 1 つも変わらない。**
+   */
+  itMode?: boolean
 }>()
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
+
+// --- IT点呼 (itMode のときだけ) ---
+// **通常点呼では生成しない** — 通話の composable は `useWebRtc` / `useCamera` を抱えるので、
+// 作るだけで unmount 時の後始末が増える
+const itCall = props.itMode ? useItTenkoCall() : null
+const itCallState = computed(() => itCall?.state.value ?? null)
+const itJudgment = computed(() => itCall?.judgment.value ?? null)
+/** 通話に進めなかった (点呼の記録の id が返らない / オフライン / 保存に失敗) */
+const itCallNotStarted = ref(false)
+const IT_LICENSE_ONLY_MESSAGE = 'IT点呼は免許証で本人確認してください'
 
 const step = ref<NormalMeasurementStep>('nfc')
 const employeeId = ref('')
@@ -323,12 +344,19 @@ async function prepareMeasurementFor(emp: { id: string, name: string }) {
  * **`source` が無いときは打つ。** 判断材料が無いなら「打刻が消える」より
  * 「2 行になる」方が軽い (消えた打刻は後から作れないが、重複は消せる)。
  */
-async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSource) {
+async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSource, cardType?: NfcReadEvent['card_type']) {
   // **測定中のタップで段が巻き戻らないようにする。このガードを外さない**
   // (Refs ippoan/alc-app-s3#135)
   if (step.value !== 'nfc') return
   approvalError.value = null
   clearPunchState()
+  // IT点呼 の本人確認は免許証だけ。`cardType` は**その読み取り自身**が運んできた値で、
+  // 免許証イベントから作られた read にしか載らない (素の読み取り = undefined も断る)。
+  // 通常点呼では見ない
+  if (props.itMode && cardType !== 'driver_license') {
+    approvalError.value = IT_LICENSE_ONLY_MESSAGE
+    return
+  }
   if (expiryDate) {
     licenseExpiryDate.value = expiryDate
     licenseExpiryStatus.value = checkLicenseExpiry(expiryDate)
@@ -361,6 +389,8 @@ const isIdle = computed(() => step.value === 'nfc')
  * 置く (Refs ippoan/alc-app-s3#135)。始められたかを返す。
  */
 async function startForEmployee(id: string, name: string): Promise<boolean> {
+  // IT点呼 の本人確認は免許証だけ (IC カードの打刻からは始めない)
+  if (props.itMode) return false
   if (step.value !== 'nfc') return false
   approvalError.value = null
   clearPunchState()
@@ -377,6 +407,8 @@ defineExpose({ isIdle, startForEmployee })
 // 手動入力 (社員番号で検索)
 const manualError = ref<string | null>(null)
 async function onManualSubmit() {
+  // IT点呼 に手入力の入口は無い (画面にも出していない)
+  if (props.itMode) return
   const input = manualIdInput.value.trim()
   if (!input) return
   manualError.value = null
@@ -521,11 +553,13 @@ async function onMeasurementResult(result: MeasurementResult) {
   isSaving.value = true
   saveError.value = null
   saveStatus.value = null
+  // IT点呼 の通話の部屋の id (= 完了の PUT が作った点呼の記録)。通常点呼では使わない
+  let itSessionId: string | null = null
   try {
     console.log('[Measurement] activeMeasurementId:', activeMeasurementId.value, 'isOnline:', isOnline.value)
     if (activeMeasurementId.value && isOnline.value) {
       // started レコードを completed に更新
-      const updateData = {
+      const updateData: Record<string, unknown> = {
         status: 'completed',
         alcohol_value: result.alcoholValue,
         result_type: result.resultType,
@@ -544,12 +578,15 @@ async function onMeasurementResult(result: MeasurementResult) {
         carins_cert_no: result.carinsCertNo,
         carins_vehicle_id: result.carinsVehicleId,
       }
+      // **通常点呼では key ごと足さない** (body を今までと同一に保つ)
+      if (props.itMode) updateData.tenko_method = 'IT点呼'
       // carins の番号は console に出さない (simplify-reviewer の検査点、Refs ippoan/alc-app-s3#110)
       const loggableUpdateData: Record<string, unknown> = { ...updateData }
       delete loggableUpdateData.carins_cert_no
       delete loggableUpdateData.carins_vehicle_id
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(loggableUpdateData))
-      await updateMeasurement(activeMeasurementId.value, updateData)
+      const saved = await updateMeasurement(activeMeasurementId.value, updateData)
+      if (itCall) itSessionId = saved.tenko_session_id ?? null
       console.log('[Measurement] updateMeasurement success')
       saveStatus.value = 'saved'
 
@@ -573,8 +610,29 @@ async function onMeasurementResult(result: MeasurementResult) {
     isSaving.value = false
   }
 
+  // IT点呼: 点呼の記録ができていれば運行管理者との通話へ (検知ありでも進む — 判定は
+  // 運行管理者がする)。できていなければ通話には進まず、結果画面に案内を出す。
+  // オフライン・保存失敗の測定は上の再送のとおり**通常点呼として**記録される
+  // (通話も判定も無いので IT点呼 としては成立していない)
+  if (itCall) {
+    if (itSessionId) void itCall.start(itSessionId)
+    else itCallNotStarted.value = true
+  }
+
   sendResult(result)
 }
+
+/**
+ * IT点呼 で運行管理者の判定を待っているあいだか。**このあいだは `ResultCard` を出さない** —
+ * あの中の「次の測定へ」は「点呼が済んだ」と読める。判定前に出る口は、未完了であることを
+ * 明示した「未完了のまま終了」だけにする。
+ * 保存中も含める (保存が終わる前に戻ると、戻ったあとの画面で通話が始まる)。
+ */
+const itAwaitingJudgment = computed(() => itCall !== null
+  && (isSaving.value || itCallState.value === 'connecting' || itCallState.value === 'calling'))
+/** 通話が切れた / signaling に断られた (再接続のボタンを出す。`TenkoKiosk.vue` と同じ) */
+const itCallBroken = computed(() => itCall !== null
+  && (itCall.isDisconnected.value || itCall.error.value !== null))
 
 /**
  * フッタに「キャンセル」を出すか (Refs ippoan/rust-alc-api#644)。
@@ -590,6 +648,8 @@ const showCancel = computed(() => step.value !== 'nfc' && step.value !== 'result
 
 // リセット
 function reset() {
+  itCall?.stop()
+  itCallNotStarted.value = false
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''
@@ -688,7 +748,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       </div>
 
       <header :class="['w-full text-center', landscape ? 'py-2' : 'max-w-md py-3']">
-        <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">アルコールチェッカー</h1>
+        <h1 :class="['font-bold text-gray-800', landscape ? 'text-lg' : 'text-2xl']">{{ itMode ? 'IT点呼' : 'アルコールチェッカー' }}</h1>
         <!-- ステップインジケーター -->
         <div :class="['flex items-center mt-2', landscape ? 'flex-wrap gap-1 justify-center' : 'justify-center']">
           <template v-for="(s, i) in steps" :key="i">
@@ -755,14 +815,25 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             {{ approvalError }}
           </div>
 
+          <!-- IT点呼 はデモモードでは使えない (デモは手入力だけで、免許証の本人確認が無い) -->
+          <div
+            v-if="itMode && isDemoMode"
+            data-testid="it-demo-blocked"
+            :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.yellow]"
+          >
+            IT点呼はデモモードでは使えません
+          </div>
+
           <!-- NFC モード -->
-          <div v-if="!useManualInput && !isDemoMode">
+          <div v-else-if="!useManualInput && !isDemoMode">
             <NfcStatus :prompt-active="icPromptActive" @read="onNfcRead">
               <template #punch-prompt>
                 <slot name="nfc-punch-prompt" />
               </template>
             </NfcStatus>
+            <!-- IT点呼 の本人確認は免許証だけ。手入力の入口は出さない -->
             <button
+              v-if="!itMode"
               class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
               @click="useManualInput = true"
             >
@@ -986,11 +1057,83 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
 
       <!-- Step 5: 結果表示 -->
       <div v-if="step === 'result' && measurementResult" class="flex flex-col gap-4">
+        <!-- IT点呼: 運行管理者の判定を待つあいだ。ResultCard (「次の測定へ」を持つ) は出さない -->
+        <div
+          v-if="itCall && itAwaitingJudgment"
+          data-testid="it-call-panel"
+          class="bg-white rounded-2xl p-6 shadow-sm flex flex-col gap-3"
+        >
+          <h2 class="text-lg font-semibold text-gray-700">IT点呼 — 運行管理者の判定を待っています</h2>
+          <p class="text-sm text-gray-500">
+            {{ employeeName }} / アルコール濃度 {{ measurementResult.alcoholValue.toFixed(2) }} mg/L
+          </p>
+          <ClientOnly>
+            <TenkoVideoCall
+              v-if="!isSaving"
+              :local-stream="itCall.localStream.value"
+              :remote-stream="itCall.remoteStream.value"
+              :is-peer-connected="itCall.isPeerConnected.value"
+              :is-connected="itCall.isConnected.value"
+            />
+          </ClientOnly>
+          <p v-if="itCall.error.value" data-testid="it-call-error" class="text-sm text-red-600">
+            {{ itCall.error.value }}
+          </p>
+          <!-- 切断時ボタン -->
+          <button
+            v-if="itCallBroken"
+            data-testid="it-call-reconnect"
+            class="w-full py-1.5 text-sm rounded-lg bg-blue-500 hover:bg-blue-400 text-white font-medium"
+            @click="itCall.reconnect()"
+          >
+            再接続
+          </button>
+          <!-- 乗務員はいつでも自分で出られる。判定が付くまで点呼は未完了のまま残り、通話が
+               成立しなかった分はあとで運行管理者が確定する — 端末を判定待ちで塞がない。
+               保存中だけは出さない (保存が終わる前に戻ると、戻ったあとの画面で通話が始まる) -->
+          <template v-if="!isSaving">
+            <p class="text-sm text-gray-500 text-center">
+              運行管理者の確認が済むまで、この点呼は未完了です
+            </p>
+            <button
+              data-testid="it-call-end"
+              class="w-full py-1.5 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium"
+              @click="reset"
+            >
+              未完了のまま終了
+            </button>
+          </template>
+        </div>
         <ResultCard
+          v-else
           :result="measurementResult"
           :employee-name="employeeName"
           @reset="reset"
         />
+        <!-- IT点呼: 運行管理者の判定 -->
+        <div
+          v-if="itJudgment"
+          data-testid="it-judgment"
+          :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner[itJudgment.judgment === 'ok' ? 'green' : 'red']]"
+        >
+          運行管理者の判定: {{ itJudgment.judgment === 'ok' ? 'OK' : 'NG' }}<template v-if="itJudgment.reason"> ({{ itJudgment.reason }})</template>
+        </div>
+        <!-- IT点呼: 通話に進めなかった (記録の id が無い / オフライン / 保存失敗 / 通話を開けない) -->
+        <div
+          v-if="itCallNotStarted || itCallState === 'unavailable'"
+          data-testid="it-call-not-started"
+          :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.red]"
+        >
+          IT点呼の通話を始められませんでした。運行管理者に連絡してください
+          <button
+            v-if="itCall && itCallState === 'unavailable'"
+            data-testid="it-call-retry"
+            class="block w-full mt-2 underline"
+            @click="itCall.reconnect()"
+          >
+            もう一度つなぐ
+          </button>
+        </div>
         <!-- 医療データ入力元バッジ -->
         <div
           v-if="medicalInputSource && (measurementResult.temperature || (bpEnabled && measurementResult.systolic))"

@@ -96,13 +96,18 @@ export function useNfcReader() {
    * 読み取りを配る。**`source` は呼び出し元が名乗る** — 束ねたあとでは
    * CoreS3 が読んだのかブリッジが読んだのか判別できないため
    * (Refs ippoan/rust-alc-api#644)。打刻を二重にするか消すかがこれで決まる。
+   *
+   * `cardType` は**免許証イベントから作られた読み取りにだけ**渡す (Refs ippoan/alc-app#387)。
+   * 渡されなければ key ごと載せない — 素の読み取りが前の読み取りの種類を引き継がない。
    */
-  function emitRead(employeeId: string, source: NfcReadSource): void {
+  function emitRead(employeeId: string, source: NfcReadSource, cardType?: NfcReadEvent['card_type']): void {
     const now = Date.now()
     if (employeeId === lastEmployeeId && now - lastEmittedAt < DEDUPE_WINDOW_MS) return
     lastEmployeeId = employeeId
     lastEmittedAt = now
-    for (const cb of [...readCallbacks]) cb({ type: 'nfc_read', employee_id: employeeId, source })
+    const event: NfcReadEvent = { type: 'nfc_read', employee_id: employeeId, source }
+    if (cardType) event.card_type = cardType
+    for (const cb of [...readCallbacks]) cb(event)
   }
 
   function emitLicenseRead(event: NfcLicenseReadEvent): void {
@@ -143,7 +148,7 @@ export function useNfcReader() {
         // ATR は USB CDC の行に乗らない (ブリッジ経由でのみ得られる)
         atr: '',
       })
-      emitRead(issue + expiry, source)
+      emitRead(issue + expiry, source, 'driver_license')
       return
     }
 
@@ -164,8 +169,9 @@ export function useNfcReader() {
   // --- NFC ブリッジ (9876) ---
 
   ws.onLicenseRead(event => emitLicenseRead(event))
-  // ブリッジの先に CoreS3 は居ない = 誰も打刻していない。source をそのまま運ぶ
-  ws.onRead(event => emitRead(event.employee_id, event.source))
+  // ブリッジの先に CoreS3 は居ない = 誰も打刻していない。source をそのまま運ぶ。
+  // card_type もその read が持っている値を素通しする (素の `nfc_read` は持たない)
+  ws.onRead(event => emitRead(event.employee_id, event.source, event.card_type))
   ws.onError(event => emitError(event))
 
   // --- 状態 ---
