@@ -241,8 +241,8 @@ describe('ManagerAlarmBar', () => {
 
   it.each([
     ['遠隔点呼だけ', ['room-a'], '着信あり — 遠隔点呼に入ると止まります'],
-    ['IT点呼 だけ', ['it-s1'], 'IT点呼の着信あり — IT点呼 の画面で通話すると止まります'],
-    ['両方', ['room-a', 'it-s1'], '遠隔点呼と IT点呼 の着信あり — それぞれの画面で通話すると止まります'],
+    ['IT点呼 だけ', ['it-s1'], 'IT点呼の着信あり — IT点呼 の画面で応答し、判定を保存すると止まります'],
+    ['両方', ['room-a', 'it-s1'], '遠隔点呼と IT点呼 の着信あり — それぞれの画面で応答すると止まります (IT点呼 は判定の保存まで)'],
   ])('着信が %s のときの文言 (見た目は同じ amber)', async (_label, rooms, text) => {
     alarmState.isConnected.value = true
     roomsState.callingRooms.value = rooms

@@ -39,8 +39,8 @@ const isCalling = computed(() => callingRooms.value.length > 0)
 const callingText = computed(() => {
   const { it, remote } = splitRooms(callingRooms.value)
   if (it.length === 0) return '着信あり — 遠隔点呼に入ると止まります'
-  if (remote.length === 0) return 'IT点呼の着信あり — IT点呼 の画面で通話すると止まります'
-  return '遠隔点呼と IT点呼 の着信あり — それぞれの画面で通話すると止まります'
+  if (remote.length === 0) return 'IT点呼の着信あり — IT点呼 の画面で応答し、判定を保存すると止まります'
+  return '遠隔点呼と IT点呼 の着信あり — それぞれの画面で応答すると止まります (IT点呼 は判定の保存まで)'
 })
 
 const alarmStatusText = computed(() => {
