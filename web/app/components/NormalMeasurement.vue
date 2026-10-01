@@ -624,12 +624,13 @@ async function onMeasurementResult(result: MeasurementResult) {
 
 /**
  * IT点呼 で運行管理者の判定を待っているあいだか。**このあいだは `ResultCard` を出さない** —
- * あの中の「次の測定へ」を押すと、判定が付く前に待機画面へ戻れてしまう。
+ * あの中の「次の測定へ」は「点呼が済んだ」と読める。判定前に出る口は、未完了であることを
+ * 明示した「未完了のまま終了」だけにする。
  * 保存中も含める (保存が終わる前に戻ると、戻ったあとの画面で通話が始まる)。
  */
 const itAwaitingJudgment = computed(() => itCall !== null
   && (isSaving.value || itCallState.value === 'connecting' || itCallState.value === 'calling'))
-/** 通話が切れた / signaling に断られた (再接続と終了のボタンを出す。`TenkoKiosk.vue` と同じ) */
+/** 通話が切れた / signaling に断られた (再接続のボタンを出す。`TenkoKiosk.vue` と同じ) */
 const itCallBroken = computed(() => itCall !== null
   && (itCall.isDisconnected.value || itCall.error.value !== null))
 
@@ -1079,22 +1080,29 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             {{ itCall.error.value }}
           </p>
           <!-- 切断時ボタン -->
-          <div v-if="itCallBroken" class="flex gap-2">
-            <button
-              data-testid="it-call-reconnect"
-              class="flex-1 py-1.5 text-sm rounded-lg bg-blue-500 hover:bg-blue-400 text-white font-medium"
-              @click="itCall.reconnect()"
-            >
-              再接続
-            </button>
+          <button
+            v-if="itCallBroken"
+            data-testid="it-call-reconnect"
+            class="w-full py-1.5 text-sm rounded-lg bg-blue-500 hover:bg-blue-400 text-white font-medium"
+            @click="itCall.reconnect()"
+          >
+            再接続
+          </button>
+          <!-- 乗務員はいつでも自分で出られる。判定が付くまで点呼は未完了のまま残り、通話が
+               成立しなかった分はあとで運行管理者が確定する — 端末を判定待ちで塞がない。
+               保存中だけは出さない (保存が終わる前に戻ると、戻ったあとの画面で通話が始まる) -->
+          <template v-if="!isSaving">
+            <p class="text-sm text-gray-500 text-center">
+              運行管理者の確認が済むまで、この点呼は未完了です
+            </p>
             <button
               data-testid="it-call-end"
-              class="flex-1 py-1.5 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium"
+              class="w-full py-1.5 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium"
               @click="reset"
             >
-              終了
+              未完了のまま終了
             </button>
-          </div>
+          </template>
         </div>
         <ResultCard
           v-else

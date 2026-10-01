@@ -472,9 +472,37 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     expect(wrapper.find('[data-testid="video-call-stub"]').exists()).toBe(true)
     expect(nextButton(wrapper)).toBeUndefined()
     expect(wrapper.find('[data-testid="it-call-not-started"]').exists()).toBe(false)
-    // 切れていなければ再接続・終了のボタンも無い
+    // 切れていなければ再接続のボタンは無い
     expect(wrapper.find('[data-testid="it-call-reconnect"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="it-call-end"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 判定待ちのあいだは常に「未完了のまま終了」が出て、押すと通話と判定待ちを止めて待機へ戻る', async () => {
+    const wrapper = await mountIt(true)
+    await runToResult(wrapper)
+
+    // 通話は切れていない (運行管理者がまだ入ってきていないだけ) — それでも出られる
+    expect(itCall.isDisconnected.value).toBe(false)
+    const end = wrapper.find('[data-testid="it-call-end"]')
+    expect(end.text()).toBe('未完了のまま終了')
+    expect(wrapper.find('[data-testid="it-call-panel"]').text()).toContain('運行管理者の確認が済むまで、この点呼は未完了です')
+
+    await end.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('開いている途中 (connecting) でも「未完了のまま終了」は出る', async () => {
+    itCall.start.mockImplementationOnce(async () => { itCall.state.value = 'connecting' })
+    const wrapper = await mountIt(true)
+    await runToResult(wrapper)
+
+    expect(wrapper.find('[data-testid="it-call-end"]').exists()).toBe(true)
+    expect(nextButton(wrapper)).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -521,6 +549,8 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="video-call-stub"]').exists()).toBe(false)
     expect(nextButton(wrapper)).toBeUndefined()
+    // 保存中は「未完了のまま終了」も出さない (戻ったあとの画面で通話が始まるのを防ぐ)
+    expect(wrapper.find('[data-testid="it-call-end"]').exists()).toBe(false)
     expect(itCall.start).not.toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -642,7 +672,7 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     wrapper.unmount()
   })
 
-  it('通話が切れたら再接続と終了のボタンを出す (終了で待機へ戻る)', async () => {
+  it('通話が切れたら再接続のボタンを出す (「未完了のまま終了」で待機へ戻れるのは同じ)', async () => {
     const wrapper = await mountIt(true)
     await runToResult(wrapper)
 
@@ -658,7 +688,7 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     wrapper.unmount()
   })
 
-  it('signaling に断られたら文言と再接続・終了のボタンを出す', async () => {
+  it('signaling に断られたら文言と再接続のボタンを出す', async () => {
     const wrapper = await mountIt(true)
     await runToResult(wrapper)
 
