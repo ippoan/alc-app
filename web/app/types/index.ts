@@ -443,6 +443,8 @@ export interface TenkoSession {
   employee_id: string
   schedule_id: string | null
   tenko_type: TenkoType
+  /** 点呼方法 ('IT点呼' など)。backend は常に返すが、手書きの型では任意 (Refs ippoan/alc-app#387) */
+  tenko_method?: string
   status: TenkoSessionStatus
   identity_verified_at: string | null
   identity_face_photo_url: string | null

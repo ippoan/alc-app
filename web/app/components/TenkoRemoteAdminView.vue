@@ -5,6 +5,8 @@ import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getD
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { alcoholResultLabel } from '~/utils/alcohol'
+import { shouldSkipManagerFaceAuth } from '~/utils/face-approval'
+import { isDevDevice } from '~/utils/token-selection'
 
 const props = defineProps<{
   initialRoomId?: string | null
@@ -148,8 +150,40 @@ function selfDeclLabel(key: string) {
 // WebSocket用: https://→wss:// または http://→ws://
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
 
+// この着信では顔認証の段を飛ばすか (IT点呼・未判定。Refs ippoan/alc-app#387)。requestCall のたびに決め直す
+const skipFaceAuth = ref(false)
+// requestCall の通し番号。session を引いている間に別の requestCall が来たら、古い方の結果を捨てる
+let requestCallSeq = 0
+
 // セッションカードクリック → 顔認証モーダルを表示
-function requestCall(roomId: string) {
+// `byOperator` = 運行管理者が自分で一覧から選んだ (initialRoomId による自動の呼び出しは false)
+function requestCall(roomId: string, byOperator = false) {
+  const seq = ++requestCallSeq
+  skipFaceAuth.value = false
+  // 開発用の印がある席で、自分で選んだときだけ点呼の中身を見る。IT点呼の着信が出るのは、
+  // テストが済むまで開発用の席だけ — 通常の点呼へ統合するときに isDevDevice の条件を外す。
+  // 自動の呼び出しでは飛ばさない (人の操作なしにカメラとマイクが開いて通話が始まってしまう)。
+  // 印が無い席は session を引かず、今までどおり同期でモーダルを開く
+  if (byOperator && isDevDevice('manager-device')) {
+    void resolveSkipFaceAuth(roomId, seq)
+    return
+  }
+  openCallModal(roomId)
+}
+
+async function resolveSkipFaceAuth(roomId: string, seq: number) {
+  let skip = false
+  try {
+    // 部屋の id = 点呼セッションの id
+    skip = shouldSkipManagerFaceAuth(await getTenkoSession(roomId, 'tenko-monitor'))
+  }
+  catch { /* 引けなければ今までどおり顔認証 */ }
+  if (seq !== requestCallSeq) return
+  skipFaceAuth.value = skip
+  openCallModal(roomId)
+}
+
+function openCallModal(roomId: string) {
   pendingRoomId.value = roomId
   faceAuthError.value = null
   modalIdError.value = null
@@ -158,10 +192,20 @@ function requestCall(roomId: string) {
   loadFromDevice()
   if (authenticatedManagerId.value) {
     modalEmployeeId.value = authenticatedManagerId.value
-    modalStep.value = 'face_auth'
+    proceedAfterIdStep()
   } else {
     modalStep.value = 'id_input'
   }
+}
+
+// 社員番号の段の次: 顔認証へ。顔認証を飛ばす着信では、モーダルを閉じてそのまま通話開始
+function proceedAfterIdStep() {
+  if (skipFaceAuth.value) {
+    faceAuthActive.value = false
+    startCall(pendingRoomId.value!)
+    return
+  }
+  modalStep.value = 'face_auth'
 }
 
 // モーダル内 ID 入力 → 社員検索 → 顔認証へ
@@ -178,7 +222,7 @@ async function onModalIdSubmit() {
     modalEmployeeId.value = emp.id
     modalEmployeeName.value = emp.name
     setManagerId(emp.id)
-    modalStep.value = 'face_auth'
+    proceedAfterIdStep()
   } catch {
     modalIdError.value = employeeNotFoundByCode(input)
   }
@@ -377,7 +421,7 @@ onUnmounted(() => {
           :class="selectedRoomId === roomId && isCallActive
             ? 'border-blue-400 bg-blue-50'
             : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'"
-          @click="requestCall(roomId)"
+          @click="requestCall(roomId, true)"
         >
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
