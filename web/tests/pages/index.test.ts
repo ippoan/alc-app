@@ -12,6 +12,7 @@ import IcPunchAlcoholPrompt from '~/components/IcPunchAlcoholPrompt.vue'
 import DeviceUnregisteredBanner from '~/components/DeviceUnregisteredBanner.vue'
 import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
+import FirmwareOtaHost from '~/components/FirmwareOtaHost.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
@@ -431,6 +432,7 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(wrapper.findAll('button').some(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))).toBe(true)
     expect(wrapper.findComponent(DeviceUnregisteredBanner).exists()).toBe(true)
     expect(wrapper.findComponent(ScreenShareSender).exists()).toBe(true)
+    expect(wrapper.findComponent(FirmwareOtaHost).exists()).toBe(true)
     expect(wrapper.findComponent(MeasurementLog).exists()).toBe(true)
     // tab=bp のとおり血圧測定タブ自体は出る (通常端末の1タブとして)
     expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(true)
@@ -467,6 +469,7 @@ describe('pages/index — 血圧測定タブ (Refs ippoan/alc-app-s3#135)', () =
     expect(wrapper.findAll('button').some(b => b.html().includes('M4 6h16M4 12h16M4 18h16'))).toBe(true)
     // 画面共有・測定ログ
     expect(wrapper.findComponent(ScreenShareSender).exists()).toBe(true)
+    expect(wrapper.findComponent(FirmwareOtaHost).exists()).toBe(true)
     expect(wrapper.findComponent(MeasurementLog).exists()).toBe(true)
     // 血圧測定は start_url の tab=bp のとおり出る。1 つだけ (測定台専用の別描画は無い)
     expect(wrapper.findAllComponents(BloodPressureMeasurement)).toHaveLength(1)

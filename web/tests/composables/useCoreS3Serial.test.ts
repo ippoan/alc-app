@@ -865,6 +865,71 @@ describe('useCoreS3Serial', () => {
     })
   })
 
+  // ---------- 機体の名乗り (Refs ippoan/alc-app#403) ----------
+
+  describe('deviceInfo', () => {
+    it('プローブ中に来た DEVICE 行の VER / BOARD / FLAVOR を持つ', async () => {
+      const dev = createMockPort()
+      dev.emit('DEVICE cores3 VER=0.1.0+abc1234 BOARD=cores3se FLAVOR=cores3-wifi\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      expect(core.deviceInfo.value).toBeNull()
+
+      expect(await connect()).toBe(true)
+
+      expect(core.deviceInfo.value).toEqual({ ver: '0.1.0+abc1234', board: 'cores3se', flavor: 'cores3-wifi' })
+    })
+
+    it('DEVICE が直前のログ行の途中に連結されていても、見つけた位置から後ろを読む', async () => {
+      const dev = createMockPort()
+      dev.emit('EVT NFC_READY port=0 VER=9.9.9DEVICE cores3 VER=0.1.0 BOARD=cores3 FLAVOR=cores3\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      expect(await connect()).toBe(true)
+
+      expect(core.deviceInfo.value).toEqual({ ver: '0.1.0', board: 'cores3', flavor: 'cores3' })
+    })
+
+    it('DEVICE に答えない旧いファーム (legacyClaim) は null のまま', async () => {
+      const dev = createMockPort()
+      dev.emit('STATUS LAN=up RS232=0 BLE=0 WIFI=1 ROT=0 BOARD=cores3 ALARM=idle/none/-/0\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      expect(await connect()).toBe(true)
+
+      expect(core.isConnected.value).toBe(true)
+      expect(core.deviceInfo.value).toBeNull()
+    })
+
+    it('ポートを返したら null に戻る', async () => {
+      const dev = createMockPort()
+      dev.emit('DEVICE cores3 VER=0.1.0 BOARD=cores3 FLAVOR=cores3\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      await connect()
+      expect(core.deviceInfo.value).not.toBeNull()
+
+      await core.release()
+
+      expect(core.deviceInfo.value).toBeNull()
+    })
+
+    it('利用側の onOpen の cb の中から読める (配る前に入っている)', async () => {
+      const dev = createMockPort()
+      dev.emit('DEVICE cores3 VER=0.1.0 BOARD=cores3 FLAVOR=cores3\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const seen: unknown[] = []
+      core.onOpen(() => seen.push(core.deviceInfo.value))
+
+      await connect()
+
+      expect(seen).toEqual([{ ver: '0.1.0', board: 'cores3', flavor: 'cores3' }])
+    })
+  })
+
   // ---------- 公開 API の形 ----------
 
   it('navigator.serial は直接触らない (列挙は arbiter 経由)', async () => {

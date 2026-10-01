@@ -716,6 +716,7 @@ function onRoleTabClick(role: RoleTab) {
 
       <!-- 画面共有: タブに関係なく常時フローティング表示 -->
       <ScreenShareSender />
+      <FirmwareOtaHost />
       <!-- 測定ログ: フッターバー (縦画面時のみ。横画面時はサイドバー内) -->
       <MeasurementLog v-if="!isAndroidLandscape" />
     </template>
