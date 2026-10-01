@@ -75,6 +75,9 @@ describe('manifestRoleFromQuery', () => {
     ['?role=general', { role: 'general' }, 'general'],
     ['クエリなし', {}, 'driver'],
     ['未知のロール', { role: 'nope' }, 'driver'],
+    // 運行管理者側の IT点呼 の役割タブ (Refs ippoan/alc-app#387)。`ROLES` に足していないので
+    // 運行者の manifest のまま (別の PWA にしない)
+    ['?role=it_tenko', { role: 'it_tenko' }, 'driver'],
     ['role が空', { role: '' }, 'driver'],
     ['role が null (?role)', { role: null }, 'driver'],
     ['着信通知からの直行', { mode: 'incoming_call' }, 'manager'],
