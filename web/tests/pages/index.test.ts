@@ -1195,13 +1195,12 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
 })
 
 describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/alc-app#387)', () => {
-  // dev の印がある端末には黄色の帯、印が無い端末 (= 本番の全端末) には「本番」の表示を、
-  // 役割のタブより上に 1 本出す。帯そのものの中身は DevDeviceBanner.test.ts
+  // dev の印がある端末にだけ、役割のタブより上に帯を 1 本出す。印が無い端末
+  // (= 本番の全端末) では DOM に 1 つも足さない。帯そのものの中身は DevDeviceBanner.test.ts
 
   let wrapper: VueWrapper | null = null
   const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
   const BANNER = '[data-testid="dev-device-banner"]'
-  const PROD = '[data-testid="prod-device-banner"]'
   const NORMAL = '.normal-measurement-stub:not([it-mode])'
   const IT = '.normal-measurement-stub[it-mode]'
 
@@ -1246,22 +1245,17 @@ describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/a
   ])('$name', ({ isLandscape }) => {
     beforeEach(() => { landscape.on.value = isLandscape })
 
-    it('★ dev の印が無い端末では黄色の帯が無く、「本番」が役割のタブより上に出る', async () => {
+    it('★ dev の印が無い端末では帯が無い (画面の先頭は今までどおり)', async () => {
       wrapper = await mountWithBanner('/?role=driver')
       expect(wrapper.find(BANNER).exists()).toBe(false)
       expect(wrapper.html()).not.toContain('開発用の端末です')
       expect(wrapper.find(NORMAL).exists()).toBe(true)
-      expect(wrapper.findAll(PROD)).toHaveLength(1)
-      expect(wrapper.find(PROD).text()).toBe('本番')
-      const html = wrapper.html()
-      expect(html.indexOf('prod-device-banner')).toBeLessThan(html.indexOf('運行管理者'))
     })
 
-    it('dev でない端末のトークンが取れている端末でも黄色の帯は無く、「本番」が出る', async () => {
+    it('dev でない端末のトークンが取れている端末でも帯が無い', async () => {
       noteDeviceToken('kiosk', plainDeviceJwt())
       wrapper = await mountWithBanner('/?role=driver')
       expect(wrapper.find(BANNER).exists()).toBe(false)
-      expect(wrapper.find(PROD).text()).toBe('本番')
     })
 
     it('★ キオスクの印がある端末では帯が 1 本だけ出る', async () => {
@@ -1270,7 +1264,6 @@ describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/a
       expect(wrapper.findAll(BANNER)).toHaveLength(1)
       expect(wrapper.find(BANNER).text()).toContain('開発用の端末です')
       expect(wrapper.find(BANNER).text()).toContain('キオスク')
-      expect(wrapper.find(PROD).exists()).toBe(false)
     })
   })
 
