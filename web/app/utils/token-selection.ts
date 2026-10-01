@@ -81,6 +81,21 @@ const devMarks: Record<DeviceTokenKind, boolean> = {
   'bp-station': readStoredMark('bp-station'),
 }
 
+/**
+ * 印が変わったとき `window` に出るイベントの名前。印 ({@link isDevDevice}) は同期で読める
+ * 代わりに reactive ではないので、画面はこれを listen して写しを読み直す。
+ * **値が変わったときだけ**出る (同じ値の書き直しでは出ない)。
+ */
+export const DEV_DEVICE_MARK_EVENT = 'alc-dev-device-mark'
+
+/** memory の印を書き換える (ここ 1 か所)。値が変わったときだけ画面へ知らせる。 */
+function setDevMark(kind: DeviceTokenKind, dev: boolean): void {
+  if (devMarks[kind] === dev) return
+  devMarks[kind] = dev
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event(DEV_DEVICE_MARK_EVENT))
+}
+
 /** 端末のトークンの payload に `dev_device === true` があるか (署名は見ない)。 */
 export function isDevDeviceToken(token: string | null | undefined): boolean {
   if (!token) return false
@@ -95,7 +110,7 @@ export function isDevDeviceToken(token: string | null | undefined): boolean {
  */
 export function noteDeviceToken(kind: DeviceTokenKind, token: string | null): void {
   const dev = isDevDeviceToken(token)
-  devMarks[kind] = dev
+  setDevMark(kind, dev)
   if (token) writeStoredMark(kind, dev)
 }
 
@@ -109,7 +124,7 @@ export function noteDeviceToken(kind: DeviceTokenKind, token: string | null): vo
  * また印が立つ** (印を決めるのは取れたトークンで、この関数は鍵の側を変えない)。
  */
 export function clearDevDeviceMark(kind: DeviceTokenKind): void {
-  devMarks[kind] = false
+  setDevMark(kind, false)
   writeStoredMark(kind, false)
 }
 
