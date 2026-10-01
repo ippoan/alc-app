@@ -11,6 +11,15 @@
  *
  * 動かすのは「この端末で使う」(useAlarmDeviceSetting が true) かつ Web Serial が使えるときだけ。
  * 止めるのは設定を off にしたときだけ — ロールタブ切替やトップ画面の unmount では止めない (#205)。
+ *
+ * ## 運行管理者の鍵のトークンの先取り (Refs ippoan/alc-app#387)
+ *
+ * 警告デバイスが繋がるたびに、運行管理者の鍵のトークンを 1 回取りに行く。開発用の印
+ * (`isDevDevice('manager-device')`) は鍵のトークンを 1 度取ったときに立つが、Google ログイン済みの
+ * 席は管理者のトークンで足りてしまい、取りに行く引き金が他に無い (測定台とキオスクには
+ * 同じ先取りが既にある — `useBpStationDeviceToken` / `useHubClaim`)。
+ * トークンの cache が有効なあいだは通信しない。失敗しても何も起こさない
+ * (`useManagerDeviceToken().prefetchManagerJwt`)。
  */
 
 /**
@@ -19,6 +28,8 @@
  * connect() も no-op ではない (installNgWatch / arbiter.register / 再接続の印の削除)
  */
 let started = false
+/** 先取りの見張りを止める関数。start() が入れ、stop() が呼ぶ (stop は始めた後にしか進まない) */
+let stopPrefetchWatch!: () => void
 
 export function useAlarmWatch(): void {
   const alarm = useAlarmDevice()
@@ -33,11 +44,19 @@ export function useAlarmWatch(): void {
     rooms.start()
     // BLE ゲートウェイと同居しない PC なので、ポートの取り合いを待つ必要が無い
     alarm.connect(0)
+    // トップ画面の unmount で止まらないよう、component から切り離した scope で見張る。
+    // immediate: 始めた時点で既に繋がっていれば、そのとき 1 回
+    const scope = effectScope(true)
+    scope.run(() => watch(alarm.isConnected, (connected) => {
+      if (connected) void useManagerDeviceToken().prefetchManagerJwt()
+    }, { immediate: true }))
+    stopPrefetchWatch = () => scope.stop()
   }
 
   function stop(): void {
     if (!started) return
     started = false
+    stopPrefetchWatch()
     void alarm.disconnect()
     // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
     rooms.stop()
