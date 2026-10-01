@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isDevDevice } from '~/utils/token-selection'
 
-type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'it_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices'
+type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'it_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices' | 'it_guide'
 
 const props = defineProps<{
   initialTab?: string
@@ -37,6 +37,8 @@ const tabs = computed<{ key: TabKey, label: string }[]>(() => [
   { key: 'work_hours', label: '労働時間' },
   { key: 'timecard', label: 'タイムカード' },
   { key: 'devices', label: 'デバイス管理' },
+  // IT点呼 の試験の手順書。開発用の印の有無に関係なく常に出す (手順の最初が「印が立ったか確かめる」ため)
+  { key: 'it_guide', label: 'IT点呼 試験の手順' },
 ])
 
 function selectTab(key: TabKey) {
@@ -114,6 +116,8 @@ function selectTab(key: TabKey) {
       <div v-if="activeTab === 'devices'" class="space-y-4">
         <DeviceRegistrationManager />
       </div>
+
+      <ItTenkoGuide v-if="activeTab === 'it_guide'" />
     </div>
   </div>
 </template>
