@@ -90,57 +90,56 @@ describe('public/manifest-*.webmanifest', () => {
     expect(new Set(colors).size).toBe(colors.length)
   })
 
-  it('運行管理者は色違いの専用アイコンを先頭に持つ (タスクバーで区別する)', () => {
-    expect(manager.icons[0].src).toBe('/icon-manager.svg')
-    expect(manager.icons[0].type).toBe('image/svg+xml')
-    expect(manager.icons[0].sizes).toBe('any')
-    expect(manager.icons[0].purpose).toBe('any maskable')
-    // 既存 PNG も fallback として並べる
-    expect(manager.icons.map((i: { src: string }) => i.src)).toContain('/icon-512.png')
+  // 役割ごとの PWA (運行者以外) のアイコン。共通の PNG を候補に並べると Chrome が寸法の合う
+  // そちらを選び、役割の絵にならない (Refs ippoan/alc-app#387)
+  const roleIcons = [
+    ['運行管理者', manager, 'manager', MANAGER_MANIFEST.themeColor],
+    ['血圧端末', bp, 'bp', BP_MANIFEST.themeColor],
+    ['IT点呼', itTenko, 'it-tenko', IT_TENKO_MANIFEST.themeColor],
+  ] as const
+  const sharedPngs = ['icon-192.png', 'icon-512.png'].map(f => readFileSync(resolve(publicDir, f)))
 
-    const svg = readFileSync(resolve(publicDir, 'icon-manager.svg'), 'utf-8')
+  it.each(roleIcons)('%s のアイコンは役割の PNG 2 枚 + SVG だけで、共通の PNG を持たない', (_name, m, slug, themeColor) => {
+    // (a) 並びの固定。共通の `/icon-192.png`・`/icon-512.png` が在るとここで落ちる
+    expect(m.icons).toEqual([
+      { src: `/icon-${slug}-192.png`, sizes: '192x192', type: 'image/png' },
+      { src: `/icon-${slug}-512.png`, sizes: '512x512', type: 'image/png' },
+      { src: `/icon-${slug}.svg`, sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+    ])
+
+    // (b) PNG の実体: 署名と IHDR の幅・高さ (16〜23 バイト目、big-endian)
+    const pngs = [192, 512].map((size) => {
+      const png = readFileSync(resolve(publicDir, `icon-${slug}-${size}.png`))
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      expect(png.readUInt32BE(16)).toBe(size)
+      expect(png.readUInt32BE(20)).toBe(size)
+      return png
+    })
+
+    // (c) SVG は残す
+    const svg = readFileSync(resolve(publicDir, `icon-${slug}.svg`), 'utf-8')
     expect(svg).toContain('<svg')
     expect(svg).toContain('viewBox="0 0 512 512"')
-    expect(svg).toContain(MANAGER_MANIFEST.themeColor)
-    // フォントに依存すると環境によっては白紙になるので図形だけで描く
-    expect(svg).not.toContain('<text')
-  })
-
-  it('血圧端末は色違いの専用アイコンを先頭に持つ (タスクバーで区別する)', () => {
-    expect(bp.icons[0].src).toBe('/icon-bp.svg')
-    expect(bp.icons[0].type).toBe('image/svg+xml')
-    expect(bp.icons[0].sizes).toBe('any')
-    expect(bp.icons[0].purpose).toBe('any maskable')
-    expect(bp.icons.map((i: { src: string }) => i.src)).toContain('/icon-512.png')
-
-    const svg = readFileSync(resolve(publicDir, 'icon-bp.svg'), 'utf-8')
-    expect(svg).toContain('<svg')
-    expect(svg).toContain('viewBox="0 0 512 512"')
-    expect(svg).toContain(BP_MANIFEST.themeColor)
-    // フォントに依存すると環境によっては白紙になるので図形だけで描く
-    expect(svg).not.toContain('<text')
-  })
-
-  it('IT点呼 は色違いの専用アイコンを先頭に持つ (タスクバーで区別する)', () => {
-    expect(itTenko.icons[0].src).toBe('/icon-it-tenko.svg')
-    expect(itTenko.icons[0].type).toBe('image/svg+xml')
-    expect(itTenko.icons[0].sizes).toBe('any')
-    expect(itTenko.icons[0].purpose).toBe('any maskable')
-    // 既存 PNG も fallback として並べる (運行管理者と同じ並び)
-    expect(itTenko.icons.map((i: { src: string }) => i.src)).toEqual(['/icon-it-tenko.svg', '/icon-192.png', '/icon-512.png'])
-
-    const svg = readFileSync(resolve(publicDir, 'icon-it-tenko.svg'), 'utf-8')
-    expect(svg).toContain('<svg')
-    expect(svg).toContain('viewBox="0 0 512 512"')
-    expect(svg).toContain(IT_TENKO_MANIFEST.themeColor)
+    expect(svg).toContain(themeColor)
     // フォントに依存すると環境によっては白紙になるので図形だけで描く
     expect(svg).not.toContain('<text')
     // 外部の画像・フォントを参照しない (SVG 単体で完結。xmlns の宣言だけは URL の形)
     expect(svg.replace('xmlns="http://www.w3.org/2000/svg"', '')).not.toMatch(/https?:|href=/)
-    // ほかのアイコンと絵柄が違う
-    for (const other of ['icon-manager.svg', 'icon-bp.svg']) {
-      expect(svg).not.toBe(readFileSync(resolve(publicDir, other), 'utf-8'))
+
+    // (d) ほかの役割とも共通の PNG とも絵が違う (バイト比較)
+    for (const [, , other] of roleIcons.filter(r => r[2] !== slug)) {
+      expect(svg).not.toBe(readFileSync(resolve(publicDir, `icon-${other}.svg`), 'utf-8'))
+      for (const [i, size] of [192, 512].entries()) {
+        expect(pngs[i]!.equals(readFileSync(resolve(publicDir, `icon-${other}-${size}.png`)))).toBe(false)
+      }
     }
+    for (const png of pngs) {
+      for (const shared of sharedPngs) expect(png.equals(shared)).toBe(false)
+    }
+  })
+
+  it('運行者は共通の PNG 2 枚を持つ (回帰)', () => {
+    expect(driver.icons.map((i: { src: string }) => i.src)).toEqual(['/icon-192.png', '/icon-512.png'])
   })
 
   it('manifest の href は useRoleManifest が指すファイル名と一致する', () => {
