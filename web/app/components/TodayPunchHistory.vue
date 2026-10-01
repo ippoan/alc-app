@@ -11,6 +11,7 @@
 import type { ApiEmployee, LatestPunch, TimePunchWithDevice } from '~/types'
 import { listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
+import { selectSendToken } from '~/utils/token-selection'
 import { cardKindOf, type CardKind } from '~/utils/card-kind'
 
 const { accessToken } = useAuth()
@@ -141,11 +142,12 @@ watch(hasDeviceJwt, (has) => {
  * 打刻更新の購読 (Refs ippoan/alc-app-s3#134)。**管理画面と同じ composable。**
  * 他の端末 (NFC タイムカード端末や別のキオスク) で打たれた打刻も、この一覧に
  * 出したいので購読する。トークンは呼び出し元の device JWT、管理者がログイン
- * していれば browser JWT。**どちらも無ければ**(未ペアリング) WS は張らず
- * ポーリングに落ちる — 画面は壊さない。
+ * していれば browser JWT (**dev端末だけは device JWT が先** — 選び方は api.ts と同じ
+ * `selectSendToken`、Refs ippoan/alc-app#387)。**どちらも無ければ**(未ペアリング) WS は
+ * 張らずポーリングに落ちる — 画面は壊さない。
  */
 const watch$ = useTimecardWatch({
-  getToken: () => accessToken.value ?? getDeviceJwt(),
+  getToken: () => selectSendToken(accessToken.value, 'kiosk', getDeviceJwt),
   onChange: () => { void loadTodayPunches() },
 })
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { GuidanceRecord } from '~/types'
+import { selectSendToken } from '~/utils/token-selection'
 
 const props = defineProps<{
   record: GuidanceRecord
@@ -40,7 +41,10 @@ async function loadAttachmentBlob(att: { id: string; record_id: string; file_typ
   if (blobUrls.value[key]) return
   try {
     const headers: Record<string, string> = {}
-    if (accessToken.value) headers['Authorization'] = `Bearer ${accessToken.value}`
+    // 付けるトークンは api.ts と同じ規則で選ぶ (Refs ippoan/alc-app#387)。ここは管理者の口なので
+    // 端末の getter は渡さない — dev端末では管理者のトークンを付けずに送る (本番の行を読まない)
+    const token = await selectSendToken(accessToken.value, 'kiosk', null)
+    if (token) headers['Authorization'] = `Bearer ${token}`
     if (deviceTenantId.value) headers['X-Tenant-ID'] = deviceTenantId.value
     const res = await fetch(`${config.public.apiBase}/api/guidance-records/${att.record_id}/attachments/${att.id}`, { headers })
     if (!res.ok) return

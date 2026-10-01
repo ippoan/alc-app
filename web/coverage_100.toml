@@ -192,6 +192,11 @@ branches = false
 path = "app/utils/api.ts"
 branches = true
 
+# 送るトークンの選び方 (dev端末は端末の鍵が先、Refs ippoan/alc-app#387)
+[[files]]
+path = "app/utils/token-selection.ts"
+branches = true
+
 [[files]]
 path = "app/utils/fetch-timeout.ts"
 branches = true
