@@ -14,6 +14,7 @@ import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
+import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import { clearDevDeviceMark, isDevDevice, noteDeviceToken, DEV_DEVICE_MARK_EVENT } from '~/utils/token-selection'
 import { devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 import type { LatestPunch } from '~/types'
@@ -1343,9 +1344,18 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
   const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
   const NOTE = '[data-testid="auto-tenko-blocked-note"]'
   const NORMAL = '.normal-measurement-stub'
-  const AUTO = 'tenko-kiosk-stub:not([remote-mode]):not([demo-mode])'
-  const DEMO = 'tenko-kiosk-stub[demo-mode]:not([remote-mode])'
-  const REMOTE = 'tenko-kiosk-stub[remote-mode]:not([demo-mode])'
+  /**
+   * いま描かれている TenkoKiosk を、props (`demoMode` / `remoteMode`) で種類に分けて返す。
+   * 自動 stub の属性名は kebab にならず、未指定の Boolean が false で出ることもあるので、
+   * 属性セレクタでは判別しない。**「何も描かれていない」は `[]` で確かめる** (種類を問わず 0 個)
+   */
+  function kiosks(w: VueWrapper) {
+    return w.findAllComponents(TenkoKiosk).map((c) => {
+      const demo = !!c.props('demoMode')
+      const remote = !!c.props('remoteMode')
+      return remote ? (demo ? 'remote_demo' : 'remote') : (demo ? 'demo' : 'auto')
+    })
+  }
   const HEAD = 'この端末は血圧計が登録されていないため、自動点呼を使えません。'
   const FIX_PAIR = '自動点呼を使うには、この端末に血圧計を登録 (ペアリング) してください。'
   const FIX_SETTING = '自動点呼を使うには、端末の設定で血圧計を使う設定にしてください。'
@@ -1411,7 +1421,7 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
       await tabButton(wrapper, '自動点呼').trigger('click')
       await nextTick()
 
-      expect(wrapper.find(AUTO).exists()).toBe(false)
+      expect(kiosks(wrapper)).toEqual([])
       expect(wrapper.find(NORMAL).exists()).toBe(true)
       expect(wrapper.find(NOTE).exists()).toBe(true)
     })
@@ -1425,7 +1435,7 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
       await tabButton(wrapper, '自動点呼').trigger('click')
       await nextTick()
 
-      expect(wrapper.find(AUTO).exists()).toBe(true)
+      expect(kiosks(wrapper)).toEqual(['auto'])
       expect(wrapper.find(NOTE).exists()).toBe(false)
     })
 
@@ -1437,7 +1447,7 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
       await tabButton(wrapper, '自動点呼').trigger('click')
       await nextTick()
 
-      expect(wrapper.find(AUTO).exists()).toBe(true)
+      expect(kiosks(wrapper)).toEqual(['auto'])
       expect(wrapper.find(NOTE).exists()).toBe(false)
     })
 
@@ -1455,7 +1465,7 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
   it('★ ?tab=tenko で開いても blocked なら通常点呼に戻り、案内が出る', async () => {
     block()
     wrapper = await mountIndex('/?role=driver&tab=tenko')
-    expect(wrapper.find(AUTO).exists()).toBe(false)
+    expect(kiosks(wrapper)).toEqual([])
     expect(wrapper.find(NORMAL).exists()).toBe(true)
     expect(wrapper.find(NOTE).exists()).toBe(true)
   })
@@ -1463,13 +1473,13 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
   it('★ 自動点呼を開いている最中に blocked へ変わると通常点呼に戻って案内が出る。外れると案内が消える', async () => {
     signedBond.probed.value = false
     wrapper = await mountIndex('/?role=driver&tab=tenko')
-    expect(wrapper.find(AUTO).exists()).toBe(true)
+    expect(kiosks(wrapper)).toEqual(['auto'])
     expect(wrapper.find(NOTE).exists()).toBe(false)
 
     signedBond.probed.value = true
     await nextTick()
     await nextTick()
-    expect(wrapper.find(AUTO).exists()).toBe(false)
+    expect(kiosks(wrapper)).toEqual([])
     expect(wrapper.find(NORMAL).exists()).toBe(true)
     expect(wrapper.find(NOTE).exists()).toBe(true)
 
@@ -1498,7 +1508,7 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
     block()
     wrapper = await mountIndex('/?role=driver')
     await clickMenuItem(wrapper, '自動点呼デモ')
-    expect(wrapper.find(DEMO).exists()).toBe(false)
+    expect(kiosks(wrapper)).toEqual([])
     expect(wrapper.find(NORMAL).exists()).toBe(true)
     expect(wrapper.find(NOTE).exists()).toBe(true)
   })
@@ -1507,17 +1517,17 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
     bpUi.state.value = 'show'
     wrapper = await mountIndex('/?role=driver')
     await clickMenuItem(wrapper, '自動点呼デモ')
-    expect(wrapper.find(DEMO).exists()).toBe(true)
+    expect(kiosks(wrapper)).toEqual(['demo'])
     expect(wrapper.find(NOTE).exists()).toBe(false)
   })
 
   it('遠隔点呼・遠隔点呼デモ・デバイス設定は塞がれていても開ける', async () => {
     block()
     wrapper = await mountIndex('/?role=driver&tab=remote')
-    expect(wrapper.find(REMOTE).exists()).toBe(true)
+    expect(kiosks(wrapper)).toEqual(['remote'])
     expect(wrapper.find(NOTE).exists()).toBe(false)
     await clickMenuItem(wrapper, '遠隔点呼デモ')
-    expect(wrapper.find('tenko-kiosk-stub[remote-mode][demo-mode]').exists()).toBe(true)
+    expect(kiosks(wrapper)).toEqual(['remote_demo'])
     await clickMenuItem(wrapper, 'デバイス設定')
     expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
     expect(wrapper.find(NOTE).exists()).toBe(false)
