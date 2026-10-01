@@ -440,6 +440,9 @@ const { latest: strayAlcohol } = useStrayAlcohol()
 
 // この端末で血圧計を使うか (Refs ippoan/alc-app-s3#135)
 const { bpEnabled } = useBloodPressureSetting()
+// 体温の段の名前は、BleStatus が自動で進む条件に使うのと同じ `showBpUi` で決める
+// (`bpEnabled` では CoreS3 キオスクが常に false で、血圧を待っているのに「体温」と出ていた)
+const { showBpUi } = useBpUiEnabled()
 
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
@@ -681,7 +684,7 @@ function reset() {
 const stepLabel = computed<Record<string, string>>(() => ({
   nfc: 'NFC',
   vehicle: '車検証',
-  medical: bpEnabled.value ? '体温・血圧' : '体温',
+  medical: showBpUi.value ? '体温・血圧' : '体温',
   measuring: '測定',
   result: '結果',
 }))
@@ -975,7 +978,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
       <!-- Step 3: 体温・血圧 (BLE Medical Gateway / 手動入力) -->
       <div v-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-6 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ bpEnabled ? '体温・血圧' : '体温' }}</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showBpUi ? '体温・血圧' : '体温' }}</h2>
           <p class="text-sm text-gray-500 mb-4">{{ employeeName }}</p>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->

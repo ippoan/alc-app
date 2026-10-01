@@ -213,6 +213,15 @@ function handleRescan() {
           医療機器で測定するとデータが表示されます
         </p>
 
+        <!-- 体温だけ届いて血圧を待っている間の案内 (自動で進む条件 autoNextReady と同じ見方) -->
+        <p
+          v-if="showBpUi && latestTemperature && !latestBloodPressure"
+          class="text-sm text-blue-600 text-center"
+          data-testid="bp-waiting-note"
+        >
+          血圧の測定を待っています。血圧を測ると自動で次へ進みます
+        </p>
+
         <!-- 再測定ボタン (読み値をクリアして測り直す) -->
         <button
           v-if="hasMedicalData"

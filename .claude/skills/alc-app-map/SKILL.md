@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:a5c9a181310ea57e6b3db4bc9d80c7222c80c6aa
+generated-from: alc-app:9316afe1d0537c0f22a1880561e5151ff1962267
 paths: [web/, cf-alc-signaling/, cf-alc-recorder/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・cf-alc-recorder/ (CoreS3 測定データ受口 DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「cf-alc-recorder」「alc-recorder」「CoreS3 測定」「alc.ippoan.org」等。
 ---
@@ -57,6 +57,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 - **public repo + 秘匿ファイル**: repo は public。`docs/*.pdf` (FC-1200 通信仕様 = Tanita Confidential)・`fc1200-wasm/{src,Cargo.toml,Cargo.lock}` は **.gitignore 済み = 絶対コミットしない** (WASM に compile してプロトコル秘匿)。
 - **semver patch のみ**: バージョンアップは常に patch (0.2.1→0.2.2)。minor/major は上げない。
 - **WebRTC は Hibernatable WebSockets API 必須** (Durable Objects)。
+- **体温の段 (`medical`) の名前と血圧待ち** (Refs ippoan/alc-app#387): `NormalMeasurement.vue` の段の名前 (パンくずと見出しの「体温」/「体温・血圧」) は `bpEnabled` ではなく **`useBpUiEnabled()` の `showBpUi`** で決める — `BleStatus.vue` の自動で次へ進む条件 (`autoNextReady`) と同じ見方 (CoreS3 キオスクは `bpEnabled` が常に false)。`showBpUi` で体温だけ届き血圧がまだの間、`BleStatus.vue` は「血圧の測定を待っています」(`data-testid="bp-waiting-note"`) を出す。`NormalMeasurement.vue` の保存内容側 (`bpEnabled && measurementResult.systolic`) は未変更。
 - **テスト (CLAUDE.md に詳細)**: Vitest 4 + `@nuxt/test-utils` (happy-dom)。fc1200-wasm と `virtual:pwa-register/vue` は `tests/mocks/` でモック (CI に wasm-pack 不要 / Windows での virtual module 解決エラー回避)。ブラウザ API (WebSerial/BLE/NFC) は `Object.defineProperty(navigator, ...)` でモック。**`v8 ignore` 禁止** (`withSetup` / テスト追加 / 到達不能コード削除で対処)。モジュールスコープ状態を持つ composable (`useBleGateway` `useFaceDetection` `useFc1200Serial`) は `vi.resetModules()` + dynamic import で分離。
 - **mock/live 統一テスト**: `web/tests/utils/api.test.ts` は 1 ファイルで mock と live (実 rust-alc-api コンテナ) 両対応。`API_BASE_URL` 環境変数の有無で切替。fake ID 禁止 (`api-test-data.ts` の実在 UUID を使う)。`docker-compose.test.yml` で GHCR `rust-alc-api:latest` + PG 起動。
 - **型同期**: `cd ~/rust/rust-alc-api && bash scripts/sync-types.sh` → `web/app/types/generated/` に生成 (git 管理、CI で差分チェック)。

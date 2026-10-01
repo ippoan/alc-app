@@ -82,7 +82,8 @@ mockNuxtImport('useBleGateway', () => () => ({
 }))
 
 // 通常点呼に埋まっている BleStatus の血圧の出し分け (Refs ippoan/alc-app#347)
-mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBpUi: ref(false) }))
+const showBpUiRef = ref(false)
+mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBpUi: showBpUiRef }))
 
 // 本人確認前のアルコール測定の通知 (Refs ippoan/rust-alc-api#644)。値を差し替えられる
 // ref にして、モーダルが出ても状態機械 (step) が進まないことを確かめる
@@ -250,6 +251,36 @@ describe('NormalMeasurement — NFC ステップの乗務員照合', () => {
     expect(active).toHaveLength(1)
     expect(active[0]!.text()).toBe('体温')
     expect(wrapper.text()).toContain('体温')
+    wrapper.unmount()
+  })
+
+  it('体温の段の名前は showBpUi で決まる (bpEnabled は見ない): true なら「体温・血圧」', async () => {
+    showBpUiRef.value = true
+    try {
+      getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+      const wrapper = await mountNfcStep()
+
+      await touchToVehicle(wrapper, '2601012901010')
+      await chooseVehicle(wrapper, 'vehicle-skip')
+
+      const active = wrapper.findAll('div.rounded-full').filter(d => d.classes('bg-blue-600'))
+      expect(active).toHaveLength(1)
+      expect(active[0]!.text()).toBe('体温・血圧')
+      expect(wrapper.find('h2').text()).toBe('体温・血圧')
+      wrapper.unmount()
+    } finally {
+      showBpUiRef.value = false
+    }
+  })
+
+  it('体温の段の名前は showBpUi が false なら「体温」', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+
+    await touchToVehicle(wrapper, '2601012901010')
+    await chooseVehicle(wrapper, 'vehicle-skip')
+
+    expect(wrapper.find('h2').text()).toBe('体温')
     wrapper.unmount()
   })
 
