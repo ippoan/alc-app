@@ -54,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   noteDeviceToken('kiosk', null)
+  localStorage.removeItem('alc_dev_device_kiosk')
   vi.unstubAllGlobals()
 })
 

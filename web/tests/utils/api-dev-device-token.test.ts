@@ -69,6 +69,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   for (const kind of KINDS) noteDeviceToken(kind, null)
+  localStorage.clear()
 })
 
 /** 管理者ログインが残ったブラウザ (admin JWT あり) + 端末の getter 3 本。 */

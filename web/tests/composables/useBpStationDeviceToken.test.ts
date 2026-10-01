@@ -374,6 +374,29 @@ describe('useBpStationDeviceToken — dev端末の印 (#387)', () => {
   const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
   const jwtOf = (payload: Record<string, unknown>) => `${seg({ alg: 'HS256' })}.${seg(payload)}.sig`
 
+  // 印は localStorage にも残る (reload をまたぐ) ので、テスト間で持ち越さない
+  beforeEach(() => { localStorage.clear() })
+
+  it('dev でないトークンに替わったら印が消える (保存した印も)', async () => {
+    const devJwt = jwtOf({ sub: 'b1', aud: 'device', dev_device: true })
+    const plainJwt = jwtOf({ sub: 'b1', aud: 'device' })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      // 30 秒 = 手前マージンより短いので次の呼び出しで取り直す
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: devJwt, expires_in: 30 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: plainJwt, expires_in: 900 }) }))
+    const t = (await load()).useBpStationDeviceToken()
+    const { isDevDevice } = await import('~/utils/token-selection')
+
+    expect(await t.getBpStationJwt()).toBe(devJwt)
+    expect(isDevDevice('bp-station')).toBe(true)
+
+    expect(await t.getBpStationJwt()).toBe(plainJwt)
+    expect(isDevDevice('bp-station')).toBe(false)
+    expect(localStorage.getItem('alc_dev_device_bp-station')).toBeNull()
+  })
+
   it('dev の鍵でトークンが取れたら測定台の印だけが立ち、ATOM S3 を抜いたら下りる', async () => {
     const devJwt = jwtOf({ sub: 'b1', aud: 'device', dev_device: true })
     stubHappyPath({ access_token: devJwt, expires_in: 900 })
@@ -390,6 +413,8 @@ describe('useBpStationDeviceToken — dev端末の印 (#387)', () => {
     const onClose = atomMock.onClose.mock.calls[0]![0] as () => void
     onClose()
     expect(isDevDevice('bp-station')).toBe(false)
+    // 抜いただけでは保存した印は残る (次の起動ではまた dev として始まる)
+    expect(localStorage.getItem('alc_dev_device_bp-station')).toBe('1')
   })
 
   it('dev でない鍵のトークンでは印は立たない', async () => {

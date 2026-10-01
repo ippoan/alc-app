@@ -1698,6 +1698,26 @@ describe('useDeviceToken — dev端末の印 (#387)', () => {
 
     clearKioskCredential()
     expect(isDevDevice('kiosk')).toBe(false)
+    // 捨てただけでは保存した印は残る (次の起動ではまた dev として始まる)
+    expect(localStorage.getItem('alc_dev_device_kiosk')).toBe('1')
+  })
+
+  it('dev でないトークンに替わったら印が消える (保存した印も)', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      // 30 秒 = 手前マージンより短いので次の呼び出しで取り直す
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: DEV_JWT, expires_in: 30 }) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: PLAIN_JWT, expires_in: 3600 }) }))
+    const useDeviceToken = await load()
+    const { isDevDevice } = await import('~/utils/token-selection')
+    const { storeKioskCredential, getDeviceJwt } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+
+    expect(await getDeviceJwt()).toBe(DEV_JWT)
+    expect(isDevDevice('kiosk')).toBe(true)
+
+    expect(await getDeviceJwt()).toBe(PLAIN_JWT)
+    expect(isDevDevice('kiosk')).toBe(false)
+    expect(localStorage.getItem('alc_dev_device_kiosk')).toBeNull()
   })
 
   it('CoreS3 の署名で取れた dev のトークンでも印が立ち、抜線で下りる', async () => {

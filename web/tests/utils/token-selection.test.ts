@@ -15,7 +15,10 @@ const PLAIN = plainDeviceJwt()
 const KINDS: DeviceTokenKind[] = ['kiosk', 'manager-device', 'bp-station']
 
 afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   for (const kind of KINDS) noteDeviceToken(kind, null)
+  localStorage.clear()
 })
 
 describe('isDevDeviceToken — payload の dev_device を読む (署名は見ない)', () => {
@@ -129,5 +132,95 @@ describe('selectSendToken — 付けるトークンを 1 つ選ぶ', () => {
   it('どちらも無ければ null', async () => {
     await expect(selectSendToken(null, 'kiosk', null)).resolves.toBeNull()
     await expect(selectSendToken(undefined, 'kiosk', async () => null)).resolves.toBeNull()
+  })
+})
+
+// 印は reload をまたいで残す (localStorage)。起動時 = module の読み込み時に同期で読むので、
+// 「reload 後」は resetModules + dynamic import で作る。
+describe('dev の印を localStorage に残す (reload をまたぐ)', () => {
+  const KEY = 'alc_dev_device_kiosk'
+
+  /** reload 後の module を読み込む (起動時に localStorage を読む)。 */
+  async function reloaded(): Promise<typeof import('~/utils/token-selection')> {
+    vi.resetModules()
+    return await import('~/utils/token-selection')
+  }
+
+  it('dev のトークンが取れたら保存し、dev でないトークンが取れたら消す (kind ごと)', () => {
+    noteDeviceToken('kiosk', DEV)
+    noteDeviceToken('manager-device', DEV)
+    expect(localStorage.getItem(KEY)).toBe('1')
+    expect(localStorage.getItem('alc_dev_device_manager-device')).toBe('1')
+    expect(localStorage.getItem('alc_dev_device_bp-station')).toBeNull()
+
+    noteDeviceToken('kiosk', PLAIN)
+    expect(localStorage.getItem(KEY)).toBeNull()
+    expect(localStorage.getItem('alc_dev_device_manager-device')).toBe('1')
+  })
+
+  it('トークンを捨てただけ (null) では保存した印を消さない — 「取れなかった」と「dev でなくなった」は別', () => {
+    noteDeviceToken('kiosk', DEV)
+    noteDeviceToken('kiosk', null)
+
+    expect(isDevDevice('kiosk')).toBe(false)
+    expect(localStorage.getItem(KEY)).toBe('1')
+  })
+
+  it('★ 起動時に印が保存されていれば、端末のトークンをまだ取っていなくても admin を使わない', async () => {
+    localStorage.setItem(KEY, '1')
+    const mod = await reloaded()
+    const getter = vi.fn(async () => DEV)
+
+    expect(mod.isDevDevice('kiosk')).toBe(true)
+    expect(mod.isDevDevice('manager-device')).toBe(false)
+    expect(mod.usesAdminToken(ADMIN, 'kiosk')).toBe(false)
+    await expect(mod.selectSendToken(ADMIN, 'kiosk', getter)).resolves.toBe(DEV)
+    // 取り直しに失敗しても admin へは戻さない
+    await expect(mod.selectSendToken(ADMIN, 'kiosk', async () => null)).resolves.toBeNull()
+  })
+
+  it('★ dev でないトークンが取れたら印が消えて admin に戻る (次の起動でも戻ったまま)', async () => {
+    localStorage.setItem(KEY, '1')
+    const mod = await reloaded()
+
+    mod.noteDeviceToken('kiosk', PLAIN)
+
+    expect(mod.usesAdminToken(ADMIN, 'kiosk')).toBe(true)
+    await expect(mod.selectSendToken(ADMIN, 'kiosk', async () => PLAIN)).resolves.toBe(ADMIN)
+    expect(localStorage.getItem(KEY)).toBeNull()
+    expect((await reloaded()).isDevDevice('kiosk')).toBe(false)
+  })
+
+  it("保存された値が '1' 以外なら印なし", async () => {
+    localStorage.setItem(KEY, 'true')
+    expect((await reloaded()).isDevDevice('kiosk')).toBe(false)
+  })
+
+  it('localStorage が読みで例外を投げても落ちず、印なしで始まる (memory の印は動く)', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    const mod = await reloaded()
+
+    expect(mod.isDevDevice('kiosk')).toBe(false)
+    expect(mod.usesAdminToken(ADMIN, 'kiosk')).toBe(true)
+  })
+
+  it('localStorage が書きで例外を投げても落ちず、memory の印だけで動く', async () => {
+    const mod = await reloaded()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota') })
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('quota') })
+
+    expect(() => mod.noteDeviceToken('kiosk', DEV)).not.toThrow()
+    expect(mod.isDevDevice('kiosk')).toBe(true)
+    expect(() => mod.noteDeviceToken('kiosk', PLAIN)).not.toThrow()
+    expect(mod.isDevDevice('kiosk')).toBe(false)
+  })
+
+  it('localStorage 自体が無い環境 (SSR) でも読み込める', async () => {
+    vi.stubGlobal('localStorage', undefined)
+    const mod = await reloaded()
+
+    expect(mod.isDevDevice('kiosk')).toBe(false)
+    expect(() => mod.noteDeviceToken('kiosk', DEV)).not.toThrow()
+    expect(mod.isDevDevice('kiosk')).toBe(true)
   })
 })

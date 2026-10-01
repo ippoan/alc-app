@@ -19,6 +19,20 @@
  * {@link noteDeviceToken} で記録し、規則はその印 ({@link isDevDevice}) だけを見る。
  * 印がまだ無い (トークンを一度も取れていない) あいだは今までの優先順位のまま動く。
  *
+ * # 印は reload をまたいで残す
+ *
+ * 印が memory だけだと、reload の直後〜端末のトークンを取り直すまでのあいだ、管理者ログインの
+ * ある dev端末の書き込みが管理者のトークンで出て本番の行になる。だから印は localStorage にも
+ * 持ち、**起動時 (この module の読み込み時) に同期で読む**。
+ *
+ * - dev の claim を持つトークンが取れた → 立てる (memory + localStorage)
+ * - dev の claim を**持たない**トークンが取れた → 消す (memory + localStorage)。鍵の dev の印が
+ *   外された端末が dev のまま残らないように
+ * - トークンを捨てた (`null`。鍵を抜いた等) → memory の印だけ下ろす。**localStorage は触らない**
+ *   — 「取れなかった」と「dev でなくなった」は別のことで、次の起動ではまた dev として始める
+ *
+ * localStorage が使えない環境 (SSR・private mode・容量超過) では memory の印だけで動く。
+ *
  * # 署名は検証しない
  *
  * ここは「どのトークンを付けるか」を決めるだけで、検証は auth-worker がやる。
@@ -32,10 +46,38 @@ import { decodeJwtPayloadFromToken } from '@ippoan/auth-client'
  */
 export type DeviceTokenKind = 'kiosk' | 'manager-device' | 'bp-station'
 
+/** 保存先の key (kind ごと)。値は dev のとき `'1'`、dev でなければ key ごと消す。 */
+function storageKey(kind: DeviceTokenKind): string {
+  return `alc_dev_device_${kind}`
+}
+
+/** 保存してある印を読む。localStorage が使えなければ「印なし」。 */
+function readStoredMark(kind: DeviceTokenKind): boolean {
+  try {
+    return localStorage.getItem(storageKey(kind)) === '1'
+  }
+  catch {
+    return false
+  }
+}
+
+/** 印を保存する / 消す。保存できなくても、この起動のあいだは memory の印で動く。 */
+function writeStoredMark(kind: DeviceTokenKind, dev: boolean): void {
+  try {
+    if (dev) localStorage.setItem(storageKey(kind), '1')
+    else localStorage.removeItem(storageKey(kind))
+  }
+  catch {
+    // private mode・容量超過など。トークンの選択を落とさない
+  }
+}
+
+// 起動時に保存してある印を同期で読む — 端末のトークンをまだ取っていなくても、前回 dev だった
+// 端末は dev として始まる
 const devMarks: Record<DeviceTokenKind, boolean> = {
-  'kiosk': false,
-  'manager-device': false,
-  'bp-station': false,
+  'kiosk': readStoredMark('kiosk'),
+  'manager-device': readStoredMark('manager-device'),
+  'bp-station': readStoredMark('bp-station'),
 }
 
 /** 端末のトークンの payload に `dev_device === true` があるか (署名は見ない)。 */
@@ -48,12 +90,18 @@ export function isDevDeviceToken(token: string | null | undefined): boolean {
 /**
  * 端末のトークンの cache が書き換わったら呼ぶ (取れたとき / 捨てたとき)。
  * 取れたトークンが dev なら印を立て、dev でないトークン・`null` (鍵を抜いた等) なら下ろす。
+ * **保存してある印を書き換えるのはトークンが取れたときだけ** (`null` では触らない)。
  */
 export function noteDeviceToken(kind: DeviceTokenKind, token: string | null): void {
-  devMarks[kind] = isDevDeviceToken(token)
+  const dev = isDevDeviceToken(token)
+  devMarks[kind] = dev
+  if (token) writeStoredMark(kind, dev)
 }
 
-/** その種類の端末の鍵が dev だと分かっているか (同期。分かっていなければ false)。 */
+/**
+ * その種類の端末の鍵が dev だと分かっているか (同期。分かっていなければ false)。
+ * 起動直後は前回保存した印、以後は最後に取れた (または捨てた) トークンで決まる。
+ */
 export function isDevDevice(kind: DeviceTokenKind): boolean {
   return devMarks[kind]
 }

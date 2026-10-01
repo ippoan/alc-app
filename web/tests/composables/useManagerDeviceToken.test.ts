@@ -275,6 +275,30 @@ describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
   const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
   const jwtOf = (payload: Record<string, unknown>) => `${seg({ alg: 'HS256' })}.${seg(payload)}.sig`
 
+  // 印は localStorage にも残る (reload をまたぐ) ので、テスト間で持ち越さない
+  beforeEach(() => { localStorage.clear() })
+
+  it('dev でないトークンに替わったら印が消える (保存した印も)', async () => {
+    const devJwt = jwtOf({ sub: 'm1', aud: 'device', dev_device: true })
+    const plainJwt = jwtOf({ sub: 'm1', aud: 'device' })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      // 30 秒 = 手前マージンより短いので次の呼び出しで取り直す
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: devJwt, expires_in: 30 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: plainJwt, expires_in: 900 }) }))
+    const t = (await load())()
+    const { isDevDevice } = await import('~/utils/token-selection')
+
+    expect(await t.getManagerJwt()).toBe(devJwt)
+    expect(isDevDevice('manager-device')).toBe(true)
+    expect(localStorage.getItem('alc_dev_device_manager-device')).toBe('1')
+
+    expect(await t.getManagerJwt()).toBe(plainJwt)
+    expect(isDevDevice('manager-device')).toBe(false)
+    expect(localStorage.getItem('alc_dev_device_manager-device')).toBeNull()
+  })
+
   it('dev の鍵でトークンが取れたら運行管理者席の印だけが立つ (同期で読める)', async () => {
     const devJwt = jwtOf({ sub: 'm1', aud: 'device', dev_device: true })
     stubHappyPath({ access_token: devJwt, expires_in: 900 })
