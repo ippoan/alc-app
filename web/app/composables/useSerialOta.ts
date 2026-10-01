@@ -20,7 +20,8 @@
  * # 何を信じるか
  *
  * - **URL と版はメッセージから受け取らない。** 合図は `target` の語だけで、URL はこのファイルに
- *   固定した allowlist ({@link SERIAL_OTA_TARGETS}) から引く。表に無い target は無視する
+ *   無く、`utils/firmware-targets.ts` の表 ({@link FIRMWARE_TARGETS}) から引く。表に無い target は
+ *   無視する。この composable が実行するのは {@link RUNNABLE_TARGETS} に在るものだけ
  * - **VER は「更新するか」の判定にだけ使う。確定の条件は FLAVOR だけ。** Pages は CDN の
  *   max-age が 600 秒で、反映直後は manifest とイメージが一時的に食い違うことがあるため
  *   (manifest の版とイメージの中身がずれても、焼いたものが同じ機種のビルドなら確定してよい)
@@ -30,26 +31,19 @@
  */
 
 import { parseDeviceLine } from '~/utils/device-line'
-
-/** 対象の端末 1 種の固定情報 */
-interface SerialOtaTarget {
-  manifestUrl: string
-  appUrl: string
-  /** `DEVICE` 応答の `FLAVOR=` と、`OTA SERIAL` に載せる語 */
-  flavor: string
-}
+import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
+import type { FirmwareTarget } from '~/utils/firmware-targets'
 
 /**
- * 合図の `target` → 取りに行く先の allowlist。**URL はここにしか書かない。**
- * 合図 (WS のメッセージ) から URL や版を受け取ると、recorder を経由して任意のイメージを
- * 焼かせる口になるため。
+ * この composable が実行できる target。ここは `useVeinSerial` のポートで書くので、表
+ * ({@link FIRMWARE_TARGETS}) に載っていても、Vein Station 以外 (CoreS3) は走らせない
+ * (Refs ippoan/alc-app#403)
  */
-export const SERIAL_OTA_TARGETS: Readonly<Record<string, SerialOtaTarget>> = {
-  'timecard-station': {
-    manifestUrl: 'https://ippoan.github.io/alc-app-s3/manifest-timecard-station.json',
-    appUrl: 'https://ippoan.github.io/alc-app-s3/firmware/alc-hub-atoms3-timecard-station-app.bin',
-    flavor: 'timecard-station',
-  },
+const RUNNABLE_TARGETS: readonly string[] = ['timecard-station']
+
+/** 実行できる target の表の行。実行できない target (表に無いものを含む) は null */
+function runnableTarget(target: string): FirmwareTarget | null {
+  return RUNNABLE_TARGETS.includes(target) ? FIRMWARE_TARGETS[target]! : null
 }
 
 /** これ未満のイメージは壊れている (Pages の 404 ページ等) とみなして書かない */
@@ -136,21 +130,24 @@ export function useSerialOta() {
     }, RESULT_DISPLAY_MS)
   }
 
-  async function flash(target: SerialOtaTarget): Promise<void> {
+  async function flash(target: FirmwareTarget): Promise<void> {
     // 更新が要るかは画面に出さずに調べる (最新のキオスクで毎回画面が点滅しないように)
     const device = await readDevice()
-    // station 以外 (vein 等) がつながっているキオスクは対象外
-    if (device.flavor !== target.flavor) return
-    const manifest = await (await fetchOk(target.manifestUrl)).json() as { version?: unknown }
+    // station 以外 (vein 等) がつながっているキオスクは対象外。
+    // 以後の `OTA SERIAL` と再起動後の照合には、機体が名乗った FLAVOR を使う
+    const flavor = device.flavor
+    if (flavor === null || !Object.hasOwn(target.flavors, flavor)) return
+    const source = target.flavors[flavor]!
+    const manifest = await (await fetchOk(source.manifestUrl)).json() as { version?: unknown }
     if (typeof manifest.version !== 'string') throw new Error('manifest has no version')
     if (manifest.version === device.ver) return
 
     state.value = { kind: 'downloading' }
-    const image = new Uint8Array(await (await fetchOk(target.appUrl)).arrayBuffer())
+    const image = new Uint8Array(await (await fetchOk(source.appUrl)).arrayBuffer())
     if (image.length < MIN_IMAGE_BYTES) throw new Error(`image too small (${image.length} B)`)
 
     state.value = { kind: 'writing', pct: 0 }
-    const ready = await link.request(`OTA SERIAL ${image.length} ${target.flavor}`, 'OTA READY', BEGIN_TIMEOUT_MS, OTA_ERR)
+    const ready = await link.request(`OTA SERIAL ${image.length} ${flavor}`, 'OTA READY', BEGIN_TIMEOUT_MS, OTA_ERR)
     const chunk = Number.parseInt(ready.slice('OTA READY'.length).trim(), 10)
     if (!(chunk > 0)) throw new Error(`bad chunk size (${ready})`)
 
@@ -179,17 +176,17 @@ export function useSerialOta() {
     const after = await readDevice()
     // 確定の条件は FLAVOR だけ (VER は Pages の食い違いがありうるので見ない)。
     // 確定しなければ端末は 10 分後に元のスロットへ戻る
-    if (after.flavor !== target.flavor) throw new Error(`flavor mismatch after reboot (${after.flavor})`)
+    if (after.flavor !== flavor) throw new Error(`flavor mismatch after reboot (${after.flavor})`)
     await link.request('OTA CONFIRM', 'OTA CONFIRMED', CONFIRM_TIMEOUT_MS, OTA_ERR)
     settle({ kind: 'done', ver: after.ver ?? '' })
   }
 
   /**
-   * target の端末を更新する。allowlist に無い target・端末がつながっていない・
-   * 別の OTA が走っている、のどれかなら何もしない。
+   * target の端末を更新する。実行できない target ({@link RUNNABLE_TARGETS} に無い)・
+   * 端末がつながっていない・別の OTA が走っている、のどれかなら何もしない。
    */
   async function run(target: string): Promise<void> {
-    const entry = Object.hasOwn(SERIAL_OTA_TARGETS, target) ? SERIAL_OTA_TARGETS[target]! : null
+    const entry = runnableTarget(target)
     if (!entry || running || !link.isConnected.value) return
     running = true
     try {
@@ -208,10 +205,10 @@ export function useSerialOta() {
 
   /**
    * 合図を受けたが今は実行できない (点呼・打刻の途中) ときに預ける。
-   * allowlist に無い target は預けない。
+   * 実行できない target は預けない。
    */
   function enqueue(target: string): void {
-    if (Object.hasOwn(SERIAL_OTA_TARGETS, target)) queued = target
+    if (runnableTarget(target)) queued = target
   }
 
   /** 預けた target があれば走らせる (待機画面に戻ったときに呼ぶ) */

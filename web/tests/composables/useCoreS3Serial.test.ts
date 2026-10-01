@@ -930,6 +930,236 @@ describe('useCoreS3Serial', () => {
     })
   })
 
+  // ---------- ファームの書き込み中の錠 (Refs ippoan/alc-app#403) ----------
+
+  /**
+   * 機体は `OTA SERIAL` の後、イメージを受け切るまで受信したバイトを全部イメージとして読む。
+   * 錠 (`ota.begin()` 〜 `ota.end()`) の間、ここから機体へ届くのは `ota.request` だけ。
+   */
+  describe('ota (書き込み中の錠)', () => {
+    const DIAG_KEY = 'alc_serial_diag'
+    const getLog = (id: string): string => `EVT WS_COMMAND ${id} {"action":"get_log","lines":40}\n`
+    const hbCount = (dev: MockPortHandle): number => dev.writes.filter(line => line === 'HB OK\n').length
+
+    afterEach(() => {
+      // 錠はモジュールの変数。次のテストは load() で読み直すが、後始末の disconnect の前に解いておく
+      core.ota.end()
+      localStorage.removeItem(DIAG_KEY)
+    })
+
+    it('錠の間、write は送らずに false を返し、ポートを手放さない', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const before = [...dev.writes]
+
+      core.ota.begin()
+      await expect(core.write('STAGE alcohol')).resolves.toBe(false)
+      core.sendGrace()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(dev.writes).toEqual(before)
+      expect(core.isConnected.value).toBe(true)
+      expect(dev.port.close).not.toHaveBeenCalled()
+      const { readDiag } = await import('~/utils/serialDiagLog')
+      expect(readDiag().some(line => line.includes('reason=write_failed'))).toBe(false)
+    })
+
+    it('錠の間、通常の request は送らずに reject する', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const before = [...dev.writes]
+
+      core.ota.begin()
+      await expect(core.request('AUTH STATUS', 'AUTH ', 3000)).rejects.toThrow(mod.OTA_LOCKED_MESSAGE)
+      expect(mod.OTA_LOCKED_MESSAGE).toBe('request(cores3): ファームの書き込み中です')
+      expect(dev.writes).toEqual(before)
+
+      // 応答待ちの枠を使っていない: ota.request はそのまま通る
+      const p = core.ota.request('OTA SERIAL 10 cores3', 'OTA READY', 1000, 'OTA ERR')
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('OTA READY 4096\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('OTA READY 4096')
+    })
+
+    it('錠の間、ハートビートが止まる (3 秒を過ぎても HB OK が出ない)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      expect(hbCount(dev)).toBe(1)
+
+      core.ota.begin()
+      await vi.advanceTimersByTimeAsync(9500)
+      expect(hbCount(dev)).toBe(1)
+    })
+
+    it('錠の間、get_log の返信を始めない (EVT の配布は今までどおり)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      localStorage.setItem(DIAG_KEY, JSON.stringify(['a', 'b']))
+      const events: string[] = []
+      core.onEvent(name => events.push(name))
+      const before = [...dev.writes]
+
+      core.ota.begin()
+      dev.emit(getLog('7'))
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(events).toEqual(['WS_COMMAND'])
+      expect(dev.writes).toEqual(before)
+    })
+
+    it('進行中の get_log の返信は、錠を掛けた時点で残りを送らない', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      localStorage.setItem(DIAG_KEY, JSON.stringify(['a', 'b', 'c']))
+
+      dev.emit(getLog('8'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('PWALOG 8 a\n')
+
+      core.ota.begin()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(dev.writes.filter(line => line.startsWith('PWALOG '))).toEqual(['PWALOG 8 a\n'])
+
+      // 錠を解いても、打ち切った返信の続きは出ない
+      core.ota.end()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(dev.writes.filter(line => line.startsWith('PWALOG '))).toEqual(['PWALOG 8 a\n'])
+    })
+
+    it('錠の間に掴み直してもハートビートを始めない (名乗り・接続・onOpen の cb は今までどおり)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      const opened: Array<string | null> = []
+      core.onOpen(() => opened.push(core.deviceInfo.value?.ver ?? null))
+      expect(opened).toEqual(['1.2.3'])
+
+      core.ota.begin()
+      // 書き込み後の再起動: ポートを失い、10 秒後の再スキャンで掴み直す
+      await core.release()
+      expect(core.isConnected.value).toBe(false)
+      expect(core.deviceInfo.value).toBeNull()
+      dev.emit('DEVICE cores3 VER=1.2.4 BOARD=cores3 FLAVOR=cores3\n')
+      await vi.advanceTimersByTimeAsync(11_000)
+
+      expect(core.isConnected.value).toBe(true)
+      expect(core.deviceInfo.value).toEqual({ ver: '1.2.4', board: 'cores3', flavor: 'cores3' })
+      expect(opened).toEqual(['1.2.3', '1.2.4'])
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(hbCount(dev)).toBe(1)
+
+      // 解いたら接続直後と同じ: 即 1 本 + 3 秒ごと
+      core.ota.end()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(hbCount(dev)).toBe(2)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbCount(dev)).toBe(3)
+    })
+
+    it('ota.request は錠が無くても通り、文字列は行として書く', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      const p = core.ota.request('DEVICE', 'DEVICE ', 1000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('DEVICE\n')
+      dev.emit('DEVICE cores3 VER=1.2.3\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('DEVICE cores3 VER=1.2.3')
+    })
+
+    it('ota.request はバイト列を改行を足さずに書き、応答を待つ', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      core.ota.begin()
+
+      const p = core.ota.request(new TextEncoder().encode('abc'), 'OTA ACK', 1000, 'OTA ERR')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('abc')
+      dev.emit('OTA ACK 3\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('OTA ACK 3')
+    })
+
+    it('ota.request は errPrefix を arbiter へ渡す (OTA ERR の行で reject する)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      core.ota.begin()
+
+      const p = core.ota.request('OTA SERIAL 10 cores3', 'OTA READY', 1000, 'OTA ERR')
+      const settled = expect(p).rejects.toThrow('OTA ERR busy')
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('OTA ERR busy\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await settled
+    })
+
+    it('ota.end(): 繋がっていれば HB OK を即 1 本送り、周期が再開し、write / request も戻る', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      core.ota.begin()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(hbCount(dev)).toBe(1)
+
+      core.ota.end()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(hbCount(dev)).toBe(2)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbCount(dev)).toBe(3)
+
+      await expect(core.write('STAGE nfc')).resolves.toBe(true)
+      expect(dev.writes.at(-1)).toBe('STAGE nfc\n')
+      const p = core.request('AUTH STATUS', 'AUTH ', 3000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('AUTH STATUS\n')
+      dev.emit('AUTH UNPAIRED\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('AUTH UNPAIRED')
+    })
+
+    it('ota.end(): 未接続なら何も送らず、例外も出ない (次の接続でハートビートが始まる)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+      core.ota.begin()
+      await core.release()
+      const before = dev.writes.length
+
+      expect(() => core.ota.end()).not.toThrow()
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(dev.writes.slice(before)).toEqual([])
+
+      dev.emit('DEVICE cores3 VER=1.2.3\n')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(core.isConnected.value).toBe(true)
+      expect(hbCount(dev)).toBe(2)
+    })
+
+    it('ota.end(): 錠が掛かっていないときに呼んでも二重のタイマーが出来ない (3 秒で HB OK が 1 本だけ)', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      core.ota.end()
+      core.ota.end()
+      const before = dev.writes.length
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.slice(before)).toEqual(['HB OK\n'])
+    })
+
+    it('ota.begin() を 2 回呼んでも、ota.end() 1 回で解ける', async () => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      core.ota.begin()
+      core.ota.begin()
+      core.ota.end()
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(core.write('STAGE nfc')).resolves.toBe(true)
+      const before = dev.writes.length
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.slice(before)).toEqual(['HB OK\n'])
+    })
+  })
+
   // ---------- 公開 API の形 ----------
 
   it('navigator.serial は直接触らない (列挙は arbiter 経由)', async () => {

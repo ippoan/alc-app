@@ -355,9 +355,39 @@ describe('useSerialOta', () => {
       [MANIFEST_URL, { cache: 'no-store' }],
       [APP_URL, { cache: 'no-store' }],
     ])
-    expect(mod.SERIAL_OTA_TARGETS).toEqual({
-      'timecard-station': { manifestUrl: MANIFEST_URL, appUrl: APP_URL, flavor: 'timecard-station' },
-    })
+    // 表の中身は tests/utils/firmware-targets.test.ts で見る (Refs ippoan/alc-app#403)
+  })
+
+  // ---------- 表に載っていても、ここが実行するのは Vein Station だけ (Refs ippoan/alc-app#403) ----------
+
+  it('cores3 は表に在るが、run も enqueue → runQueued も機体へ 1 行も送らず fetch もしない', async () => {
+    const { FIRMWARE_TARGETS } = await import('~/utils/firmware-targets')
+    expect(Object.hasOwn(FIRMWARE_TARGETS, 'cores3')).toBe(true)
+    // 機体が CoreS3 の flavor を名乗っていても、Vein のポートでは書かない
+    dev.flavor = 'cores3'
+
+    await runToEnd('cores3')
+    ota.enqueue('cores3')
+    await ota.runQueued()
+
+    expect(link.request).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(ota.state.value).toEqual({ kind: 'idle' })
+  })
+
+  it('機体が FLAVOR を名乗らなければ何もしない', async () => {
+    dev.flavor = ''
+    await runToEnd()
+    expect(dev.log).toEqual(['DEVICE'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(ota.state.value).toEqual({ kind: 'idle' })
+  })
+
+  it('別の target の flavor を名乗る機体 (cores3) には書かない', async () => {
+    dev.flavor = 'cores3'
+    await runToEnd()
+    expect(dev.log).toEqual(['DEVICE'])
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   // ---------- 対象外・前提の欠け ----------
