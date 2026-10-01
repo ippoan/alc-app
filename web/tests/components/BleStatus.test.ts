@@ -434,4 +434,44 @@ describe('BleStatus — 測定値がそろうと自動的に次へ進む (Refs #
 
     wrapper.unmount()
   })
+
+  it('血圧を使う端末は体温だけ届くと「血圧の測定を待っています」を出し、血圧が届くと消す', async () => {
+    bpUiState.value = 'show'
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+    expect(wrapper.find('[data-testid="bp-waiting-note"]').exists()).toBe(false)
+
+    latestTemperature.value = { value: 36.5 }
+    await wrapper.vm.$nextTick()
+    const note = wrapper.find('[data-testid="bp-waiting-note"]')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toContain('血圧の測定を待っています')
+
+    latestBloodPressure.value = { systolic: 118, diastolic: 76 }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="bp-waiting-note"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('血圧を使わない端末は体温だけ届いても待ちの案内を出さない', async () => {
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    latestTemperature.value = { value: 36.5 }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="bp-waiting-note"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('血圧を使う端末でも体温がまだ届いていなければ待ちの案内は出ない', async () => {
+    bpUiState.value = 'show'
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    expect(wrapper.find('[data-testid="bp-waiting-note"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
 })
