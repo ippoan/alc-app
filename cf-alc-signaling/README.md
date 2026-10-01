@@ -27,6 +27,20 @@ Cloudflare Durable Objects による WebRTC シグナリングサーバー。
 - `role=device` — 測定端末 (SDP Offer 送信側)
 - `role=admin` — 管理者ダッシュボード (SDP Answer 送信側)
 
+### dev端末の区別 (任意の `token`)
+
+`/room/:roomId`・`/watch-rooms`・`GET /active-rooms` は任意の query `token` を受ける
+(Refs ippoan/alc-app#387)。
+
+- `token` が無い — dev でない接続として従来どおりに動く。
+- `token` がある — auth-worker `/auth/introspect` で検証し、応答の `dev_device === true`
+  のときだけ dev端末として扱う。**検証に落ちたら `401 Unauthorized` で拒否する**
+  (dev でない側に倒さない)。
+- dev の device が入った部屋は、dev の購読者 (`/watch-rooms`・`/active-rooms`) にだけ見え、
+  着信通知 (FCM) にも載らない。dev でない購読者には dev でない部屋だけが見える。
+- dev の device が入った部屋に dev でない admin が入ろうとすると `403`。admin が先に居る
+  部屋に dev の device が入ると、dev でない admin は close code `1008` で切られる。
+
 ### メッセージプロトコル
 
 ```jsonc
@@ -53,6 +67,7 @@ Cloudflare Durable Objects による WebRTC シグナリングサーバー。
 ```bash
 npm install
 npm run dev     # localhost:8787
+npm test        # vitest (workerd 上で DO ごと動かす。cf-alc-recorder と同構成)
 ```
 
 ## デプロイ
