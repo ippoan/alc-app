@@ -15,6 +15,26 @@
 
 export type LicenseExpiryStatus = 'valid' | 'expiring_soon' | 'expired'
 
+/**
+ * 端末が `EVT NFC_LICENSE issue=… expiry=…` で寄越す日付 1 つぶんの桁数。
+ *
+ * firmware (`nfc_shim.cpp`) は交付日・有効期限それぞれに 9 バイト以上のバッファを
+ * 要求しており、どちらも YYYYMMDD の 8 文字。
+ */
+export const LICENSE_DATE_LEN = 8
+
+/**
+ * 端末が読んだ免許証の交付日と有効期限から、社員の照会に使う NFC ID (16 桁) を作る。
+ * どちらかの桁が合わなければ null (途中で切れた行を採らない)。
+ *
+ * 式を持つのはここ 1 か所 — 免許証の読み取り口 (`useNfcReader`) と警告デバイス
+ * (`useAlarmDevice`) が同じ関数を使う (Refs ippoan/alc-app#387)。
+ */
+export function licenseNfcId(issue: string, expiry: string): string | null {
+  if (issue.length !== LICENSE_DATE_LEN || expiry.length !== LICENSE_DATE_LEN) return null
+  return issue + expiry
+}
+
 /** hex 文字列から交付年月日を抽出して Date に変換 (chars 10-17) */
 export function parseLicenseIssueDate(hexString: string): Date | null {
   if (!hexString || hexString.length < 18) return null

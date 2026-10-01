@@ -15,6 +15,7 @@ import {
   createSchedule, batchCreateSchedules, listSchedules, getSchedule, updateSchedule, deleteSchedule,
   getPendingSchedules,
   startTenkoSession, submitAlcohol, getTenkoDashboard, getEmployees,
+  lookupEmployeeByCard,
 } from '~/utils/api'
 
 const API_BASE = 'https://api.example.test'
@@ -136,6 +137,44 @@ describe('api.ts — 予定の口は運行管理者席の鍵で通す (#337)', (
 
     expect(kioskGetter).toHaveBeenCalledTimes(1)
     expect(bearerOf(fetchMock.mock.calls[0]!)).toBe(`Bearer ${KIOSK_JWT}`)
+  })
+})
+
+// カードの id から社員を引く口 (読み取り専用・打刻しない、Refs ippoan/alc-app#387)。
+// IT点呼 の受け画面が、警告デバイスにタッチしたカードで席の運行管理者を登録するときに使う。
+// このファイルは fetch を自前で stub するので、実物の API へは飛ばない
+describe('api.ts — lookupEmployeeByCard', () => {
+  const CARD = '0123456789abcdef'
+
+  it('POST /api/timecard/cards/lookup、id は body に載せる (URL には載せない)', async () => {
+    const employee = { id: 'mgr-1', name: '運行 管理', role: ['manager'] }
+    fetchMock.mockResolvedValue(okJson(employee))
+    initManagerSeat()
+    expect(await lookupEmployeeByCard(CARD, 'manager-device')).toEqual(employee)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/proxy/timecard/cards/lookup')
+    expect(url).not.toContain(CARD)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ card_id: CARD })
+  })
+
+  it("'manager-device' なら運行管理者席の鍵で通る (キオスクの鍵は使わない)", async () => {
+    initManagerSeat()
+    await lookupEmployeeByCard(CARD, 'manager-device')
+
+    expect(managerGetter).toHaveBeenCalledTimes(1)
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(bearerOf(fetchMock.mock.calls[0]!)).toBe(`Bearer ${MANAGER_JWT}`)
+  })
+
+  it('席の鍵が取れなければ理由を投げ、送らない (キオスクの鍵へ落とさない)', async () => {
+    managerGetter.mockResolvedValue(null)
+    initManagerSeat()
+    await expect(lookupEmployeeByCard(CARD, 'manager-device')).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(kioskGetter).not.toHaveBeenCalled()
   })
 })
 

@@ -25,17 +25,10 @@
 import type { NfcReadEvent, NfcLicenseReadEvent, NfcErrorEvent, NfcReadSource } from '~/types'
 import { isWebSerialSupported } from '~/utils/webserial'
 import { evtArg as argValue } from '~/composables/useCoreS3Serial'
+import { licenseNfcId } from '~/utils/license'
 
 /** 同じ免許証を配り直さない窓 (経路の切り替わり際の二重配布を断つ) */
 const DEDUPE_WINDOW_MS = 3000
-
-/**
- * CoreS3 が寄越す日付 1 つぶんの桁数。
- *
- * firmware (`nfc_shim.cpp`) は交付日・有効期限それぞれに 9 バイト以上のバッファを
- * 要求しており、どちらも YYYYMMDD の 8 文字。
- */
-const DATE_LEN = 8
 
 /**
  * card_id / expiry_date の頭に詰める 10 桁の詰め物。
@@ -134,11 +127,12 @@ export function useNfcReader() {
       const issue = argValue(args, 'issue')
       const expiry = argValue(args, 'expiry')
       // 26 桁の契約を満たせない行は捨てる (utils/license.ts の桁が合わなくなる)
-      if (issue.length !== DATE_LEN || expiry.length !== DATE_LEN) return
+      const nfcId = licenseNfcId(issue, expiry)
+      if (!nfcId) return
 
       console.log(`[NFC] License read (${source}):`, { issue, expiry })
 
-      const cardId = CARD_ID_PAD + issue + expiry
+      const cardId = CARD_ID_PAD + nfcId
       // useNfcWebSocket と同じ順 — 先に期限を配り、続けて読み取りを配る
       emitLicenseRead({
         type: 'nfc_license_read',
@@ -148,7 +142,7 @@ export function useNfcReader() {
         // ATR は USB CDC の行に乗らない (ブリッジ経由でのみ得られる)
         atr: '',
       })
-      emitRead(issue + expiry, source, 'driver_license')
+      emitRead(nfcId, source, 'driver_license')
       return
     }
 

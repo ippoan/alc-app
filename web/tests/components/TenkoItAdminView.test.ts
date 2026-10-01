@@ -20,6 +20,7 @@ const getEmployeesMock = vi.fn()
 const getTenkoSessionMock = vi.fn()
 const listTenkoSessionsMock = vi.fn()
 const getMeasurementMock = vi.fn()
+const lookupEmployeeByCardMock = vi.fn()
 
 vi.mock('~/utils/api', async importOriginal => ({
   // 席の鍵が取れないときに `request()` が投げる文言。実物の定数をそのまま使う
@@ -30,6 +31,7 @@ vi.mock('~/utils/api', async importOriginal => ({
   getTenkoSession: (...args: unknown[]) => getTenkoSessionMock(...args),
   listTenkoSessions: (...args: unknown[]) => listTenkoSessionsMock(...args),
   getMeasurement: (...args: unknown[]) => getMeasurementMock(...args),
+  lookupEmployeeByCard: (...args: unknown[]) => lookupEmployeeByCardMock(...args),
   submitManagerJudgment: vi.fn(),
   getDriverInfo: vi.fn(async () => null),
 }))
@@ -54,7 +56,9 @@ mockNuxtImport('useActiveRooms', () => () => ({
 
 // 警告デバイス本体のボタンの押下の回数 (実物はシリアルの行から数える module の ref)
 const buttonPressCountRef = ref(0)
-mockNuxtImport('useAlarmDevice', () => () => ({ buttonPressCount: buttonPressCountRef }))
+// 警告デバイスが NFC で読んだカード (実物はシリアルの行から作る module の ref)
+const cardReadRef = ref<{ seq: number, lookupId: string } | null>(null)
+mockNuxtImport('useAlarmDevice', () => () => ({ buttonPressCount: buttonPressCountRef, cardRead: cardReadRef }))
 
 const connectMock = vi.fn(async (..._args: unknown[]) => {})
 const startStreamingMock = vi.fn(async () => {})
@@ -153,6 +157,7 @@ beforeEach(() => {
   webRtcRoles.length = 0
   activeRoomsRef.value = []
   callingRoomsRef.value = []
+  cardReadRef.value = null
   // 既定: この席には運行管理者 mgr-1 が登録済み
   localStorage.clear()
   localStorage.setItem(MANAGER_KEY, 'mgr-1')
@@ -846,5 +851,318 @@ describe('TenkoItAdminView — 警告デバイス本体のボタン', () => {
     buttonPressCountRef.value += 1
     await flush()
     expect(connectMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('TenkoItAdminView — 警告デバイスへのカードのタッチ', () => {
+  const CARD = '0123456789abcdef'
+  const OTHER_CARD = '04a1b2c3'
+  const OTHER = { id: 'mgr-2', name: '交代 管理', role: ['admin'] }
+  const NOT_REGISTERED = 'このカードは登録されていません。社員番号で登録してください'
+  const LOOKUP_FAILED = 'カードを確認できませんでした。もう一度タッチしてください'
+  const cardErrorLine = (w: Wrapper) => w.find('[data-testid="it-manager-card-error"]')
+
+  /** 機体がカードを読んだ (連番を進めて合図を出す) */
+  async function touch(w: Wrapper, lookupId = CARD) {
+    cardReadRef.value = { seq: (cardReadRef.value?.seq ?? 0) + 1, lookupId }
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  /** 応答を自分で返す照会。返した関数で resolve する */
+  function deferLookup() {
+    const resolvers: Array<(v: unknown) => void> = []
+    lookupEmployeeByCardMock.mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve) }))
+    return resolvers
+  }
+
+  async function settle(w: Wrapper) {
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  it('未登録でタッチ → 席の鍵の口で引いて登録され、名前が出て席に残る (入力は要らない)', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+    const w = await mountView()
+    expect(card(w).find('input').exists()).toBe(true)
+
+    await touch(w)
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledWith(CARD, 'manager-device')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    expect(card(w).find('input').exists()).toBe(false)
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+    // 社員番号の照会も、点呼を開くこともしない
+    expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('★ 登録済みで別の人がタッチ → 確認なしで切り替わる (入力欄が出ていなくても受ける)', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    const confirmMock = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirmMock)
+    const w = await mountView()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    expect(card(w).find('input').exists()).toBe(false)
+
+    await touch(w, OTHER_CARD)
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('交代 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-2')
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(idModal(w).exists()).toBe(false)
+    vi.unstubAllGlobals()
+    w.unmount()
+  })
+
+  it('切り替えた後の判定者は、タッチした人になる', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await touch(w, OTHER_CARD)
+    await click(incoming(w).find('button'), w)
+    expect(panel(w).props('managerId')).toBe('mgr-2')
+    w.unmount()
+  })
+
+  it('点呼を開いている間 (通話中・通話なし) のタッチは無視する (照会もしない)', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').text()).toContain('通話中の IT点呼')
+    await touch(w, OTHER_CARD)
+    expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    expect(panel(w).props('managerId')).toBe('mgr-1')
+    w.unmount()
+
+    activeRoomsRef.value = []
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-1')], total: 1, page: 1, per_page: 50 })
+    const w2 = await mountView()
+    await click(pendingRows(w2)[0]!.find('button'), w2)
+    expect(w2.find('[data-testid="it-opened"]').text()).toContain('通話なしで確定する IT点呼')
+    await touch(w2, OTHER_CARD)
+    expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+    w2.unmount()
+  })
+
+  it('繋いでいる途中のタッチは無視する', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    activeRoomsRef.value = ['it-session-1']
+    let resolveConnect!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((resolve) => { resolveConnect = resolve }))
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+
+    await touch(w, OTHER_CARD)
+    expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+
+    resolveConnect()
+    await settle(w)
+    expect(panel(w).props('managerId')).toBe('mgr-1')
+    w.unmount()
+  })
+
+  it('★ 照会を待つ間に点呼を開いたら登録しない (判定者は替わらない・エラーも出さない)', async () => {
+    const resolvers = deferLookup()
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await touch(w, OTHER_CARD)
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+
+    await click(incoming(w).find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(true)
+
+    resolvers[0]!(OTHER)
+    await settle(w)
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+    expect(panel(w).props('managerId')).toBe('mgr-1')
+    expect(cardErrorLine(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('照会を待つ間に点呼を開いたら、照会の失敗も出さない', async () => {
+    let reject!: (e: unknown) => void
+    lookupEmployeeByCardMock.mockImplementation(() => new Promise((_resolve, rj) => { reject = rj }))
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await touch(w, OTHER_CARD)
+    await click(incoming(w).find('button'), w)
+
+    reject(Object.assign(new Error('API エラー (404)'), { status: 404 }))
+    await settle(w)
+    expect(cardErrorLine(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('★ 続けて 2 回タッチしたら後のタッチだけが効く (先の応答が後から返っても、先に返っても)', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    const resolvers = deferLookup()
+    const w = await mountView()
+    await touch(w, CARD)
+    await touch(w, OTHER_CARD)
+    expect(lookupEmployeeByCardMock.mock.calls.map(c => c[0])).toEqual([CARD, OTHER_CARD])
+
+    // 先のタッチの応答が先に返る → 捨てる (まだ未登録のまま)
+    resolvers[0]!(MANAGER)
+    await settle(w)
+    expect(card(w).find('input').exists()).toBe(true)
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
+
+    resolvers[1]!(OTHER)
+    await settle(w)
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('交代 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-2')
+    w.unmount()
+
+    // 後のタッチの応答が先に返り、先のタッチの応答が後から返る → 後のタッチのまま
+    localStorage.removeItem(MANAGER_KEY)
+    cardReadRef.value = null
+    const again = deferLookup()
+    const w2 = await mountView()
+    await touch(w2, CARD)
+    await touch(w2, OTHER_CARD)
+    again[1]!(OTHER)
+    await settle(w2)
+    again[0]!(MANAGER)
+    await settle(w2)
+    expect(card(w2).find('[data-testid="it-manager-name"]').text()).toBe('交代 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-2')
+    w2.unmount()
+  })
+
+  it('モーダル表示中のタッチ → 登録して、待っていた対象をそのまま開く', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(connectMock).not.toHaveBeenCalled()
+
+    await touch(w)
+    expect(idModal(w).exists()).toBe(false)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    expect(panel(w).props('managerId')).toBe('mgr-1')
+    expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('モーダル表示中のタッチの失敗は、モーダルのエラーに出す (開かない)', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    lookupEmployeeByCardMock.mockRejectedValue(Object.assign(new Error('API エラー (404)'), { status: 404 }))
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+
+    await touch(w)
+    expect(idModal(w).text()).toContain(NOT_REGISTERED)
+    expect(cardErrorLine(w).exists()).toBe(false)
+    expect(connectMock).not.toHaveBeenCalled()
+
+    // タッチし直して登録できたらエラーは消え、そのまま開く
+    lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+    await touch(w)
+    expect(idModal(w).exists()).toBe(false)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it.each([
+    ['未登録のカード (404)', Object.assign(new Error('API エラー (404)'), { status: 404 }), NOT_REGISTERED],
+    ['席の鍵が取れない', new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE), MANAGER_DEVICE_AUTH_FAILED_MESSAGE],
+    ['そのほかの失敗', Object.assign(new Error('API エラー (500)'), { status: 500 }), LOOKUP_FAILED],
+  ])('失敗の文言 (%s) を上部の枠に出す。カードの id は出さない', async (_label, error, message) => {
+    localStorage.removeItem(MANAGER_KEY)
+    lookupEmployeeByCardMock.mockRejectedValue(error)
+    const w = await mountView()
+    await touch(w)
+    expect(cardErrorLine(w).text()).toBe(message)
+    expect(w.text()).not.toContain(CARD)
+    expect(card(w).find('input').exists()).toBe(true)
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
+    w.unmount()
+  })
+
+  it('権限の無い人のタッチは、その旨を出して前の登録を変えない (登録済みの表示でも文言が出る)', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue({ id: 'emp-1', name: '山田 太郎', role: ['driver'] })
+    const w = await mountView()
+    await touch(w)
+    expect(cardErrorLine(w).text()).toBe('山田 太郎さんには運行管理者の権限がありません')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+
+    // 次のタッチで登録できたら文言は消える
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    await touch(w, OTHER_CARD)
+    expect(cardErrorLine(w).exists()).toBe(false)
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('交代 管理')
+    w.unmount()
+  })
+
+  it('カードの id を localStorage にも console にも残さない', async () => {
+    const spies = (['log', 'warn', 'error', 'info', 'debug'] as const)
+      .map(level => vi.spyOn(console, level).mockImplementation(() => {}))
+    lookupEmployeeByCardMock.mockResolvedValueOnce(MANAGER).mockRejectedValueOnce(new Error('boom'))
+    localStorage.removeItem(MANAGER_KEY)
+    const w = await mountView()
+    await touch(w)
+    await touch(w, OTHER_CARD)
+
+    const stored = Array.from({ length: localStorage.length }, (_, i) => localStorage.getItem(localStorage.key(i)!))
+    expect(stored).toEqual(['mgr-1'])
+    const printed = spies.flatMap(spy => spy.mock.calls).map(args => JSON.stringify(args))
+    expect(printed.filter(text => text.includes(CARD) || text.includes(OTHER_CARD))).toEqual([])
+    spies.forEach(spy => spy.mockRestore())
+    w.unmount()
+  })
+
+  it('mount より前の合図は拾わない (画面を開いた時点では登録しない)', async () => {
+    cardReadRef.value = { seq: 7, lookupId: OTHER_CARD }
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    const w = await mountView()
+    expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    w.unmount()
+  })
+
+  it('画面を閉じた後のタッチでは何も起きない', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    const w = await mountView()
+    w.unmount()
+    cardReadRef.value = { seq: 1, lookupId: OTHER_CARD }
+    await flush()
+    expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+  })
+
+  it('照会を待つ間に画面を閉じたら登録しない (席の保存も変えない)', async () => {
+    const resolvers = deferLookup()
+    const w = await mountView()
+    await touch(w, OTHER_CARD)
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+
+    resolvers[0]!(OTHER)
+    await flush()
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+  })
+
+  it('合図が null に戻っても何もしない', async () => {
+    lookupEmployeeByCardMock.mockResolvedValue(OTHER)
+    const w = await mountView()
+    await touch(w, OTHER_CARD)
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+    cardReadRef.value = null
+    await settle(w)
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+    w.unmount()
   })
 })

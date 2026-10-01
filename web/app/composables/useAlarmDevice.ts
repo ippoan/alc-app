@@ -16,6 +16,8 @@
  *   dev  → host `DEVICE alarm VER=<ver>`    … プローブへの応答 (名乗り、arbiter が判定)
  *   dev  → host `STATUS alarm state=<idle|alarming|muted> cause=<none|silence|ng:<reason>|call> hb_age_ms=<n|-> VER=<ver>`
  *   dev  → host `EVT ALARM state=<...> cause=<...>` … 状態遷移のたび + 5 秒ごと無条件
+ *   dev  → host `EVT NFC_LOGIN card_id=<16 進> card_kind=<felica_idm|nfca_uid>` … 社員証の IC カードを読んだ
+ *   dev  → host `EVT NFC_LICENSE issue=<8 桁> expiry=<8 桁>`                    … 運転免許証を読んだ
  * 末尾トークン ` call=1` / ` call=0` は任意 (無ければ 0)。` grace=<秒>` も任意 (下記)。
  *
  * `DEVICE` は名乗り専用で状態を持たない。接続直後の初期状態 (`state=`/`cause=`) は
@@ -44,11 +46,20 @@
  * (`buttonPressCount`。alarming → muted を作るのは本体のボタンだけ、Refs ippoan/alc-app#387)。
  * 5 秒ごとの再送・`STATUS` の応答・接続直後の最初の行・ほかの遷移では数えない。
  *
+ * NFC を持つ機体は、カードを読むと上の 2 種類の行を出す (機体は打刻しない)。ここは行を検査して
+ * **「読んだカード」の合図** (`cardRead` = 連番 + 社員の照会に送る id) を出すだけで、照会も登録も
+ * しない (読むのは IT点呼 の受け画面、Refs ippoan/alc-app#387)。途中で切れた行・知らない種類の
+ * カードは捨てる。接続時にプローブ中の行として渡された分 (= 繋ぐ前のタッチ) は合図にしない。
+ * 同じカードの連続の読み取りを抑えるのは機体の役目で、ここは届いた行の数だけ合図を出す。
+ * **カードの id はログに出さない。**
+ *
  * 診断ログ (`[ALARM-DEV]`) は運行者端末の DevTools で読む用に出しっぱなし (Refs #197)。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { msSinceLoad, writeLine } from '~/composables/useSerialArbiter'
+import { evtArg } from '~/composables/useCoreS3Serial'
+import { licenseNfcId } from '~/utils/license'
 
 /** デバイスが報告する鳴動状態 */
 export interface AlarmDeviceState {
@@ -56,7 +67,15 @@ export interface AlarmDeviceState {
   cause: string
 }
 
-/** arbiter に登録する名前 */
+/**
+ * 機体が読んだカード 1 枚ぶんの合図。`seq` は読むたびに増える連番 (同じカードでも増える)、
+ * `lookupId` は社員の照会 (`lookupEmployeeByCard`) に送る id
+ */
+export interface AlarmCardRead {
+  seq: number
+  lookupId: string
+}
+
 /**
  * arbiter に登録する名前。`DEVICE alarm` の kind (auth-worker の `DEVICE_KINDS` の
  * key に揃えた語彙、Refs ippoan/alc-app#353) と一致させる — arbiter は `DEVICE <kind>`
@@ -98,12 +117,21 @@ const isConnected = ref(false)
 const deviceState = ref<AlarmDeviceState | null>(null)
 /** 着信で鳴っている間に本体のボタンが押された回数 (増えるだけ。読む側は watch する) */
 const buttonPressCount = ref(0)
+/** 機体が最後に読んだカード (まだ 1 枚も読んでいなければ null。読む側は watch する) */
+const cardRead = ref<AlarmCardRead | null>(null)
 
 /**
  * 状態行 (`state=`/`cause=` を積む行) の始まり。行頭とは限らない — シリアルの行は原子的でなく、
  * 直前のログ行が途中で切れて連結されうる (useSerialArbiter の request の照合と同じ理由)
  */
 const STATE_LINE = /STATUS alarm|EVT ALARM/
+
+/** カードの行の始まり (状態行と同じく、行頭とは限らない) */
+const CARD_LINE = /EVT NFC_(LOGIN|LICENSE)(?= )/
+/** `EVT NFC_LOGIN` の `card_kind` として受ける語 */
+const CARD_KINDS = ['felica_idm', 'nfca_uid']
+/** `EVT NFC_LOGIN` の `card_id` の形 (16 進の 8〜20 桁) */
+const CARD_ID = /^[0-9a-f]{8,20}$/i
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 /** 預かっているポートの writer (未接続なら null)。grace の送り先 */
@@ -153,9 +181,32 @@ export function useAlarmDevice() {
    * 状態行だけを畳む (機種識別ではなく、状態行の振り分けにだけ使う。機種識別は `DEVICE alarm` を
    * 見る arbiter 側、Refs ippoan/alc-app#353)。行の途中に在っても拾い、見つけた位置から後ろだけを読む
    */
-  function handleLine(line: string): void {
+  function handleStateLine(line: string): void {
     const at = line.search(STATE_LINE)
     if (at >= 0) applyLine(line.slice(at))
+  }
+
+  /**
+   * カードの行から、社員の照会に送る id を取り出す。採れない行は null:
+   * IC カードは種類が知っている語で id が 16 進の 8〜20 桁のときだけ、免許証は交付日と
+   * 有効期限の桁が合うときだけ (種類は行の末尾に在るので、途中で切れた行はここで落ちる)
+   */
+  function cardLookupId(line: string): string | null {
+    const hit = CARD_LINE.exec(line)
+    if (!hit) return null
+    const args = line.slice(hit.index).split(' ')
+    if (hit[1] === 'LICENSE') return licenseNfcId(evtArg(args, 'issue'), evtArg(args, 'expiry'))
+    const cardId = evtArg(args, 'card_id')
+    return CARD_KINDS.includes(evtArg(args, 'card_kind')) && CARD_ID.test(cardId) ? cardId : null
+  }
+
+  /** 接続後に届いた 1 行。状態行を畳み、カードの行なら合図を出す (id はログに出さない) */
+  function handleLine(line: string): void {
+    handleStateLine(line)
+    const lookupId = cardLookupId(line)
+    if (!lookupId) return
+    cardRead.value = { seq: (cardRead.value?.seq ?? 0) + 1, lookupId }
+    log('card read')
   }
 
   // --- heartbeat ---
@@ -234,8 +285,9 @@ export function useAlarmDevice() {
       sessionStorage.setItem(RECONNECT_MARK_KEY, '1')
       log(`claimed port (probe lines=${lines.length})`)
       // プローブ中に来ていた行を畳む (`DEVICE ...` の名乗りそのものは状態行に
-      // 当てはまらないので無視される)
-      for (const line of lines) handleLine(line)
+      // 当てはまらないので無視される)。**状態行だけ** — ここに混ざったカードの行は
+      // 繋ぐ前のタッチなので合図にしない
+      for (const line of lines) handleStateLine(line)
       // `DEVICE` は名乗り専用で状態を持たないため、初期状態 (state=/cause=) を
       // ここで `STATUS` を 1 回撃って取る。応答は通常の onLine 経由で handleLine に届く
       // (次の `EVT ALARM` の定期送信 (5 秒ごと) を待たない、Refs ippoan/alc-app#353)
@@ -313,6 +365,7 @@ export function useAlarmDevice() {
     isConnected: readonly(isConnected),
     deviceState: readonly(deviceState),
     buttonPressCount: readonly(buttonPressCount),
+    cardRead: readonly(cardRead),
     connect,
     disconnect,
     requestPort,
