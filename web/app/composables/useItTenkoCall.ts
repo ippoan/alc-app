@@ -4,7 +4,8 @@
  * IT点呼 は通常点呼の流れ (本人確認 → 測定 → 保存) の最後に運行管理者と通話し、
  * 運行管理者の判定が付いたら完了になる。ここはその「最後」だけを持つ:
  *
- *   1. カメラとマイクを取り、点呼の記録の id を部屋の id にして signaling に繋ぐ
+ *   1. カメラとマイクを取り、`it-<点呼の記録の id>` を部屋の id にして signaling に繋ぐ
+ *      (接頭辞は `~/utils/it-tenko`。運行管理者側が部屋の一覧を接頭辞で振り分ける)
  *   2. 3 秒ごとに点呼の記録を引き、`manager_judgment` が付いたら通話を切って判定を出す
  *
  * **`NormalMeasurement` が `itMode` のときだけ生成する。** 通常点呼の画面では生成しない
@@ -19,6 +20,7 @@
  */
 
 import { getTenkoSession } from '~/utils/api'
+import { itTenkoRoomId } from '~/utils/it-tenko'
 
 /** 判定を引き直す間隔。運行管理者側 (`TenkoRemoteAdminView.vue`) と同じ */
 export const IT_TENKO_POLL_INTERVAL_MS = 3000
@@ -127,7 +129,8 @@ export function useItTenkoCall() {
         : video
       localStream.value = streamToSend
 
-      await webRtc.connect(config.public.signalingUrl, id)
+      // 部屋の id だけ接頭辞つき。判定を引く `getTenkoSession` は点呼の記録の id のまま
+      await webRtc.connect(config.public.signalingUrl, itTenkoRoomId(id))
       await webRtc.startStreaming(streamToSend)
     }
     catch (e) {

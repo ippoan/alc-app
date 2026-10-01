@@ -148,7 +148,8 @@ describe('useItTenkoCall', () => {
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true, video: false })
     // **呼ぶ側は token も path も渡さない** (開発用の端末のトークンは useWebRtc が自分で付ける)
     expect(rtcConnect).toHaveBeenCalledTimes(1)
-    expect(rtcConnect).toHaveBeenCalledWith(useRuntimeConfig().public.signalingUrl, 'session-1')
+    // 部屋の id は `it-<点呼の記録の id>` (運行管理者側が接頭辞で振り分ける)
+    expect(rtcConnect).toHaveBeenCalledWith(useRuntimeConfig().public.signalingUrl, 'it-session-1')
     // 送るのは映像 + 音声を合成したもの
     const sent = rtcStartStreaming.mock.calls[0]![0] as FakeMediaStream
     expect(sent.getTracks().map(t => t.kind)).toEqual(['video', 'audio'])
@@ -176,7 +177,7 @@ describe('useItTenkoCall', () => {
 
     await tick()
     expect(getTenkoSessionMock).toHaveBeenCalledTimes(1)
-    // scope は既定 (キオスクの鍵で読む)
+    // scope は既定 (キオスクの鍵で読む)。**引くのは接頭辞なしの点呼の記録の id**
     expect(getTenkoSessionMock).toHaveBeenCalledWith('session-1')
     expect(call.state.value).toBe('calling')
     expect(rtcDisconnect).not.toHaveBeenCalled()
@@ -267,7 +268,7 @@ describe('useItTenkoCall', () => {
 
     expect(cameraStart).toHaveBeenCalledTimes(1)
     expect(rtcConnect).toHaveBeenCalledTimes(1)
-    expect(rtcConnect).toHaveBeenCalledWith(expect.anything(), 'session-1')
+    expect(rtcConnect).toHaveBeenCalledWith(expect.anything(), 'it-session-1')
   })
 
   it('★ stop: 判定待ちと通話を止めて初めの状態へ戻す', async () => {
@@ -286,7 +287,7 @@ describe('useItTenkoCall', () => {
 
     // stop のあとは次の通話を始められる
     await call.start('session-2')
-    expect(rtcConnect).toHaveBeenLastCalledWith(expect.anything(), 'session-2')
+    expect(rtcConnect).toHaveBeenLastCalledWith(expect.anything(), 'it-session-2')
     expect(call.state.value).toBe('calling')
   })
 
@@ -374,7 +375,7 @@ describe('useItTenkoCall', () => {
       await call.reconnect()
 
       expect(rtcConnect).toHaveBeenCalledTimes(2)
-      expect(rtcConnect).toHaveBeenLastCalledWith(useRuntimeConfig().public.signalingUrl, 'session-1')
+      expect(rtcConnect).toHaveBeenLastCalledWith(useRuntimeConfig().public.signalingUrl, 'it-session-1')
       expect(call.state.value).toBe('calling')
       // 繋ぎ直したので「切れた」の印は下ろす
       expect(call.isDisconnected.value).toBe(false)
