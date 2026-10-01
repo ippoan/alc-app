@@ -337,7 +337,7 @@ describe('useTimecardWatch', () => {
 
       lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'timecard-station', url: 'https://evil.example/x.bin' }))
       expect(onSerialOta).toHaveBeenCalledTimes(1)
-      expect(onSerialOta).toHaveBeenCalledWith('timecard-station')
+      expect(onSerialOta).toHaveBeenCalledWith('timecard-station', undefined)
       expect(onChange).not.toHaveBeenCalled()
     })
 
@@ -350,6 +350,31 @@ describe('useTimecardWatch', () => {
       lastWs().message(JSON.stringify({ type: 'serial_ota' }))
       lastWs().message(JSON.stringify({ type: 'serial_ota', target: 1 }))
       expect(onSerialOta).not.toHaveBeenCalled()
+    })
+
+    it('device_id が在る合図は、2 つ目の引数で渡す (Refs ippoan/alc-app#403)', async () => {
+      const onSerialOta = vi.fn()
+      const { watch } = make({ onSerialOta })
+      await watch.connect()
+      lastWs().open()
+
+      lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'cores3', device_id: 'test-device-1' }))
+      expect(onSerialOta).toHaveBeenCalledTimes(1)
+      expect(onSerialOta).toHaveBeenCalledWith('cores3', 'test-device-1')
+    })
+
+    it.each([
+      ['数値', 1],
+      ['null', null],
+    ])('device_id が文字列でない (%s) なら undefined を渡す', async (_label, deviceId) => {
+      const onSerialOta = vi.fn()
+      const { watch } = make({ onSerialOta })
+      await watch.connect()
+      lastWs().open()
+
+      lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'cores3', device_id: deviceId }))
+      expect(onSerialOta).toHaveBeenCalledTimes(1)
+      expect(onSerialOta).toHaveBeenCalledWith('cores3', undefined)
     })
 
     it('onSerialOta を渡していなければ serial_ota は従来どおり無視する', async () => {
@@ -385,7 +410,7 @@ describe('useTimecardWatch', () => {
 
       lastWs().open()
       lastWs().message(JSON.stringify({ type: 'serial_ota', target: 'timecard-station' }))
-      expect(onSerialOta).toHaveBeenCalledWith('timecard-station')
+      expect(onSerialOta).toHaveBeenCalledWith('timecard-station', undefined)
       watch.stop()
     })
   })

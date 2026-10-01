@@ -65,8 +65,10 @@ export interface TimecardWatchOptions {
    * `{"type":"serial_ota","target":…}` を受けたときに呼ぶ (Refs ippoan/alc-app-s3#279)。
    * 渡すのは `target` の語だけ — URL や版はメッセージから読まない (`useSerialOta` が
    * 自前の allowlist で引く)。未指定なら従来どおり無視する。
+   * 2 つ目は合図の `device_id` (1 台指定の更新。Refs ippoan/alc-app#403) — 文字列で
+   * 載っているときだけ渡し、無い・文字列でないなら `undefined`。
    */
-  onSerialOta?: (target: string) => void
+  onSerialOta?: (target: string, deviceId?: string) => void
 }
 
 /**
@@ -168,10 +170,12 @@ export function useTimecardWatch(options: TimecardWatchOptions) {
 
     sock.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data as string) as { type?: string, target?: unknown }
+        const data = JSON.parse(event.data as string) as { type?: string, target?: unknown, device_id?: unknown }
         // 合図以外 (pong 等) は無視する
         if (data.type === 'timecard_punch') options.onChange?.()
-        else if (data.type === 'serial_ota' && typeof data.target === 'string') options.onSerialOta?.(data.target)
+        else if (data.type === 'serial_ota' && typeof data.target === 'string') {
+          options.onSerialOta?.(data.target, typeof data.device_id === 'string' ? data.device_id : undefined)
+        }
       }
       catch {
         // 非 JSON は無視

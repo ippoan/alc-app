@@ -6,6 +6,7 @@ import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import type { SerialOtaState } from '~/composables/useSerialOta'
 import type { TimecardWatchOptions } from '~/composables/useTimecardWatch'
+import { useKioskScreen } from '~/composables/useKioskScreen'
 
 // キオスクが購読 WS の合図で USB の端末をシリアル OTA する (Refs ippoan/alc-app-s3#279)。
 // 実行は待機画面 (NFC 待ち) のときだけ。途中で受けた合図は預け、待機画面へ戻ったときに走らせる。
@@ -120,8 +121,6 @@ async function mountKiosk(props: Record<string, unknown> = {}) {
   return wrapper
 }
 
-const overlay = (wrapper: Awaited<ReturnType<typeof mountKiosk>>) => wrapper.find('[data-testid="serial-ota-overlay"]')
-
 describe('TenkoKiosk — 端末のシリアル OTA (Refs ippoan/alc-app-s3#279)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -172,24 +171,36 @@ describe('TenkoKiosk — 端末のシリアル OTA (Refs ippoan/alc-app-s3#279)'
     wrapper.unmount()
   })
 
-  it.each([
-    [{ kind: 'downloading' }, '端末を更新しています 0%'],
-    [{ kind: 'writing', pct: 42 }, '端末を更新しています 42%'],
-    [{ kind: 'rebooting' }, '端末を再起動しています…'],
-    [{ kind: 'confirming' }, '端末を再起動しています…'],
-    [{ kind: 'done', ver: '0.2.0' }, '更新しました 0.2.0'],
-    [{ kind: 'failed', reason: 'OTA ERR write' }, '更新できませんでした (元の版のまま)'],
-  ] as Array<[SerialOtaState, string]>)('状態 %o は画面全体に「%s」と出す', async (state, text) => {
+  it.each(['cores3', 'unknown-target'])('Vein Station 以外の合図 (%s) は預からない (Refs ippoan/alc-app#403)', async (target) => {
     const wrapper = await mountKiosk()
-    expect(overlay(wrapper).exists()).toBe(false)
-
-    ota.state.value = state
-    await flushPromises()
-    expect(overlay(wrapper).text()).toBe(text)
-
-    ota.state.value = { kind: 'idle' }
-    await flushPromises()
-    expect(overlay(wrapper).exists()).toBe(false)
+    watchMock.options!.onSerialOta!(target, 'test-device-1')
+    expect(ota.enqueue).not.toHaveBeenCalled()
+    expect(ota.runQueued).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('「更新中」の幕は描かない (FirmwareOtaHost が描く。Refs ippoan/alc-app#403)', async () => {
+    const wrapper = await mountKiosk()
+    ota.state.value = { kind: 'writing', pct: 42 }
+    await flushPromises()
+    expect(wrapper.find('[data-testid="serial-ota-overlay"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('待機画面を離れている間だけ「機体を使用中」を申告する (Refs ippoan/alc-app#403)', async () => {
+    const wrapper = await mountKiosk()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    step.value = 'alcohol'
+    expect(isDeviceBusy.value).toBe(true)
+
+    step.value = 'nfc'
+    expect(isDeviceBusy.value).toBe(false)
+
+    step.value = 'medical'
+    expect(isDeviceBusy.value).toBe(true)
+    wrapper.unmount()
+    expect(isDeviceBusy.value).toBe(false)
   })
 })

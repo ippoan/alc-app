@@ -42,6 +42,16 @@ let current: KioskScreen | null = null
 const safeDeclarations = new Set<object>()
 const blockedDeclarations = new Set<object>()
 
+/**
+ * 「機体を使用中」の申告の集合 (Refs ippoan/alc-app#403)。**リロードの判定とは別物** —
+ * 上の 2 つにも `current` にも混ぜない (通常点呼・血圧のタブは `track` も安全の申告もして
+ * いないので、流用すると「始めてよい」が永久に来ない)。`reactive` にしてあるのは、
+ * 読む側 ({@link useKioskScreen} の `isDeviceBusy`) が watch できるようにするため。
+ * **申告が 1 つも立っていなければ「使用中ではない」** (機体を使わないタブで止まらない)。
+ */
+const deviceBusyDeclarations = reactive(new Set<object>())
+const isDeviceBusy = computed(() => deviceBusyDeclarations.size > 0)
+
 /** plugin 側の読み口。Vue の context を必要としない。 */
 export function readReloadContext(): ReloadContext {
   return { screen: current, safe: safeDeclarations.size, blocked: blockedDeclarations.size }
@@ -52,6 +62,7 @@ export function resetReloadContext(): void {
   current = null
   safeDeclarations.clear()
   blockedDeclarations.clear()
+  deviceBusyDeclarations.clear()
 }
 
 /**
@@ -89,5 +100,13 @@ export function useKioskScreen() {
     declare(blockedDeclarations, source)
   }
 
-  return { track, declareSafeToReload, declareReloadBlocked, readReloadContext }
+  /**
+   * この画面は「いま機体 (CoreS3) を使っている」と申告する (真のあいだだけ)。
+   * ファームの更新を始めてよいかの材料で、リロードの判定には関わらない。
+   */
+  function declareDeviceBusy(source: Ref<boolean> | (() => boolean)): void {
+    declare(deviceBusyDeclarations, source)
+  }
+
+  return { track, declareSafeToReload, declareReloadBlocked, readReloadContext, declareDeviceBusy, isDeviceBusy }
 }
