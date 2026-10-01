@@ -270,6 +270,10 @@ path = "app/utils/device-line.ts"
 branches = true
 
 [[files]]
+path = "app/utils/firmware-targets.ts"
+branches = true
+
+[[files]]
 path = "app/utils/card-kind.ts"
 branches = true
 

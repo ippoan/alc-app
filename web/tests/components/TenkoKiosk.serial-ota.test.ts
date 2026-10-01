@@ -6,7 +6,7 @@ import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import type { SerialOtaState } from '~/composables/useSerialOta'
 import type { TimecardWatchOptions } from '~/composables/useTimecardWatch'
-import { useKioskScreen } from '~/composables/useKioskScreen'
+import { readReloadContext, useKioskScreen } from '~/composables/useKioskScreen'
 
 // キオスクが購読 WS の合図で USB の端末をシリアル OTA する (Refs ippoan/alc-app-s3#279)。
 // 実行は待機画面 (NFC 待ち) のときだけ。途中で受けた合図は預け、待機画面へ戻ったときに走らせる。
@@ -202,5 +202,36 @@ describe('TenkoKiosk — 端末のシリアル OTA (Refs ippoan/alc-app-s3#279)'
     expect(isDeviceBusy.value).toBe(true)
     wrapper.unmount()
     expect(isDeviceBusy.value).toBe(false)
+  })
+
+  it('ファームの更新が idle でない間、PWA の載せ替えの現在地を busy にする (Refs ippoan/alc-app#403)', async () => {
+    const wrapper = await mountKiosk()
+    // 待機画面で、更新していない: 載せ替えてよい現在地
+    expect(readReloadContext().screen).toEqual({ step: 'nfc', busy: false })
+
+    // 更新は待機画面 (nfc) のまま始まる。現在地は `track` の watch (既定の flush) で次の tick に写る
+    ota.state.value = { kind: 'writing', pct: 42 }
+    await flushPromises()
+    expect(readReloadContext().screen).toEqual({ step: 'nfc', busy: true })
+
+    ota.state.value = { kind: 'rebooting' }
+    await flushPromises()
+    expect(readReloadContext().screen!.busy).toBe(true)
+    ota.state.value = { kind: 'done', ver: '0.2.0' }
+    await flushPromises()
+    expect(readReloadContext().screen!.busy).toBe(true)
+
+    ota.state.value = { kind: 'idle' }
+    await flushPromises()
+    expect(readReloadContext().screen).toEqual({ step: 'nfc', busy: false })
+    wrapper.unmount()
+  })
+
+  it('mount した時点でファームの更新中なら、最初から busy (setup が落ちない)', async () => {
+    ota.state = ref<SerialOtaState>({ kind: 'downloading' })
+    const wrapper = await mountKiosk()
+    expect(readReloadContext().screen).toEqual({ step: 'nfc', busy: true })
+    wrapper.unmount()
+    expect(readReloadContext().screen).toBeNull()
   })
 })

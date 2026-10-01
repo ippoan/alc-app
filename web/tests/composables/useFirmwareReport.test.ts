@@ -409,4 +409,149 @@ describe('useFirmwareReport', () => {
       expect(reportFirmware).toHaveBeenCalledTimes(3)
     })
   })
+
+  // ---------- hold / release: 更新中は待機の報告を保留する (Refs ippoan/alc-app#403) ----------
+
+  describe('hold / release', () => {
+    /** 始めて繋ぎ、最初の idle (id の取得を含む) を済ませる */
+    async function started(): Promise<void> {
+      fw.start()
+      open()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+      expect(fw.deviceId.value).toBe('d1')
+    }
+
+    it('保留中は周期の idle を送らない', async () => {
+      await started()
+
+      fw.hold()
+      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS * 2)
+
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+      expect(deviceToken.getDeviceJwt).toHaveBeenCalledTimes(1)
+    })
+
+    it('保留中は繋がったときの idle を送らず、ポートを失っても id を捨てない', async () => {
+      await started()
+
+      fw.hold()
+      // 書き込み後の再起動
+      close()
+      expect(fw.deviceId.value).toBe('d1')
+      open({ ver: '0.2.0', board: 'cores3', flavor: 'cores3' })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+      expect(sentLines()).toEqual(['AUTH STATUS'])
+    })
+
+    it('保留中は、止めてから始め直したときの idle も送らない', async () => {
+      await started()
+
+      fw.hold()
+      fw.stop()
+      fw.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+    })
+
+    it('保留中でも report(phase, extra) を直接呼べば送る (id を持っているので AUTH STATUS を聞かない)', async () => {
+      await started()
+
+      fw.hold()
+      await fw.report('writing', { pct: 40, target_version: '0.2.0' })
+
+      expect(sentLines()).toEqual(['AUTH STATUS'])
+      expect(reportFirmware).toHaveBeenCalledTimes(2)
+      expect(reportFirmware).toHaveBeenLastCalledWith({
+        device_id: 'd1',
+        kind: 'cores3',
+        board: 'cores3',
+        flavor: 'cores3',
+        version: '0.1.0+abc1234',
+        phase: 'writing',
+        pct: 40,
+        target_version: '0.2.0',
+      })
+    })
+
+    it('再起動の後も、保留中は持っている id で報告する (聞き直さない)', async () => {
+      await started()
+
+      fw.hold()
+      close()
+      open({ ver: '0.2.0', board: 'cores3', flavor: 'cores3' })
+      await fw.report('confirming')
+
+      expect(sentLines()).toEqual(['AUTH STATUS'])
+      expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd1', version: '0.2.0', phase: 'confirming' }))
+    })
+
+    it('release() で idle を 1 回送り、以後は周期と繋がったときの idle が戻り、ポートを失ったら id を捨てる', async () => {
+      await started()
+      fw.hold()
+      close()
+      open({ ver: '0.2.0', board: 'cores3', flavor: 'cores3' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+
+      await fw.release()
+      expect(reportFirmware).toHaveBeenCalledTimes(2)
+      expect(reportFirmware).toHaveBeenLastCalledWith({
+        device_id: 'd1',
+        kind: 'cores3',
+        board: 'cores3',
+        flavor: 'cores3',
+        version: '0.2.0',
+        phase: 'idle',
+      })
+
+      // 周期が戻る
+      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
+      expect(reportFirmware).toHaveBeenCalledTimes(3)
+
+      // ポートを失ったら id を捨て、繋がったら聞き直して送る
+      close()
+      expect(fw.deviceId.value).toBeNull()
+      coreS3.request.mockResolvedValue('AUTH PAIRED t1 d2')
+      open()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sentLines()).toEqual(['AUTH STATUS', 'AUTH STATUS'])
+      expect(reportFirmware).toHaveBeenCalledTimes(4)
+      expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd2', phase: 'idle' }))
+    })
+
+    it('保留していないときの release() は何も送らない', async () => {
+      await started()
+
+      await fw.release()
+
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+      expect(deviceToken.getDeviceJwt).toHaveBeenCalledTimes(1)
+    })
+
+    it('hold() を 2 回呼んでも、release() 1 回で解け、2 回目の release() は何も送らない', async () => {
+      await started()
+
+      fw.hold()
+      fw.hold()
+      await fw.release()
+      await fw.release()
+
+      expect(reportFirmware).toHaveBeenCalledTimes(2)
+    })
+
+    it('保留は呼び出しをまたいで 1 つ (別の useFirmwareReport() から解ける)', async () => {
+      await started()
+
+      fw.hold()
+      await mod.useFirmwareReport().release()
+
+      expect(reportFirmware).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
+      expect(reportFirmware).toHaveBeenCalledTimes(3)
+    })
+  })
 })

@@ -4,6 +4,7 @@
  *
  * 管理者の画面 (`GET /api/firmware/devices`) は、この報告を一覧にして 1 台ずつ更新の合図を
  * 出す。報告が無い機体は一覧に現れないので、繋がったときと 5 分ごとに `idle` を送り続ける。
+ * ファームの更新中だけは `hold()` でこの待機の報告を保留し、終わったら `release()` で戻す。
  *
  * **ここは機体に何も書き込まない。** 機体へ送るのは `AUTH STATUS` の 1 行だけ
  * (応答 `AUTH PAIRED <tenant> <id>` / `AUTH UNPAIRED`。alc-app-s3 の
@@ -36,6 +37,11 @@ const deviceId = ref<string | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 /** CoreS3 の onOpen / onClose は解除の口を持たないので、登録は起動から 1 回だけ */
 let hooked = false
+/**
+ * 保留中 (ファームの更新中)。待機の報告 (周期・繋がったとき) を送らず、ポートを失っても id を
+ * 捨てない — 一覧の「更新中」を `idle` で上書きせず、再起動の後も同じ id で報告するため
+ */
+let onHold = false
 
 /** `AUTH PAIRED <tenant> <id>` の id。未登録 (`AUTH UNPAIRED`)・形違い・字種違いは null */
 export function parseAuthStatusLine(line: string): string | null {
@@ -90,20 +96,25 @@ export function useFirmwareReport() {
     }
   }
 
+  /** 待機の報告。保留中は送らない */
+  async function reportIdle(): Promise<void> {
+    if (!onHold) await report('idle')
+  }
+
   /** 繋がったときと 5 分ごとに `idle` を送り始める。二重に呼んでも 1 回分だけ動く */
   function start(): void {
     if (timer) return
-    timer = setInterval(() => { void report('idle') }, FIRMWARE_REPORT_INTERVAL_MS)
+    timer = setInterval(() => { void reportIdle() }, FIRMWARE_REPORT_INTERVAL_MS)
     if (hooked) {
       // 止めてから始め直した: 登録は残っているので、いま繋がっている分だけ送る
-      void report('idle')
+      void reportIdle()
       return
     }
     hooked = true
     // 登録した時点で既に繋がっていれば、その場で 1 回呼ばれる。stop() の後は送らない
-    coreS3.onOpen(() => { if (timer) void report('idle') })
-    // 別の機体に差し替えられたときに古い id で報告しない
-    coreS3.onClose(() => { deviceId.value = null })
+    coreS3.onOpen(() => { if (timer) void reportIdle() })
+    // 別の機体に差し替えられたときに古い id で報告しない (保留中は再起動で切れるので持ったまま)
+    coreS3.onClose(() => { if (!onHold) deviceId.value = null })
   }
 
   /** 周期の送信を止める */
@@ -113,10 +124,27 @@ export function useFirmwareReport() {
     timer = null
   }
 
+  /**
+   * 待機の報告を保留する (ファームの更新を始めるときに呼ぶ)。`report(phase, extra)` を
+   * 直接呼んだ分は今までどおり送る
+   */
+  function hold(): void {
+    onHold = true
+  }
+
+  /** 保留を解き、`idle` を 1 回送る (更新後の版が一覧に載る)。保留していなければ何もしない */
+  async function release(): Promise<void> {
+    if (!onHold) return
+    onHold = false
+    await report('idle')
+  }
+
   return {
     deviceId: readonly(deviceId),
     start,
     stop,
     report,
+    hold,
+    release,
   }
 }

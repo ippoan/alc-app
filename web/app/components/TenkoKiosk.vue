@@ -133,9 +133,13 @@ watch(step, syncStep, { immediate: true })
 // `useTenkoKiosk` の state は component ごとの素の ref で外からは読めないので、ここで出す。
 // 入口で止まっている間 (bpRequirementUnknown) と読み込み中は、リロードで止めた理由や
 // 照会中の要求が消えるため busy 扱いにする。
+// ファームの更新中 (待機画面 = `nfc` のまま始まる) も busy — 書き込みの途中でページを落とさない
+// (Refs ippoan/alc-app#403)。`track` の getter は登録した時点で評価されるので、`serialOta` は
+// これより前で定義する (受けの配線は下の「端末のシリアル OTA」の節)
+const serialOta = useSerialOta()
 useKioskScreen().track(() => ({
   step: step.value,
-  busy: bpRequirementUnknown.value || isLoading.value,
+  busy: bpRequirementUnknown.value || isLoading.value || serialOta.state.value.kind !== 'idle',
 }))
 
 /**
@@ -339,8 +343,7 @@ async function onVeinIdentify() {
 // 点呼の途中では走らせず、待機画面 (NFC 待ち・指静脈の読み取り中でない) のときだけ走らせる。
 // 途中で受けた合図は預けておき、待機画面へ戻ったときに走らせる。
 // 購読 WS は打刻一覧の画面 (TodayPunchHistory) と同じもの — 両者は driverSubTab の v-if で
-// 同時に出ないので、キオスク 1 台の購読は 1 本のまま
-const serialOta = useSerialOta()
+// 同時に出ないので、キオスク 1 台の購読は 1 本のまま (`serialOta` は上の `track` の前で定義)
 const isKioskIdle = computed(() => step.value === 'nfc' && !veinBusy.value)
 const otaWatch = useTimecardWatch({
   getToken: () => useDeviceToken().getDeviceJwt(),

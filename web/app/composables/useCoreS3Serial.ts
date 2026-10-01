@@ -41,6 +41,10 @@
  * 新しい行を `PWALOG <id> <行>` で返し、`PWALOG END <id> <送った行数>` で閉じる。CoreS3 は
  * それを `get_log` の応答の `pwa_log` に載せる (Refs ippoan/alc-app#223)。古い firmware は
  * `PWALOG` を知らず `ERR` を 1 行返すだけ (害なし)。
+ *
+ * ファームの書き込み中だけ、ここから機体へのほかの送信を止める錠が在る (`ota.begin()` /
+ * `ota.end()` / `ota.request()`。Refs ippoan/alc-app#403)。機体へ書く出口は `write` /
+ * `request` / `replyLog` の 3 つだけで、錠の間は 3 つとも送らない。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
@@ -68,6 +72,9 @@ const LOG_REPLY_MAX_LINES = 40
 const LOG_REPLY_MAX_BYTES = 1200
 /** `PWALOG` の行を送る間隔 (CoreS3 の受信を溢れさせない。40 行で約 0.4 秒) */
 const LOG_REPLY_INTERVAL = 10
+
+/** ファームの書き込み中に通常の `request` を呼んだときの reject の文言 */
+export const OTA_LOCKED_MESSAGE = 'request(cores3): ファームの書き込み中です'
 
 /**
  * 置き場に `dev <行>` で残す CoreS3 の `EVT` の接頭辞。CoreS3 自身のログは電源断で消えるので、
@@ -121,6 +128,14 @@ let held: WritableStreamDefaultWriter<Uint8Array> | null = null
 
 /** 走っている heartbeat のタイマー (未接続なら null) */
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * ファームの書き込み中の錠 (Refs ippoan/alc-app#403)。機体は `OTA SERIAL` の後、イメージの
+ * バイト列を受け切るまで、受信したバイトを全部イメージとして読む — その間にホストが別の行
+ * (`HB OK`・`STAGE …`・署名の要求・`PWALOG`) を 1 行でも送ると、イメージに混ざって検証で落ちる。
+ * 掛かっている間に通るのは `ota.request` だけ
+ */
+let otaLocked = false
 
 /** いちばん新しい `get_log` の返信の番号。上がったら古い返信は打ち切る */
 let logReplyGeneration = 0
@@ -253,16 +268,17 @@ export function useCoreS3Serial() {
    * 書き込みは `write()` ではなく arbiter の `writeLine` を直に使う — 診断の返信の失敗で
    * ポートを返して (release して) 掴み直しを起こさないため。1 行でも失敗したら残りは
    * 打ち切る。返信中に次の `get_log` が来た・ポートを失った・掴み直した、のいずれでも
-   * 古い返信はそこで止める。
+   * 古い返信はそこで止める。ファームの書き込み中 (錠) は始めず、進行中の返信も残りを送らない。
    */
   async function replyLog(id: string): Promise<void> {
+    if (otaLocked) return
     const generation = ++logReplyGeneration
     const writer = held
     const lines = pickLogLines(readDiag()).map(line => `PWALOG ${id} ${line}`)
     lines.push(`PWALOG END ${id} ${lines.length}`)
     for (const [i, line] of lines.entries()) {
       if (i > 0) await new Promise(resolve => setTimeout(resolve, LOG_REPLY_INTERVAL))
-      if (generation !== logReplyGeneration || held !== writer || !writer) return
+      if (otaLocked || generation !== logReplyGeneration || held !== writer || !writer) return
       if (!await writeLine(writer, line)) return
     }
   }
@@ -325,7 +341,8 @@ export function useCoreS3Serial() {
       for (const cb of [...openHandlers]) cb()
       for (const line of lines) handleLine(line)
       for (const notify of [...waiters]) notify()
-      startHeartbeat()
+      // ファームの書き込み中 (再起動後の掴み直しを含む) は送らない。`ota.end()` が始め直す
+      if (!otaLocked) startHeartbeat()
     },
 
     onLine: handleLine,
@@ -368,9 +385,12 @@ export function useCoreS3Serial() {
     closeHandlers.add(cb)
   }
 
-  /** 行を 1 本書く。書けなくなったらポートを返して掴み直しへ */
+  /**
+   * 行を 1 本書く。書けなくなったらポートを返して掴み直しへ。
+   * ファームの書き込み中 (錠) は送らずに false — ポートは返さない
+   */
   async function write(line: string): Promise<boolean> {
-    if (!held) return false
+    if (!held || otaLocked) return false
     const ok = await writeLine(held, line)
     if (!ok) await arbiter.release(CLAIMANT_NAME, 'write_failed')
     return ok
@@ -418,9 +438,43 @@ export function useCoreS3Serial() {
   /**
    * 1 行送って応答 1 つを待つ (#213 の自動端末登録、後続の VoiceS3R 認証でも使用予定)。
    * 実体は arbiter 側 (useSerialArbiter.request) — CoreS3 が預かっているポートに送る。
+   * ファームの書き込み中 (錠) は送らずに reject する。
    */
   function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    if (otaLocked) return Promise.reject(new Error(OTA_LOCKED_MESSAGE))
     return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+  }
+
+  // --- ファームの書き込みだけが使う口 (Refs ippoan/alc-app#403) ---
+
+  /** 錠を掛け、ハートビートを止める。以後 `otaEnd()` まで、機体へ届くのは `otaRequest` だけ */
+  function otaBegin(): void {
+    otaLocked = true
+    stopHeartbeat()
+  }
+
+  /**
+   * 錠を解く。繋がっていれば接続直後と同じくハートビートを始め直す (`HB OK` を即 1 本 +
+   * 3 秒ごと)。未接続なら何もしない (次の onOpen が始める)。掛かっていないときに呼んだら
+   * 何もしない (走っているハートビートに触らない)
+   */
+  function otaEnd(): void {
+    if (!otaLocked) return
+    otaLocked = false
+    if (held) startHeartbeat()
+  }
+
+  /**
+   * 錠に関係なく、行またはバイト列を送って応答 1 つを待つ (`useVeinSerial().request` と同じ形)。
+   * 失敗行の接頭辞が `ERR <先頭トークン>` の形でないコマンド (`OTA …` は `OTA ERR <reason>`) は
+   * `errPrefix` で明示する。バイト列は先頭トークンが無いので必ず渡す
+   */
+  function otaRequest(line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
+  function otaRequest(bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  function otaRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
+    // 実装側の引数は union なので、arbiter のどちらの overload にも当てはまるよう
+    // バイト列 overload (errPrefix 必須) の形に寄せて渡す
+    return arbiter.request(CLAIMANT_NAME, payload as Uint8Array, matchPrefix, timeoutMs, errPrefix as string)
   }
 
   return {
@@ -439,5 +493,6 @@ export function useCoreS3Serial() {
     release,
     disconnect,
     request,
+    ota: { begin: otaBegin, end: otaEnd, request: otaRequest },
   }
 }
