@@ -101,10 +101,13 @@ const incomingCallMode = ref(route.query.mode === 'incoming_call')
 const incomingCallRoom = ref<string | null>((route.query.room as string) || null)
 
 // --- ロールタブ ---
-type RoleTab = 'driver' | 'manager' | 'admin' | 'general'
-const roleTabOptions: RoleTab[] = ['driver', 'manager', 'admin', 'general']
+type RoleTab = 'driver' | 'manager' | 'admin' | 'general' | 'it_tenko'
+const roleTabOptions: RoleTab[] = ['driver', 'manager', 'admin', 'general', 'it_tenko']
 const activeRole = ref<RoleTab>(
   incomingCallMode.value ? 'manager'
+  // 運行管理者側の IT点呼 (Refs ippoan/alc-app#387)。**運行管理者席の鍵に dev の印がある端末で
+  // だけ開く** — 印の無い端末が URL で開いても、タブに無い画面が出るだけなので運行者へ倒す
+  : route.query.role === 'it_tenko' && !isDevDevice('manager-device') ? 'driver'
   : roleTabOptions.includes(route.query.role as RoleTab)
     ? (route.query.role as RoleTab)
     : 'driver',
@@ -172,10 +175,23 @@ function onDevMarkCleared() {
 watch(devKioskMark, (mark) => {
   if (!mark && driverSubTab.value === 'it') driverSubTab.value = 'normal'
 })
+
+// 運行管理者側の IT点呼 の受け画面 (`TenkoItAdminView`) を、役割のタブ「IT点呼」として出す
+// (Refs ippoan/alc-app#387)。**運行管理者席の鍵に dev の印がある端末にだけ**出す (テストが
+// 済むまで本番の運行管理者には見せない)。写しの持ち方は上の `devKioskMark` と同じ
+const devManagerMark = ref(isDevDevice('manager-device'))
+// 印が消えたら、タブから消えた画面に留まらせず運行者へ戻す。印が無い端末では一度も動かない
+watch(devManagerMark, (mark) => {
+  if (!mark && activeRole.value === 'it_tenko') activeRole.value = 'driver'
+})
+function refreshDevMarks() {
+  refreshDevKioskMark()
+  devManagerMark.value = isDevDevice('manager-device')
+}
 // 印が変わった瞬間 (端末のトークンが取れた / 外した) に写しを読み直す — メニューを開かなくても
 // 「IT点呼」「開発用の記録」が現れる。印が無い端末ではイベントが 1 度も出ない
-onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevKioskMark))
-onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevKioskMark))
+onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevMarks))
+onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevMarks))
 
 // 血圧測定の置き場所。**`BloodPressureMeasurement` が中身を出せる状態 (`showBpUi`) と同じ
 // 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
@@ -291,11 +307,21 @@ const roleLabels: Record<RoleTab, string> = {
   manager: '運行管理者',
   admin: 'システム管理者',
   general: '汎用管理',
+  it_tenko: 'IT点呼',
 }
 
-const visibleRoleTabs = computed(() =>
-  isPC.value ? roleTabOptions : roleTabOptions.filter(r => r !== 'general')
-)
+// 汎用管理は PC だけ、IT点呼 は運行管理者席の鍵に dev の印がある端末だけ (PC に限らない)
+const visibleRoleTabs = computed(() => roleTabOptions.filter(r =>
+  r === 'general' ? isPC.value
+  : r === 'it_tenko' ? devManagerMark.value
+  : true,
+))
+// Android 横画面のハンバーガーの「ロール切替」。運行者以外を並べる (汎用管理は今までどおり
+// PC でなくても出す)。IT点呼 は上と同じ条件で最後に足す
+const menuRoleTabs = computed<RoleTab[]>(() => [
+  'manager', 'admin', 'general',
+  ...(devManagerMark.value ? ['it_tenko' as const] : []),
+])
 
 // ハンバーガーメニュー
 const menuOpen = ref(false)
@@ -313,7 +339,7 @@ function refreshWatchdogStatus() {
 watch(menuOpen, (open) => {
   if (!open) return
   refreshWatchdogStatus()
-  refreshDevKioskMark()
+  refreshDevMarks()
 })
 
 // QRスキャンでデバイス登録
@@ -590,7 +616,7 @@ function onRoleTabClick(role: RoleTab) {
               <!-- ロール切替 -->
               <div class="px-3 py-1 text-xs text-gray-400 font-medium">ロール切替</div>
               <button
-                v-for="role in (['manager', 'admin', 'general'] as RoleTab[])"
+                v-for="role in menuRoleTabs"
                 :key="role"
                 class="w-full text-left px-4 py-2 text-sm transition-colors"
                 :class="activeRole === role
@@ -739,7 +765,8 @@ function onRoleTabClick(role: RoleTab) {
     <!-- 運行管理者タブ -->
     <!-- 警告デバイスの heartbeat と着信購読は認証ゲートの外 (タブに入った時点) で動かす。
          RoleAuthGate の :key 再マウントや着信通知モードの分岐に巻き込まれない位置に 1 つだけ置く -->
-    <ManagerAlarmBar v-if="activeRole === 'manager'" />
+    <!-- IT点呼 の役割タブでも出す (受け画面の席で、警告デバイスの接続ボタンと状態が見えるように) -->
+    <ManagerAlarmBar v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
       v-if="activeRole === 'manager' && incomingCallMode"
@@ -789,5 +816,12 @@ function onRoleTabClick(role: RoleTab) {
         </div>
       </div>
     </template>
+
+    <!-- IT点呼 タブ (運行管理者側の受け画面。Refs ippoan/alc-app#387)。運行管理者席の鍵に dev の印が
+         ある端末にだけタブが出る。**RoleAuthGate は通さない** — 運行管理者の特定 (社員番号) は
+         受け画面が通話・判定の手前で自分で聞く -->
+    <div v-if="activeRole === 'it_tenko'" class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
+      <TenkoItAdminView />
+    </div>
   </div>
 </template>

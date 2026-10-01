@@ -15,6 +15,10 @@ import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import FirmwareOtaHost from '~/components/FirmwareOtaHost.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
+import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
+import RoleAuthGate from '~/components/RoleAuthGate.vue'
+import ManagerAlarmBar from '~/components/ManagerAlarmBar.vue'
+import ManagerDashboard from '~/components/ManagerDashboard.vue'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import { clearDevDeviceMark, isDevDevice, noteDeviceToken, DEV_DEVICE_MARK_EVENT } from '~/utils/token-selection'
 import { devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
@@ -1203,6 +1207,291 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
 
     expect(wrapper.find(NORMAL).exists()).toBe(true)
     expect(menuLabels(wrapper)).not.toContain(LABEL)
+  })
+})
+
+describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け画面。Refs ippoan/alc-app#387)', () => {
+  // 運行管理者側の IT点呼 の受け画面 (`TenkoItAdminView`) を、画面最上段の役割タブとして出す。
+  // **運行管理者席の鍵に dev の印がある端末にだけ**出し、運行管理者の認証 (RoleAuthGate) は通さない。
+  // 印が無い端末 (= 本番の全端末) の役割タブとメニューは 1 つも変わらない
+
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+  const LABEL = 'IT点呼'
+  const NORMAL = '.normal-measurement-stub:not([it-mode])'
+  const PC_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+  const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14)'
+  const originalUserAgent = navigator.userAgent
+  const originalInnerWidth = window.innerWidth
+
+  function setDevice(userAgent: string) {
+    Object.defineProperty(navigator, 'userAgent', { value: userAgent, configurable: true })
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true })
+  }
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+    setDevice(PC_UA)
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    for (const kind of ['kiosk', 'manager-device', 'bp-station'] as const) clearDevDeviceMark(kind)
+    localStorage.clear()
+    landscape.on.value = false
+    Object.defineProperty(navigator, 'userAgent', { value: originalUserAgent, configurable: true })
+    Object.defineProperty(window, 'innerWidth', { value: originalInnerWidth, configurable: true })
+  })
+
+  /** 最上段の役割タブ (`bg-gray-200` の帯) のラベル。縦画面にだけ在る */
+  function roleTabLabels(w: VueWrapper) {
+    return w.find('.bg-gray-200').findAll('button').map(b => b.text())
+  }
+
+  async function openMenu(w: VueWrapper) {
+    const b = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!b) throw new Error('hamburger not found')
+    await b.trigger('click')
+    await nextTick()
+  }
+
+  function menuLabels(w: VueWrapper) {
+    return w.find('.absolute.right-0').findAll('button').map(b => b.text())
+  }
+
+  /** いま運行者の画面 (通常点呼) に居て、受け画面は出ていない */
+  function expectDriver(w: VueWrapper) {
+    expect(w.find(NORMAL).exists()).toBe(true)
+    expect(w.findComponent(TenkoItAdminView).exists()).toBe(false)
+    expect(roleButton(w, '運行者').classes()).toContain('bg-white')
+  }
+
+  describe('(a) 出る端末', () => {
+    it('★ 印が無い端末では出ない — 役割タブは今までの 4 つのまま', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理'])
+    })
+
+    it('★ 印が無い端末 (PC でない) も今までの 3 つのまま', async () => {
+      setDevice(ANDROID_UA)
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者'])
+    })
+
+    it('dev でない運行管理者席のトークンが取れている端末でも出ない', async () => {
+      noteDeviceToken('manager-device', plainDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+    })
+
+    it('見るのは運行管理者席の鍵の印だけ (キオスクの鍵が dev でも出ない)', async () => {
+      noteDeviceToken('kiosk', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+    })
+
+    it('★ 印がある端末では「汎用管理」の右 (最後) に出る', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL])
+    })
+
+    it('PC のみ、の制約は掛けない — PC でない端末でも印があれば出る (汎用管理は出ない)', async () => {
+      setDevice(ANDROID_UA)
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', LABEL])
+    })
+
+    it('mount 後に印が立つと、何も押さなくてもタブが現れる', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+
+      noteDeviceToken('manager-device', devDeviceJwt())
+      await nextTick()
+
+      expect(roleTabLabels(wrapper)).toContain(LABEL)
+    })
+  })
+
+  describe('(b) 選ぶと受け画面が RoleAuthGate なしで出る', () => {
+    it('★ タブを押すと TenkoItAdminView が出る。RoleAuthGate も ManagerDashboard も運行者の画面も出ない', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      const replaceState = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {})
+      try {
+        wrapper = await mountIndex('/?role=driver')
+        expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
+
+        await clickRole(wrapper, LABEL)
+
+        expect(wrapper.findAllComponents(TenkoItAdminView)).toHaveLength(1)
+        expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+        expect(wrapper.findComponent(ManagerDashboard).exists()).toBe(false)
+        expect(wrapper.find(NORMAL).exists()).toBe(false)
+        expect(roleButton(wrapper, LABEL).classes()).toContain('bg-white')
+        // URL にも役割が載る (リロードで同じ画面に戻る)
+        expect(String(replaceState.mock.calls.at(-1)![2])).toBe('/?role=it_tenko')
+      }
+      finally {
+        replaceState.mockRestore()
+      }
+    })
+
+    it('警告デバイスのバー (ManagerAlarmBar) は IT点呼 の役割タブでも出る', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      expect(wrapper.findComponent(ManagerAlarmBar).exists()).toBe(false)
+
+      await clickRole(wrapper, LABEL)
+      expect(wrapper.findAllComponents(ManagerAlarmBar)).toHaveLength(1)
+
+      await clickRole(wrapper, 'システム管理者')
+      expect(wrapper.findComponent(ManagerAlarmBar).exists()).toBe(false)
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
+    })
+
+    it('★ 印がある端末は ?role=it_tenko で直接開ける (RoleAuthGate なし)', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=it_tenko')
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      expect(roleButton(wrapper, LABEL).classes()).toContain('bg-white')
+    })
+
+    it('運行管理者タブは今までどおり RoleAuthGate を通り、そこに受け画面は出ない', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=manager')
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
+    })
+  })
+
+  describe('(c) 印が無い端末が ?role=it_tenko で開いたら運行者に倒す', () => {
+    it('★ 印なし → 運行者 (通常点呼)。受け画面もタブも出ない', async () => {
+      wrapper = await mountIndex('/?role=it_tenko')
+      expectDriver(wrapper)
+      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+      expect(wrapper.findComponent(ManagerAlarmBar).exists()).toBe(false)
+    })
+
+    it('dev でない運行管理者席のトークンが取れている端末 → 運行者', async () => {
+      noteDeviceToken('manager-device', plainDeviceJwt())
+      wrapper = await mountIndex('/?role=it_tenko')
+      expectDriver(wrapper)
+    })
+
+    it('キオスクの鍵だけ dev の端末 → 運行者', async () => {
+      noteDeviceToken('kiosk', devDeviceJwt())
+      wrapper = await mountIndex('/?role=it_tenko')
+      expectDriver(wrapper)
+    })
+  })
+
+  describe('(d) Android 横画面のハンバーガーの「ロール切替」', () => {
+    beforeEach(() => { landscape.on.value = true })
+
+    it('★ 印が無い端末では今までの 3 つのまま (IT点呼 は無い)', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      await openMenu(wrapper)
+      expect(menuLabels(wrapper).slice(0, 3)).toEqual(['運行管理者', 'システム管理者', '汎用管理'])
+      expect(menuLabels(wrapper)).not.toContain(LABEL)
+    })
+
+    it('★ 印がある端末では「汎用管理」の次に出て、選ぶと受け画面が開く', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      await openMenu(wrapper)
+      expect(menuLabels(wrapper).slice(0, 4)).toEqual(['運行管理者', 'システム管理者', '汎用管理', LABEL])
+
+      const item = wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === LABEL)
+      await item!.trigger('click')
+      await nextTick()
+
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      // 横画面の「運行者に戻る」のバーに、いまの役割の名前が出る
+      expect(wrapper.text()).toContain('運行者に戻る')
+      expect(wrapper.text()).toContain(LABEL)
+    })
+
+    it('開いたまま印が立つと、開き直さなくても「ロール切替」に入る', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      await openMenu(wrapper)
+      expect(menuLabels(wrapper)).not.toContain(LABEL)
+
+      noteDeviceToken('manager-device', devDeviceJwt())
+      await nextTick()
+
+      expect(menuLabels(wrapper)).toContain(LABEL)
+    })
+
+    it('印が外れた端末でメニューを開くと、項目は無い', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      clearDevDeviceMark('manager-device')
+      await openMenu(wrapper)
+      expect(menuLabels(wrapper)).not.toContain(LABEL)
+    })
+  })
+
+  describe('(e) 途中で印が消えたら運行者に戻る', () => {
+    it('★ 受け画面を開いているときに印が外れると、運行者 (通常点呼) に戻り、タブも消える', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=it_tenko')
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
+
+      clearDevDeviceMark('manager-device')
+      await nextTick()
+      await nextTick()
+
+      expectDriver(wrapper)
+      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+    })
+
+    it('★ dev でないトークンに替わったときも同じ', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=it_tenko')
+
+      noteDeviceToken('manager-device', plainDeviceJwt())
+      await nextTick()
+      await nextTick()
+
+      expectDriver(wrapper)
+    })
+
+    it('別の役割を開いているときに印が外れても、その役割のまま (タブだけ消える)', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      wrapper = await mountIndex('/?role=admin')
+      expect(roleTabLabels(wrapper)).toContain(LABEL)
+
+      clearDevDeviceMark('manager-device')
+      await nextTick()
+      await nextTick()
+
+      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+      expect(roleButton(wrapper, 'システム管理者').classes()).toContain('bg-white')
+    })
+
+    it('キオスクの印が外れても、受け画面は閉じない (見るのは運行管理者席の印)', async () => {
+      noteDeviceToken('manager-device', devDeviceJwt())
+      noteDeviceToken('kiosk', devDeviceJwt())
+      wrapper = await mountIndex('/?role=it_tenko')
+
+      clearDevDeviceMark('kiosk')
+      await nextTick()
+      await nextTick()
+
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
+    })
+  })
+
+  it('着信通知からの直行 (?mode=incoming_call) は今までどおり運行管理者タブ — 印があっても IT点呼 へは行かない', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    wrapper = await mountIndex('/?mode=incoming_call&role=it_tenko&room=r1')
+    expect(wrapper.findComponent(ManagerDashboard).exists()).toBe(true)
+    expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
   })
 })
 

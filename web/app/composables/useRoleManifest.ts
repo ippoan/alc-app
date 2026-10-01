@@ -1,15 +1,15 @@
 import type { Ref, ComputedRef } from 'vue'
 
 /**
- * インストールの単位。`index.vue` の RoleTab 4 つに、運行者タブの中の
- * 血圧測定タブ (`?tab=bp`) を別アプリとして切り出した `'bp'` を足したもの
- * (Refs ippoan/alc-app-s3#135)。`?role=` に書けるのは RoleTab の 4 つだけで、
- * `'bp'` は `?tab=` から決まる。
+ * インストールの単位。`index.vue` の RoleTab 5 つ (運行者 / 運行管理者 / システム管理者 /
+ * 汎用管理 / IT点呼) に、運行者タブの中の血圧測定タブ (`?tab=bp`) を別アプリとして
+ * 切り出した `'bp'` を足したもの (Refs ippoan/alc-app-s3#135)。`?role=` に書けるのは
+ * RoleTab の 5 つだけで、`'bp'` は `?tab=` から決まる。
  */
-export type ManifestRole = 'driver' | 'manager' | 'admin' | 'general' | 'bp'
+export type ManifestRole = 'driver' | 'manager' | 'admin' | 'general' | 'it_tenko' | 'bp'
 
 /** `?role=` として受け付ける値 (= index.vue の RoleTab) */
-const ROLES: ManifestRole[] = ['driver', 'manager', 'admin', 'general']
+const ROLES: ManifestRole[] = ['driver', 'manager', 'admin', 'general', 'it_tenko']
 
 /** 血圧測定タブの `?tab=` (index.vue の DriverSubTab と同じ値) */
 export const BP_TAB = 'bp'
@@ -44,9 +44,23 @@ export const BP_MANIFEST: RoleManifest = {
   themeColor: '#0f766e',
 }
 
+/**
+ * 運行管理者側の IT点呼 の受け画面用 (Refs ippoan/alc-app#387)。役割タブ「IT点呼」
+ * (`?role=it_tenko`) を別アイコンでインストールできるようにする。
+ *
+ * **manifest は URL の `?role=` だけで決まる** (SSR の HTML に出すため、端末の開発用の印は
+ * 見られない)。印の無い端末が `?role=it_tenko` を直接開くと、画面は運行者に倒れるが
+ * (`index.vue`)、`<link rel="manifest">` はこれが出る。
+ */
+export const IT_TENKO_MANIFEST: RoleManifest = {
+  href: '/manifest-it-tenko.webmanifest',
+  themeColor: '#6d28d9',
+}
+
 /** 運行者以外の manifest。ここに無いロールは運行者と同じ扱い (別アプリにしない) */
 const MANIFEST_BY_ROLE: Partial<Record<ManifestRole, RoleManifest>> = {
   manager: MANAGER_MANIFEST,
+  it_tenko: IT_TENKO_MANIFEST,
   bp: BP_MANIFEST,
 }
 
@@ -64,7 +78,7 @@ function first(v: unknown): string | undefined {
  * ただし運行者のうち血圧測定タブ (`?tab=bp`) だけは別アプリ (`'bp'`) として扱う —
  * 血圧しか測らない端末を別アイコンで入れるため。`?tab=` は運行者のときしか
  * サブタブの意味を持たないので (index.vue の onAdminTabChange 参照)、
- * 運行管理者・システム管理者の `?tab=bp` は素通しする。
+ * 運行管理者・システム管理者・IT点呼 の `?tab=bp` は素通しする。
  */
 export function manifestRoleFromQuery(query: Record<string, unknown>): ManifestRole {
   if (first(query.mode) === 'incoming_call') return 'manager'
@@ -75,9 +89,9 @@ export function manifestRoleFromQuery(query: Record<string, unknown>): ManifestR
 }
 
 /**
- * 運行者・運行管理者・血圧測定端末を別々の PWA としてインストールできるように、
- * manifest を出し分ける (Refs #179, ippoan/alc-app-s3#135)。実体は
- * `web/public/manifest-{driver,manager,bp}.webmanifest`。
+ * 運行者・運行管理者・血圧測定端末・IT点呼 を別々の PWA としてインストールできるように、
+ * manifest を出し分ける (Refs #179, ippoan/alc-app-s3#135, ippoan/alc-app#387)。実体は
+ * `web/public/manifest-{driver,manager,bp,it-tenko}.webmanifest`。
  *
  * 呼び出すのは `app.vue` 1 か所だけ — トップ画面 (`index.vue`) から呼ぶと、
  * 認証の初期化が終わるまで `app.vue` がスピナーだけを描くぶん SSR の HTML に
