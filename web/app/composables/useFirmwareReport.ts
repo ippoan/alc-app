@@ -132,10 +132,16 @@ export function useFirmwareReport() {
     onHold = true
   }
 
-  /** 保留を解き、`idle` を 1 回送る (更新後の版が一覧に載る)。保留していなければ何もしない */
+  /**
+   * 保留を解き、`idle` を 1 回送る (更新後の版が一覧に載る)。保留していなければ何もしない。
+   * 解いた時点で繋がっていなければ id を捨てる — 保留中はポートを失っても id を持ったままなので、
+   * 未接続のまま終わると古い id が残り、交換後の機体をその id の機体として扱ってしまう
+   * (次に繋がったときに `AUTH STATUS` を聞き直す)
+   */
   async function release(): Promise<void> {
     if (!onHold) return
     onHold = false
+    if (!coreS3.isConnected.value) deviceId.value = null
     await report('idle')
   }
 

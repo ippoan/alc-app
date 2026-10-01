@@ -1,11 +1,19 @@
 /**
  * キオスクが USB でつながった端末をシリアル経由で更新する (シリアル OTA、
- * Refs ippoan/alc-app-s3#279)。
+ * Refs ippoan/alc-app-s3#279, ippoan/alc-app#403)。
  *
- * Atom VoiceS3R の `atoms3-timecard` `station` ビルドは LAN も Wi-Fi も持たず、USB で
- * 運行者 PC につながっている。管理者が /device/setup で「最新にする」を押すと、recorder が
- * キオスクの購読 WS (`useTimecardWatch`) に `{"type":"serial_ota","target":…}` を送る。
- * キオスクはここで Pages から版とイメージを取り、Web Serial で動作中の端末の app へ流し込む。
+ * 対象は 2 種 ({@link RUNNABLE_TARGETS}):
+ *
+ * - **Vein Station** (`timecard-station`): Atom VoiceS3R の `atoms3-timecard` `station` ビルド。
+ *   LAN も Wi-Fi も持たず、USB で運行者 PC につながっている。管理者が /device/setup で
+ *   「最新にする」を押すと合図が出る。受けは `TenkoKiosk.vue`
+ * - **CoreS3** (`cores3`): 統合ハブ。管理者が 1 台を指定して合図を出す。受けは
+ *   `FirmwareOtaHost.vue`
+ *
+ * どちらも、recorder がキオスクの購読 WS (`useTimecardWatch`) に
+ * `{"type":"serial_ota","target":…}` を送り、キオスクはここで Pages から版とイメージを取り、
+ * Web Serial で動作中の端末の app へ流し込む。**送受信の手順 ({@link flash}) は 1 つ**で、
+ * target で変わるのは「どのポートで話すか」と、CoreS3 だけの前後の手当て (下) だけ。
  *
  * # 契約 (端末側は alc-app-s3 の firmware。行は `OTA ` で始まるものだけを見る)
  *
@@ -13,33 +21,79 @@
  * 2. 生のバイト列を `<chunk>` ずつ。**`OTA ACK <累計>` を受けてから次を送る**
  * 3. 最後のチャンクの後は `complete()` (検証) の結果 `OTA OK` / `OTA ERR verify`。
  *    `OTA OK` の約 500 ms 後に端末は再起動する
- * 4. 再接続後に `DEVICE` → `DEVICE timecard VER=<ver> FLAVOR=<flavor>`。
+ * 4. 再接続後に `DEVICE` → `DEVICE <kind> VER=<ver> FLAVOR=<flavor>`。
  *    FLAVOR が期待どおりなら `OTA CONFIRM` → `OTA CONFIRMED`
  *    (10 分以内に確定しなければ端末は元のスロットへ戻る)
  *
  * # 何を信じるか
  *
- * - **URL と版はメッセージから受け取らない。** 合図は `target` の語だけで、URL はこのファイルに
- *   無く、`utils/firmware-targets.ts` の表 ({@link FIRMWARE_TARGETS}) から引く。表に無い target は
- *   無視する。この composable が実行するのは {@link RUNNABLE_TARGETS} に在るものだけ
+ * - **URL と版はメッセージから受け取らない。** 合図は `target` の語 (と CoreS3 の `device_id`)
+ *   だけで、URL はこのファイルに無く、`utils/firmware-targets.ts` の表 ({@link FIRMWARE_TARGETS})
+ *   から引く。表に無い target は無視する。この composable が実行するのは
+ *   {@link RUNNABLE_TARGETS} に在るものだけ
  * - **VER は「更新するか」の判定にだけ使う。確定の条件は FLAVOR だけ。** Pages は CDN の
  *   max-age が 600 秒で、反映直後は manifest とイメージが一時的に食い違うことがあるため
  *   (manifest の版とイメージの中身がずれても、焼いたものが同じ機種のビルドなら確定してよい)
  *
- * ポートは `useVeinSerial` (claimant `timecard`) が握っているものを借りる。2 本目の
- * claimant も reader も立てない。
+ * # ポート
+ *
+ * Vein Station は `useVeinSerial` (claimant `timecard`)、CoreS3 は `useCoreS3Serial().ota` が
+ * 握っているものを借りる。2 本目の claimant も reader も立てない。
+ *
+ * # CoreS3 だけの手当て (順番を変えない)
+ *
+ * CoreS3 のポートには、書き込みと無関係な送信 (ハートビート・`STAGE`・署名の要求・診断の返信) が
+ * 常に流れている。機体は `OTA SERIAL` の後、受けたバイトを全部イメージとして読むので、
+ * 1 行でも混ざるとイメージが壊れる。
+ *
+ * 1. **宛先の照合**: 合図の `device_id` が、実行時の自分の機体の id
+ *    (`useFirmwareReport().deviceId`) と一致するときだけ進む。無い・不一致・自分の id が未取得
+ *    なら何もしない (recorder は合図を全キオスクへ配る — 照合するのはここだけ)
+ * 2. 照合で対象外と分かったら、管理者の一覧へ `skipped` を報告するだけ (幕は出さない)
+ * 3. 取得の前に待機の報告を保留 (`hold()`)。取得の後、**始める直前に「機体を使用中」を聞き直し**、
+ *    使用中なら始めずに預け直す
+ * 4. `ota.begin()` (錠) → `HB OFF` → `OTA SERIAL` → チャンク → `OTA OK` →
+ *    **再起動を待つ前に `ota.end()`**。錠を掛けたまま再接続すると、端末の token の取り直しの
+ *    署名が reject され、以後の報告とキオスクの端末 token が落ちる。**錠の間の報告は await しない**
+ *    (報告は token の取得と POST を伴い、機体の 10 秒の無受信に掛かりうる)
+ * 5. 再起動後は **`await report('confirming')` を先に** (中で走る署名の要求を待ち切る) →
+ *    `AUTH STATUS` で id を聞き直し、始めたときと違えば `OTA CONFIRM` を送らない (差し替えの検出) →
+ *    `DEVICE` → `OTA CONFIRM`。この 3 つは「既に応答待ち」の reject のときだけ間を置いて再試行する
+ * 6. 終わりは必ず `running = false` → `ota.end()` → `release()` の順
+ *
+ * # 受容している制約 (直さない)
+ *
+ * - 錠の間 (`HB OFF` 〜 `OTA OK`) に出た `STAGE` / `RESULT` は捨てられる。再起動した場合は
+ *   再接続時に直近の STAGE が送り直されるが、再起動しない失敗の経路では、次に段が変わるまで
+ *   機体の画面が古い段のまま残りうる (更新は待機中にしか始めない)
+ * - `HB OFF` の後にタブを閉じる / リロードすると、機体は 10 秒で `OTA ERR timeout` → 元の版のまま。
+ *   沈黙警告は、次にページが開いて `HB OK` を送るまで外れたまま
+ * - 未接続の間の `failed` の報告は送れない (報告は未接続で黙って戻る)
+ * - 錠の間 (30〜60 秒) に端末の token が取り直しの時期に入ると、その署名の要求が錠で reject され、
+ *   60 秒の抑止に入る。その回は再起動後の報告が落ち、一覧は次の 5 分の周期で正しくなる
+ *   (更新そのものは成功する)
+ * - 始める直前の再確認でも塞ぎ切れない隙が在る: イメージの取得が、カードを読み取った直後の通信より
+ *   速く終わると、画面の段が待機のまま再確認を通過して始まる。害は、乗務員の画面が 1〜2 分
+ *   「更新中」の幕で覆われること (イメージは壊れない)
+ * - 更新の実行は 1 台の PC で 1 本 (`running` は共有)。CoreS3 の更新中に来た Vein Station の合図
+ *   (逆も) は黙って捨てられる
+ * - 配布ページの URL の表は、auth-worker の `DEVICE_KINDS` (別 repo) と 2 か所に在る
  */
 
 import { parseDeviceLine } from '~/utils/device-line'
 import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
 import type { FirmwareTarget } from '~/utils/firmware-targets'
+import type { FirmwarePhase } from '~/utils/api'
+import type { FirmwareReportExtra } from '~/composables/useFirmwareReport'
+
+/** CoreS3 の target。ポートと前後の手当て (冒頭 doc) がこの target だけ違う */
+const HUB_TARGET = 'cores3'
 
 /**
- * この composable が実行できる target。ここは `useVeinSerial` のポートで書くので、表
- * ({@link FIRMWARE_TARGETS}) に載っていても、Vein Station 以外 (CoreS3) は走らせない
- * (Refs ippoan/alc-app#403)
+ * この composable が実行できる target。表 ({@link FIRMWARE_TARGETS}) に載っていても、
+ * 話すポートを持たない target は走らせない (Refs ippoan/alc-app#403)
  */
-const RUNNABLE_TARGETS: readonly string[] = ['timecard-station']
+const RUNNABLE_TARGETS: readonly string[] = ['timecard-station', HUB_TARGET]
 
 /** 実行できる target の表の行。実行できない target (表に無いものを含む) は null */
 function runnableTarget(target: string): FirmwareTarget | null {
@@ -49,6 +103,8 @@ function runnableTarget(target: string): FirmwareTarget | null {
 /** これ未満のイメージは壊れている (Pages の 404 ページ等) とみなして書かない */
 export const MIN_IMAGE_BYTES = 256 * 1024
 
+/** manifest / イメージの取得の上限。固まった取得で「更新中」のまま残らないように */
+const FETCH_TIMEOUT_MS = 60_000
 /** `DEVICE` の応答待ち */
 const DEVICE_TIMEOUT_MS = 5_000
 /** `OTA SERIAL` → `OTA READY`。端末は esp_ota_begin でイメージ長ぶんを消去するので長めに待つ */
@@ -57,15 +113,65 @@ const BEGIN_TIMEOUT_MS = 60_000
 const ACK_TIMEOUT_MS = 15_000
 /** 最後のチャンク → `OTA OK` (イメージの検証を含む) */
 const VERIFY_TIMEOUT_MS = 60_000
-/** `OTA OK` → 再接続。arbiter は 10 秒ごとに再スキャンする */
+/** `OTA OK` → 再接続。ポートの探索は 10 秒ごとに再スキャンする */
 const RECONNECT_TIMEOUT_MS = 90_000
 /** `OTA CONFIRM` → `OTA CONFIRMED` */
 const CONFIRM_TIMEOUT_MS = 10_000
+/** `HB OFF` → `OK HB OFF` (CoreS3 だけ) */
+const HB_OFF_TIMEOUT_MS = 5_000
+/** 再起動後の `AUTH STATUS` の応答待ち (CoreS3 だけ) */
+const AUTH_STATUS_TIMEOUT_MS = 3_000
+/** 再起動後の要求が「既に応答待ち」で弾かれたときの再試行の間隔と、合計の上限 (CoreS3 だけ) */
+const BUSY_RETRY_INTERVAL_MS = 2_000
+const BUSY_RETRY_TOTAL_MS = 60_000
 /** 結果 (done / failed) を画面に出しておく時間 */
 export const RESULT_DISPLAY_MS = 5_000
 
 /** 失敗行の接頭辞 (`OTA ERR <reason>`)。`ERR <先頭トークン>` の形ではないので明示する */
 const OTA_ERR = 'OTA ERR'
+
+/** CoreS3 の更新に要る引数 (Vein Station は渡さない) */
+export interface SerialOtaRunOptions {
+  /** 合図の `device_id`。実行時の自分の機体の id と一致するときだけ書く */
+  deviceId?: string
+  /** 「機体を使用中」か。イメージを取った後、始める直前にもう一度聞く */
+  isBusy?: () => boolean
+}
+
+/** 書き込みに使うポート (`useVeinSerial()` / `useCoreS3Serial().ota` のどちらか) */
+interface OtaPort {
+  isConnected: Readonly<Ref<boolean>>
+  request: {
+    (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
+    (bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  }
+}
+
+/** 失敗の理由。`word` は管理者の一覧へ報告する短い固定の語 */
+class OtaError extends Error {
+  constructor(message: string, readonly word: string) {
+    super(message)
+  }
+}
+
+/**
+ * 報告に載せる失敗の語。機体が断った (`OTA ERR <語>`) ならその語、こちらで決めた失敗は
+ * {@link OtaError} の語、それ以外 (応答の時間切れ・ポートを失った) は `no_response`
+ */
+function failureWord(e: unknown): string {
+  if (e instanceof OtaError) return e.word
+  const m = /^OTA ERR (\S{1,64})/.exec((e as Error).message)
+  return m ? m[1]! : 'no_response'
+}
+
+/**
+ * ポートがほかの要求の応答待ちで、こちらの要求を送らずに弾いたか。判定は useSerialArbiter.ts の
+ * reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致 (DeviceSettings.vue と同じ)。
+ * 文言を変えたらここも合わせること
+ */
+function isPortBusy(e: unknown): boolean {
+  return String(e).includes('既に応答待ちです')
+}
 
 export type SerialOtaState =
   | { kind: 'idle' }
@@ -82,29 +188,34 @@ let running = false
 let resultTimer: ReturnType<typeof setTimeout> | null = null
 
 export function useSerialOta() {
-  const link = useVeinSerial()
+  const vein = useVeinSerial()
+  const coreS3 = useCoreS3Serial()
+  const firmware = useFirmwareReport()
+  const hubPort: OtaPort = { isConnected: coreS3.isConnected, request: coreS3.ota.request }
   /**
-   * 待機画面へ戻るのを待っている target。呼び出し元 (キオスク) ごとに持つ —
-   * 画面が外れたら一緒に捨てる (管理者が押し直す)
+   * 始めてよくなる (待機画面へ戻る・機体が空く) のを待っている合図。呼び出し元 (合図の受け)
+   * ごとに持つ — 画面が外れたら一緒に捨てる (管理者が押し直す)
    */
-  let queued: string | null = null
+  let queued: { target: string, opts: SerialOtaRunOptions } | null = null
 
-  async function readDevice(): Promise<{ ver: string | null, flavor: string | null }> {
-    return parseDeviceLine(await link.request('DEVICE', 'DEVICE ', DEVICE_TIMEOUT_MS))
-  }
-
-  async function fetchOk(url: string): Promise<Response> {
-    const res = await fetch(url, { cache: 'no-store' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res
+  /** 配布ページから取る。失敗 (HTTP・時間切れ・本文の読み取り) は報告の語 `download` にまとめる */
+  async function download<T>(url: string, read: (res: Response) => Promise<T>): Promise<T> {
+    try {
+      const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await read(res)
+    }
+    catch (e) {
+      throw new OtaError((e as Error).message, 'download')
+    }
   }
 
   /** 接続の有無が `want` になるのを `deadline` (Date.now() の値) まで待つ */
-  function waitForConnected(want: boolean, deadline: number): Promise<boolean> {
-    if (link.isConnected.value === want) return Promise.resolve(true)
+  function waitForConnected(port: OtaPort, want: boolean, deadline: number): Promise<boolean> {
+    if (port.isConnected.value === want) return Promise.resolve(true)
     return new Promise<boolean>((resolve) => {
       // 真偽値なので、変わった時点で `want` になっている
-      const stop = watch(link.isConnected, () => finish(true), { flush: 'sync' })
+      const stop = watch(port.isConnected, () => finish(true), { flush: 'sync' })
       const timer = setTimeout(() => finish(false), deadline - Date.now())
       function finish(ok: boolean): void {
         clearTimeout(timer)
@@ -115,9 +226,33 @@ export function useSerialOta() {
   }
 
   /** `OTA OK` の後、いったん切れてからつながり直すのを待つ */
-  async function waitForReconnect(): Promise<boolean> {
+  async function waitForReconnect(port: OtaPort): Promise<boolean> {
     const deadline = Date.now() + RECONNECT_TIMEOUT_MS
-    return await waitForConnected(false, deadline) && await waitForConnected(true, deadline)
+    return await waitForConnected(port, false, deadline) && await waitForConnected(port, true, deadline)
+  }
+
+  /**
+   * 1 行送って応答を待つ。ポートがほかの要求の応答待ちで弾いたときだけ、間を置いて送り直す
+   * (`deadline` まで)。機体が断った・時間切れは送り直さない
+   */
+  async function requestWhenFree(
+    port: OtaPort,
+    deadline: number,
+    line: string,
+    matchPrefix: string,
+    timeoutMs: number,
+    errPrefix?: string,
+  ): Promise<string> {
+    for (;;) {
+      try {
+        return await port.request(line, matchPrefix, timeoutMs, errPrefix)
+      }
+      catch (e) {
+        if (!isPortBusy(e)) throw e
+        if (Date.now() + BUSY_RETRY_INTERVAL_MS > deadline) throw new OtaError((e as Error).message, 'busy')
+        await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_INTERVAL_MS))
+      }
+    }
   }
 
   /** 結果を数秒出してから idle に戻す */
@@ -130,93 +265,197 @@ export function useSerialOta() {
     }, RESULT_DISPLAY_MS)
   }
 
-  async function flash(target: FirmwareTarget): Promise<void> {
+  /**
+   * 機体が「いまは受けられない」と答えた (CoreS3 だけ)。失敗の幕にせず、錠を解いてから
+   * 一覧へ `skipped` を出す (報告は端末の token を取りに行くので、錠より後)
+   */
+  function skipBusy(): void {
+    coreS3.ota.end()
+    state.value = { kind: 'idle' }
+    void firmware.report('skipped', { reason: 'busy' })
+  }
+
+  /**
+   * `hubId` は CoreS3 のときだけ、書き込みを始める機体の id (合図の `device_id` と照合済み)。
+   * Vein Station は null — 報告も錠も id の確認もしない
+   */
+  async function flash(
+    target: string,
+    entry: FirmwareTarget,
+    port: OtaPort,
+    opts: SerialOtaRunOptions,
+    hubId: string | null,
+  ): Promise<void> {
+    const hub = hubId !== null
+    /** 管理者の一覧へ遷移を出す (CoreS3 だけ)。**await しない** */
+    const tell = (phase: FirmwarePhase, extra: FirmwareReportExtra): void => {
+      if (hub) void firmware.report(phase, extra)
+    }
+
     // 更新が要るかは画面に出さずに調べる (最新のキオスクで毎回画面が点滅しないように)
-    const device = await readDevice()
+    const device = parseDeviceLine(await port.request('DEVICE', 'DEVICE ', DEVICE_TIMEOUT_MS))
+    if (entry.boards && (device.board === null || !entry.boards.includes(device.board))) {
+      return tell('skipped', { reason: 'unsupported' })
+    }
     // station 以外 (vein 等) がつながっているキオスクは対象外。
     // 以後の `OTA SERIAL` と再起動後の照合には、機体が名乗った FLAVOR を使う
     const flavor = device.flavor
-    if (flavor === null || !Object.hasOwn(target.flavors, flavor)) return
-    const source = target.flavors[flavor]!
-    const manifest = await (await fetchOk(source.manifestUrl)).json() as { version?: unknown }
+    if (flavor === null || !Object.hasOwn(entry.flavors, flavor)) {
+      return tell('skipped', { reason: 'flavor_mismatch' })
+    }
+    const source = entry.flavors[flavor]!
+    const manifest = await download(source.manifestUrl, res => res.json() as Promise<{ version?: unknown }>)
     if (typeof manifest.version !== 'string') throw new Error('manifest has no version')
-    if (manifest.version === device.ver) return
+    if (manifest.version === device.ver) return tell('skipped', { reason: 'up_to_date' })
+    const progress = { target_version: manifest.version }
 
+    // ここから終わりまで、待機の報告 (idle) で一覧の「更新中」を上書きしない
+    if (hub) firmware.hold()
     state.value = { kind: 'downloading' }
-    const image = new Uint8Array(await (await fetchOk(source.appUrl)).arrayBuffer())
-    if (image.length < MIN_IMAGE_BYTES) throw new Error(`image too small (${image.length} B)`)
+    tell('downloading', progress)
+    const image = new Uint8Array(await download(source.appUrl, res => res.arrayBuffer()))
+    if (image.length < MIN_IMAGE_BYTES) throw new OtaError(`image too small (${image.length} B)`, 'image_too_small')
 
+    // 取っている数秒の間に画面が進んでいたら、始めずに預け直す (空いたときに受けがもう一度走らせる)
+    if (opts.isBusy?.()) {
+      queued = { target, opts }
+      state.value = { kind: 'idle' }
+      return
+    }
+
+    if (hub) {
+      // ここから `ota.end()` まで、CoreS3 へのほかの送信が止まる
+      coreS3.ota.begin()
+      try {
+        await port.request('HB OFF', 'OK HB OFF', HB_OFF_TIMEOUT_MS)
+      }
+      catch (e) {
+        if (isPortBusy(e)) return skipBusy()
+        // `ERR …`・無応答は先へ進む (次の `OTA SERIAL` で分かる)
+      }
+    }
+
+    let ready: string
+    try {
+      ready = await port.request(`OTA SERIAL ${image.length} ${flavor}`, 'OTA READY', BEGIN_TIMEOUT_MS, OTA_ERR)
+    }
+    catch (e) {
+      // 機体が測定の画面の間・別の OTA 中
+      if (hub && (e as Error).message.startsWith(`${OTA_ERR} busy`)) return skipBusy()
+      throw e
+    }
     state.value = { kind: 'writing', pct: 0 }
-    const ready = await link.request(`OTA SERIAL ${image.length} ${flavor}`, 'OTA READY', BEGIN_TIMEOUT_MS, OTA_ERR)
+    // pct は報告しない (遷移だけ)。幕の % は state で出す
+    tell('writing', progress)
     const chunk = Number.parseInt(ready.slice('OTA READY'.length).trim(), 10)
-    if (!(chunk > 0)) throw new Error(`bad chunk size (${ready})`)
+    if (!(chunk > 0)) throw new OtaError(`bad chunk size (${ready})`, 'bad_chunk')
 
     for (let sent = 0; sent < image.length;) {
       const end = Math.min(sent + chunk, image.length)
       const bytes = image.subarray(sent, end)
       if (end < image.length) {
         // ACK を受けてから次を送る (端末の flash 書き込みを追い越さない)
-        const ack = await link.request(bytes, 'OTA ACK', ACK_TIMEOUT_MS, OTA_ERR)
+        const ack = await port.request(bytes, 'OTA ACK', ACK_TIMEOUT_MS, OTA_ERR)
         const acked = Number.parseInt(ack.slice('OTA ACK'.length).trim(), 10)
-        if (acked !== end) throw new Error(`ack mismatch (${acked} != ${end})`)
+        if (acked !== end) throw new OtaError(`ack mismatch (${acked} != ${end})`, 'ack_mismatch')
       }
       else {
         // 最後のチャンクは ACK の後に検証の結果が来る。ACK を待って登録し直すと、同じ読み取りに
         // 入った `OTA OK` を取りこぼしうるので、最初から `OTA OK` を待つ
-        await link.request(bytes, 'OTA OK', VERIFY_TIMEOUT_MS, OTA_ERR)
+        await port.request(bytes, 'OTA OK', VERIFY_TIMEOUT_MS, OTA_ERR)
       }
       sent = end
       state.value = { kind: 'writing', pct: Math.floor((sent * 100) / image.length) }
     }
 
+    // 再起動を待つ前に錠を解く。掛けたままだと、再接続直後の端末の token の取り直しの署名が
+    // reject される。未接続なら何も送らず、次の接続がハートビートを始める
+    if (hub) coreS3.ota.end()
+
     state.value = { kind: 'rebooting' }
-    if (!(await waitForReconnect())) throw new Error('reconnect timeout')
+    tell('rebooting', progress)
+    if (!(await waitForReconnect(port))) throw new OtaError('reconnect timeout', 'reconnect_timeout')
 
     state.value = { kind: 'confirming' }
-    const after = await readDevice()
+    let ask: (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string) => Promise<string> = port.request
+    if (hub) {
+      // 機体へ聞く前に待ち切る: 再起動で端末の token は捨てられており、報告の中の取り直しが
+      // 機体への署名の要求を走らせる。先に聞くと、こちらの応答待ちが署名を reject させる
+      await firmware.report('confirming', progress)
+      const deadline = Date.now() + BUSY_RETRY_TOTAL_MS
+      ask = (...args) => requestWhenFree(port, deadline, ...args)
+      // 再起動を待っている間に別の機体へ差し替えられていたら確定しない
+      // (`OTA CONFIRM` は冪等で、別の機体に届いても `OTA CONFIRMED` が返る)
+      const id = parseAuthStatusLine(await ask('AUTH STATUS', 'AUTH ', AUTH_STATUS_TIMEOUT_MS))
+      if (id !== hubId) throw new OtaError('device changed after reboot', 'device_changed')
+    }
+    const after = parseDeviceLine(await ask('DEVICE', 'DEVICE ', DEVICE_TIMEOUT_MS))
     // 確定の条件は FLAVOR だけ (VER は Pages の食い違いがありうるので見ない)。
     // 確定しなければ端末は 10 分後に元のスロットへ戻る
-    if (after.flavor !== flavor) throw new Error(`flavor mismatch after reboot (${after.flavor})`)
-    await link.request('OTA CONFIRM', 'OTA CONFIRMED', CONFIRM_TIMEOUT_MS, OTA_ERR)
+    if (after.flavor !== flavor) {
+      throw new OtaError(`flavor mismatch after reboot (${after.flavor})`, 'flavor_mismatch')
+    }
+    await ask('OTA CONFIRM', 'OTA CONFIRMED', CONFIRM_TIMEOUT_MS, OTA_ERR)
+    tell('done', progress)
     settle({ kind: 'done', ver: after.ver ?? '' })
   }
 
   /**
    * target の端末を更新する。実行できない target ({@link RUNNABLE_TARGETS} に無い)・
    * 端末がつながっていない・別の OTA が走っている、のどれかなら何もしない。
+   * CoreS3 は加えて、`opts.deviceId` が実行時の自分の機体の id と一致しなければ何もしない
+   * (無い・自分の id がまだ取れていない、も同じ)。
    */
-  async function run(target: string): Promise<void> {
+  async function run(target: string, opts: SerialOtaRunOptions = {}): Promise<void> {
     const entry = runnableTarget(target)
-    if (!entry || running || !link.isConnected.value) return
+    if (!entry || running) return
+    const hub = target === HUB_TARGET
+    const port = hub ? hubPort : vein
+    if (!port.isConnected.value) return
+    // 宛先の照合 (冒頭 doc)。預けた後に機体が差し替えられた場合も、ここで弾く
+    const hubId = hub ? firmware.deviceId.value : null
+    if (hub && (hubId === null || opts.deviceId !== hubId)) return
     running = true
     try {
-      await flash(entry)
+      await flash(target, entry, port, opts, hubId)
     }
     catch (e) {
       const reason = (e as Error).message
       // 更新が要るかを調べている段階 (idle のまま) で失敗したときは画面に出さない
       if (state.value.kind === 'idle') console.warn(`[SERIAL_OTA] skipped: ${reason}`)
-      else settle({ kind: 'failed', reason })
+      else {
+        settle({ kind: 'failed', reason })
+        if (hub) {
+          // 報告は端末の token を取りに行くので、錠を解いてから
+          coreS3.ota.end()
+          void firmware.report('failed', { reason: failureWord(e) })
+        }
+      }
     }
     finally {
+      // この順を変えない。`running` を先に下ろす (`release()` の送信を待つ間に来た `runQueued` が
+      // 預かりだけ消費して黙って戻らないように)。`end()` は錠が掛かっていなければ、`release()` は
+      // 保留していなければ何もしないので、無条件に呼ぶ
       running = false
+      coreS3.ota.end()
+      void firmware.release()
     }
   }
 
   /**
    * 合図を受けたが今は実行できない (点呼・打刻の途中) ときに預ける。
-   * 実行できない target は預けない。
+   * 実行できない target は預けない。`opts` は {@link runQueued} がそのまま {@link run} へ渡す
    */
-  function enqueue(target: string): void {
-    if (runnableTarget(target)) queued = target
+  function enqueue(target: string, opts: SerialOtaRunOptions = {}): void {
+    if (runnableTarget(target)) queued = { target, opts }
   }
 
-  /** 預けた target があれば走らせる (待機画面に戻ったときに呼ぶ) */
+  /** 預けた合図があれば走らせる (待機画面に戻った・機体が空いたときに呼ぶ) */
   async function runQueued(): Promise<void> {
     if (queued === null) return
-    const target = queued
+    const { target, opts } = queued
     queued = null
-    await run(target)
+    await run(target, opts)
   }
 
   return {

@@ -9,9 +9,11 @@
  *
  * **管理画面 (TimecardManager) と運行者タブの打刻履歴 (TodayPunchHistory) で共有する。**
  * どちらも「打刻が入ったら一覧を引き直す」だけなので、2 実装目を作らない。
- * 点呼キオスク (TenkoKiosk) は打刻一覧を持たず、同じ WS でシリアル OTA の合図
- * (`serial_ota`、Refs ippoan/alc-app-s3#279) だけを受ける。TodayPunchHistory とは同時に
- * 出ないので、キオスク 1 台の購読は 1 本のまま。
+ * 点呼キオスク (TenkoKiosk) と FirmwareOtaHost は打刻一覧を持たず、同じ WS でシリアル OTA の
+ * 合図 (`serial_ota`、Refs ippoan/alc-app-s3#279, ippoan/alc-app#403) だけを受ける
+ * (TenkoKiosk は Vein Station、FirmwareOtaHost は CoreS3 の合図)。TenkoKiosk と
+ * TodayPunchHistory は同時に出ないが、FirmwareOtaHost の購読はタブに関係なく在るので、
+ * CoreS3 を繋いだキオスク 1 台の購読は 2 本になる (recorder に追い出しも上限も無い)。
  *
  * # 取りこぼさないための 3 点
  *
@@ -57,7 +59,7 @@ export interface TimecardWatchOptions {
    */
   getToken: () => string | null | Promise<string | null>
   /**
-   * 引き直しの実処理 (打刻一覧の再取得)。**打刻一覧を持たない画面 (TenkoKiosk) は渡さない** —
+   * 引き直しの実処理 (打刻一覧の再取得)。**打刻一覧を持たない画面 (TenkoKiosk / FirmwareOtaHost) は渡さない** —
    * その場合は切断中のポーリングも回さない (引き直す先が無い)。
    */
   onChange?: () => unknown

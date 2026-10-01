@@ -553,5 +553,41 @@ describe('useFirmwareReport', () => {
       await vi.advanceTimersByTimeAsync(mod.FIRMWARE_REPORT_INTERVAL_MS)
       expect(reportFirmware).toHaveBeenCalledTimes(3)
     })
+
+    // ---------- 更新の後に古い id を残さない (Refs ippoan/alc-app#403) ----------
+
+    it('★ 保留を解いたとき未接続なら id を捨て、次に繋がったときに AUTH STATUS を聞き直す', async () => {
+      await started()
+      fw.hold()
+      // 書き込み後の再起動で切れたまま、繋がり直さずに終わった (再接続の時間切れ)
+      close()
+      expect(fw.deviceId.value).toBe('d1')
+
+      await fw.release()
+      expect(fw.deviceId.value).toBeNull()
+      // 未接続なので idle は送れない
+      expect(reportFirmware).toHaveBeenCalledTimes(1)
+
+      // 故障機を交換して繋いだ: 古い id を使わず、機体に聞き直す
+      coreS3.request.mockResolvedValue('AUTH PAIRED t1 d2')
+      open()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sentLines()).toEqual(['AUTH STATUS', 'AUTH STATUS'])
+      expect(fw.deviceId.value).toBe('d2')
+      expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd2', phase: 'idle' }))
+    })
+
+    it('保留を解いたとき繋がっていれば、id を持ったまま idle を送る (聞き直さない)', async () => {
+      await started()
+      fw.hold()
+      close()
+      open({ ver: '0.2.0', board: 'cores3', flavor: 'cores3' })
+
+      await fw.release()
+
+      expect(fw.deviceId.value).toBe('d1')
+      expect(sentLines()).toEqual(['AUTH STATUS'])
+      expect(reportFirmware).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'd1', version: '0.2.0', phase: 'idle' }))
+    })
   })
 })
