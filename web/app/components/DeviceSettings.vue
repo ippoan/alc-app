@@ -362,6 +362,8 @@ function resetDeviceRegistration() {
     // WebView 側 (localStorage): tenant / device_id / settings_token / kiosk credential
     // (kiosk credential のクリアは deactivateDevice() 内で済んでいる)
     deactivateDevice()
+    // IT点呼 の受け画面が席に覚えさせた運行管理者の id (別テナントへ登録し直すと無効になる)
+    clearStoredItTenkoManager()
     // Android native 側 (SharedPreferences): device_id / settings_token / fcm 登録マーク /
     // kiosk credential を消し RoomWatcher を停止する (stale device_id 起因の WS未接続・FCM未 を解消)。
     const android = (window as unknown as { Android?: { resetDeviceRegistration?: () => void } }).Android

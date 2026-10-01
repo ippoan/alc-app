@@ -607,3 +607,20 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     })
   })
 })
+
+describe('DeviceSettings — 端末登録リセット', () => {
+  it('2 タップ目で、IT点呼 の受け画面が席に覚えさせた運行管理者の id も消す (Refs ippoan/alc-app#387)', async () => {
+    localStorage.setItem('alc_it_tenko_manager_id', 'mgr-1')
+    const wrapper = await mountDeviceSettings()
+    const resetButton = () => wrapper.findAll('button').find(b => b.text().includes('リセット'))!
+
+    // 1 タップ目は確認だけ
+    await resetButton().trigger('click')
+    expect(resetButton().text()).toContain('本当にリセット')
+    expect(localStorage.getItem('alc_it_tenko_manager_id')).toBe('mgr-1')
+
+    await resetButton().trigger('click')
+    expect(localStorage.getItem('alc_it_tenko_manager_id')).toBeNull()
+    wrapper.unmount()
+  })
+})

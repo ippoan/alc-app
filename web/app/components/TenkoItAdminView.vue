@@ -2,21 +2,25 @@
 /**
  * 運行管理者側の IT点呼 の受け画面 (Refs ippoan/alc-app#387)。
  *
- * 遠隔点呼とは別物。流れは「社員番号で運行管理者を特定 (**顔認証なし**) → 通話 → 判定」。
+ * 遠隔点呼とは別物。流れは「運行管理者を席に登録 (社員番号だけ。**顔認証なし**) → 通話 → 判定」。
  * IT点呼 で保存された記録は、運行管理者の判定が付くまで未完了のまま残る。判定のときに
  * **通話で確認した (IT) か、本人が来て対面で確認した (対面) か**を選んで確定する。
  * 通話が成立しなかった分は「未完了の IT点呼」の一覧から後で確定する。
  *
- * **運行管理者席の鍵に開発用の印がある席にだけ出る** (`ManagerDashboard.vue` のタブ)。
+ * **運行管理者席の鍵に開発用の印がある席にだけ出る** (`index.vue` の最上段の役割タブ `it_tenko`。
+ * 運行管理者タブの入口 `RoleAuthGate` は通さない)。
  * 通信は全部 `'tenko-monitor'` の口 (= 開発用の席では運行管理者席の鍵) で送る。
  *
- * 社員番号の段と通話の手順は `TenkoRemoteAdminView.vue` からの複製 (あちらは本番で動いている
+ * **判定者は「この席に登録された運行管理者」** (`useItTenkoManager`)。画面の上部の枠で社員番号を
+ * 登録すると席 (localStorage) が id を覚え、「変更」を押すまで残る。運行管理者タブ・遠隔点呼が
+ * 共有する ID (`useManagerAuth`) は引き継がないし、そこへ書き込みもしない。
+ *
+ * 通話の手順は `TenkoRemoteAdminView.vue` からの複製 (あちらは本番で動いている
  * 経路なので触らない。共通化は IT点呼 を通常の点呼へ統合するときに行う)。
  */
 import type { TenkoSession } from '~/types'
-import { getEmployeeByCode, getEmployees, getTenkoSession, listTenkoSessions } from '~/utils/api'
+import { getEmployees, getTenkoSession, listTenkoSessions } from '~/utils/api'
 import { alcoholResultLabel } from '~/utils/alcohol'
-import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { IT_TENKO_METHOD, defaultJudgmentMethod, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 
@@ -27,7 +31,13 @@ interface Target {
 }
 
 const config = useRuntimeConfig()
-const { authenticatedManagerId, setManagerId, loadFromDevice } = useManagerAuth()
+const {
+  manager,
+  loading: managerLoading,
+  load: loadManager,
+  registerByCode,
+  clear: clearManager,
+} = useItTenkoManager()
 const webRtc = useWebRtc('admin')
 const camera = useCamera()
 
@@ -103,18 +113,24 @@ function formatTime(d: string | null) {
   return new Date(d).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-// --- 運行管理者の特定 (社員番号だけ。顔認証はしない) ---
+// --- この席の運行管理者 (社員番号で登録する。顔認証はしない) ---
 
-/** 社員番号の入力を待っている対象 */
+/** 未登録のまま開こうとして、社員番号の入力を待っている対象 */
 const waiting = ref<Target | null>(null)
 const idInput = ref('')
 const idError = ref<string | null>(null)
+/** 上部の枠 (着信が無くても登録できる) の入力 */
+const cardInput = ref('')
+const cardError = ref<string | null>(null)
+
+const managerName = computed(() =>
+  manager.value?.name ?? (managerLoading.value ? '確認中...' : '(名前を取得できません)'),
+)
 
 function request(target: Target) {
   idError.value = null
-  // デバイスから管理者IDを復元 → あれば社員番号の入力を飛ばす
-  loadFromDevice()
-  if (authenticatedManagerId.value) {
+  // 席に登録が在れば社員番号は聞かない
+  if (manager.value) {
     void open(target)
     return
   }
@@ -132,25 +148,36 @@ function requestRow(s: TenkoSession) {
   request({ sessionId: s.id, roomId: itTenkoRoomOf(s.id, activeRooms.value) })
 }
 
+/** 入力の社員番号で席に登録する。登録できたら true (空の入力・失敗は false) */
+async function register(input: Ref<string>, error: Ref<string | null>): Promise<boolean> {
+  const code = input.value.trim()
+  if (!code) return false
+  error.value = null
+  const res = await registerByCode(code)
+  if (!res.ok) {
+    error.value = res.message
+    return false
+  }
+  input.value = ''
+  return true
+}
+
+/** 上部の枠の「登録」 */
+async function onCardSubmit() {
+  await register(cardInput, cardError)
+}
+
+/** モーダルの「次へ」。登録できたら、そのまま対象を開く */
 async function onIdSubmit() {
-  const input = idInput.value.trim()
-  if (!input) return
-  idError.value = null
-  try {
-    const emp = await getEmployeeByCode(input, 'tenko-monitor')
-    if (!emp.role.includes('manager') && !emp.role.includes('admin')) {
-      idError.value = `${emp.name}さんには運行管理者の権限がありません`
-      return
-    }
-    setManagerId(emp.id)
-  }
-  catch {
-    idError.value = employeeNotFoundByCode(input)
-    return
-  }
-  idInput.value = ''
+  if (!await register(idInput, idError)) return
   // 照会を待つあいだにキャンセルされていたら開かない
   if (waiting.value) await open(waiting.value)
+}
+
+/** 「変更」: 登録を消して未登録の表示に戻す */
+function changeManager() {
+  cardError.value = null
+  clearManager()
 }
 
 function cancelIdInput() {
@@ -275,6 +302,7 @@ function onJudged() {
 }
 
 onMounted(() => {
+  void loadManager()
   void loadEmployeeNames()
   refresh()
   startWatchingRooms()
@@ -300,6 +328,44 @@ onUnmounted(() => {
       >
         更新
       </button>
+    </div>
+
+    <!-- この席の運行管理者 (判定者)。着信が無くても登録できる -->
+    <div class="rounded-xl border border-gray-200 bg-white p-4" data-testid="it-manager-card">
+      <div v-if="manager" class="flex items-center justify-between gap-2">
+        <p class="text-sm text-gray-700">
+          いまの運行管理者:
+          <span class="font-semibold text-gray-900" data-testid="it-manager-name">{{ managerName }}</span>
+        </p>
+        <!-- 点呼を開いている間 (繋いでいる途中を含む) は替えさせない: 判定者が途中で消える -->
+        <button
+          class="shrink-0 px-3 py-1.5 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors disabled:opacity-50"
+          :disabled="opened !== null || connecting"
+          @click="changeManager"
+        >
+          変更
+        </button>
+      </div>
+      <div v-else class="space-y-2">
+        <p class="text-sm text-gray-700">この席の運行管理者を登録してください (社員番号)</p>
+        <div class="flex gap-2">
+          <input
+            v-model="cardInput"
+            type="text"
+            placeholder="社員番号 (例: 001)"
+            class="min-w-0 flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            @keyup.enter="onCardSubmit"
+          >
+          <button
+            :disabled="!cardInput.trim()"
+            class="shrink-0 px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors disabled:opacity-50"
+            @click="onCardSubmit"
+          >
+            登録
+          </button>
+        </div>
+        <p v-if="cardError" class="text-sm text-red-700" data-testid="it-manager-card-error">{{ cardError }}</p>
+      </div>
     </div>
 
     <div v-if="callError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700" data-testid="it-call-error">
@@ -379,7 +445,7 @@ onUnmounted(() => {
         v-if="session"
         :key="session.id"
         :session="session"
-        :manager-id="authenticatedManagerId"
+        :manager-id="manager?.id ?? null"
         :default-method="defaultJudgmentMethod(opened.roomId !== null)"
         @judged="onJudged"
       />
@@ -466,7 +532,7 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <!-- 運行管理者の特定 (社員番号だけ。顔認証はしない) -->
+  <!-- 未登録のまま開こうとしたとき: 社員番号で席に登録してから開く (顔認証はしない) -->
   <div
     v-if="waiting"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
