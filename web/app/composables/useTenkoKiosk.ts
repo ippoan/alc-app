@@ -391,6 +391,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    *   (起動直後・探索中) も乗る。そこで止めると**署名を試す前に端末を締め出す**ので、
    *   まだ試していなければ**ここで 1 度試してから**判定する (`hasProbedBpBond`)。
    *   止めるのは**試した結果、ボンド状態が分からなかったとき**だけ。
+   *
+   * (#401: `unused` の端末は index.vue が自動点呼のタブごと塞ぐので、ここには来ない。)
    */
   async function isBpRequirementUnknown(): Promise<boolean> {
     if (remoteMode || tenkoType.value === 'post_operation') return false
