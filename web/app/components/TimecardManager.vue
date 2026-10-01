@@ -5,6 +5,7 @@ import {
   listTimePunches, downloadTimePunchesCsv,
 } from '~/utils/api'
 import { jstTodayDate } from '~/utils/jst'
+import { isDevDevice, usesAdminToken } from '~/utils/token-selection'
 import { cardKindOf } from '~/utils/card-kind'
 
 type SubTab = 'cards' | 'punches'
@@ -193,10 +194,25 @@ watch(subTab, (tab) => {
  * 引き直すのは打刻履歴タブを開いているときだけ (カード登録タブでは無駄)。
  * **絞り込みが今日以外でも引き直す** — 条件付きにすると「今日を見ているときだけ
  * 更新される」という説明の要る挙動になり、引き直しは安い。
+ *
+ *
+ * トークン (Refs ippoan/alc-app#387): dev端末 (開発用の鍵) では管理者ログインがあっても
+ * 端末のトークンで購読する。打刻の合図は dev / 本番で分かれているので、管理者のトークンで
+ * 繋ぐと dev端末の画面が本番の打刻で引き直しに行き、自分の (dev の) 打刻では引き直さない。
+ *
+ * **dev の印が無い端末は従来のまま: 管理者のトークンだけ。** 無ければ null (WS を張らず
+ * ポーリングのみ) で、端末の鍵は取りに行かない — `selectSendToken` に丸ごと乗せると、
+ * 管理者のトークンが無い本番の端末が端末の鍵で購読し始める (挙動が変わる)。
  */
 const { accessToken } = useAuth()
+const { getDeviceJwt } = useDeviceToken()
+function watchToken(): string | null | Promise<string | null> {
+  if (usesAdminToken(accessToken.value, 'kiosk')) return accessToken.value
+  // dev端末で取れなくても管理者のトークンへは戻さない (本番の合図を購読しない)
+  return isDevDevice('kiosk') ? getDeviceJwt() : null
+}
 const punchWatch = useTimecardWatch({
-  getToken: () => accessToken.value,
+  getToken: watchToken,
   onChange: () => { if (subTab.value === 'punches') void loadPunches() },
 })
 

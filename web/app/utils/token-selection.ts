@@ -30,6 +30,7 @@
  *   外された端末が dev のまま残らないように
  * - トークンを捨てた (`null`。鍵を抜いた等) → memory の印だけ下ろす。**localStorage は触らない**
  *   — 「取れなかった」と「dev でなくなった」は別のことで、次の起動ではまた dev として始める
+ * - 画面から外した ({@link clearDevDeviceMark}) → 消す (memory + localStorage)
  *
  * localStorage が使えない環境 (SSR・private mode・容量超過) では memory の印だけで動く。
  *
@@ -96,6 +97,20 @@ export function noteDeviceToken(kind: DeviceTokenKind, token: string | null): vo
   const dev = isDevDeviceToken(token)
   devMarks[kind] = dev
   if (token) writeStoredMark(kind, dev)
+}
+
+/**
+ * その種類の dev の印を外す (memory + localStorage)。{@link noteDeviceToken} が dev でない
+ * トークンを取ったときと同じ消し方。
+ *
+ * dev の鍵を**抜いたあと**の PC を管理者として使い直すための操作 — 鍵を抜いただけでは
+ * 保存した印が残り (「取れなかった」と「dev でなくなった」は別)、管理者ログインがあっても
+ * 管理者のトークンで送らなくなる。**dev の鍵が挿さったままなら、次にトークンを取った時点で
+ * また印が立つ** (印を決めるのは取れたトークンで、この関数は鍵の側を変えない)。
+ */
+export function clearDevDeviceMark(kind: DeviceTokenKind): void {
+  devMarks[kind] = false
+  writeStoredMark(kind, false)
 }
 
 /**

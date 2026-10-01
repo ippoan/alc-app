@@ -4,7 +4,7 @@
  * - `POST /auth/introspect` … 固定 token 表で introspect 応答を返す。
  *   実物と同じく `Authorization: <shared secret>` (生の値) を要求する。
  * - `POST /alc-internal-proxy/api/hub/measurements` … ingest 転送のモック。
- *   `X-Alc-Proxy-Secret` を検証し、受けた body / X-Tenant-ID を記録する。
+ *   `X-Alc-Proxy-Secret` を検証し、受けた body / X-Tenant-ID / X-Device-Dev を記録する。
  *   item の kind に "boom" が含まれると 500 を返す (上流失敗の再現用)。
  * - `GET /internal/hub-devices` … battery cron 用 hub device 一覧のモック。
  *   `Authorization: <shared secret>` を要求。`POST /__spy/hub-devices` で
@@ -128,6 +128,55 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  // dev端末 (Refs ippoan/alc-app#387) 専用。**専用テナント** — 合図が dev / 本番の
+  // どちらの購読者に届くかを数えるので、他 test の購読を混ぜない。
+  "hub-token-dev": {
+    active: true,
+    tenant_id: "tenant-dev",
+    role: "device-hub",
+    sub: "device-dev",
+    email: "",
+    exp: 9999999999,
+    dev_device: true,
+  },
+  // 同じテナントの本番の端末 (`dev_device: false` を明示して返す形)
+  "hub-token-dev-prod": {
+    active: true,
+    tenant_id: "tenant-dev",
+    role: "device-hub",
+    sub: "device-dev-prod",
+    email: "",
+    exp: 9999999999,
+    dev_device: false,
+  },
+  // `=== true` 以外は本番扱い、の確認用 (文字列の "true")
+  "hub-token-dev-string": {
+    active: true,
+    tenant_id: "tenant-dev",
+    role: "device-hub",
+    sub: "device-dev-string",
+    email: "",
+    exp: 9999999999,
+    dev_device: "true",
+  },
+  "kiosk-token-dev": {
+    active: true,
+    tenant_id: "tenant-dev",
+    role: "device-kiosk",
+    sub: "device-kiosk-dev",
+    email: "",
+    exp: 9999999999,
+    dev_device: true,
+  },
+  // 同じテナントの本番の購読者 (欄なし = 旧 auth-worker の応答と同じ形)
+  "admin-token-dev-prod": {
+    active: true,
+    tenant_id: "tenant-dev",
+    role: "admin",
+    sub: "",
+    email: "",
+    exp: 9999999999,
+  },
   // 期限切れ / 署名不正 / ACL 不許可テナントは実物では区別なく active:false になる。
   "expired-token": { active: false },
 };
@@ -173,6 +222,8 @@ export default {
       const items = await request.json();
       ingestCalls.push({
         tenantId: request.headers.get("X-Tenant-ID"),
+        // dev端末の転送だけに付く (`null` = ヘッダー自体が無い、Refs ippoan/alc-app#387)
+        dev: request.headers.get("X-Device-Dev"),
         items,
       });
       // 上流失敗の再現用。kind は端末経路 (WS / POST バッチ) で、card_id は

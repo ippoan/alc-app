@@ -9,6 +9,8 @@
  *     (RECORDER service binding + INTERNAL_SHARED_SECRET)
  *   → recorder の DO が ingest 転送 (rust-alc-api `POST /api/hub/measurements`) の
  *     あとに `/watch-timecard` の購読者へ合図を出す。
+ *     dev端末の token (introspect の `dev_device === true`) なら `X-Device-Dev: 1` を
+ *     付け、recorder が dev の行・dev の購読者へ振る (Refs ippoan/alc-app#387)。
  *
  * **rust-alc-api の `POST /api/timecard/punch` を直に叩かせない。** 直行すると
  * その打刻だけ合図が鳴らない (経路依存の挙動になる)。
@@ -70,6 +72,10 @@ export default defineEventHandler(async (event) => {
   if (introRes.status !== 200) {
     throw createError({ statusCode: 503, statusMessage: 'introspect に失敗しました' })
   }
+  // dev端末 (開発用の鍵) の token か (Refs ippoan/alc-app#387)。**決めるのは introspect の
+  // `dev_device === true` だけ** — ブラウザの申告 (body / ヘッダー) は読まない。
+  // 下の `isDevLoginToken` (dev ログインの拒否) とは別物。
+  const isDevDevice = ((await introRes.clone().json()) as { dev_device?: unknown } | null)?.dev_device === true
   const access = decideTimecardPunchAccess(await introRes.json())
   if (!access.ok) {
     throw createError({ statusCode: access.status, statusMessage: access.message })
@@ -92,7 +98,11 @@ export default defineEventHandler(async (event) => {
     deviceId: access.deviceId,
     cardId,
   })
-  const res = await recorder.fetch(fwd.url, fwd.init)
+  // dev端末の打刻は recorder に `X-Device-Dev: 1` で伝える。recorder はこれを backend への
+  // 転送と `/watch-timecard` の合図の両方に使う。**dev でなければヘッダー自体を付けない**
+  const headers = { ...(fwd.init.headers as Record<string, string>) }
+  if (isDevDevice) headers['X-Device-Dev'] = '1'
+  const res = await recorder.fetch(fwd.url, { ...fwd.init, headers })
   setResponseStatus(event, res.status)
   setResponseHeader(event, 'Content-Type', 'application/json')
   setResponseHeader(event, 'Cache-Control', 'no-store')

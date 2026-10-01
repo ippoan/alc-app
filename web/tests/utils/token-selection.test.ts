@@ -4,7 +4,7 @@
 // トークンより先にそれを使う。無ければ今までの優先順位 (管理者 → 端末) のまま。**
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
-  isDevDevice, isDevDeviceToken, noteDeviceToken, selectSendToken, usesAdminToken,
+  clearDevDeviceMark, isDevDevice, isDevDeviceToken, noteDeviceToken, selectSendToken, usesAdminToken,
   type DeviceTokenKind,
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
@@ -222,5 +222,63 @@ describe('dev の印を localStorage に残す (reload をまたぐ)', () => {
     expect(mod.isDevDevice('kiosk')).toBe(false)
     expect(() => mod.noteDeviceToken('kiosk', DEV)).not.toThrow()
     expect(mod.isDevDevice('kiosk')).toBe(true)
+  })
+})
+
+describe('clearDevDeviceMark — 画面から dev の印を外す', () => {
+  const KEY = 'alc_dev_device_kiosk'
+
+  it('memory と localStorage の両方が消え、管理者のトークンに戻る', async () => {
+    noteDeviceToken('kiosk', DEV)
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(localStorage.getItem(KEY)).toBe('1')
+
+    clearDevDeviceMark('kiosk')
+
+    expect(isDevDevice('kiosk')).toBe(false)
+    expect(localStorage.getItem(KEY)).toBeNull()
+    expect(usesAdminToken(ADMIN, 'kiosk')).toBe(true)
+    await expect(selectSendToken(ADMIN, 'kiosk', async () => DEV)).resolves.toBe(ADMIN)
+  })
+
+  it('★ 鍵を抜いたあと (memory の印は下りているが保存した印が残っている) でも保存した印が消える', async () => {
+    noteDeviceToken('kiosk', DEV)
+    noteDeviceToken('kiosk', null)
+    expect(localStorage.getItem(KEY)).toBe('1')
+
+    clearDevDeviceMark('kiosk')
+
+    expect(localStorage.getItem(KEY)).toBeNull()
+    // 次の起動でも dev として始まらない
+    vi.resetModules()
+    expect((await import('~/utils/token-selection')).isDevDevice('kiosk')).toBe(false)
+  })
+
+  it('外すのはその種類の印だけ', () => {
+    noteDeviceToken('kiosk', DEV)
+    noteDeviceToken('manager-device', DEV)
+
+    clearDevDeviceMark('kiosk')
+
+    expect(isDevDevice('manager-device')).toBe(true)
+    expect(localStorage.getItem('alc_dev_device_manager-device')).toBe('1')
+  })
+
+  it('dev の鍵が挿さったままなら、次にトークンを取った時点でまた印が立つ', () => {
+    noteDeviceToken('kiosk', DEV)
+    clearDevDeviceMark('kiosk')
+
+    noteDeviceToken('kiosk', DEV)
+
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(localStorage.getItem(KEY)).toBe('1')
+  })
+
+  it('localStorage が例外を投げても落ちず、memory の印は消える', () => {
+    noteDeviceToken('kiosk', DEV)
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('denied') })
+
+    expect(() => clearDevDeviceMark('kiosk')).not.toThrow()
+    expect(isDevDevice('kiosk')).toBe(false)
   })
 })

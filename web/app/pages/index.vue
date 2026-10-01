@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { LatestPunch } from '~/types'
 import { initApi, setBpStationJwtGetter } from '~/utils/api'
+import { isDevDevice } from '~/utils/token-selection'
 
 const config = useRuntimeConfig()
 const route = useRoute()
@@ -116,7 +117,7 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
@@ -124,6 +125,9 @@ const driverSubTab = ref<DriverSubTab>(
   : route.query.tab === 'remote_demo' ? 'remote_demo'
   : route.query.tab === 'device' ? 'device'
   : route.query.tab === 'bp' ? 'bp'
+  // dev端末の記録 (Refs ippoan/alc-app#387)。**dev の印がある端末でだけ開く** — 印の無い
+  // 端末が URL で開いても、メニューに無い画面が出るだけなので通常点呼へ倒す
+  : route.query.tab === 'dev_records' && isDevDevice('kiosk') ? 'dev_records'
   : 'normal',
 )
 
@@ -143,6 +147,22 @@ const MENU_TABS: readonly SubTabDef[] = [
   { key: 'device', label: 'デバイス設定' },
 ]
 
+// dev端末 (開発用の鍵。本番環境でのテスト用) の記録を見る項目 (Refs ippoan/alc-app#387)。
+// **キオスクの鍵に dev の印がある端末にだけ**ハンバーガーへ足す。選んでもハンバーガーに
+// 留まる (可視側へ移るのは下の `bp` だけの規則)。
+// 印 (`isDevDevice`) は同期で読める代わりに reactive ではないので、ここに写しを持ち、
+// メニューを開くたびに読み直す — 起動後に dev の鍵でトークンが取れた端末でも、開けば出る
+const DEV_RECORDS_TAB: SubTabDef = { key: 'dev_records', label: '開発用の記録' }
+const devKioskMark = ref(isDevDevice('kiosk'))
+function refreshDevKioskMark() {
+  devKioskMark.value = isDevDevice('kiosk')
+}
+/** 画面から印を外したあと: 項目を消し、行き場の無くなった画面を通常点呼へ戻す */
+function onDevMarkCleared() {
+  refreshDevKioskMark()
+  driverSubTab.value = 'normal'
+}
+
 // 血圧測定の置き場所。**`BloodPressureMeasurement` が中身を出せる状態 (`showBpUi`) と同じ
 // 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
 // 可視タブとハンバーガーは**排他**: 同じ導線が 2 か所に出ないよう、可視側へ出す端末では
@@ -160,7 +180,11 @@ const bpInVisible = computed(() =>
   showBpUi.value || (driverSubTab.value === 'bp' && bpUiState.value === 'checking'),
 )
 const visibleTabs = computed(() => bpInVisible.value ? [...VISIBLE_TABS, BP_TAB] : VISIBLE_TABS)
-const menuTabs = computed(() => bpInVisible.value ? MENU_TABS : [...MENU_TABS, BP_TAB])
+const menuTabs = computed(() => [
+  ...MENU_TABS,
+  ...(bpInVisible.value ? [] : [BP_TAB]),
+  ...(devKioskMark.value ? [DEV_RECORDS_TAB] : []),
+])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
 // 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
 const isMenuTabActive = computed(() => menuTabs.value.some(t => t.key === driverSubTab.value))
@@ -236,7 +260,11 @@ function refreshWatchdogStatus() {
     watchdogStatus.value = (window as any).Android?.isCallEnabled?.() ? '稼働中' : '停止中'
   } catch { watchdogStatus.value = null }
 }
-watch(menuOpen, (open) => { if (open) refreshWatchdogStatus() })
+watch(menuOpen, (open) => {
+  if (!open) return
+  refreshWatchdogStatus()
+  refreshDevKioskMark()
+})
 
 // QRスキャンでデバイス登録
 const qrRegistering = ref(false)
@@ -608,6 +636,8 @@ function onRoleTabClick(role: RoleTab) {
           <!-- 血圧測定タブ。血圧だけを測る端末はこのタブを start_url に持つ manifest で
                インストールする (Refs ippoan/alc-app-s3#135) -->
           <BloodPressureMeasurement v-if="driverSubTab === 'bp'" class="flex-1 min-h-0" />
+          <!-- dev端末の記録 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る -->
+          <DevDeviceRecords v-if="driverSubTab === 'dev_records'" class="flex-1 min-h-0" @cleared="onDevMarkCleared" />
         </div>
       </div>
 

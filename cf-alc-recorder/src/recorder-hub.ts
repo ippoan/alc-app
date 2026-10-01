@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
-import { resolveSecret } from "./auth";
+import { DEV_HEADER_VALUE, RECORDER_DEV_HEADER, resolveSecret } from "./auth";
 import {
   buildTimecardPunch,
   CRASH_LOG_KIND,
@@ -38,6 +38,7 @@ import {
  *
  * Hibernation 復帰: 接続 identity は in-memory に持たず、毎メッセージ
  * `ws.deserializeAttachment()` から読む (= 復帰後も転送先 tenant/device が壊れない)。
+ * dev端末かどうか (Refs ippoan/alc-app#387) も同じ attachment に持つ。
  *
  * 下り (server → browser、device/setup ページの live update、Refs auth-worker
  * live update 要望): `GET /events` は SSE で接続中デバイス一覧の変化を push する。
@@ -56,6 +57,20 @@ interface WsAttachment {
    * 「接続中デバイス」一覧に現れる (Refs ippoan/alc-app-s3#134)。
    */
   deviceId?: string;
+  /**
+   * dev端末の接続なら `true` (Refs ippoan/alc-app#387)。**本番では欄ごと載せない。**
+   * 値は worker が introspect の結果から立てたもので、接続の間は変わらない。
+   */
+  dev?: true;
+}
+
+/** attachment を組み立てる (dev は true のときだけ欄を作る)。 */
+function buildAttachment(tenantId: string, deviceId: string | undefined, dev: boolean): WsAttachment {
+  return {
+    tenantId,
+    ...(deviceId !== undefined ? { deviceId } : {}),
+    ...(dev ? { dev: true as const } : {}),
+  };
 }
 
 /**
@@ -87,6 +102,21 @@ const DEVICE_TAG_PREFIX = "device:";
  * 別 tag にしておけば watcher には構造的に届かない (Refs ippoan/alc-app-s3#134)。
  */
 const WATCH_TAG = "watch:timecard";
+
+/**
+ * 同じ購読者のうち **dev端末** の tag (Refs ippoan/alc-app#387)。
+ *
+ * dev端末の打刻は backend で本番の行と分けて持たれるので、合図も分ける:
+ * dev の打刻は dev の購読者にだけ、本番の打刻は本番の購読者にだけ届く。
+ * **購読者はどちらか片方の tag しか持たない** — 両方に付けると、本番の画面が
+ * dev の打刻のたびに引き直しに行く (逆も)。
+ */
+const WATCH_DEV_TAG = "watch:timecard:dev";
+
+/** 打刻した側 / 購読する側の dev に対応する tag。 */
+function watchTagFor(dev: boolean): string {
+  return dev ? WATCH_DEV_TAG : WATCH_TAG;
+}
 
 /**
  * シリアル OTA の合図 (`POST /serial-ota`) を受けるキオスク購読者だけの tag。
@@ -170,6 +200,7 @@ export class RecorderHub extends DurableObject<Env> {
    * worker (src/index.ts) からの内部呼び出しのみを想定。認証 (device JWT introspect /
    * INTERNAL_SHARED_SECRET) は worker 側で完了しており、identity は
    * `X-Recorder-Tenant-Id` / `X-Recorder-Device-Id` ヘッダーで受け取る。
+   * dev端末かどうかは `X-Recorder-Dev` (worker が必ず上書きする) で受け取る。
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -227,9 +258,14 @@ export class RecorderHub extends DurableObject<Env> {
     // worker (src/index.ts) が introspect 済み判定から必ず上書きして付けるヘッダー
     // (Refs #279)。kiosk だけ `KIOSK_TAG` を足す — シリアル OTA の合図の宛先になる。
     const isKiosk = request.headers.get("X-Recorder-Watcher-Kind") === "kiosk";
+    // 合図の tag は dev / 本番のどちらか片方だけ (Refs ippoan/alc-app#387)。
+    // `KIOSK_TAG` (シリアル OTA の合図) は dev を問わない — 端末の firmware の話で、
+    // 記録の区別とは関係が無い。
+    const dev = request.headers.get(RECORDER_DEV_HEADER) === DEV_HEADER_VALUE;
+    const watchTag = watchTagFor(dev);
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], isKiosk ? [WATCH_TAG, KIOSK_TAG] : [WATCH_TAG]);
-    pair[1].serializeAttachment({ tenantId } satisfies WsAttachment);
+    this.ctx.acceptWebSocket(pair[1], isKiosk ? [watchTag, KIOSK_TAG] : [watchTag]);
+    pair[1].serializeAttachment(buildAttachment(tenantId, undefined, dev));
     // サブプロトコルを 1 つも返さないとブラウザが即座に閉じる。
     // **トークン側を返してはいけない** (応答ヘッダーに秘密が乗る)
     return new Response(null, {
@@ -258,9 +294,13 @@ export class RecorderHub extends DurableObject<Env> {
    * **発生源はこの 1 メソッドのまま保つこと。** 呼び出し側を増やすのは
    * 「打刻を作る経路」がここを通るようにする形でだけ行う — 別の場所から
    * 合図を出し始めると、増えるたびに「鳴らない経路」が生まれる。
+   *
+   * # dev端末 (Refs ippoan/alc-app#387)
+   *
+   * `dev` は**打刻した側**の区別。同じ側の購読者 (`watchTagFor`) にだけ送る。
    */
-  private notifyTimecardPunch(): void {
-    for (const ws of this.ctx.getWebSockets(WATCH_TAG)) {
+  private notifyTimecardPunch(dev: boolean): void {
+    for (const ws of this.ctx.getWebSockets(watchTagFor(dev))) {
       this.send(ws, { type: "timecard_punch" });
     }
   }
@@ -312,8 +352,8 @@ export class RecorderHub extends DurableObject<Env> {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], [DEVICE_TAG_PREFIX + deviceId]);
     // identity は attachment に載せ、hibernation 復帰後も deserializeAttachment で読む。
-    const attachment: WsAttachment = { tenantId, deviceId };
-    pair[1].serializeAttachment(attachment);
+    const dev = request.headers.get(RECORDER_DEV_HEADER) === DEV_HEADER_VALUE;
+    pair[1].serializeAttachment(buildAttachment(tenantId, deviceId, dev));
     this.send(pair[1], { type: "connected" });
     this.broadcastDevices();
 
@@ -346,7 +386,11 @@ export class RecorderHub extends DurableObject<Env> {
       ws.close(1011, "missing attachment");
       return;
     }
-    const attachment: DeviceAttachment = { tenantId: raw.tenantId, deviceId: raw.deviceId };
+    const attachment: DeviceAttachment = {
+      tenantId: raw.tenantId,
+      deviceId: raw.deviceId,
+      ...(raw.dev === true ? { dev: true as const } : {}),
+    };
 
     switch (msg.type) {
       case "measurement":
@@ -414,6 +458,8 @@ export class RecorderHub extends DurableObject<Env> {
     if (!tenantId || !deviceId) {
       return json({ error: "missing_identity" }, 400);
     }
+    // dev端末の打刻か (worker が caller の `X-Device-Dev: 1` から立てる、#387)
+    const dev = request.headers.get(RECORDER_DEV_HEADER) === DEV_HEADER_VALUE;
     let body: unknown;
     try {
       body = await request.json();
@@ -437,13 +483,14 @@ export class RecorderHub extends DurableObject<Env> {
       tenantId,
       deviceId,
       [built.item],
+      dev,
     );
     if (!result.ok) {
       // 詳細 (上流 body) は echo しない。ブラウザは打ち直せる
       return json({ error: result.error }, 502);
     }
     // 合図は backend が受理した後 (WS 経路の ack と同じ順序)
-    this.notifyTimecardPunch();
+    this.notifyTimecardPunch(dev);
     return json({ seq: built.item.seq }, 202);
   }
 
@@ -505,13 +552,16 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
 
-    // tenant_id / device_id は WS attachment (= introspect 済み JWT claims) から注入。
+    // tenant_id / device_id / dev は WS attachment (= introspect 済み JWT claims) から注入。
+    // **frame の中身で dev を決めない** (Refs ippoan/alc-app#387)。
+    const dev = attachment.dev === true;
     const result = await forwardMeasurements(
       this.env.AUTH_WORKER,
       sharedSecret,
       attachment.tenantId,
       attachment.deviceId,
       [parsed.item],
+      dev,
     );
     if (!result.ok) {
       // 詳細 (body) は response に echo しない。status のみ端末へ返し log に残す。
@@ -521,7 +571,7 @@ export class RecorderHub extends DurableObject<Env> {
     this.send(ws, { type: "ack", seq });
     // 打刻だけ購読者へ合図を出す (ack の後 = backend が受理した後)
     if (parsed.item.kind === TIMECARD_KIND) {
-      this.notifyTimecardPunch();
+      this.notifyTimecardPunch(dev);
     }
   }
 
