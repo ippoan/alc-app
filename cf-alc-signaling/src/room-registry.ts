@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './index';
+import { isDevRequest } from './auth';
 
 interface CallSchedule {
   enabled: boolean;
@@ -8,6 +9,16 @@ interface CallSchedule {
   endHour: number;
   endMin: number;
   days: number[]; // 0=日, 1=月, ..., 6=土
+}
+
+/**
+ * 部屋の登録値。旧形式は数値 (`Date.now()`) だけで、dev の属性を持たない —
+ * デプロイをまたいで残っている部屋は dev でない部屋として読む (Refs ippoan/alc-app#387)。
+ */
+type RoomEntry = number | { ts: number; dev: boolean };
+
+function isDevRoom(entry: RoomEntry | undefined): boolean {
+  return typeof entry === 'object' && entry !== null && entry.dev === true;
 }
 
 /**
@@ -31,8 +42,11 @@ export class RoomRegistry extends DurableObject<Env> {
       // Tag with device_id for identification after hibernation
       const tags = deviceId ? [`device:${deviceId}`] : [];
       this.ctx.acceptWebSocket(pair[1], tags);
+      // 購読者が dev端末の鍵かは attachment に持つ (hibernation から復帰しても残る)
+      const dev = isDevRequest(request);
+      pair[1].serializeAttachment({ dev });
       // Send current state immediately on connect
-      const rooms = await this.getActiveRooms();
+      const rooms = await this.getActiveRooms(dev);
       pair[1].send(JSON.stringify({ type: 'rooms_updated', rooms }));
       console.log(`[WS] device=${deviceId || '(none)'} connected, active_rooms=${rooms.length}, total_ws=${this.ctx.getWebSockets().length}`);
       return new Response(null, { status: 101, webSocket: pair[0] });
@@ -40,7 +54,7 @@ export class RoomRegistry extends DurableObject<Env> {
 
     // GET /rooms → list active room IDs
     if (request.method === 'GET' && url.pathname === '/rooms') {
-      const rooms = await this.getActiveRooms();
+      const rooms = await this.getActiveRooms(isDevRequest(request));
       return new Response(JSON.stringify({ rooms }), {
         headers: { 'Content-Type': 'application/json' },
       });
@@ -50,7 +64,8 @@ export class RoomRegistry extends DurableObject<Env> {
     const putMatch = url.pathname.match(/^\/rooms\/([^/]+)$/);
     if (request.method === 'PUT' && putMatch) {
       const roomId = putMatch[1];
-      await this.ctx.storage.put(`room:${roomId}`, Date.now());
+      const entry: RoomEntry = { ts: Date.now(), dev: isDevRequest(request) };
+      await this.ctx.storage.put(`room:${roomId}`, entry);
       await this.broadcastRooms();
       return new Response(null, { status: 204 });
     }
@@ -59,7 +74,7 @@ export class RoomRegistry extends DurableObject<Env> {
     const answeredMatch = url.pathname.match(/^\/rooms\/([^/]+)\/answered$/);
     if (request.method === 'POST' && answeredMatch) {
       const roomId = answeredMatch[1];
-      await this.broadcastRoomAnswered(roomId);
+      await this.broadcastRoomAnswered(roomId, isDevRequest(request));
       return new Response(null, { status: 204 });
     }
 
@@ -122,7 +137,8 @@ export class RoomRegistry extends DurableObject<Env> {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      const rooms = await this.getActiveRooms();
+      // テスト着信に dev の部屋 id を混ぜない
+      const rooms = await this.getActiveRooms(false);
       const testRoomId = `test-call-${Date.now()}`;
       const msg = JSON.stringify({ type: 'rooms_updated', rooms: [...rooms, testRoomId] });
 
@@ -181,7 +197,8 @@ export class RoomRegistry extends DurableObject<Env> {
 
     // POST /test-call-all-with-fcm → WebSocket + FCM fallback (実際の着信と同じ経路)
     if (request.method === 'POST' && url.pathname === '/test-call-all-with-fcm') {
-      const rooms = await this.getActiveRooms();
+      // テスト着信に dev の部屋 id を混ぜない
+      const rooms = await this.getActiveRooms(false);
       const testRoomId = `test-call-${Date.now()}`;
       const msg = JSON.stringify({ type: 'rooms_updated', rooms: [...rooms, testRoomId] });
 
@@ -276,7 +293,8 @@ export class RoomRegistry extends DurableObject<Env> {
 
       if (shouldSend) {
         // Schedule allows → send test call
-        const rooms = await this.getActiveRooms();
+        // テスト着信に dev の部屋 id を混ぜない
+        const rooms = await this.getActiveRooms(false);
         const testRoomId = `test-call-${Date.now()}`;
         const msg = JSON.stringify({ type: 'rooms_updated', rooms: [...rooms, testRoomId] });
         let sent = 0;
@@ -334,7 +352,7 @@ export class RoomRegistry extends DurableObject<Env> {
     try {
       const data = JSON.parse(message);
       if (data.type === 'call_answered' && data.roomId) {
-        await this.broadcastRoomAnswered(data.roomId);
+        await this.broadcastRoomAnswered(data.roomId, this.isDevWatcher(ws));
         return;
       }
       if (data.type === 'set_schedule') {
@@ -381,9 +399,21 @@ export class RoomRegistry extends DurableObject<Env> {
     return await this.ctx.storage.get<CallSchedule>(`schedule:${deviceId}`) ?? null;
   }
 
-  private async broadcastRoomAnswered(roomId: string) {
+  /** 購読者が dev端末の鍵か。attachment の無い接続は dev でない。 */
+  private isDevWatcher(ws: WebSocket): boolean {
+    return (ws.deserializeAttachment() as { dev?: boolean } | null)?.dev === true;
+  }
+
+  /**
+   * その部屋の dev と一致する購読者にだけ送る。登録の無い部屋 (既に抜けた部屋 /
+   * テスト着信) は、言ってきた側の dev (`fallbackDev`) の購読者に送る。
+   */
+  private async broadcastRoomAnswered(roomId: string, fallbackDev: boolean) {
+    const entry = await this.ctx.storage.get<RoomEntry>(`room:${roomId}`);
+    const roomDev = entry === undefined ? fallbackDev : isDevRoom(entry);
     const msg = JSON.stringify({ type: 'room_answered', roomId });
     for (const ws of this.ctx.getWebSockets()) {
+      if (this.isDevWatcher(ws) !== roomDev) continue;
       try {
         ws.send(msg);
       } catch { /* ignore closed */ }
@@ -392,10 +422,13 @@ export class RoomRegistry extends DurableObject<Env> {
   }
 
   private async broadcastRooms() {
-    const rooms = await this.getActiveRooms();
+    // 購読者ごとに、その購読者の dev と一致する部屋だけを送る
+    const rooms = await this.getActiveRooms(false);
+    const devRooms = await this.getActiveRooms(true);
     const msg = JSON.stringify({ type: 'rooms_updated', rooms });
+    const devMsg = JSON.stringify({ type: 'rooms_updated', rooms: devRooms });
     const allWs = this.ctx.getWebSockets();
-    console.log(`[broadcast] rooms=${JSON.stringify(rooms)}, ws_count=${allWs.length}`);
+    console.log(`[broadcast] rooms=${JSON.stringify(rooms)}, dev_rooms=${JSON.stringify(devRooms)}, ws_count=${allWs.length}`);
 
     // WS broadcast (works when connection is healthy)
     let wsSent = 0;
@@ -405,7 +438,7 @@ export class RoomRegistry extends DurableObject<Env> {
       try {
         const shouldSend = await this.shouldNotify(ws);
         if (shouldSend) {
-          ws.send(msg);
+          ws.send(this.isDevWatcher(ws) ? devMsg : msg);
           wsSent++;
           console.log(`[broadcast] WS sent to device=${deviceId}`);
         } else {
@@ -422,6 +455,7 @@ export class RoomRegistry extends DurableObject<Env> {
     // Always send FCM to all eligible devices (Android-side dedup handles overlap)
     // ws.send() can silently succeed on stale connections, so we cannot rely on
     // WS delivery to exclude devices from FCM.
+    // FCM は本番の運行管理者へ届くので、dev の部屋は渡さない (`rooms` は dev でない部屋だけ)。
     if (rooms.length > 0 && this.env.BACKEND_API_URL) {
       console.log(`[broadcast] FCM requesting to ${this.env.BACKEND_API_URL}`);
       this.ctx.waitUntil(
@@ -514,8 +548,15 @@ export class RoomRegistry extends DurableObject<Env> {
     return `現在${pad(jstHour)}:${pad(jstMin)} — スケジュール${pad(schedule.startHour)}:${pad(schedule.startMin)}〜${pad(schedule.endHour)}:${pad(schedule.endMin)}外です`;
   }
 
-  private async getActiveRooms(): Promise<string[]> {
-    const entries = await this.ctx.storage.list<number>({ prefix: 'room:' });
-    return [...entries.keys()].map(k => k.replace('room:', ''));
+  /**
+   * 見る側の dev と一致する部屋だけを返す — dev の購読者には dev の部屋だけ、dev でない
+   * 購読者には dev でない部屋だけ。部屋の id を外へ出す経路は必ずここを通す
+   * (絞り点はこの 1 か所、Refs ippoan/alc-app#387)。
+   */
+  private async getActiveRooms(viewerDev: boolean): Promise<string[]> {
+    const entries = await this.ctx.storage.list<RoomEntry>({ prefix: 'room:' });
+    return [...entries]
+      .filter(([, entry]) => isDevRoom(entry) === viewerDev)
+      .map(([k]) => k.replace('room:', ''));
   }
 }

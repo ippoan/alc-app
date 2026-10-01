@@ -1,4 +1,4 @@
-import { introspectToken, resolveSecret, decideCamAdminAuth } from './auth';
+import { introspectToken, resolveSecret, decideCamAdminAuth, decideDevDevice, headersWithDev } from './auth';
 
 export { SignalingRoom } from './signaling-room';
 export { RoomRegistry } from './room-registry';
@@ -12,6 +12,30 @@ export interface Env {
   FCM_INTERNAL_SECRET?: string;
   AUTH_WORKER: Fetcher;
   INTERNAL_SHARED_SECRET: unknown;
+}
+
+// 拒否の応答をブラウザの fetch (GET /active-rooms) からも status ごと読めるようにする。
+const CORS_ORIGIN = { 'Access-Control-Allow-Origin': '*' };
+
+/**
+ * 任意の query `token` から「dev端末の鍵か」を得る (Refs ippoan/alc-app#387)。
+ * - token が無い → dev でない (Android 端末や既存のブラウザは付けていない。従来どおり)
+ * - token があって検証に落ちた → 拒否の Response (dev でない側に倒さない)
+ */
+async function resolveDev(url: URL, env: Env): Promise<boolean | Response> {
+  const token = url.searchParams.get('token');
+  if (token === null) return false;
+  const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
+  if (!sharedSecret) {
+    return new Response('Server misconfigured', { status: 503, headers: CORS_ORIGIN });
+  }
+  const decided = decideDevDevice(
+    token ? await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin) : null,
+  );
+  if (decided === 401) {
+    return new Response('Unauthorized', { status: 401, headers: CORS_ORIGIN });
+  }
+  return decided;
 }
 
 export default {
@@ -67,7 +91,9 @@ export default {
     if (request.method === 'GET' && url.pathname === '/active-rooms') {
       const id = env.ROOM_REGISTRY.idFromName('registry');
       const stub = env.ROOM_REGISTRY.get(id);
-      const res = await stub.fetch('https://registry/rooms');
+      const dev = await resolveDev(url, env);
+      if (dev instanceof Response) return dev;
+      const res = await stub.fetch('https://registry/rooms', { headers: headersWithDev(request, dev) });
       const data = await res.json<{ rooms: string[] }>();
       return new Response(JSON.stringify(data), {
         headers: {
@@ -193,7 +219,12 @@ export default {
       const stub = env.ROOM_REGISTRY.get(id);
       // Forward device_id query param to DO
       const deviceId = url.searchParams.get('device_id') || '';
-      return stub.fetch(new Request(`https://registry/watch?device_id=${encodeURIComponent(deviceId)}`, request));
+      const dev = await resolveDev(url, env);
+      if (dev instanceof Response) return dev;
+      return stub.fetch(new Request(`https://registry/watch?device_id=${encodeURIComponent(deviceId)}`, {
+        method: request.method,
+        headers: headersWithDev(request, dev),
+      }));
     }
 
     // WebSocket endpoint: /cam-room/:siteId → 拠点カメラ中継 (RoomRegistryを
@@ -246,10 +277,13 @@ export default {
       });
     }
 
+    const dev = await resolveDev(url, env);
+    if (dev instanceof Response) return dev;
+
     // Route to Durable Object by room ID
     const id = env.SIGNALING_ROOM.idFromName(roomId);
     const stub = env.SIGNALING_ROOM.get(id);
 
-    return stub.fetch(request);
+    return stub.fetch(new Request(request, { headers: headersWithDev(request, dev) }));
   },
 } satisfies ExportedHandler<Env>;

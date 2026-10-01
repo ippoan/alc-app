@@ -16,6 +16,27 @@ export interface IntrospectResult {
   sub?: string;
   email?: string;
   exp?: number;
+  /** 開発用の鍵 (dev端末) か。claim が無ければ応答に載らない = dev でない (Refs ippoan/auth-worker#593)。 */
+  dev_device?: boolean;
+}
+
+/**
+ * worker が introspect の結果から組み立てて DO へ渡すヘッダ ("1" = dev端末 / "0" = dev でない)。
+ * client が同名のヘッダを付けてきても worker が必ず上書きするので、DO はこの値だけを信じてよい
+ * (Refs ippoan/alc-app#387)。
+ */
+export const DEV_HEADER = "X-Alc-Signaling-Dev";
+
+/** DO 側: worker が組み立てた DEV_HEADER を読む。無い / "1" 以外は dev でない。 */
+export function isDevRequest(request: Request): boolean {
+  return request.headers.get(DEV_HEADER) === "1";
+}
+
+/** client のヘッダを写したうえで DEV_HEADER を検証結果で上書きする (client の申告を捨てる)。 */
+export function headersWithDev(request: Request, dev: boolean): Headers {
+  const headers = new Headers(request.headers);
+  headers.set(DEV_HEADER, dev ? "1" : "0");
+  return headers;
 }
 
 /** cam-room admin 接続を許可する role (Google ログイン JWT の role claim、Refs alc-app#129)。 */
@@ -65,4 +86,16 @@ export function decideCamAdminAuth(result: IntrospectResult | null | undefined):
   if (!result || result.active !== true) return 401;
   if (result.role !== CAM_ADMIN_ROLE) return 403;
   return 101;
+}
+
+/**
+ * 任意 token の introspect 結果から「dev端末の鍵か」を決める (純粋関数、Refs ippoan/alc-app#387)。
+ * - `active` でない (署名不正 / exp 切れ / env 不一致 / introspect 失敗) → 401。
+ *   「dev でない」に倒さない — 期限切れの token を付けた dev端末が本番側の部屋として
+ *   登録されるのを防ぐ。
+ * - dev かどうかは `dev_device === true` だけで決める (role や申告は見ない)。
+ */
+export function decideDevDevice(result: IntrospectResult | null | undefined): 401 | boolean {
+  if (!result || result.active !== true) return 401;
+  return result.dev_device === true;
 }
