@@ -67,6 +67,7 @@ Cloudflare Durable Objects による WebRTC シグナリングサーバー。
 ```bash
 npm install
 npm run dev     # localhost:8787
+npm test        # vitest (workerd 上で DO ごと動かす。cf-alc-recorder と同構成)
 ```
 
 ## デプロイ

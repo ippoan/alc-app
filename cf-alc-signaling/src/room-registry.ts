@@ -137,10 +137,7 @@ export class RoomRegistry extends DurableObject<Env> {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      // テスト着信に dev の部屋 id を混ぜない
-      const rooms = await this.getActiveRooms(false);
-      const testRoomId = `test-call-${Date.now()}`;
-      const msg = JSON.stringify({ type: 'rooms_updated', rooms: [...rooms, testRoomId] });
+      const messageFor = await this.testCallMessages();
 
       const results: { device_id: string; sent: boolean; blocked: boolean; reason: string }[] = [];
       // Group sockets by device_id
@@ -158,7 +155,7 @@ export class RoomRegistry extends DurableObject<Env> {
         if (shouldSend) {
           let sent = false;
           for (const s of sockets) {
-            try { s.send(msg); sent = true; } catch { /* ignore closed */ }
+            try { s.send(messageFor(s)); sent = true; } catch { /* ignore closed */ }
           }
           results.push({ device_id: deviceId, sent, blocked: false, reason: '' });
         } else {
@@ -197,10 +194,7 @@ export class RoomRegistry extends DurableObject<Env> {
 
     // POST /test-call-all-with-fcm → WebSocket + FCM fallback (実際の着信と同じ経路)
     if (request.method === 'POST' && url.pathname === '/test-call-all-with-fcm') {
-      // テスト着信に dev の部屋 id を混ぜない
-      const rooms = await this.getActiveRooms(false);
-      const testRoomId = `test-call-${Date.now()}`;
-      const msg = JSON.stringify({ type: 'rooms_updated', rooms: [...rooms, testRoomId] });
+      const messageFor = await this.testCallMessages();
 
       const results: { device_id: string; sent: boolean; blocked: boolean; via: string; reason: string }[] = [];
       let wsSent = 0;
@@ -220,7 +214,7 @@ export class RoomRegistry extends DurableObject<Env> {
         if (shouldSend) {
           let sent = false;
           for (const s of sockets) {
-            try { s.send(msg); sent = true; } catch { /* ignore closed */ }
+            try { s.send(messageFor(s)); sent = true; } catch { /* ignore closed */ }
           }
           if (sent) {
             wsSent++;
@@ -293,14 +287,11 @@ export class RoomRegistry extends DurableObject<Env> {
 
       if (shouldSend) {
         // Schedule allows → send test call
-        // テスト着信に dev の部屋 id を混ぜない
-        const rooms = await this.getActiveRooms(false);
-        const testRoomId = `test-call-${Date.now()}`;
-        const msg = JSON.stringify({ type: 'rooms_updated', rooms: [...rooms, testRoomId] });
+        const messageFor = await this.testCallMessages();
         let sent = 0;
         for (const s of allSockets) {
           try {
-            s.send(msg);
+            s.send(messageFor(s));
             sent++;
           } catch { /* ignore closed */ }
         }
@@ -397,6 +388,20 @@ export class RoomRegistry extends DurableObject<Env> {
     const deviceId = this.getDeviceId(ws);
     if (!deviceId) return null;
     return await this.ctx.storage.get<CallSchedule>(`schedule:${deviceId}`) ?? null;
+  }
+
+  /**
+   * テスト着信の `rooms_updated` を購読者ごとに組み立てる。部屋の一覧は実際の着信と同じく
+   * その購読者の dev で引き (dev の購読者に dev でない部屋を混ぜない / 逆も)、
+   * テスト部屋の id はどちらにも足す。
+   */
+  private async testCallMessages(): Promise<(ws: WebSocket) => string> {
+    const testRoomId = `test-call-${Date.now()}`;
+    const build = async (viewerDev: boolean) =>
+      JSON.stringify({ type: 'rooms_updated', rooms: [...(await this.getActiveRooms(viewerDev)), testRoomId] });
+    const msg = await build(false);
+    const devMsg = await build(true);
+    return ws => (this.isDevWatcher(ws) ? devMsg : msg);
   }
 
   /** 購読者が dev端末の鍵か。attachment の無い接続は dev でない。 */
