@@ -11,6 +11,7 @@ import {
   resolveSecret,
 } from "../src/auth";
 import { closeCodeForEcho } from "../src/recorder-hub";
+import { isOtaDeviceId, parseOtaReport } from "../src/recorder-hub";
 
 const BASE = "https://alc-recorder.test";
 const SHARED_SECRET = "test-shared-secret";
@@ -1518,6 +1519,493 @@ describe("dev端末の区別", () => {
         tenantId: "tenant-dev",
         deviceId: "device-dev-prod",
       });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 端末の指定つきの更新の合図 / キオスクからの報告 (Refs ippoan/alc-app#403)
+//
+// CoreS3 のファームを 1 台ずつ更新するための 3 つ:
+//   1. `POST /tenants/:t/serial-ota` の合図に `device_id` を載せる
+//   2. `POST /tenants/:t/ota-report` でキオスクからの報告を DO storage に保存する
+//   3. `GET  /tenants/:t/ota-status` で保存した報告の一覧を返す
+//
+// **テナントは test ごとに分ける** — isolatedStorage: false なので DO storage が
+// test 間で残り、件数や並びを数える test が互いに汚染される。
+// ---------------------------------------------------------------------------
+
+const OTA_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** キオスクからの報告を保存する内部 API (alc-app の server route と同じ形)。 */
+function otaReportViaHttp(
+  tenantId: string,
+  body: unknown,
+  authHeader: string | null = SHARED_SECRET,
+) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authHeader !== null) headers.Authorization = authHeader;
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/ota-report`, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+/** 保存した報告の一覧を引く内部 API。 */
+function otaStatusViaHttp(tenantId: string, authHeader: string | null = SHARED_SECRET) {
+  const headers: Record<string, string> = {};
+  if (authHeader !== null) headers.Authorization = authHeader;
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/ota-status`, { headers });
+}
+
+type OtaDevice = Record<string, unknown> & { device_id: string; reported_at_ms: number };
+
+async function otaDevices(tenantId: string): Promise<OtaDevice[]> {
+  const res = await otaStatusViaHttp(tenantId);
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { devices: OtaDevice[] }).devices;
+}
+
+/** DO storage に報告を直接置く (時刻を指定したい test 用)。 */
+async function seedOtaState(tenantId: string, deviceId: string, reportedAtMs: number) {
+  await runInDurableObject(hubStub(env, tenantId), async (_instance, state) => {
+    await state.storage.put(`ota-state:${deviceId}`, {
+      device_id: deviceId,
+      kind: "cores3",
+      phase: "idle",
+      reported_at_ms: reportedAtMs,
+    });
+  });
+}
+
+describe("serial-ota の合図: 端末の指定", () => {
+  it("★ cores3 が通り、device_id は在るときだけ合図に載る (無ければ key ごと無い)。不正な device_id は 400 で何も送らない", async () => {
+    const { ws: kioskWs } = await connectWatcher("kiosk-token-ota-4");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const kiosk = messageQueue(kioskWs!);
+
+    // device_id つき: 合図に device_id が載る
+    const withId = await serialOtaViaHttp("tenant-ota-4", { target: "cores3", device_id: "hub_A-01" });
+    expect(withId.status).toBe(200);
+    expect(await withId.json()).toEqual({ sent: 1 });
+    expect(await kiosk.next()).toStrictEqual({
+      type: "serial_ota",
+      target: "cores3",
+      device_id: "hub_A-01",
+    });
+
+    // 長さの上限ちょうど (64 文字) は通る
+    const longest = "a".repeat(64);
+    const atLimit = await serialOtaViaHttp("tenant-ota-4", { target: "cores3", device_id: longest });
+    expect(atLimit.status).toBe(200);
+    expect(await kiosk.next()).toStrictEqual({
+      type: "serial_ota",
+      target: "cores3",
+      device_id: longest,
+    });
+
+    // device_id 無し: 今までどおりの形 (**device_id の key が無い**)
+    for (const target of ["cores3", "timecard-station"]) {
+      const res = await serialOtaViaHttp("tenant-ota-4", { target });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: 1 });
+      const message = (await kiosk.next()) as Record<string, unknown>;
+      expect(Object.keys(message).sort()).toEqual(["target", "type"]);
+      expect(message).toStrictEqual({ type: "serial_ota", target });
+    }
+
+    // 不正な device_id (長すぎ・記号・空・文字列でない) は 400 で、合図は 1 本も出ない
+    const invalidIds: unknown[] = ["a".repeat(65), "bad id", "bad/id", "bad.id", "", 123, null, ["x"]];
+    for (const deviceId of invalidIds) {
+      const res = await serialOtaViaHttp("tenant-ota-4", { target: "cores3", device_id: deviceId });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_device_id" });
+    }
+    // allowlist 外は device_id が正しくても今までどおり invalid_target
+    const badTarget = await serialOtaViaHttp("tenant-ota-4", { target: "not-allowed", device_id: "hub_A-01" });
+    expect(badTarget.status).toBe(400);
+    expect(await badTarget.json()).toEqual({ error: "invalid_target" });
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(kiosk.pending()).toBe(0);
+  });
+
+  it("isOtaDeviceId は英数字・`-`・`_` の 1〜64 文字だけを通す", () => {
+    expect(isOtaDeviceId("hub_A-01")).toBe(true);
+    expect(isOtaDeviceId("a")).toBe(true);
+    expect(isOtaDeviceId("a".repeat(64))).toBe(true);
+    expect(isOtaDeviceId("a".repeat(65))).toBe(false);
+    expect(isOtaDeviceId("")).toBe(false);
+    expect(isOtaDeviceId("a b")).toBe(false);
+    expect(isOtaDeviceId("a\n")).toBe(false);
+    expect(isOtaDeviceId("端末")).toBe(false);
+    expect(isOtaDeviceId(1)).toBe(false);
+    expect(isOtaDeviceId(undefined)).toBe(false);
+  });
+});
+
+describe("parseOtaReport", () => {
+  const base = { device_id: "hub-1", kind: "cores3", phase: "idle" };
+
+  it("必須だけの報告を通し、無い値は key ごと持たない", () => {
+    expect(parseOtaReport(base)).toStrictEqual({ ok: true, report: base });
+  });
+
+  it("phase は決めた 8 つだけを通す", () => {
+    const phases = [
+      "idle",
+      "downloading",
+      "writing",
+      "rebooting",
+      "confirming",
+      "done",
+      "failed",
+      "skipped",
+    ];
+    for (const phase of phases) {
+      expect(parseOtaReport({ ...base, phase })).toStrictEqual({
+        ok: true,
+        report: { ...base, phase },
+      });
+    }
+    for (const phase of ["unknown", "", "IDLE", 1, null, undefined]) {
+      expect(parseOtaReport({ ...base, phase })).toEqual({ ok: false, error: "invalid_phase" });
+    }
+  });
+
+  it("必須の形が外れた報告は弾く", () => {
+    for (const body of [null, undefined, "text", 1, [base]]) {
+      expect(parseOtaReport(body)).toEqual({ ok: false, error: "invalid_body" });
+    }
+    for (const deviceId of [undefined, "", "bad id", "a".repeat(65), 1]) {
+      expect(parseOtaReport({ ...base, device_id: deviceId })).toEqual({
+        ok: false,
+        error: "invalid_device_id",
+      });
+    }
+    for (const kind of [undefined, "", "k".repeat(33), 1]) {
+      expect(parseOtaReport({ ...base, kind })).toEqual({ ok: false, error: "invalid_kind" });
+    }
+    expect(parseOtaReport({ ...base, kind: "k".repeat(32) }).ok).toBe(true);
+  });
+
+  it("任意の欄は形が合うものだけ残す (外れた欄だけ捨て、報告は通す)", () => {
+    const full = {
+      ...base,
+      board: "cores3",
+      flavor: "",
+      version: "v".repeat(64),
+      target_version: "1.2.4",
+      pct: 100,
+      reason: "ok",
+    };
+    expect(parseOtaReport(full)).toStrictEqual({ ok: true, report: full });
+    expect(parseOtaReport({ ...base, pct: 0 })).toStrictEqual({
+      ok: true,
+      report: { ...base, pct: 0 },
+    });
+    expect(
+      parseOtaReport({
+        ...base,
+        board: 1,
+        flavor: null,
+        version: "v".repeat(65),
+        target_version: ["1"],
+        reason: { text: "x" },
+      }),
+    ).toStrictEqual({ ok: true, report: base });
+    for (const pct of [-1, 101, 1.5, "50", null, Number.NaN]) {
+      expect(parseOtaReport({ ...base, pct })).toStrictEqual({ ok: true, report: base });
+    }
+  });
+
+  it("未知の key は取り出さない", () => {
+    expect(
+      parseOtaReport({ ...base, tenant_id: "other", reported_at_ms: 1, extra: { nested: true } }),
+    ).toStrictEqual({ ok: true, report: base });
+  });
+});
+
+describe("ota-report / ota-status", () => {
+  it("shared secret 無し / 不一致は 401 で、何も保存されない", async () => {
+    const body = { device_id: "hub-1", kind: "cores3", phase: "idle" };
+    expect((await otaReportViaHttp("tenant-otarep-auth", body, null)).status).toBe(401);
+    expect((await otaReportViaHttp("tenant-otarep-auth", body, "wrong-secret")).status).toBe(401);
+    expect((await otaStatusViaHttp("tenant-otarep-auth", null)).status).toBe(401);
+    const wrong = await otaStatusViaHttp("tenant-otarep-auth", "wrong-secret");
+    expect(wrong.status).toBe(401);
+    expect(await wrong.json()).toEqual({ error: "unauthorized" });
+
+    expect(await otaDevices("tenant-otarep-auth")).toEqual([]);
+  });
+
+  it("報告を保存し、一覧に出す", async () => {
+    const body = {
+      device_id: "hub-1",
+      kind: "cores3",
+      board: "cores3",
+      flavor: "prod",
+      version: "1.2.3",
+      target_version: "1.2.4",
+      phase: "writing",
+      pct: 42,
+      reason: "",
+    };
+    const before = Date.now();
+    const res = await otaReportViaHttp("tenant-otarep-ok", body);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    const after = Date.now();
+
+    const devices = await otaDevices("tenant-otarep-ok");
+    expect(devices).toStrictEqual([{ ...body, reported_at_ms: expect.any(Number) }]);
+    expect(devices[0].reported_at_ms).toBeGreaterThanOrEqual(before);
+    expect(devices[0].reported_at_ms).toBeLessThanOrEqual(after);
+  });
+
+  it("無い値は一覧でも key ごと無い", async () => {
+    const res = await otaReportViaHttp("tenant-otarep-min", {
+      device_id: "hub-1",
+      kind: "cores3",
+      phase: "idle",
+    });
+    expect(res.status).toBe(200);
+    const devices = await otaDevices("tenant-otarep-min");
+    expect(devices.length).toBe(1);
+    expect(Object.keys(devices[0]).sort()).toEqual(["device_id", "kind", "phase", "reported_at_ms"]);
+  });
+
+  it("同じ device_id の報告は上書きする (前の報告の欄は残らない)", async () => {
+    const first = await otaReportViaHttp("tenant-otarep-over", {
+      device_id: "hub-1",
+      kind: "cores3",
+      version: "1.2.3",
+      phase: "writing",
+      pct: 10,
+    });
+    expect(first.status).toBe(200);
+    const second = await otaReportViaHttp("tenant-otarep-over", {
+      device_id: "hub-1",
+      kind: "cores3",
+      version: "1.2.4",
+      phase: "done",
+    });
+    expect(second.status).toBe(200);
+
+    const devices = await otaDevices("tenant-otarep-over");
+    expect(devices).toStrictEqual([
+      {
+        device_id: "hub-1",
+        kind: "cores3",
+        version: "1.2.4",
+        phase: "done",
+        reported_at_ms: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("必須欠け・未知の phase・JSON 不正は 400 で、保存されない", async () => {
+    const cases: Array<[unknown, string]> = [
+      [{ kind: "cores3", phase: "idle" }, "invalid_device_id"],
+      [{ device_id: "bad id", kind: "cores3", phase: "idle" }, "invalid_device_id"],
+      [{ device_id: "a".repeat(65), kind: "cores3", phase: "idle" }, "invalid_device_id"],
+      [{ device_id: "hub-1", phase: "idle" }, "invalid_kind"],
+      [{ device_id: "hub-1", kind: "k".repeat(33), phase: "idle" }, "invalid_kind"],
+      [{ device_id: "hub-1", kind: "cores3" }, "invalid_phase"],
+      [{ device_id: "hub-1", kind: "cores3", phase: "exploding" }, "invalid_phase"],
+      [[{ device_id: "hub-1", kind: "cores3", phase: "idle" }], "invalid_body"],
+      ["null", "invalid_body"],
+      ["not-json{", "invalid_json"],
+    ];
+    for (const [body, error] of cases) {
+      const res = await otaReportViaHttp("tenant-otarep-bad", body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error });
+    }
+    expect(await otaDevices("tenant-otarep-bad")).toEqual([]);
+    await runInDurableObject(hubStub(env, "tenant-otarep-bad"), async (_instance, state) => {
+      expect((await state.storage.list({ prefix: "ota-state:" })).size).toBe(0);
+    });
+  });
+
+  it("未知の key と、形が外れた任意の欄は保存されない", async () => {
+    const res = await otaReportViaHttp("tenant-otarep-keys", {
+      device_id: "hub-1",
+      kind: "cores3",
+      phase: "failed",
+      reason: "timeout",
+      version: "v".repeat(65),
+      pct: 250,
+      tenant_id: "other-tenant",
+      reported_at_ms: 1,
+      extra: { nested: true },
+    });
+    expect(res.status).toBe(200);
+    await runInDurableObject(hubStub(env, "tenant-otarep-keys"), async (_instance, state) => {
+      const stored = await state.storage.get<Record<string, unknown>>("ota-state:hub-1");
+      expect(stored).toStrictEqual({
+        device_id: "hub-1",
+        kind: "cores3",
+        phase: "failed",
+        reason: "timeout",
+        reported_at_ms: expect.any(Number),
+      });
+      // 呼び手が名乗った時刻ではなく、受けた時刻
+      expect(stored!.reported_at_ms).not.toBe(1);
+    });
+  });
+
+  it("★ 201 件目の書き込みで、いちばん古い報告が消える (上書きでは消えない)", async () => {
+    const tenant = "tenant-otarep-cap";
+    const base = Date.now() - 60 * 60 * 1000;
+    const seedId = (i: number) => `seed-${String(i).padStart(3, "0")}`;
+    await runInDurableObject(hubStub(env, tenant), async (_instance, state) => {
+      for (let i = 0; i < 200; i++) {
+        await state.storage.put(`ota-state:${seedId(i)}`, {
+          device_id: seedId(i),
+          kind: "cores3",
+          phase: "idle",
+          reported_at_ms: base + i,
+        });
+      }
+    });
+    expect((await otaDevices(tenant)).length).toBe(200);
+
+    // 既に在る端末の報告は上書き = 件数が増えないので、何も消えない
+    const overwrite = await otaReportViaHttp(tenant, {
+      device_id: seedId(5),
+      kind: "cores3",
+      phase: "done",
+    });
+    expect(overwrite.status).toBe(200);
+    let ids = (await otaDevices(tenant)).map((d) => d.device_id);
+    expect(ids.length).toBe(200);
+    expect(ids).toContain(seedId(0));
+
+    // 201 件目: いちばん古い 1 件 (seed-000) だけが消える
+    const added = await otaReportViaHttp(tenant, { device_id: "hub-new", kind: "cores3", phase: "idle" });
+    expect(added.status).toBe(200);
+    ids = (await otaDevices(tenant)).map((d) => d.device_id);
+    expect(ids.length).toBe(200);
+    expect(ids).toContain("hub-new");
+    expect(ids).not.toContain(seedId(0));
+    expect(ids).toContain(seedId(1));
+    await runInDurableObject(hubStub(env, tenant), async (_instance, state) => {
+      expect((await state.storage.list({ prefix: "ota-state:" })).size).toBe(200);
+      expect(await state.storage.get(`ota-state:${seedId(0)}`)).toBeUndefined();
+    });
+  });
+
+  it("★ TTL (7 日) を過ぎた報告は一覧に出ず、次の書き込みで storage からも消える", async () => {
+    const tenant = "tenant-otarep-ttl";
+    const now = Date.now();
+    await seedOtaState(tenant, "hub-expired", now - OTA_STATE_TTL_MS - 60_000);
+    await seedOtaState(tenant, "hub-fresh", now - OTA_STATE_TTL_MS + 60 * 60 * 1000);
+    await runInDurableObject(hubStub(env, tenant), async (_instance, state) => {
+      // 別の prefix (command_result) は更新の報告の掃除に巻き込まれない
+      await state.storage.put("cmdres:stale-but-other-prefix", { device_id: "x", payload: null });
+    });
+
+    // 一覧: TTL 内のものだけ。storage にはまだ残っている (読むだけでは消さない)
+    expect((await otaDevices(tenant)).map((d) => d.device_id)).toEqual(["hub-fresh"]);
+    await runInDurableObject(hubStub(env, tenant), async (_instance, state) => {
+      expect(await state.storage.get("ota-state:hub-expired")).toBeDefined();
+    });
+
+    // 次の書き込みで storage から消える
+    const res = await otaReportViaHttp(tenant, { device_id: "hub-new", kind: "cores3", phase: "idle" });
+    expect(res.status).toBe(200);
+    await runInDurableObject(hubStub(env, tenant), async (_instance, state) => {
+      expect(await state.storage.get("ota-state:hub-expired")).toBeUndefined();
+      expect(await state.storage.get("ota-state:hub-fresh")).toBeDefined();
+      expect(await state.storage.get("cmdres:stale-but-other-prefix")).toBeDefined();
+    });
+    expect((await otaDevices(tenant)).map((d) => d.device_id)).toEqual(["hub-new", "hub-fresh"]);
+  });
+
+  it("一覧は reported_at_ms の新しい順", async () => {
+    const tenant = "tenant-otarep-order";
+    const now = Date.now();
+    await seedOtaState(tenant, "hub-middle", now - 2000);
+    await seedOtaState(tenant, "hub-oldest", now - 3000);
+    await seedOtaState(tenant, "hub-newer", now - 1000);
+    const devices = await otaDevices(tenant);
+    expect(devices.map((d) => d.device_id)).toEqual(["hub-newer", "hub-middle", "hub-oldest"]);
+    expect(devices.map((d) => d.reported_at_ms)).toEqual([now - 1000, now - 2000, now - 3000]);
+  });
+
+  it("別テナントの報告は出ない (DO はテナント単位)", async () => {
+    const res = await otaReportViaHttp("tenant-otarep-a", {
+      device_id: "hub-1",
+      kind: "cores3",
+      phase: "idle",
+    });
+    expect(res.status).toBe(200);
+    expect((await otaDevices("tenant-otarep-a")).map((d) => d.device_id)).toEqual(["hub-1"]);
+    expect(await otaDevices("tenant-otarep-b")).toEqual([]);
+  });
+
+  it("method が違えば 404 (ota-report は POST、ota-status は GET のみ)", async () => {
+    const getReport = await SELF.fetch(`${BASE}/tenants/tenant-otarep-auth/ota-report`, {
+      headers: { Authorization: SHARED_SECRET },
+    });
+    expect(getReport.status).toBe(404);
+    const postStatus = await SELF.fetch(`${BASE}/tenants/tenant-otarep-auth/ota-status`, {
+      method: "POST",
+      headers: { Authorization: SHARED_SECRET },
+      body: "{}",
+    });
+    expect(postStatus.status).toBe(404);
+  });
+});
+
+describe("command_result の掃除 (prune の共用)", () => {
+  it("TTL (10 分) を過ぎた command_result と時刻の無いものだけを消し、更新の報告には触れない", async () => {
+    const stub = hubStub(env, "tenant-cmd");
+    const now = Date.now();
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("cmdres:prune-expired", {
+        device_id: "device-cmd",
+        received_at_ms: now - 10 * 60 * 1000 - 60_000,
+        payload: null,
+      });
+      await state.storage.put("cmdres:prune-no-stamp", { device_id: "device-cmd", payload: null });
+      await state.storage.put("cmdres:prune-fresh", {
+        device_id: "device-cmd",
+        received_at_ms: now - 60_000,
+        payload: null,
+      });
+      // command_result の TTL (10 分) は過ぎているが、更新の報告の TTL (7 日) の内
+      await state.storage.put("ota-state:prune-other-prefix", {
+        device_id: "prune-other-prefix",
+        kind: "cores3",
+        phase: "idle",
+        reported_at_ms: now - 60 * 60 * 1000,
+      });
+    });
+
+    const { ws } = await connectAccepted("hub-token-tenant-cmd");
+    openSockets.push(ws);
+    ws.send(JSON.stringify({ type: "command_result", id: "prune-trigger", payload: { ok: true } }));
+    // 保存は非同期なので、書けるまで待つ (書き込みの直前に掃除が走る)
+    let status = 404;
+    for (let i = 0; i < 20 && status !== 200; i++) {
+      const res = await SELF.fetch(`${BASE}/tenants/tenant-cmd/commands/prune-trigger/result`, {
+        headers: { Authorization: SHARED_SECRET },
+      });
+      status = res.status;
+      await res.body?.cancel();
+      if (status !== 200) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(status).toBe(200);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.get("cmdres:prune-expired")).toBeUndefined();
+      expect(await state.storage.get("cmdres:prune-no-stamp")).toBeUndefined();
+      expect(await state.storage.get("cmdres:prune-fresh")).toBeDefined();
+      expect(await state.storage.get("ota-state:prune-other-prefix")).toBeDefined();
     });
   });
 });

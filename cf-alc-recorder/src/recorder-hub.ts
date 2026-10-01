@@ -36,6 +36,11 @@ import {
  *   - `POST /command` (worker の内部 HTTP API から) → 接続中デバイスへ
  *     `{ type: "command", id, payload }` を push。
  *
+ * ファームの更新の状態 (Refs ippoan/alc-app#403):
+ *   - `POST /ota-report` (worker の内部 HTTP API から) → キオスクが繋いでいる端末の
+ *     版・更新の状態を DO storage に保存 (端末ごとに 1 件、7 日 TTL、200 件まで)。
+ *   - `GET /ota-status` → 保存した報告の一覧。
+ *
  * Hibernation 復帰: 接続 identity は in-memory に持たず、毎メッセージ
  * `ws.deserializeAttachment()` から読む (= 復帰後も転送先 tenant/device が壊れない)。
  * dev端末かどうか (Refs ippoan/alc-app#387) も同じ attachment に持つ。
@@ -137,6 +142,109 @@ const CMD_RESULT_PREFIX = "cmdres:";
 /** command_result の保持期間 (この時間を過ぎたら次の書き込み時に prune)。 */
 const CMD_RESULT_TTL_MS = 10 * 60 * 1000;
 
+/** ファームの更新の報告 (`POST /ota-report`) の storage key prefix。 */
+const OTA_STATE_PREFIX = "ota-state:";
+
+/** 更新の報告の保持期間 (過ぎたものは一覧に出さず、次の書き込み時に prune)。 */
+const OTA_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** 更新の報告の件数の上限 (1 テナント = 1 DO あたり)。超える書き込みは古いものから消す。 */
+const OTA_STATE_MAX = 200;
+
+/** `storage.delete(keys)` に 1 回で渡せる key の数 (Durable Objects の KV API の上限)。 */
+const STORAGE_DELETE_BATCH = 128;
+
+/** 更新の合図・報告に載る端末の指定の字種と長さ (Refs ippoan/alc-app#403)。 */
+const OTA_DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 更新の合図 (`serial_ota`) と報告で受け付ける `device_id` か。 */
+export function isOtaDeviceId(value: unknown): value is string {
+  return typeof value === "string" && OTA_DEVICE_ID_RE.test(value);
+}
+
+/** 更新の報告の `phase` で受け付ける値。 */
+const OTA_PHASES = [
+  "idle",
+  "downloading",
+  "writing",
+  "rebooting",
+  "confirming",
+  "done",
+  "failed",
+  "skipped",
+] as const;
+type OtaPhase = (typeof OTA_PHASES)[number];
+
+/** 更新の報告の `kind` の長さ上限。 */
+const OTA_KIND_MAX_LEN = 32;
+
+/** 更新の報告の任意の文字列の欄と、その長さ上限。 */
+const OTA_TEXT_KEYS = ["board", "flavor", "version", "target_version", "reason"] as const;
+const OTA_TEXT_MAX_LEN = 64;
+
+/** 更新の報告 1 件 (検査済み)。**無い値は key ごと持たない。** */
+export interface OtaReport {
+  device_id: string;
+  kind: string;
+  board?: string;
+  flavor?: string;
+  version?: string;
+  target_version?: string;
+  phase: OtaPhase;
+  pct?: number;
+  reason?: string;
+}
+
+/** DO storage に置く形 (`GET /ota-status` はこれをそのまま返す)。 */
+type OtaState = OtaReport & { reported_at_ms: number };
+
+export type ParseOtaReportResult =
+  | { ok: true; report: OtaReport }
+  | { ok: false; error: "invalid_body" | "invalid_device_id" | "invalid_kind" | "invalid_phase" };
+
+/**
+ * 更新の報告の body を検査する (Refs ippoan/alc-app#403)。
+ *
+ * - 必須 (`device_id` / `kind` / `phase`) は形が外れたら報告ごと弾く。
+ * - 任意の欄は形が外れたら**その欄だけ捨てる** — 飾りの欄 1 つを理由に、更新の状態
+ *   (`phase`) の報告そのものを失わないため (`normalizeSessionId` と同じ倒し方)。
+ * - ここに挙げた key だけを取り出す。未知の key は保存しない。
+ */
+export function parseOtaReport(body: unknown): ParseOtaReportResult {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "invalid_body" };
+  }
+  const src = body as Record<string, unknown>;
+  const deviceId = src.device_id;
+  if (!isOtaDeviceId(deviceId)) {
+    return { ok: false, error: "invalid_device_id" };
+  }
+  const kind = src.kind;
+  if (typeof kind !== "string" || kind.length < 1 || kind.length > OTA_KIND_MAX_LEN) {
+    return { ok: false, error: "invalid_kind" };
+  }
+  const phase = OTA_PHASES.find((p) => p === src.phase);
+  if (phase === undefined) {
+    return { ok: false, error: "invalid_phase" };
+  }
+  const report: OtaReport = { device_id: deviceId, kind, phase };
+  for (const key of OTA_TEXT_KEYS) {
+    const value = src[key];
+    if (typeof value === "string" && value.length <= OTA_TEXT_MAX_LEN) report[key] = value;
+  }
+  const pct = src.pct;
+  if (typeof pct === "number" && Number.isInteger(pct) && pct >= 0 && pct <= 100) {
+    report.pct = pct;
+  }
+  return { ok: true, report };
+}
+
+/** 保存した時刻 (`stampKey` の欄) が無い、または TTL を過ぎた記録か。 */
+function isExpired(value: unknown, stampKey: string, ttlMs: number, now: number): boolean {
+  const stamp = (value as Record<string, unknown> | null | undefined)?.[stampKey];
+  return typeof stamp !== "number" || !stamp || now - stamp > ttlMs;
+}
+
 /** 上り 1 メッセージの上限 (これ以上は parse せず reject)。 */
 const MAX_MESSAGE_BYTES = 64 * 1024;
 
@@ -213,6 +321,12 @@ export class RecorderHub extends DurableObject<Env> {
     }
     if (url.pathname === "/serial-ota" && request.method === "POST") {
       return this.handleSerialOta(request);
+    }
+    if (url.pathname === "/ota-report" && request.method === "POST") {
+      return this.handleOtaReport(request);
+    }
+    if (url.pathname === "/ota-status" && request.method === "GET") {
+      return this.handleOtaStatus();
     }
     if (url.pathname === "/timecard-punch" && request.method === "POST") {
       return this.handleTimecardPunch(request);
@@ -313,19 +427,29 @@ export class RecorderHub extends DurableObject<Env> {
    * (`DEVICE_TAG_PREFIX`) にも admin/manager の watcher にも届かない。
    * ユーザー決定により宛先はテナント内の全キオスクへ一斉、結果はサーバに
    * 返さない (送った本数だけ返す。Refs ippoan/alc-app-s3#279)。
+   *
+   * `device_id` (どの端末を更新するか、Refs ippoan/alc-app#403) が在るときは合図に
+   * 載せる。**宛先はここでは絞らない** — 購読の attachment は端末を持たないので、
+   * キオスクの側が「自分に繋がっている端末か」を見て実行する。`device_id` が無い
+   * 合図は今までどおりの形で、key ごと足さない。
    */
   private async handleSerialOta(request: Request): Promise<Response> {
-    let body: { target?: unknown } = {};
+    let body: { target?: unknown; device_id?: unknown } = {};
     try {
-      body = (await request.json()) as { target?: unknown };
+      body = (await request.json()) as { target?: unknown; device_id?: unknown };
     } catch {
       // worker 側で JSON validity は検査済みだが、内部呼び出しの保険として fail-closed
       return json({ error: "invalid_json" }, 400);
     }
     const target = typeof body.target === "string" ? body.target : "";
+    const deviceId = body.device_id;
     const sockets = this.ctx.getWebSockets(KIOSK_TAG);
     for (const ws of sockets) {
-      this.send(ws, { type: "serial_ota", target });
+      this.send(ws, {
+        type: "serial_ota",
+        target,
+        ...(isOtaDeviceId(deviceId) ? { device_id: deviceId } : {}),
+      });
     }
     return json({ sent: sockets.length });
   }
@@ -588,7 +712,12 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
     const now = Date.now();
-    await this.pruneCommandResults(now);
+    await this.pruneExpired<{ received_at_ms?: number }>(
+      CMD_RESULT_PREFIX,
+      CMD_RESULT_TTL_MS,
+      "received_at_ms",
+      now,
+    );
     await this.ctx.storage.put(CMD_RESULT_PREFIX + id, {
       device_id: attachment.deviceId,
       received_at_ms: now,
@@ -596,18 +725,89 @@ export class RecorderHub extends DurableObject<Env> {
     });
   }
 
-  /** TTL を過ぎた command_result を掃除する (書き込みのたびに実行、件数は小さい)。 */
-  private async pruneCommandResults(now: number): Promise<void> {
-    const entries = await this.ctx.storage.list<{ received_at_ms?: number }>({
-      prefix: CMD_RESULT_PREFIX,
-    });
+  /**
+   * `prefix` の記録のうち TTL を過ぎたものを掃除し、残ったものを返す
+   * (書き込みのたびに実行、件数は小さい)。command_result と更新の報告で共用する。
+   * `stampKey` は保存した時刻 (ms) を持つ欄の名前。
+   */
+  private async pruneExpired<T>(
+    prefix: string,
+    ttlMs: number,
+    stampKey: keyof T & string,
+    now: number,
+  ): Promise<Map<string, T>> {
+    const entries = await this.ctx.storage.list<T>({ prefix });
+    const kept = new Map<string, T>();
     const stale: string[] = [];
     for (const [key, value] of entries) {
-      if (!value?.received_at_ms || now - value.received_at_ms > CMD_RESULT_TTL_MS) {
-        stale.push(key);
-      }
+      if (isExpired(value, stampKey, ttlMs, now)) stale.push(key);
+      else kept.set(key, value);
     }
-    if (stale.length > 0) await this.ctx.storage.delete(stale);
+    await this.deleteKeys(stale);
+    return kept;
+  }
+
+  /** storage の key をまとめて消す (1 回の上限ごとに分ける)。 */
+  private async deleteKeys(keys: string[]): Promise<void> {
+    for (let i = 0; i < keys.length; i += STORAGE_DELETE_BATCH) {
+      await this.ctx.storage.delete(keys.slice(i, i + STORAGE_DELETE_BATCH));
+    }
+  }
+
+  // ── ファームの更新の状態 (内部 HTTP API、Refs ippoan/alc-app#403) ──────────
+
+  /**
+   * キオスクからの報告 (繋いでいる端末の版・更新の状態) を保存する。
+   *
+   * 認証は worker 側で完了している (`INTERNAL_SHARED_SECRET`)。呼び手 (alc-app の
+   * server route) が検査済みの値を送ってくるが、ここでも形を検査する。
+   *
+   * **DO storage に置く** — メモリの状態は hibernation で消える。端末ごとに 1 件
+   * (同じ `device_id` は上書き) で、履歴は持たない。
+   */
+  private async handleOtaReport(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    const parsed = parseOtaReport(body);
+    if (!parsed.ok) {
+      return json({ error: parsed.error }, 400);
+    }
+    const now = Date.now();
+    const key = OTA_STATE_PREFIX + parsed.report.device_id;
+    const kept = await this.pruneExpired<OtaState>(
+      OTA_STATE_PREFIX,
+      OTA_STATE_TTL_MS,
+      "reported_at_ms",
+      now,
+    );
+    // 上限を超える書き込みは、いちばん古い報告を消してから入れる (上書きは件数が増えない)
+    if (!kept.has(key) && kept.size >= OTA_STATE_MAX) {
+      const oldest = [...kept]
+        .sort(([, a], [, b]) => a.reported_at_ms - b.reported_at_ms)
+        .slice(0, kept.size - OTA_STATE_MAX + 1)
+        .map(([k]) => k);
+      await this.deleteKeys(oldest);
+    }
+    const state: OtaState = { ...parsed.report, reported_at_ms: now };
+    await this.ctx.storage.put(key, state);
+    return json({ ok: true });
+  }
+
+  /** 保存した報告の一覧 (TTL 内のものだけ、`reported_at_ms` の新しい順)。 */
+  private async handleOtaStatus(): Promise<Response> {
+    const now = Date.now();
+    const entries = await this.ctx.storage.list<OtaState>({ prefix: OTA_STATE_PREFIX });
+    const devices = [...entries.values()]
+      .filter((state) => !isExpired(state, "reported_at_ms", OTA_STATE_TTL_MS, now))
+      .sort(
+        (a, b) =>
+          b.reported_at_ms - a.reported_at_ms || (a.device_id < b.device_id ? -1 : 1),
+      );
+    return json({ devices });
   }
 
   // ── 下り: command push (内部 HTTP API) ────────────────────────────────────
