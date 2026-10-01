@@ -2,7 +2,10 @@
 //
 // 打刻の合図は dev / 本番で分かれている (cf-alc-recorder)。dev端末 (開発用の鍵) では
 // 管理者ログインがあっても端末のトークンで購読しないと、本番の打刻で引き直しに行き、
-// 自分の打刻では引き直さない。規則は送信と同じ `selectSendToken`。
+// 自分の打刻では引き直さない。
+//
+// **dev の印が無い端末は従来のまま** (管理者のトークンだけ。無ければ null で、端末の鍵は
+// 取りに行かない)。この PR は dev でない端末の挙動を 1 つも変えない。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
@@ -64,11 +67,40 @@ describe('TimecardManager — 購読のトークン', () => {
     const wrapper = await mountSuspended(TimecardManager)
 
     await expect(Promise.resolve(getToken!())).resolves.toBe(ADMIN)
+    expect(getDeviceJwtMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
   it('★ dev の印がある端末では、管理者ログインがあっても端末のトークン', async () => {
     accessToken.value = ADMIN
+    noteDeviceToken('kiosk', DEV)
+    getDeviceJwtMock.mockResolvedValue(DEV)
+    const wrapper = await mountSuspended(TimecardManager)
+
+    await expect(Promise.resolve(getToken!())).resolves.toBe(DEV)
+    wrapper.unmount()
+  })
+
+  it('★ 管理者のトークンも dev の印も無い → null (従来どおり。端末のトークンは取りに行かない)', async () => {
+    getDeviceJwtMock.mockResolvedValue(PLAIN)
+    const wrapper = await mountSuspended(TimecardManager)
+
+    await expect(Promise.resolve(getToken!())).resolves.toBeNull()
+    expect(getDeviceJwtMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('dev でない端末のトークンが取れている端末で管理者のトークンが無い → null (同上)', async () => {
+    noteDeviceToken('kiosk', PLAIN)
+    getDeviceJwtMock.mockResolvedValue(PLAIN)
+    const wrapper = await mountSuspended(TimecardManager)
+
+    await expect(Promise.resolve(getToken!())).resolves.toBeNull()
+    expect(getDeviceJwtMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('dev の印がある端末は、管理者のトークンが無くても端末のトークン', async () => {
     noteDeviceToken('kiosk', DEV)
     getDeviceJwtMock.mockResolvedValue(DEV)
     const wrapper = await mountSuspended(TimecardManager)
