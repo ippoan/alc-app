@@ -5,6 +5,7 @@ import {
   listTimePunches, downloadTimePunchesCsv,
 } from '~/utils/api'
 import { jstTodayDate } from '~/utils/jst'
+import { selectSendToken } from '~/utils/token-selection'
 import { cardKindOf } from '~/utils/card-kind'
 
 type SubTab = 'cards' | 'punches'
@@ -193,10 +194,16 @@ watch(subTab, (tab) => {
  * 引き直すのは打刻履歴タブを開いているときだけ (カード登録タブでは無駄)。
  * **絞り込みが今日以外でも引き直す** — 条件付きにすると「今日を見ているときだけ
  * 更新される」という説明の要る挙動になり、引き直しは安い。
+ *
+ * トークンは送信と同じ規則で選ぶ (Refs ippoan/alc-app#387): dev端末 (開発用の鍵) では
+ * 管理者ログインがあっても端末のトークンで購読する。打刻の合図は dev / 本番で分かれて
+ * いるので、管理者のトークンで繋ぐと dev端末の画面が本番の打刻で引き直しに行き、
+ * 自分の (dev の) 打刻では引き直さない。運行者タブの TodayPunchHistory と同じ形。
  */
 const { accessToken } = useAuth()
+const { getDeviceJwt } = useDeviceToken()
 const punchWatch = useTimecardWatch({
-  getToken: () => accessToken.value,
+  getToken: () => selectSendToken(accessToken.value, 'kiosk', getDeviceJwt),
   onChange: () => { if (subTab.value === 'punches') void loadPunches() },
 })
 

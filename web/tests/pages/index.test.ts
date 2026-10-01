@@ -13,6 +13,9 @@ import DeviceUnregisteredBanner from '~/components/DeviceUnregisteredBanner.vue'
 import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
+import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
+import { clearDevDeviceMark, isDevDevice, noteDeviceToken } from '~/utils/token-selection'
+import { devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 import type { LatestPunch } from '~/types'
 
 // トップ画面のうち「警告デバイスの見張りをロールタブに関わらず始める」部分だけを見る (Refs #231)。
@@ -892,5 +895,135 @@ describe('pages/index — IC カードの打刻でタッチ枠にボタンが実
     await nextTick()
 
     expect(wrapper.find('[data-testid="ic-punch-alcohol"]').exists()).toBe(true)
+  })
+})
+
+describe('pages/index — dev端末の記録 (Refs ippoan/alc-app#387)', () => {
+  // dev端末 (開発用の鍵) の記録を見る項目は、**キオスクの鍵に dev の印がある端末にだけ**
+  // ハンバーガーへ出す。選んでも可視タブ側へは移らない (移るのは血圧タブだけの規則)
+
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+  const LABEL = '開発用の記録'
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    clearDevDeviceMark('kiosk')
+    noteDeviceToken('manager-device', null)
+    localStorage.clear()
+    landscape.on.value = false
+  })
+
+  function hamburgerButton(w: VueWrapper) {
+    const b = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!b) throw new Error('hamburger not found')
+    return b
+  }
+
+  /** ハンバーガーを開閉する */
+  async function toggleMenu(w: VueWrapper) {
+    await hamburgerButton(w).trigger('click')
+    await nextTick()
+  }
+
+  function menuLabels(w: VueWrapper) {
+    return w.find('.absolute.right-0').findAll('button').map(b => b.text())
+  }
+
+  function visibleTabLabels(w: VueWrapper) {
+    const row = w.find(landscape.on.value ? '.border-b.bg-gray-50' : '.bg-blue-100')
+    return row.findAll('button').map(b => b.text())
+  }
+
+  describe.each([
+    { name: '縦画面', isLandscape: false },
+    { name: 'Android 横画面', isLandscape: true },
+  ])('$name', ({ isLandscape }) => {
+    beforeEach(() => { landscape.on.value = isLandscape })
+
+    it('dev の印が無い端末ではメニューに項目が出ない', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      await toggleMenu(wrapper)
+      expect(menuLabels(wrapper)).not.toContain(LABEL)
+      expect(menuLabels(wrapper)).toContain('デバイス設定')
+    })
+
+    it('dev でない端末のトークンが取れている端末でも出ない', async () => {
+      noteDeviceToken('kiosk', plainDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      await toggleMenu(wrapper)
+      expect(menuLabels(wrapper)).not.toContain(LABEL)
+    })
+
+    it('★ dev の印がある端末ではメニューに出て、選ぶと開く (可視タブ側へは移らない)', async () => {
+      noteDeviceToken('kiosk', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      expect(visibleTabLabels(wrapper)).not.toContain(LABEL)
+
+      await toggleMenu(wrapper)
+      const item = wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === LABEL)
+      expect(item).toBeTruthy()
+      await item!.trigger('click')
+      await nextTick()
+
+      expect(wrapper.findComponent(DevDeviceRecords).exists()).toBe(true)
+      expect(wrapper.find('.normal-measurement-stub').exists()).toBe(false)
+      // 選んだあとも可視タブには出ず、ハンバーガーが点灯する (= メニュー側に居る)
+      expect(visibleTabLabels(wrapper)).not.toContain(LABEL)
+      expect(hamburgerButton(wrapper).classes()).toContain('bg-blue-600')
+    })
+  })
+
+  it('見るのはキオスクの鍵の印だけ (運行管理者席の鍵が dev でも出ない)', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver')
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).not.toContain(LABEL)
+  })
+
+  it('起動後に dev の鍵でトークンが取れた端末でも、メニューを開き直せば出る', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).not.toContain(LABEL)
+    await toggleMenu(wrapper) // 閉じる
+
+    noteDeviceToken('kiosk', devDeviceJwt())
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).toContain(LABEL)
+  })
+
+  it('★ dev の印がある端末は ?tab=dev_records で開ける', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=dev_records')
+    expect(wrapper.findComponent(DevDeviceRecords).exists()).toBe(true)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(false)
+  })
+
+  it('dev の印が無い端末が ?tab=dev_records で開いても通常点呼になる', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=dev_records')
+    expect(wrapper.findComponent(DevDeviceRecords).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
+  it('画面から印を外すと、項目が消えて通常点呼へ戻る', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=dev_records')
+
+    // DevDeviceRecords は印を消してから cleared を上げる
+    clearDevDeviceMark('kiosk')
+    wrapper.findComponent(DevDeviceRecords).vm.$emit('cleared')
+    await nextTick()
+
+    expect(isDevDevice('kiosk')).toBe(false)
+    expect(wrapper.findComponent(DevDeviceRecords).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).not.toContain(LABEL)
   })
 })
