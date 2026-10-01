@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
-import { devDeviceJwt } from '../helpers/dummy-jwt'
+import { devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 
 // 運行管理者席の鍵のトークン (dev端末だけが使う。Refs ippoan/alc-app#387)
 const tokenMocks = vi.hoisted(() => ({
@@ -96,6 +96,7 @@ describe('useActiveRooms', () => {
     useState<string[]>('active-rooms').value = []
     useState<boolean>('active-rooms-watching').value = false
     useState<string | null>('active-rooms-joined').value = null
+    useState<string[]>('active-rooms-handled').value = []
   })
 
   afterEach(() => {
@@ -106,8 +107,9 @@ describe('useActiveRooms', () => {
   })
 
   it('初期状態は未購読で room 一覧は空', () => {
-    const { activeRooms, isWatching, joinedRoomId } = useActiveRooms()
+    const { activeRooms, isWatching, joinedRoomId, callingRooms } = useActiveRooms()
     expect(activeRooms.value).toEqual([])
+    expect(callingRooms.value).toEqual([])
     expect(isWatching.value).toBe(false)
     expect(joinedRoomId.value).toBeNull()
   })
@@ -444,6 +446,304 @@ describe('useActiveRooms', () => {
 
       expect(wsInstances).toHaveLength(2)
       expect(lastWs().url).toBe(`ws://localhost:8787/watch-rooms${TOKEN_QUERY}`)
+    })
+  })
+
+  // --- 着信として数える部屋 (Refs ippoan/alc-app#387) ---
+
+  describe('着信として数える部屋 (callingRooms)', () => {
+    /** 購読を張って一覧を流す */
+    function startWithRooms(rooms: string[]) {
+      const api = startOpened(useActiveRooms)
+      pushRooms(rooms)
+      return api
+    }
+
+    function pushRooms(rooms: string[]) {
+      lastWs().simulateMessage(JSON.stringify({ type: 'rooms_updated', rooms }))
+    }
+
+    it('★ 回帰: 部屋が立っていて未参加なら全部を数え、どれかに入っている間は 0', () => {
+      const { callingRooms, setJoined } = startWithRooms(['room-a', 'it-s1'])
+      expect(callingRooms.value).toEqual(['room-a', 'it-s1'])
+
+      setJoined('room-a')
+      expect(callingRooms.value).toEqual([])
+    })
+
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('通話を抜けた %s の部屋は、一覧に残っていても数えない', (_label, roomId) => {
+      const { callingRooms, setJoined } = startWithRooms([roomId])
+
+      setJoined(roomId)
+      setJoined(null)
+
+      expect(callingRooms.value).toEqual([])
+    })
+
+    it('通話を抜けた部屋が在っても、別の部屋が待っていれば数える', () => {
+      const { callingRooms, setJoined } = startWithRooms(['room-a'])
+      setJoined('room-a')
+      setJoined(null)
+
+      pushRooms(['room-a', 'room-b'])
+
+      expect(callingRooms.value).toEqual(['room-b'])
+    })
+
+    it('抜けた部屋が一覧から消え、同じ id が再び現れたら新しい着信として数える', () => {
+      const { callingRooms, setJoined } = startWithRooms(['room-a'])
+      setJoined('room-a')
+      setJoined(null)
+
+      pushRooms([])
+      expect(callingRooms.value).toEqual([])
+      pushRooms(['room-a'])
+
+      expect(callingRooms.value).toEqual(['room-a'])
+    })
+
+    it('reload で取り直した一覧から消えていても、印は消える', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ rooms: [] }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const { callingRooms, setJoined, reload } = startWithRooms(['room-a'])
+      setJoined('room-a')
+      setJoined(null)
+
+      await reload()
+      pushRooms(['room-a'])
+
+      expect(callingRooms.value).toEqual(['room-a'])
+    })
+
+    it('通話に入らずに離れた部屋 (入っていないままの setJoined(null)) は数え続ける', () => {
+      const { callingRooms, setJoined } = startWithRooms(['it-s1'])
+
+      setJoined(null)
+
+      expect(callingRooms.value).toEqual(['it-s1'])
+    })
+
+    it('一覧にもう無い部屋から抜けても印を残さない (後で同じ id が現れたら数える)', () => {
+      const { callingRooms, setJoined } = startWithRooms(['room-a'])
+      setJoined('room-a')
+      pushRooms([])
+
+      setJoined(null)
+      expect(useState<string[]>('active-rooms-handled').value).toEqual([])
+      pushRooms(['room-a'])
+
+      expect(callingRooms.value).toEqual(['room-a'])
+    })
+
+    it('同じ部屋に入り直して抜けても、印は 1 つだけ', () => {
+      const { setJoined } = startWithRooms(['room-a'])
+
+      setJoined('room-a')
+      setJoined(null)
+      setJoined('room-a')
+      setJoined(null)
+
+      expect(useState<string[]>('active-rooms-handled').value).toEqual(['room-a'])
+    })
+
+    it('null を挟まずに別の部屋へ入り直しただけでは、前の部屋に印を付けない', () => {
+      const { setJoined } = startWithRooms(['room-a', 'room-b'])
+
+      setJoined('room-a')
+      setJoined('room-b')
+
+      expect(useState<string[]>('active-rooms-handled').value).toEqual([])
+    })
+  })
+
+  // --- 購読を張った後に dev の印が変わる (Refs ippoan/alc-app#387) ---
+
+  describe('購読を張った後に印が変わる', () => {
+    const flush = () => vi.advanceTimersByTimeAsync(0)
+    /** 印を書き換える口 (useActiveRooms と同じ module の実体を使う) */
+    const marks = () => import('~/utils/token-selection')
+
+    let fetchMock: ReturnType<typeof vi.fn>
+    let fetchedRooms: string[]
+
+    beforeEach(() => {
+      fetchedRooms = []
+      fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ rooms: fetchedRooms }) }))
+      vi.stubGlobal('fetch', fetchMock)
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+    })
+
+    async function loadAsDev() {
+      localStorage.setItem(MANAGER_MARK_KEY, '1')
+      vi.resetModules()
+      return (await import('~/composables/useActiveRooms')).useActiveRooms()
+    }
+
+    it('★ 印なしで張った購読は、印が立ったら token 付きで張り直し、古い一覧を着信として数えない', async () => {
+      const { activeRooms, callingRooms, isWatching, stop } = startOpened(useActiveRooms)
+      const first = lastWs()
+      first.simulateMessage(JSON.stringify({ type: 'rooms_updated', rooms: ['prod-room'] }))
+      expect(callingRooms.value).toEqual(['prod-room'])
+      fetchedRooms = ['it-dev-1']
+
+      ;(await marks()).noteDeviceToken('manager-device', MANAGER_TOKEN)
+
+      // その場で古い購読を閉じ、一覧を空にする (トークンを待つ前)
+      expect(first.readyState).toBe(MockWebSocket.CLOSED)
+      expect(activeRooms.value).toEqual([])
+      expect(callingRooms.value).toEqual([])
+      expect(isWatching.value).toBe(false)
+
+      await flush()
+      expect(wsInstances).toHaveLength(2)
+      expect(lastWs().url).toBe(`ws://localhost:8787/watch-rooms${TOKEN_QUERY}`)
+      expect(fetchMock.mock.calls).toEqual([[`http://localhost:8787/active-rooms${TOKEN_QUERY}`]])
+      expect(activeRooms.value).toEqual(['it-dev-1'])
+
+      // 閉じた古い購読に遅れて届く frame では一覧を変えず、張り直しも重ねない
+      first.simulateMessage(JSON.stringify({ type: 'rooms_updated', rooms: ['prod-room'] }))
+      first.onclose?.(new CloseEvent('close'))
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(activeRooms.value).toEqual(['it-dev-1'])
+      expect(wsInstances).toHaveLength(2)
+      stop()
+    })
+
+    it('★ 印ありで張った購読は、印が外れたら token なしで張り直す', async () => {
+      const { start, stop, activeRooms } = await loadAsDev()
+      start()
+      await flush()
+      const first = lastWs()
+      first.simulateOpen()
+      first.simulateMessage(JSON.stringify({ type: 'rooms_updated', rooms: ['it-dev-1'] }))
+      fetchMock.mockClear()
+
+      ;(await marks()).clearDevDeviceMark('manager-device')
+
+      expect(first.readyState).toBe(MockWebSocket.CLOSED)
+      expect(activeRooms.value).toEqual([])
+      // 印が無い側は同期の流れの中で張る
+      expect(wsInstances).toHaveLength(2)
+      expect(lastWs().url).toBe('ws://localhost:8787/watch-rooms')
+      expect(fetchMock.mock.calls).toEqual([['http://localhost:8787/active-rooms']])
+      stop()
+    })
+
+    it('トークンを待っている途中で印が外れたら、待っていた token 付きの購読は作らない', async () => {
+      let resolveToken!: (token: string) => void
+      tokenMocks.getManagerJwt.mockImplementationOnce(() => new Promise<string>((r) => { resolveToken = r }))
+      const { start, stop } = await loadAsDev()
+      start()
+
+      ;(await marks()).clearDevDeviceMark('manager-device')
+      resolveToken(MANAGER_TOKEN)
+      await flush()
+
+      expect(wsInstances.map(w => w.url)).toEqual(['ws://localhost:8787/watch-rooms'])
+      stop()
+    })
+
+    it('張り直しを待つ timer が残っていても、張り直しは 1 本だけ', async () => {
+      const { stop } = startOpened(useActiveRooms)
+      lastWs().close() // 3 秒後の張り直しを待っている
+
+      ;(await marks()).noteDeviceToken('manager-device', MANAGER_TOKEN)
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(wsInstances.map(w => w.url)).toEqual([
+        'ws://localhost:8787/watch-rooms',
+        `ws://localhost:8787/watch-rooms${TOKEN_QUERY}`,
+      ])
+      stop()
+    })
+
+    it('張り直した後も ping は新しい購読にだけ送る', async () => {
+      const { stop } = startOpened(useActiveRooms)
+      const first = lastWs()
+
+      ;(await marks()).noteDeviceToken('manager-device', MANAGER_TOKEN)
+      await flush()
+      lastWs().simulateOpen()
+      await vi.advanceTimersByTimeAsync(30000)
+
+      expect(first.sent).toEqual([])
+      expect(lastWs().sent).toEqual(['ping'])
+      stop()
+    })
+
+    it('★ 参照カウントは変えない (張り直しの後も start 2 回 → stop 2 回で閉じる)', async () => {
+      const { start, stop } = useActiveRooms()
+      start()
+      start()
+
+      ;(await marks()).noteDeviceToken('manager-device', MANAGER_TOKEN)
+      await flush()
+      lastWs().simulateOpen()
+
+      stop()
+      expect(lastWs().readyState).toBe(MockWebSocket.OPEN)
+      stop()
+      expect(lastWs().readyState).toBe(MockWebSocket.CLOSED)
+    })
+
+    it('軸が同じなら張り直さない (キオスク・測定台の印が変わっただけ)', async () => {
+      const { activeRooms, stop } = startOpened(useActiveRooms)
+      lastWs().simulateMessage(JSON.stringify({ type: 'rooms_updated', rooms: ['room-a'] }))
+      const { noteDeviceToken, clearDevDeviceMark } = await marks()
+
+      noteDeviceToken('kiosk', devDeviceJwt('dev-kiosk'))
+      noteDeviceToken('bp-station', devDeviceJwt('dev-bp'))
+      clearDevDeviceMark('kiosk')
+      await flush()
+
+      expect(wsInstances).toHaveLength(1)
+      expect(lastWs().readyState).toBe(MockWebSocket.OPEN)
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(activeRooms.value).toEqual(['room-a'])
+      stop()
+    })
+
+    it('★ 印の無い席では張り直しが 1 度も走らない (dev でない鍵のトークンを取っても同じ)', async () => {
+      const listen = vi.spyOn(window, 'dispatchEvent')
+      const { activeRooms, callingRooms, stop } = startOpened(useActiveRooms)
+      lastWs().simulateMessage(JSON.stringify({ type: 'rooms_updated', rooms: ['room-a'] }))
+
+      ;(await marks()).noteDeviceToken('manager-device', plainDeviceJwt('plain-manager'))
+      await vi.advanceTimersByTimeAsync(60000)
+
+      expect(listen).not.toHaveBeenCalled()
+      expect(wsInstances).toHaveLength(1)
+      expect(lastWs().url).toBe('ws://localhost:8787/watch-rooms')
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+      expect(activeRooms.value).toEqual(['room-a'])
+      expect(callingRooms.value).toEqual(['room-a'])
+      listen.mockRestore()
+      stop()
+    })
+
+    it('最後の stop の後は、印が変わっても張り直さない', async () => {
+      const { stop } = startOpened(useActiveRooms)
+      stop()
+
+      ;(await marks()).noteDeviceToken('manager-device', MANAGER_TOKEN)
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(wsInstances).toHaveLength(1)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('reload を待つあいだに印が変わったら、古い軸の一覧は捨てて false を返す', async () => {
+      let resolveFetch!: (res: unknown) => void
+      fetchMock.mockImplementationOnce(() => new Promise((r) => { resolveFetch = r }))
+      const { reload, activeRooms } = useActiveRooms()
+
+      const pending = reload()
+      ;(await marks()).noteDeviceToken('manager-device', MANAGER_TOKEN)
+      resolveFetch({ ok: true, json: async () => ({ rooms: ['prod-room'] }) })
+
+      await expect(pending).resolves.toBe(false)
+      expect(activeRooms.value).toEqual([])
     })
   })
 })

@@ -20,8 +20,8 @@ const alarmMock = {
 
 const roomsState = {
   isWatching: ref(true),
-  activeRooms: ref<string[]>([]),
-  joinedRoomId: ref<string | null>(null),
+  // 着信として数える部屋 (判定は useActiveRooms の側。バーは読むだけ)
+  callingRooms: ref<string[]>([]),
 }
 const roomsMock = {
   start: vi.fn(() => { calls.push('start') }),
@@ -37,8 +37,7 @@ mockNuxtImport('useAlarmDevice', () => () => ({
 
 mockNuxtImport('useActiveRooms', () => () => ({
   isWatching: readonly(roomsState.isWatching),
-  activeRooms: readonly(roomsState.activeRooms),
-  joinedRoomId: readonly(roomsState.joinedRoomId),
+  callingRooms: readonly(roomsState.callingRooms),
   setJoined: vi.fn(),
   reload: vi.fn(),
   ...roomsMock,
@@ -63,8 +62,7 @@ describe('ManagerAlarmBar', () => {
     alarmState.isConnected.value = false
     alarmState.deviceState.value = null
     roomsState.isWatching.value = true
-    roomsState.activeRooms.value = []
-    roomsState.joinedRoomId.value = null
+    roomsState.callingRooms.value = []
     settingState.enabled.value = true
   })
 
@@ -158,7 +156,7 @@ describe('ManagerAlarmBar', () => {
 
   it('未接続の警告は signaling 未接続 / 着信より優先し、つながると消える', async () => {
     roomsState.isWatching.value = false
-    roomsState.activeRooms.value = ['room-a']
+    roomsState.callingRooms.value = ['room-a']
     const wrapper = await mountSuspended(ManagerAlarmBar)
     expect(wrapper.text()).toContain('警告デバイスが接続されていません')
     expect(wrapper.text()).not.toContain('着信を受けられません')
@@ -202,18 +200,19 @@ describe('ManagerAlarmBar', () => {
     wrapper.unmount()
   })
 
-  it('room が立っていて未参加なら「着信あり」+ amber の枠と脈打つアイコン (台数は出さない)', async () => {
+  it('着信として数える部屋が在れば「着信あり」+ amber の枠と脈打つアイコン (台数は出さない)', async () => {
     alarmState.isConnected.value = true
-    roomsState.activeRooms.value = ['room-a', 'room-b']
+    roomsState.callingRooms.value = ['room-a', 'room-b']
     const wrapper = await mountSuspended(ManagerAlarmBar)
-    expect(wrapper.text()).toContain('着信あり')
+    // ★ 回帰: 遠隔点呼だけの着信の文言は今までと同じ
+    expect(wrapper.text()).toContain('着信あり — 遠隔点呼に入ると止まります')
     expect(wrapper.text()).not.toContain('2')
     expect(wrapper.find('.bg-amber-100').exists()).toBe(true)
     expect(wrapper.find('.animate-pulse').exists()).toBe(true)
     expect(wrapper.find('[data-testid="manager-alarm-bar"]').classes()).toContain('border-amber-300')
 
-    // どれかに入れば着信ではなく、平常の見張り文言と緑に戻る
-    roomsState.joinedRoomId.value = 'room-a'
+    // 数える部屋が無くなれば (どれかに入った・対応を終えた) 平常の見張り文言と緑に戻る
+    roomsState.callingRooms.value = []
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).not.toContain('着信あり')
     expect(wrapper.text()).toContain('運行管理者のブラウザを見張っています')
@@ -222,7 +221,7 @@ describe('ManagerAlarmBar', () => {
 
     // デバイス側の鳴動 / 停止済みは着信より優先する
     alarmState.deviceState.value = { state: 'muted', cause: 'call' }
-    roomsState.joinedRoomId.value = null
+    roomsState.callingRooms.value = ['room-a']
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="manager-alarm-bar"]').classes()).toContain('border-amber-200')
     wrapper.unmount()
@@ -231,10 +230,36 @@ describe('ManagerAlarmBar', () => {
   it('signaling 未接続なら着信の代わりに警告文を出す', async () => {
     alarmState.isConnected.value = true
     roomsState.isWatching.value = false
-    roomsState.activeRooms.value = ['room-a']
+    roomsState.callingRooms.value = ['room-a']
     const wrapper = await mountSuspended(ManagerAlarmBar)
     expect(wrapper.text()).toContain('着信を受けられません (signaling 未接続)')
     expect(wrapper.text()).not.toContain('着信あり')
+    wrapper.unmount()
+  })
+
+  // --- 着信の案内は部屋の種別で分ける (Refs ippoan/alc-app#387) ---
+
+  it.each([
+    ['遠隔点呼だけ', ['room-a'], '着信あり — 遠隔点呼に入ると止まります'],
+    ['IT点呼 だけ', ['it-s1'], 'IT点呼の着信あり — IT点呼 の画面で通話すると止まります'],
+    ['両方', ['room-a', 'it-s1'], '遠隔点呼と IT点呼 の着信あり — それぞれの画面で通話すると止まります'],
+  ])('着信が %s のときの文言 (見た目は同じ amber)', async (_label, rooms, text) => {
+    alarmState.isConnected.value = true
+    roomsState.callingRooms.value = rooms
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+
+    expect(wrapper.find('p.text-amber-700').text()).toBe(text)
+    expect(wrapper.find('[data-testid="manager-alarm-bar"]').classes()).toContain('border-amber-300')
+    wrapper.unmount()
+  })
+
+  it('★ 回帰: 着信が無ければ平常の見張り文言 (部屋 0 の席は今までと同じ)', async () => {
+    alarmState.isConnected.value = true
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+
+    expect(wrapper.text()).toContain('運行管理者のブラウザを見張っています (閉じると鳴ります)')
+    expect(wrapper.text()).not.toContain('着信')
+    expect(wrapper.find('.bg-green-100').exists()).toBe(true)
     wrapper.unmount()
   })
 
