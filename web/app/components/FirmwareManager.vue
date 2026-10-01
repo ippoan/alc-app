@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { FirmwareDevice } from '~/utils/api'
 import { listFirmwareDevices, updateFirmware } from '~/utils/api'
-import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
+import { fetchLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
 
 /** 一覧を引き直す間隔 */
 const LIST_INTERVAL_MS = 10_000
@@ -42,19 +42,7 @@ async function loadList() {
 }
 
 async function loadLatest() {
-  const flavors = FIRMWARE_TARGETS.cores3!.flavors
-  const next: Record<string, string> = {}
-  await Promise.all(Object.entries(flavors).map(async ([flavor, image]) => {
-    try {
-      const res = await fetch(image.manifestUrl, { cache: 'no-store' })
-      if (!res.ok) return
-      const body = await res.json() as { version?: unknown }
-      if (typeof body.version === 'string') next[flavor] = body.version
-    } catch {
-      // 取れなかった flavor は「不明」のまま (行は壊さない)
-    }
-  }))
-  latest.value = next
+  latest.value = await fetchLatestFirmwareVersions()
 }
 
 onMounted(() => {
@@ -110,8 +98,7 @@ function statusLabel(d: FirmwareDevice): string {
 }
 
 function canUpdate(d: FirmwareDevice): boolean {
-  const target = latestOf(d)
-  return !isStale(d) && !isUpdating(d) && d.version !== undefined && target !== undefined && d.version !== target
+  return !isStale(d) && !isUpdating(d) && hasFirmwareUpdate(d, latest.value)
 }
 
 function formatTime(ms: number): string {

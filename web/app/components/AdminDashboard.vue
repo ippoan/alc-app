@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { listFirmwareDevices } from '~/utils/api'
+import { fetchLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
+
 const config = useRuntimeConfig()
 const { user, logout } = useAuth()
 
@@ -61,6 +64,40 @@ function toTabKey(v: string | undefined): TabKey {
 const activeTab = ref<TabKey>(toTabKey(props.initialTab))
 watch(activeTab, tab => emit('update:tab', tab))
 const cameraActive = computed(() => activeTab.value === 'camera')
+
+/**
+ * 「端末のファーム」のタブは、更新できる端末が 1 台でも在るときだけ並びに出す。
+ * `TABS` / `toTabKey` はそのままなので `?tab=firmware` では直接開ける。
+ * 判定は mount 時に 1 回と 5 分ごと (書き込みは無い)。失敗は前の値のまま。
+ */
+const FIRMWARE_CHECK_INTERVAL_MS = 5 * 60_000
+const firmwareUpdateAvailable = ref(false)
+let firmwareTimer: ReturnType<typeof setInterval> | undefined
+let firmwareChecking = false
+
+async function checkFirmwareUpdate() {
+  if (firmwareChecking) return
+  firmwareChecking = true
+  try {
+    const [{ devices }, latest] = await Promise.all([listFirmwareDevices(), fetchLatestFirmwareVersions()])
+    firmwareUpdateAvailable.value = devices.some(d => hasFirmwareUpdate(d, latest))
+  } catch (e) {
+    console.warn('ファームの更新の有無を確認できませんでした:', e)
+  } finally {
+    firmwareChecking = false
+  }
+}
+
+onMounted(() => {
+  checkFirmwareUpdate()
+  firmwareTimer = setInterval(checkFirmwareUpdate, FIRMWARE_CHECK_INTERVAL_MS)
+})
+onUnmounted(() => { if (firmwareTimer) clearInterval(firmwareTimer) })
+
+/** 開いている間 (URL で直接開いた場合を含む) はタブを消さない */
+const visibleTabs = computed(() => TABS.filter(t =>
+  t.key !== 'firmware' || firmwareUpdateAvailable.value || activeTab.value === 'firmware',
+))
 </script>
 
 <template>
@@ -68,7 +105,7 @@ const cameraActive = computed(() => activeTab.value === 'camera')
     <div class="px-4 pt-4 flex items-center gap-3">
       <div class="flex flex-wrap gap-1 bg-gray-200 rounded-lg p-1 w-fit">
         <button
-          v-for="tab in TABS"
+          v-for="tab in visibleTabs"
           :key="tab.key"
           class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
           :class="activeTab === tab.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-600 hover:text-gray-800'"

@@ -392,28 +392,119 @@ describe('FirmwareManager', () => {
 })
 
 // AdminDashboard のタブ。専用のテストが無かったので、このタブの分だけ小さく見る。
+// 「端末のファーム」は更新できる端末が在るときだけ並びに出す (`?tab=firmware` では直接開ける)。
 describe('AdminDashboard — 端末のファームのタブ', () => {
+  // 変更前のタブの並び (11 個)
+  const TABS_BEFORE = [
+    '乗務員', '免許証', '送信キュー', 'Webhook', '中間点呼', 'リモートカメラ',
+    '拠点カメラ', 'タイムカード', 'デバイス管理', '点呼', 'ハブ測定値',
+  ]
+  const TAB = '端末のファーム'
+
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
+    vi.setSystemTime(NOW)
+    vi.clearAllMocks()
     listFirmwareDevices.mockResolvedValue({ devices: [] })
     stubFetch()
   })
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
 
-  it('タブは一番最後で、押すと FirmwareManager が描画される (最初は描画されない)', async () => {
-    const wrapper = await mountSuspended(AdminDashboard)
-    const labels = wrapper.findAll('button').map(b => b.text())
-    expect(labels[labels.indexOf('端末のファーム') + 1]).toBe('ログアウト')
-    expect(labels.at(labels.indexOf('ログアウト') - 1)).toBe('端末のファーム')
+  const mountAdmin = async (initialTab?: string) => {
+    const wrapper = await mountSuspended(AdminDashboard, { props: { initialTab } })
+    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+    await wrapper.vm.$nextTick()
+    return wrapper
+  }
+  const labels = (w: Awaited<ReturnType<typeof mountAdmin>>) => w.findAll('button').map(b => b.text())
+  const tabLabels = (w: Awaited<ReturnType<typeof mountAdmin>>) => labels(w).slice(0, labels(w).indexOf('ログアウト'))
+
+  it('更新できる端末が無いとき、並びに無い。既存の 11 個の並びは変わらない', async () => {
+    const wrapper = await mountAdmin()
+    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
+    wrapper.unmount()
+  })
+
+  it('更新できる端末が在るとき、一番最後に出て、押すと FirmwareManager が描画される', async () => {
+    listFirmwareDevices.mockResolvedValue({ devices: [dev()] })
+    const wrapper = await mountAdmin()
+    expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(false)
 
-    await wrapper.findAll('button').find(b => b.text() === '端末のファーム')!.trigger('click')
+    await wrapper.findAll('button').find(b => b.text() === TAB)!.trigger('click')
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('?tab=firmware (initialTab) で開ける', async () => {
-    const wrapper = await mountSuspended(AdminDashboard, { props: { initialTab: 'firmware' } })
+  it('版が同じ端末だけなら出ない', async () => {
+    listFirmwareDevices.mockResolvedValue({ devices: [dev({ version: '1.2.0' })] })
+    const wrapper = await mountAdmin()
+    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
+    wrapper.unmount()
+  })
+
+  it('一覧の取得が失敗したら出ない (例外も出ない)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    listFirmwareDevices.mockRejectedValue(new Error('API エラー (500): x'))
+    const wrapper = await mountAdmin()
+    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('?tab=firmware (initialTab) で開いたら、更新が無くてもタブが出ていて FirmwareManager が描画される', async () => {
+    const wrapper = await mountAdmin('firmware')
+    expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(true)
     wrapper.unmount()
+  })
+
+  it('開いている間は更新が無くなってもタブを消さず、ほかのタブへ移ると消える', async () => {
+    listFirmwareDevices.mockResolvedValue({ devices: [dev()] })
+    const wrapper = await mountAdmin('firmware')
+    listFirmwareDevices.mockResolvedValue({ devices: [] })
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    await wrapper.vm.$nextTick()
+    expect(tabLabels(wrapper)).toContain(TAB)
+
+    await wrapper.findAll('button').find(b => b.text() === '乗務員')!.trigger('click')
+    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
+    wrapper.unmount()
+  })
+
+  it('5 分ごとに再判定して、出る・消える。前の回が返っていない間は重ねない。unmount で止まる', async () => {
+    const wrapper = await mountAdmin()
+    expect(listFirmwareDevices).toHaveBeenCalledTimes(1)
+    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
+
+    listFirmwareDevices.mockResolvedValue({ devices: [dev()] })
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    await wrapper.vm.$nextTick()
+    expect(listFirmwareDevices).toHaveBeenCalledTimes(2)
+    expect(tabLabels(wrapper)).toContain(TAB)
+
+    listFirmwareDevices.mockResolvedValue({ devices: [] })
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    await wrapper.vm.$nextTick()
+    expect(tabLabels(wrapper)).not.toContain(TAB)
+
+    let resolve!: (v: { devices: FirmwareDevice[] }) => void
+    listFirmwareDevices.mockReturnValue(new Promise((r) => { resolve = r }))
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    const callsBefore = listFirmwareDevices.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5 * MIN)
+    expect(listFirmwareDevices).toHaveBeenCalledTimes(callsBefore) // 返っていない間は呼ばない
+    resolve({ devices: [] })
+    await flush()
+
+    wrapper.unmount()
+    const calls = listFirmwareDevices.mock.calls.length
+    await vi.advanceTimersByTimeAsync(20 * MIN)
+    expect(listFirmwareDevices).toHaveBeenCalledTimes(calls)
   })
 })
