@@ -28,10 +28,16 @@
  *   - GET  /tenants/:tenantId/commands/:id/result       … command_result の取得
  *   - POST /tenants/:tenantId/serial-ota                … キオスクへシリアル OTA の合図
  *       (auth-worker /device/setup の「Vein Station を最新にする」から呼ばれる。
- *        body は `{ target }` で allowlist ["timecard-station"] のみ許可。宛先は
- *        テナント内の購読キオスク全員 (`KIOSK_TAG`)、応答は `{ sent }` のみで
- *        結果は返さない。Refs ippoan/alc-app-s3#279)
- *     (`/tenants/...` の 6 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
+ *        body は `{ target, device_id? }` で、target は allowlist
+ *        ["timecard-station", "cores3"] のみ許可。宛先はテナント内の購読キオスク全員
+ *        (`KIOSK_TAG`)、応答は `{ sent }` のみで結果は返さない。Refs ippoan/alc-app-s3#279。
+ *        `device_id` (任意) は「どの端末を更新するか」で、合図にそのまま載る —
+ *        recorder では宛先を絞らず、キオスクが自分に繋がっている端末のときだけ実行する。
+ *        Refs ippoan/alc-app#403)
+ *   - POST /tenants/:tenantId/ota-report                … キオスクからの報告
+ *       (繋いでいる端末の版・更新の状態) を DO storage に保存 (Refs ippoan/alc-app#403)
+ *   - GET  /tenants/:tenantId/ota-status                … 保存した報告の一覧
+ *     (`/tenants/...` の 8 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
  *      内部 API。auth-worker /auth/introspect と同じ server-to-server shared secret
  *      認証で、呼び手は alc-app の server route など Worker 間に限られる)
  *
@@ -63,7 +69,7 @@ import { runBatterySnapshotCron } from "./battery-snapshot";
 import { hubStub } from "./hub-stub";
 
 export { RecorderHub } from "./recorder-hub";
-import { WATCH_SUBPROTOCOL } from "./recorder-hub";
+import { isOtaDeviceId, WATCH_SUBPROTOCOL } from "./recorder-hub";
 
 export interface Env {
   RECORDER_HUB: DurableObjectNamespace;
@@ -234,9 +240,10 @@ const MAX_BATCH_ITEMS = 100;
 
 /**
  * POST /tenants/:tenantId/serial-ota で受け付ける target の allowlist (#279)。
- * URL・版・自由文字列は運ばない — allowlist の 1 語だけ。
+ * URL・版・自由文字列は運ばない — allowlist の 1 語と、任意の端末の指定
+ * (`device_id`、字種と長さを検査。Refs ippoan/alc-app#403) だけ。
  */
-const SERIAL_OTA_TARGETS: ReadonlySet<string> = new Set(["timecard-station"]);
+const SERIAL_OTA_TARGETS: ReadonlySet<string> = new Set(["timecard-station", "cores3"]);
 
 /**
  * POST /measurements — Wi-Fi 客の上りバッチ (Refs ippoan/alc-app#109)。
@@ -376,9 +383,9 @@ export default {
     if (serialOtaMatch && request.method === "POST") {
       const denied = await requireInternalAuth(request, env);
       if (denied) return denied;
-      let body: { target?: unknown };
+      let body: { target?: unknown; device_id?: unknown };
       try {
-        body = (await request.json()) as { target?: unknown };
+        body = (await request.json()) as { target?: unknown; device_id?: unknown };
       } catch {
         return json({ error: "invalid_json" }, 400);
       }
@@ -386,12 +393,40 @@ export default {
       if (!SERIAL_OTA_TARGETS.has(target)) {
         return json({ error: "invalid_target" }, 400);
       }
+      // device_id は任意。**在るのに形が外れていたら合図ごと弾く** — 落として送ると
+      // 「1 台だけ」のつもりの合図が端末の指定なしで全キオスクへ出る (Refs #403)
+      const deviceId = body.device_id;
+      if (deviceId !== undefined && !isOtaDeviceId(deviceId)) {
+        return json({ error: "invalid_device_id" }, 400);
+      }
       const fwd = new Request("https://recorder-hub.internal/serial-ota", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target }),
+        body: JSON.stringify({ target, ...(deviceId !== undefined ? { device_id: deviceId } : {}) }),
       });
       return hubStub(env, decodeURIComponent(serialOtaMatch[1])).fetch(fwd);
+    }
+
+    // ファームの更新の状態 (Refs ippoan/alc-app#403)。body の検査と保存は DO 側
+    const otaReportMatch = url.pathname.match(/^\/tenants\/([^/]+)\/ota-report$/);
+    if (otaReportMatch && request.method === "POST") {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      const fwd = new Request("https://recorder-hub.internal/ota-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: request.body,
+      });
+      return hubStub(env, decodeURIComponent(otaReportMatch[1])).fetch(fwd);
+    }
+
+    const otaStatusMatch = url.pathname.match(/^\/tenants\/([^/]+)\/ota-status$/);
+    if (otaStatusMatch && request.method === "GET") {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      return hubStub(env, decodeURIComponent(otaStatusMatch[1])).fetch(
+        "https://recorder-hub.internal/ota-status",
+      );
     }
 
     const devicesMatch = url.pathname.match(/^\/tenants\/([^/]+)\/devices$/);

@@ -128,6 +128,15 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  // 端末の指定つきの合図 (Refs ippoan/alc-app#403) 専用。上と同じ理由で別テナント。
+  "kiosk-token-ota-4": {
+    active: true,
+    tenant_id: "tenant-ota-4",
+    role: "device-kiosk",
+    sub: "device-kiosk-ota-4",
+    email: "",
+    exp: 9999999999,
+  },
   // dev端末 (Refs ippoan/alc-app#387) 専用。**専用テナント** — 合図が dev / 本番の
   // どちらの購読者に届くかを数えるので、他 test の購読を混ぜない。
   "hub-token-dev": {
