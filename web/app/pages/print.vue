@@ -4,6 +4,7 @@
 // PDF は base64 化して server route (/api/print/:deviceId) に渡すだけ。
 // useAuth はローカル composable (app/composables/useAuth.ts) を auto-import する
 // (accessToken を持つ。@ippoan/auth-client の useAuth とは別物)。
+import { selectSendToken } from '~/utils/token-selection'
 
 const { accessToken } = useAuth()
 
@@ -36,16 +37,20 @@ function log(line: string): void {
   logLines.value.push(line)
 }
 
-function authHeaders(): Record<string, string> {
+// 付けるトークンは api.ts と同じ規則で選ぶ (Refs ippoan/alc-app#387)。印刷は管理者の口なので
+// 端末の getter は渡さない — dev端末では管理者のトークンを付けずに送る (route が 401 を返し、
+// 下の log に出る)。
+async function authHeaders(): Promise<Record<string, string>> {
   const h: Record<string, string> = {}
-  if (accessToken.value) h.Authorization = `Bearer ${accessToken.value}`
+  const token = await selectSendToken(accessToken.value, 'kiosk', null)
+  if (token) h.Authorization = `Bearer ${token}`
   return h
 }
 
 // 接続中デバイス一覧を読み込む
 async function loadDevices(): Promise<void> {
   try {
-    const res = await $fetch<DevicesResponse>('/api/print/devices', { headers: authHeaders() })
+    const res = await $fetch<DevicesResponse>('/api/print/devices', { headers: await authHeaders() })
     devices.value = res.devices ?? []
     if (devices.value.length > 0 && !selectedDevice.value) {
       selectedDevice.value = devices.value[0] ?? ''
@@ -118,7 +123,7 @@ async function print(): Promise<void> {
   try {
     const res = await $fetch<PrintResponse>(`/api/print/${encodeURIComponent(selectedDevice.value)}`, {
       method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
       body: { pdfBase64: pdfBase64.value },
     })
     if (res.ok) {

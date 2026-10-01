@@ -31,6 +31,7 @@ import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
 } from '~/utils/fetch-timeout'
+import { selectSendToken, usesAdminToken, type DeviceTokenKind } from '~/utils/token-selection'
 
 let apiBase = ''
 let getAccessToken: (() => string | null) | null = null
@@ -151,6 +152,12 @@ function buildAuthHeaders(): Record<string, string> {
  * - `'manager-device'` … **運行管理者席 (VoiceS3R) の鍵で通す口**。auth-worker#573 が
  *   role `device-tenko-manager` に許した**予定の口だけ**に付ける。admin JWT があれば
  *   従来どおりそちらが優先 (admin タブは今までと 1 ミリも変わらない)
+ *
+ * **例外は dev端末だけ** (Refs ippoan/alc-app#387): その scope が使うはずの端末の鍵が dev
+ * (トークンに claim `dev_device`) だと分かっているあいだは、admin JWT があっても端末の鍵で送る
+ * — admin JWT で送ると本番の行になるため。規則は `~/utils/token-selection` の 1 か所にあり、
+ * ここは {@link deviceTokenKindOf} で「どの鍵を見るか」を渡すだけ。
+ *
  * - `'bp-station'` … **血圧測定台 (ATOM S3 を挿した PC) の鍵で通す口** (Refs #353)。
  *   測定台は `devices` に行を持たず `deviceId` が構造的に空なので、admin JWT も
  *   キオスクの device JWT も持たない。auth-worker の `BP_STATION_ROUTES` が role
@@ -194,6 +201,17 @@ export const BP_STATION_DEVICE_AUTH_FAILED_MESSAGE
   = '血圧測定台の端末で認証できませんでした。この測定台の ATOM S3 が USB でつながっていて、'
     + '用途「測定台」で鍵が登録されているか確認してください'
 
+/**
+ * その scope の送信が**もともと使うはずだった端末の鍵**の種類 (Refs ippoan/alc-app#387)。
+ * `request()` の分岐の条件と同じ — getter が入っていない scope はキオスクの鍵へ進むので、
+ * 見る印もキオスクのもの。
+ */
+function deviceTokenKindOf(scope: RequestTokenScope): DeviceTokenKind {
+  if (scope === 'manager-device' && getManagerDeviceJwt) return 'manager-device'
+  if (scope === 'bp-station' && getBpStationDeviceJwt) return 'bp-station'
+  return 'kiosk'
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -210,7 +228,9 @@ async function request<T>(
     // proxy (auth-worker /alc-proxy) が JWT を検証して X-Tenant-ID + X-User-* を注入し
     // OIDC mint する (Cloud Run IAM lockdown 後も到達可)。401→refresh→retry を効かせるため
     // proxyAuthFetch (createAuthFetch インスタンス) を使う。
-    if (getAccessToken?.()) {
+    // **dev端末は例外**で、admin JWT があっても下の端末の鍵の分岐へ進む (規則は
+    // `usesAdminToken`、Refs ippoan/alc-app#387)。
+    if (usesAdminToken(getAccessToken?.(), deviceTokenKindOf(scope))) {
       // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
       // 通過 = initApi 済み) ので non-null。
       return await proxyAuthFetch!<T>(toProxyPath(path), opts)
@@ -306,10 +326,10 @@ async function publicIngestRequest<T>(path: string, options: RequestInit = {}): 
  * admin browser JWT or device JWT があれば same-origin proxy (/api/proxy) 経由
  * (proxy が X-Tenant-ID 注入 + OIDC mint)。どちらも無ければ従来の `${apiBase}` 直叩き
  * (X-Tenant-ID fallback) に倒す (lockdown 前の非破壊)。
+ * どちらを付けるかは `request()` と同じ規則 (`selectSendToken`、Refs ippoan/alc-app#387)。
  */
 async function proxyRawFetch(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
-  let jwt = getAccessToken?.() ?? null
-  if (!jwt && getKioskDeviceJwt) jwt = await getKioskDeviceJwt()
+  const jwt = await selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
   if (jwt) {
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${jwt}`)
@@ -1039,7 +1059,9 @@ function punchError(failure: PunchFailure, message: string, status?: number): Er
  * 失敗は `punchFailure` を載せて投げる (上の型を参照)。
  */
 export async function punchTimecard(cardId: string): Promise<void> {
-  const jwt = getAccessToken?.() ?? (getKioskDeviceJwt ? await getKioskDeviceJwt() : null)
+  // 付けるトークンは `request()` と同じ規則で選ぶ (dev端末なら端末の鍵が先、
+  // Refs ippoan/alc-app#387)
+  const jwt = await selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
   // **ここを 'failed' に落とさない。** 未ペアリング端末はこの分岐にだけ来るので、
   // 一緒くたにすると「ペアリングすれば直る」と分からなくなる
   if (!jwt) throw punchError('unpaired', '端末がペアリングされていません')

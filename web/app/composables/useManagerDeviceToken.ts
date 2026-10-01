@@ -44,9 +44,10 @@
  * 運行管理者トークンを掴むことは構造上ありえない (`api.ts` の `scope` も参照)。
  * storage には一切書かない (VoiceS3R を抜けば期限切れとともに消える)。
  */
-import { ref, readonly } from 'vue'
+import { ref, readonly, watch } from 'vue'
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
+import { noteDeviceToken } from '~/utils/token-selection'
 
 /** auth-worker#573 が運行管理者席の鍵に割り当てた用途。nonce (query) と token (body) の両方で使う。 */
 export const MANAGER_KEY_USAGE = 'tenko-manager'
@@ -70,6 +71,10 @@ export type ManagerTokenFailureStage = 'no-alarm-device' | 'nonce' | 'sign' | 't
 // --- module スコープ (運行管理者席の PC に 1 つ。キオスクの cache とは別物) ---
 const cachedJwt = ref<string | null>(null)
 let cachedExpMs = 0
+// このトークンが dev端末のものかを、送るトークンの選択 (`~/utils/token-selection`) が**同期で**
+// 読めるようにする (Refs ippoan/alc-app#387)。cache の書き換え・破棄のすべてに追従する。
+// 取得の経路・タイミングは変えない (見ているだけ)
+watch(cachedJwt, token => noteDeviceToken('manager-device', token), { flush: 'sync' })
 let inFlight: Promise<string | null> | null = null
 const backoffUntil = ref(0)
 const lastError = ref<string | null>(null)
