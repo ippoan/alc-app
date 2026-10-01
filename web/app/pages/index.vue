@@ -701,7 +701,7 @@ function onRoleTabClick(role: RoleTab) {
                リンクより上 (= 画面最下部はリンクのまま) に置かれ、NormalMeasurement 自身が
                持つ flex-1 + overflow-y-auto で一緒にスクロールする。ラッパーの特別な class 分岐は
                不要 (#248 の overflow-y-auto トリックは NormalMeasurement 側に既にあるため) -->
-          <NormalMeasurement v-if="driverSubTab === 'normal'" ref="normalMeasurement" :landscape="isAndroidLandscape" :ic-prompt-active="icPromptActive" class="flex-1 min-h-0">
+          <NormalMeasurement v-if="driverSubTab === 'normal'" ref="normalMeasurement" :landscape="isAndroidLandscape" :ic-prompt-active="icPromptActive" :it-selectable="devKioskMark" class="flex-1 min-h-0">
             <template #nfc-punch-prompt>
               <!-- IC カードでかざした人をアルコールチェックへ案内する (Refs ippoan/rust-alc-api#644)。
                    人が見ている NFC のタッチ枠の中に出す (below-card = カードの下は見られない) -->

@@ -1495,6 +1495,56 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
   })
 })
 
+describe('pages/index — 通常点呼の中で IT点呼 を選べる端末 (Refs ippoan/alc-app#387)', () => {
+  // 通常点呼の `NormalMeasurement` に `itSelectable` が渡るのは、**キオスクの鍵に dev の印が
+  // ある端末だけ**。stub は prop を宣言していないので、渡した値は属性 `it-selectable` に出る
+
+  let wrapper: VueWrapper | null = null
+  const NORMAL = '.normal-measurement-stub:not([it-mode])'
+  const IT = '.normal-measurement-stub[it-mode]'
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    clearDevDeviceMark('kiosk')
+    noteDeviceToken('manager-device', null)
+    localStorage.clear()
+  })
+
+  it('★ dev の印が無い端末では、通常点呼に itSelectable = false が渡る (選べない)', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('false')
+  })
+
+  it('dev でない端末のトークンが取れている端末・運行管理者席の鍵だけが dev の端末でも false', async () => {
+    noteDeviceToken('kiosk', plainDeviceJwt())
+    noteDeviceToken('manager-device', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('false')
+  })
+
+  it('★ dev の印がある端末では、通常点呼に itSelectable = true が渡る。IT点呼タブの側には渡さない', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('true')
+    wrapper.unmount()
+
+    wrapper = await mountIndex('/?role=driver&tab=it')
+    expect(wrapper.find(IT).exists()).toBe(true)
+    expect(wrapper.find(IT).attributes('it-selectable')).toBeUndefined()
+  })
+
+  it('印が外れたら false に戻る', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver')
+    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('true')
+
+    clearDevDeviceMark('kiosk')
+    await nextTick()
+    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('false')
+  })
+})
+
 describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/alc-app#387)', () => {
   // dev の印がある端末にだけ、役割のタブより上に帯を 1 本出す。印が無い端末
   // (= 本番の全端末) では DOM に 1 つも足さない。帯そのものの中身は DevDeviceBanner.test.ts

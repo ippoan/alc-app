@@ -25,19 +25,97 @@ const props = defineProps<{
    * 済ませるため。**指定しなければ今までの通常点呼と 1 つも変わらない。**
    */
   itMode?: boolean
+  /**
+   * 通常点呼の流れの中で IT点呼 を**選べる**ようにする (Refs ippoan/alc-app#387)。
+   * 測定の結果が届いた後・保存の前に「このまま保存 / IT点呼」の段を 1 つ挟む。
+   *
+   * 段が出るのは `canOfferItChoice()` の条件を全部満たした回だけで、満たさない回は
+   * 今までどおり測定の結果で即保存する。**指定しなければ (false でも) 今までの通常点呼と
+   * 1 つも変わらない。** 本人確認の入口 (社員証・手入力) は `itMode` と違って狭めない。
+   */
+  itSelectable?: boolean
 }>()
 
 const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 
-// --- IT点呼 (itMode のときだけ) ---
+// --- IT点呼 (itMode か itSelectable のときだけ) ---
 // **通常点呼では生成しない** — 通話の composable は `useWebRtc` / `useCamera` を抱えるので、
-// 作るだけで unmount 時の後始末が増える
-const itCall = props.itMode ? useItTenkoCall() : null
+// 作るだけで unmount 時の後始末が増える。生成は setup の 1 度きりなので、mount の後で
+// `itSelectable` が立った画面は次に mount されるまで選択の段を出さない
+const itCall = props.itMode || props.itSelectable ? useItTenkoCall() : null
 const itCallState = computed(() => itCall?.state.value ?? null)
 const itJudgment = computed(() => itCall?.judgment.value ?? null)
 /** 通話に進めなかった (点呼の記録の id が返らない / オフライン / 保存に失敗) */
 const itCallNotStarted = ref(false)
 const IT_LICENSE_ONLY_MESSAGE = 'IT点呼は免許証で本人確認してください'
+
+// --- 通常点呼の中で IT点呼 を選ぶ段 (itSelectable のときだけ。Refs ippoan/alc-app#387) ---
+// 段 (`step`) は増やさない — `step === 'result'` のまま、保存の前の 1 状態として持つ
+// (上の進み具合の表示も CoreS3 に送る段も今までと同じ)。
+
+/** 何も押されないまま「このまま保存」と同じ動きをするまでの秒数 */
+const IT_CHOICE_TIMEOUT_S = 30
+/** 今回の本人確認が免許証だったか (IT点呼 は免許証が必須)。IC カードの直行と手入力では立てない */
+const verifiedByLicense = ref(false)
+/** 選択の段を出しているか */
+const itChoiceOpen = ref(false)
+/** 選択の段の残り秒数 (画面に出す) */
+const itChoiceSecondsLeft = ref(0)
+/** 今回の点呼で IT点呼 を選んだか */
+const itChosen = ref(false)
+let itChoiceTimer: ReturnType<typeof setInterval> | null = null
+/** 選択を待っている保存の続き。null = 待っていない */
+let settleItChoice: ((viaIt: boolean) => void) | null = null
+
+/**
+ * 今回の点呼を IT点呼 として扱うか — `itMode` (最初から IT点呼) か、選択の段で選んだ。
+ * **保存と保存後の動きはこれ 1 つで分ける。** 本人確認の制限と見出しは `itMode` のまま
+ */
+const itActive = computed(() => itCall !== null && (props.itMode || itChosen.value))
+
+/**
+ * 選択の段を出してよいか。**1 つでも欠けたら出さず、今までどおり即保存する。**
+ * 測定の開始レコードが無い回 (`activeMeasurementId` が null) は保存が端末のキューへ回り、
+ * IT点呼 を選んでも成立しないので出さない
+ */
+function canOfferItChoice(): boolean {
+  return itCall !== null
+    && props.itSelectable === true
+    && !props.itMode
+    && verifiedByLicense.value
+    && isOnline.value
+    && !isDemoMode.value
+    && activeMeasurementId.value !== null
+}
+
+/** 選択の段を閉じる (タイマーも止める)。待っている保存があれば `viaIt` で先へ進める */
+function closeItChoice(viaIt: boolean) {
+  if (itChoiceTimer !== null) {
+    clearInterval(itChoiceTimer)
+    itChoiceTimer = null
+  }
+  itChoiceOpen.value = false
+  const settle = settleItChoice
+  settleItChoice = null
+  settle?.(viaIt)
+}
+
+/**
+ * 選択の段を出し、選ばれるまで待つ。**必ず resolve する** — ボタン・30 秒の放置・
+ * 画面を離れた (unmount) のどれでも保存へ進むので、測定の結果が保存されないまま残らない
+ * (放置と unmount は通常点呼として保存)
+ */
+function askItChoice(): Promise<boolean> {
+  itChoiceOpen.value = true
+  itChoiceSecondsLeft.value = IT_CHOICE_TIMEOUT_S
+  itChoiceTimer = setInterval(() => {
+    itChoiceSecondsLeft.value -= 1
+    if (itChoiceSecondsLeft.value <= 0) closeItChoice(false)
+  }, 1000)
+  return new Promise<boolean>((resolve) => { settleItChoice = resolve })
+}
+// 選択を待ったまま画面を離れたら、通常点呼として保存する
+onUnmounted(() => closeItChoice(false))
 
 const step = ref<NormalMeasurementStep>('nfc')
 const employeeId = ref('')
@@ -365,6 +443,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
   try {
     const emp = await getEmployeeByNfcId(nfcId)
     await prepareMeasurementFor(emp)
+    verifiedByLicense.value = cardType === 'driver_license'
     // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
     if (source !== 'cores3') await tryPunch(nfcId)
     step.value = 'choice'
@@ -551,10 +630,14 @@ async function onMeasurementResult(result: MeasurementResult) {
   }
 
   measurementResult.value = result
+  // IT点呼 を選べる回は、結果の画面を選択の段から始める (保存は選ばれてから)
+  const itChoice = canOfferItChoice() ? askItChoice() : null
   step.value = 'result'
 
   // 録画停止 + ローカル保存 (カメラもここで落ちる)
   await finishVideoRecording(employeeId.value, activeMeasurementId.value || undefined)
+
+  if (itChoice) itChosen.value = await itChoice
 
   isSaving.value = true
   saveError.value = null
@@ -585,14 +668,14 @@ async function onMeasurementResult(result: MeasurementResult) {
         carins_vehicle_id: result.carinsVehicleId,
       }
       // **通常点呼では key ごと足さない** (body を今までと同一に保つ)
-      if (props.itMode) updateData.tenko_method = IT_TENKO_METHOD
+      if (itActive.value) updateData.tenko_method = IT_TENKO_METHOD
       // carins の番号は console に出さない (simplify-reviewer の検査点、Refs ippoan/alc-app-s3#110)
       const loggableUpdateData: Record<string, unknown> = { ...updateData }
       delete loggableUpdateData.carins_cert_no
       delete loggableUpdateData.carins_vehicle_id
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(loggableUpdateData))
       const saved = await updateMeasurement(activeMeasurementId.value, updateData)
-      if (itCall) itSessionId = saved.tenko_session_id ?? null
+      if (itActive.value) itSessionId = saved.tenko_session_id ?? null
       console.log('[Measurement] updateMeasurement success')
       saveStatus.value = 'saved'
 
@@ -620,7 +703,7 @@ async function onMeasurementResult(result: MeasurementResult) {
   // 運行管理者がする)。できていなければ通話には進まず、結果画面に案内を出す。
   // オフライン・保存失敗の測定は上の再送のとおり**通常点呼として**記録される
   // (通話も判定も無いので IT点呼 としては成立していない)
-  if (itCall) {
+  if (itCall && itActive.value) {
     if (itSessionId) void itCall.start(itSessionId)
     else itCallNotStarted.value = true
   }
@@ -634,7 +717,7 @@ async function onMeasurementResult(result: MeasurementResult) {
  * 明示した「未完了のまま終了」だけにする。
  * 保存中も含める (保存が終わる前に戻ると、戻ったあとの画面で通話が始まる)。
  */
-const itAwaitingJudgment = computed(() => itCall !== null
+const itAwaitingJudgment = computed(() => itActive.value
   && (isSaving.value || itCallState.value === 'connecting' || itCallState.value === 'calling'))
 /** 通話が切れた / signaling に断られた (再接続のボタンを出す。`TenkoKiosk.vue` と同じ) */
 const itCallBroken = computed(() => itCall !== null
@@ -656,6 +739,10 @@ const showCancel = computed(() => step.value !== 'nfc' && step.value !== 'result
 function reset() {
   itCall?.stop()
   itCallNotStarted.value = false
+  closeItChoice(false)
+  itChoiceSecondsLeft.value = 0
+  itChosen.value = false
+  verifiedByLicense.value = false
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''
@@ -1063,9 +1150,38 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
 
       <!-- Step 5: 結果表示 -->
       <div v-if="step === 'result' && measurementResult" class="flex flex-col gap-4">
+        <!-- 通常点呼の中で IT点呼 を選ぶ段 (保存の前)。ResultCard (「次の測定へ」を持つ) は出さない —
+             まだ保存していない。何も押されなければ残り秒数が尽きたところで通常点呼として保存する -->
+        <div
+          v-if="itChoiceOpen"
+          data-testid="it-choice-panel"
+          class="bg-white rounded-2xl p-6 shadow-sm flex flex-col gap-3"
+        >
+          <h2 class="text-lg font-semibold text-gray-700">保存の方法を選んでください</h2>
+          <p class="text-sm text-gray-500">
+            {{ employeeName }} / アルコール濃度 {{ measurementResult.alcoholValue.toFixed(2) }} mg/L
+          </p>
+          <button
+            data-testid="it-choice-save"
+            class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+            @click="closeItChoice(false)"
+          >
+            このまま保存
+          </button>
+          <button
+            data-testid="it-choice-it"
+            class="w-full px-6 py-3 bg-white border-2 border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
+            @click="closeItChoice(true)"
+          >
+            IT点呼 (運行管理者と通話)
+          </button>
+          <p data-testid="it-choice-countdown" class="text-sm text-gray-500 text-center">
+            あと {{ itChoiceSecondsLeft }} 秒でこのまま保存します
+          </p>
+        </div>
         <!-- IT点呼: 運行管理者の判定を待つあいだ。ResultCard (「次の測定へ」を持つ) は出さない -->
         <div
-          v-if="itCall && itAwaitingJudgment"
+          v-else-if="itCall && itAwaitingJudgment"
           data-testid="it-call-panel"
           class="bg-white rounded-2xl p-6 shadow-sm flex flex-col gap-3"
         >
