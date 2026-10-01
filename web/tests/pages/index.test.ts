@@ -14,7 +14,7 @@ import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
-import { clearDevDeviceMark, isDevDevice, noteDeviceToken } from '~/utils/token-selection'
+import { clearDevDeviceMark, isDevDevice, noteDeviceToken, DEV_DEVICE_MARK_EVENT } from '~/utils/token-selection'
 import { devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 import type { LatestPunch } from '~/types'
 
@@ -1191,5 +1191,141 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
 
     expect(wrapper.find(NORMAL).exists()).toBe(true)
     expect(menuLabels(wrapper)).not.toContain(LABEL)
+  })
+})
+
+describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/alc-app#387)', () => {
+  // dev の印がある端末にだけ、役割のタブより上に帯を 1 本出す。印が無い端末
+  // (= 本番の全端末) では DOM に 1 つも足さない。帯そのものの中身は DevDeviceBanner.test.ts
+
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+  const BANNER = '[data-testid="dev-device-banner"]'
+  const NORMAL = '.normal-measurement-stub:not([it-mode])'
+  const IT = '.normal-measurement-stub[it-mode]'
+
+  /** 帯だけ実物にして載せる (ほかは他の describe と同じ shallow) */
+  function mountWithBanner(route: string) {
+    return mountSuspended(IndexPage, {
+      route,
+      shallow: true,
+      global: {
+        stubs: { ManagerAlarmBar: false, ClientOnly: false, NormalMeasurement: NormalMeasurementStub, DevDeviceBanner: false },
+      },
+    })
+  }
+
+  async function toggleMenu(w: VueWrapper) {
+    const b = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!b) throw new Error('hamburger not found')
+    await b.trigger('click')
+    await nextTick()
+  }
+
+  function menuLabels(w: VueWrapper) {
+    return w.find('.absolute.right-0').findAll('button').map(b => b.text())
+  }
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    for (const kind of ['kiosk', 'manager-device', 'bp-station'] as const) clearDevDeviceMark(kind)
+    localStorage.clear()
+    landscape.on.value = false
+  })
+
+  describe.each([
+    { name: '縦画面', isLandscape: false },
+    { name: 'Android 横画面', isLandscape: true },
+  ])('$name', ({ isLandscape }) => {
+    beforeEach(() => { landscape.on.value = isLandscape })
+
+    it('★ dev の印が無い端末では帯が無い (画面の先頭は今までどおり)', async () => {
+      wrapper = await mountWithBanner('/?role=driver')
+      expect(wrapper.find(BANNER).exists()).toBe(false)
+      expect(wrapper.html()).not.toContain('開発用の端末です')
+      expect(wrapper.find(NORMAL).exists()).toBe(true)
+    })
+
+    it('dev でない端末のトークンが取れている端末でも帯が無い', async () => {
+      noteDeviceToken('kiosk', plainDeviceJwt())
+      wrapper = await mountWithBanner('/?role=driver')
+      expect(wrapper.find(BANNER).exists()).toBe(false)
+    })
+
+    it('★ キオスクの印がある端末では帯が 1 本だけ出る', async () => {
+      noteDeviceToken('kiosk', devDeviceJwt())
+      wrapper = await mountWithBanner('/?role=driver')
+      expect(wrapper.findAll(BANNER)).toHaveLength(1)
+      expect(wrapper.find(BANNER).text()).toContain('開発用の端末です')
+      expect(wrapper.find(BANNER).text()).toContain('キオスク')
+    })
+  })
+
+  it('役割のタブより上に出る', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountWithBanner('/?role=driver')
+    const html = wrapper.html()
+    expect(html.indexOf('dev-device-banner')).toBeGreaterThan(-1)
+    expect(html.indexOf('dev-device-banner')).toBeLessThan(html.indexOf('運行管理者'))
+  })
+
+  it('運行管理者のタブを開いていても出る (運行管理者席の印)', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    wrapper = await mountWithBanner('/?role=manager')
+    expect(wrapper.find(BANNER).text()).toContain('運行管理者席')
+  })
+
+  it('mount 後に印が立つと帯が現れる (メニューを開かなくてよい)', async () => {
+    wrapper = await mountWithBanner('/?role=driver')
+    expect(wrapper.find(BANNER).exists()).toBe(false)
+
+    noteDeviceToken('kiosk', devDeviceJwt())
+    await nextTick()
+
+    expect(wrapper.find(BANNER).exists()).toBe(true)
+  })
+
+  it('★ mount 後に印が立つと、メニューを開き直さなくても「IT点呼」「開発用の記録」が入る', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    // メニューは開いたまま (開いた時点の読み直しでは、まだ印が無い)
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).not.toContain('IT点呼')
+    expect(menuLabels(wrapper)).not.toContain('開発用の記録')
+
+    noteDeviceToken('kiosk', devDeviceJwt())
+    await nextTick()
+
+    expect(menuLabels(wrapper)).toContain('IT点呼')
+    expect(menuLabels(wrapper)).toContain('開発用の記録')
+  })
+
+  it('★ IT点呼 を開いているときに印が外れると、メニューを開かなくても通常点呼へ戻る', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=it')
+    expect(wrapper.find(IT).exists()).toBe(true)
+
+    noteDeviceToken('kiosk', plainDeviceJwt())
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find(IT).exists()).toBe(false)
+    expect(wrapper.find(NORMAL).exists()).toBe(true)
+  })
+
+  it('unmount で listener を外す (そのあと印が変わっても例外にならない)', async () => {
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    const mounted = await mountIndex('/?role=driver')
+
+    mounted.unmount()
+
+    expect(removeSpy.mock.calls.some(([name]) => name === DEV_DEVICE_MARK_EVENT)).toBe(true)
+    expect(() => noteDeviceToken('kiosk', devDeviceJwt())).not.toThrow()
+    removeSpy.mockRestore()
   })
 })

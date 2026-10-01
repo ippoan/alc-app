@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { LatestPunch } from '~/types'
 import { initApi, setBpStationJwtGetter } from '~/utils/api'
-import { isDevDevice } from '~/utils/token-selection'
+import { DEV_DEVICE_MARK_EVENT, isDevDevice } from '~/utils/token-selection'
 
 const config = useRuntimeConfig()
 const route = useRoute()
@@ -172,6 +172,10 @@ function onDevMarkCleared() {
 watch(devKioskMark, (mark) => {
   if (!mark && driverSubTab.value === 'it') driverSubTab.value = 'normal'
 })
+// 印が変わった瞬間 (端末のトークンが取れた / 外した) に写しを読み直す — メニューを開かなくても
+// 「IT点呼」「開発用の記録」が現れる。印が無い端末ではイベントが 1 度も出ない
+onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevKioskMark))
+onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevKioskMark))
 
 // 血圧測定の置き場所。**`BloodPressureMeasurement` が中身を出せる状態 (`showBpUi`) と同じ
 // 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
@@ -406,6 +410,8 @@ function onRoleTabClick(role: RoleTab) {
 
 <template>
   <div class="flex flex-col h-full">
+    <!-- 開発用の端末であることの帯 (dev の印がある端末にだけ出る。無ければ DOM ごと出ない) -->
+    <DevDeviceBanner />
     <!-- ロールタブ (Android横画面時は非表示→ハンバーガーメニューに移動) -->
     <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 pt-2 flex items-center gap-2">
       <div class="flex-1 flex gap-1 bg-gray-200 rounded-lg p-1">

@@ -2,10 +2,10 @@
 //
 // 規則は 1 つ: **その送信で使える端末の鍵のトークンに claim `dev_device` があれば、管理者の
 // トークンより先にそれを使う。無ければ今までの優先順位 (管理者 → 端末) のまま。**
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import {
   clearDevDeviceMark, isDevDevice, isDevDeviceToken, noteDeviceToken, selectSendToken, usesAdminToken,
-  DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE, devSignalingToken,
+  DEV_DEVICE_MARK_EVENT, DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE, devSignalingToken,
   type DeviceTokenKind,
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
@@ -298,5 +298,102 @@ describe('devSignalingToken — dev端末が signaling へ付けるトークン 
 
   it.each([[null], [undefined]])('getter が無い (%s) なら throw する', async (getter) => {
     await expect(devSignalingToken(getter)).rejects.toThrow(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
+  })
+})
+
+// 印 (`isDevDevice`) は reactive ではないので、画面は印が変わったことをイベントで知る。
+// **値が変わったときだけ**出す — 印が無い端末 (= 本番の全端末) では 1 度も出ない。
+describe('DEV_DEVICE_MARK_EVENT — 印が変わったときだけ window に知らせる', () => {
+  const onMark = vi.fn()
+
+  beforeEach(() => {
+    onMark.mockClear()
+    window.addEventListener(DEV_DEVICE_MARK_EVENT, onMark)
+  })
+
+  afterEach(() => {
+    // window を外すテストが途中で落ちても listener を外せるように、先に戻す
+    vi.unstubAllGlobals()
+    window.removeEventListener(DEV_DEVICE_MARK_EVENT, onMark)
+  })
+
+  it('イベントの名前', () => {
+    expect(DEV_DEVICE_MARK_EVENT).toBe('alc-dev-device-mark')
+  })
+
+  it('dev のトークンが取れて印が立つ → 1 回。同じ dev のトークンをもう一度 → 出ない', () => {
+    noteDeviceToken('kiosk', DEV)
+    expect(onMark).toHaveBeenCalledTimes(1)
+
+    noteDeviceToken('kiosk', DEV)
+    expect(onMark).toHaveBeenCalledTimes(1)
+  })
+
+  it('印がある状態で dev でないトークンが取れる → 1 回 (印が下りる)', () => {
+    noteDeviceToken('kiosk', DEV)
+    onMark.mockClear()
+
+    noteDeviceToken('kiosk', PLAIN)
+
+    expect(onMark).toHaveBeenCalledTimes(1)
+    expect(isDevDevice('kiosk')).toBe(false)
+  })
+
+  it('印がある状態でトークンを捨てる (null) → 1 回 (印が下りる)', () => {
+    noteDeviceToken('kiosk', DEV)
+    onMark.mockClear()
+
+    noteDeviceToken('kiosk', null)
+
+    expect(onMark).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ 印が無い状態で dev でないトークン・null → 出ない (本番の端末では 1 度も出ない)', () => {
+    for (const kind of KINDS) {
+      noteDeviceToken(kind, PLAIN)
+      noteDeviceToken(kind, null)
+      noteDeviceToken(kind, ADMIN)
+    }
+    expect(onMark).not.toHaveBeenCalled()
+  })
+
+  it('clearDevDeviceMark: 印が在れば 1 回、無ければ出ない', () => {
+    noteDeviceToken('manager-device', DEV)
+    onMark.mockClear()
+
+    clearDevDeviceMark('manager-device')
+    expect(onMark).toHaveBeenCalledTimes(1)
+
+    clearDevDeviceMark('manager-device')
+    clearDevDeviceMark('kiosk')
+    expect(onMark).toHaveBeenCalledTimes(1)
+  })
+
+  it('別の種類の印が立っていても、変わった種類の分だけ出る', () => {
+    noteDeviceToken('kiosk', DEV)
+    noteDeviceToken('bp-station', DEV)
+    expect(onMark).toHaveBeenCalledTimes(2)
+
+    noteDeviceToken('kiosk', DEV)
+    expect(onMark).toHaveBeenCalledTimes(2)
+  })
+
+  it('出すのは素の Event (印の中身は載せない。読む側が isDevDevice で読み直す)', () => {
+    noteDeviceToken('kiosk', DEV)
+    const event = onMark.mock.calls[0]![0] as Event
+    expect(event).toBeInstanceOf(Event)
+    expect(event.type).toBe(DEV_DEVICE_MARK_EVENT)
+  })
+
+  it('window が無い環境 (SSR) でも例外にならず、印は変わる (イベントは出さない)', () => {
+    vi.stubGlobal('window', undefined)
+
+    expect(() => noteDeviceToken('kiosk', DEV)).not.toThrow()
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(() => clearDevDeviceMark('kiosk')).not.toThrow()
+    expect(isDevDevice('kiosk')).toBe(false)
+
+    vi.unstubAllGlobals()
+    expect(onMark).not.toHaveBeenCalled()
   })
 })
