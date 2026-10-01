@@ -12,6 +12,8 @@
  * ロールタブ切替 (このバーの unmount) では切らない (#205)。どのロールタブに居ても
  * 着信 (`call=1`) は鳴る — これは望ましい副作用 (#135)
  */
+import { splitRooms } from '~/utils/it-tenko'
+
 const alarm = useAlarmDevice()
 // Web Serial の無いブラウザではバーを出さない
 const isSupported = alarm.isSupported
@@ -19,7 +21,7 @@ const isSupported = alarm.isSupported
 // バーを出さない。null は未設定 (既存の端末) なので問いかけカードを出す
 // ([つなぐ] で true になった瞬間に useAlarmWatch が見張りを始める)
 const { enabled, setEnabled } = useAlarmDeviceSetting()
-const { isWatching, activeRooms, joinedRoomId } = useActiveRooms()
+const { isWatching, callingRooms } = useActiveRooms()
 
 const alarmCauseLabels: Record<string, string> = {
   silence: '無音',
@@ -30,8 +32,16 @@ function alarmCauseText(cause: string): string {
   return alarmCauseLabels[cause] ?? cause
 }
 
-/** 着信中 = room は立っているが管理者がまだどれにも入っていない (台数は認証前の画面なので出さない) */
-const isCalling = computed(() => joinedRoomId.value === null && activeRooms.value.length > 0)
+/** 着信中 = 着信として数える部屋が在る (判定は useActiveRooms。台数は認証前の画面なので出さない) */
+const isCalling = computed(() => callingRooms.value.length > 0)
+
+/** 着信の案内。どの画面で通話すれば止まるかは部屋の種別で違う (鳴るのはどちらも同じ) */
+const callingText = computed(() => {
+  const { it, remote } = splitRooms(callingRooms.value)
+  if (it.length === 0) return '着信あり — 遠隔点呼に入ると止まります'
+  if (remote.length === 0) return 'IT点呼の着信あり — IT点呼 の画面で応答し、判定を保存すると止まります'
+  return '遠隔点呼と IT点呼 の着信あり — それぞれの画面で応答すると止まります (IT点呼 は判定の保存まで)'
+})
 
 const alarmStatusText = computed(() => {
   if (!alarm.isConnected.value) return '未接続'
@@ -146,7 +156,7 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
             <span class="font-bold">警告デバイスが接続されていません</span> — USB を確認して「接続」を押してください
           </p>
           <p v-else-if="!isWatching" class="text-xs text-red-600">着信を受けられません (signaling 未接続)</p>
-          <p v-else-if="isCalling" class="text-xs text-amber-700 font-medium">着信あり — 遠隔点呼に入ると止まります</p>
+          <p v-else-if="isCalling" class="text-xs text-amber-700 font-medium">{{ callingText }}</p>
           <p v-else class="text-xs text-gray-500">運行管理者のブラウザを見張っています (閉じると鳴ります)</p>
         </div>
 

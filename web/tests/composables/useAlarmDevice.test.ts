@@ -117,6 +117,7 @@ describe('useAlarmDevice', () => {
     useState<boolean>('active-rooms-watching').value = opts.watching ?? true
     useState<string[]>('active-rooms').value = opts.rooms ?? []
     useState<string | null>('active-rooms-joined').value = opts.joined ?? null
+    useState<string[]>('active-rooms-handled').value = []
   }
 
   async function load() {
@@ -630,6 +631,46 @@ describe('useAlarmDevice', () => {
       setRooms({ rooms: [] })
       await vi.advanceTimersByTimeAsync(3000)
       expect(dev.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    // --- 着信として数える部屋は useActiveRooms の callingRooms (Refs ippoan/alc-app#387) ---
+
+    it('★ IT点呼 の部屋の着信でも call=1 を付ける', async () => {
+      const dev = await connectDevice()
+      setRooms({ rooms: ['it-s1'] })
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
+    })
+
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 判定を保存した %s の部屋が、通話を抜けて一覧に残っていても call は付けない', async (_label, roomId) => {
+      const dev = await connectDevice()
+      setRooms({ rooms: [roomId] })
+      const rooms = useActiveRooms()
+      rooms.setJoined(roomId)
+      rooms.markHandled(roomId)
+      rooms.setJoined(null)
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+
+      // 別の部屋が待っていれば鳴らす
+      useState<string[]>('active-rooms').value = [roomId, 'room-b']
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
+    })
+
+    it.each([['遠隔点呼', 'room-a'], ['IT点呼', 'it-s1']])('★ 判定を保存せずに通話を抜けた %s の部屋 (自分で閉じた・通信が切れて落ちた) は、また call=1 になる', async (_label, roomId) => {
+      const dev = await connectDevice()
+      setRooms({ rooms: [roomId] })
+      const rooms = useActiveRooms()
+      rooms.setJoined(roomId)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK\n')
+
+      rooms.setJoined(null)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.at(-1)).toBe('HB OK call=1\n')
     })
 
     it('購読が切れていても着信中なら call=1 は付く (猶予中も、NG になっても)', async () => {

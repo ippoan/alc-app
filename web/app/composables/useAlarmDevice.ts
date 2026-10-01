@@ -25,7 +25,8 @@
  * 送る中身は useActiveRooms から組み立てる:
  *   room 一覧の購読 (WebSocket) が 15 秒以上切れている → `HB NG signaling` (着信を受けられない)
  *   それ以外                                          → `HB OK`
- *   room が立っていて管理者がまだどれにも入っていない → 末尾に ` call=1` (着信中)
+ *   着信として数える部屋が在る (useActiveRooms の callingRooms。判定はあちら 1 か所)
+ *                                                     → 末尾に ` call=1` (着信中)
  *
  * 意図した reload (chunk 読み込み失敗の自動復旧 / アプリ内の reload / 利用者の F5) では
  * シリアルが閉じて heartbeat が途絶するが、鳴らさずに再接続を待ってほしい。reload の
@@ -174,8 +175,8 @@ export function useAlarmDevice() {
   function heartbeatLine(): string {
     const ngFor = ngSince === null ? 0 : Date.now() - ngSince
     const status = ngFor >= NG_GRACE_MS ? 'HB NG signaling' : 'HB OK'
-    // room はあるが管理者がまだどれにも入っていない = 呼び出しに応答していない
-    const calling = rooms.activeRooms.value.length > 0 && rooms.joinedRoomId.value === null
+    // 呼び出しに応答していない部屋が在る (遠隔点呼も IT点呼 も鳴らす)
+    const calling = rooms.callingRooms.value.length > 0
     const line = calling ? `${status} call=1` : status
     if (line !== lastLine) {
       log(`heartbeat ${lastLine ?? '(start)'} -> ${line}`)

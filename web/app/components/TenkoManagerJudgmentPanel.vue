@@ -14,7 +14,7 @@
  */
 import type { TenkoSession, SubmitManagerJudgment } from '~/types'
 import { submitManagerJudgment } from '~/utils/api'
-import { MANAGER_JUDGMENT_METHOD, type ManagerJudgmentMethod } from '~/utils/it-tenko'
+import { MANAGER_JUDGMENT_METHOD, itTenkoRoomId, type ManagerJudgmentMethod } from '~/utils/it-tenko'
 
 const props = defineProps<{
   session: TenkoSession
@@ -26,6 +26,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   judged: [TenkoSession]
 }>()
+
+const { markHandled } = useActiveRooms()
 
 const ngMode = ref(false)
 const reason = ref('')
@@ -75,6 +77,10 @@ async function submit(judgment: 'ok' | 'ng') {
     if (judgment === 'ng' && trimmed) body.reason = trimmed
     if (method.value) body.method = method.value
     const updated = await submitManagerJudgment(props.session.id, body, 'tenko-monitor')
+    // 判定が付いた点呼の部屋は、相手が閉じて消えるまで着信として数えない (警告デバイスを
+    // 鳴らさない)。部屋の id は遠隔点呼なら記録の id そのまま、IT点呼 なら `it-<id>` —
+    // 一覧に在る方だけが印になる
+    for (const roomId of [updated.id, itTenkoRoomId(updated.id)]) markHandled(roomId)
     emit('judged', updated)
     ngMode.value = false
     reason.value = ''
