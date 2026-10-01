@@ -38,7 +38,7 @@ onMounted(async () => {
   loadFromDevice()
   if (authenticatedManagerId.value) {
     try {
-      const emp = await getEmployeeById(authenticatedManagerId.value)
+      const emp = await getEmployeeById(authenticatedManagerId.value, 'tenko-monitor')
       deviceManagerName.value = emp.name
     }
     catch { deviceManagerName.value = null }
@@ -91,17 +91,17 @@ function stopSessionPolling() {
 
 async function fetchSession(sessionId: string) {
   try {
-    const session = await getTenkoSession(sessionId)
+    const session = await getTenkoSession(sessionId, 'tenko-monitor')
     liveSession.value = session
     // 社員名 + 運転者情報を取得 (初回のみ)
     if (!liveEmployeeName.value && session.employee_id) {
       try {
-        const employees = await getEmployees()
+        const employees = await getEmployees('tenko-monitor')
         const emp = employees.find(e => e.id === session.employee_id)
         if (emp) liveEmployeeName.value = emp.name
       } catch { /* ignore */ }
       try {
-        liveDriverInfo.value = await getDriverInfo(session.employee_id)
+        liveDriverInfo.value = await getDriverInfo(session.employee_id, 'tenko-monitor')
       } catch { /* ignore */ }
     }
   } catch { /* セッション未作成の場合は無視 */ }
@@ -170,7 +170,7 @@ async function onModalIdSubmit() {
   if (!input) return
   modalIdError.value = null
   try {
-    const emp = await getEmployeeByCode(input)
+    const emp = await getEmployeeByCode(input, 'tenko-monitor')
     if (!emp.role.includes('manager') && !emp.role.includes('admin')) {
       modalIdError.value = `${emp.name}さんには運行管理者の権限がありません`
       return
@@ -435,6 +435,7 @@ onUnmounted(() => {
         v-if="showDriverInfoPanel && liveSession?.employee_id"
         :employee-id="liveSession.employee_id"
         :session-id="liveSession.id"
+        scope="tenko-monitor"
         @close="showDriverInfoPanel = false"
       />
     </div>

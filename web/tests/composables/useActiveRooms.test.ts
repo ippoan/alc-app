@@ -1,4 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { devDeviceJwt } from '../helpers/dummy-jwt'
+
+// 運行管理者席の鍵のトークン (dev端末だけが使う。Refs ippoan/alc-app#387)
+const tokenMocks = vi.hoisted(() => ({
+  useManagerDeviceToken: vi.fn(),
+  getManagerJwt: vi.fn(),
+}))
+mockNuxtImport('useManagerDeviceToken', () => tokenMocks.useManagerDeviceToken)
+
+const MANAGER_TOKEN = devDeviceJwt('dev-manager')
+const TOKEN_QUERY = `?token=${encodeURIComponent(MANAGER_TOKEN)}`
+/** 運行管理者席の鍵の dev の印の保存先 (`~/utils/token-selection`) */
+const MANAGER_MARK_KEY = 'alc_dev_device_manager-device'
 
 // 生成された MockWebSocket をすべて記録する
 let wsInstances: MockWebSocket[] = []
@@ -68,6 +82,11 @@ describe('useActiveRooms', () => {
     vi.stubGlobal('WebSocket', MockWebSocket)
     vi.useFakeTimers()
 
+    tokenMocks.useManagerDeviceToken.mockReset()
+    tokenMocks.getManagerJwt.mockReset()
+    tokenMocks.useManagerDeviceToken.mockReturnValue({ getManagerJwt: tokenMocks.getManagerJwt })
+    localStorage.clear()
+
     // module スコープの参照カウント / socket を test ごとにリセットする
     vi.resetModules()
     const mod = await import('~/composables/useActiveRooms')
@@ -80,6 +99,7 @@ describe('useActiveRooms', () => {
   })
 
   afterEach(() => {
+    localStorage.clear()
     vi.stubGlobal('WebSocket', originalWebSocket)
     vi.useRealTimers()
     vi.unstubAllGlobals()
@@ -252,5 +272,178 @@ describe('useActiveRooms', () => {
 
     const { reload } = useActiveRooms()
     await expect(reload()).resolves.toBe(false)
+  })
+
+  // --- dev端末の区別 (Refs ippoan/alc-app#387) ---
+
+  describe('dev の印が無い席は今までどおり', () => {
+    it('★ start() の同期の流れの中で、token なしの WebSocket ができている', () => {
+      const { start } = useActiveRooms()
+
+      start()
+
+      // microtask を 1 つも流していない (変更前と同じ)
+      expect(wsInstances).toHaveLength(1)
+      expect(lastWs().url).toBe('ws://localhost:8787/watch-rooms')
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it('★ reload() を待たずに呼んだ直後に、token なしの fetch が出ている', () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ rooms: [] }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const { reload } = useActiveRooms()
+
+      void reload()
+
+      expect(fetchMock.mock.calls).toEqual([['http://localhost:8787/active-rooms']])
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it('キオスク・測定台の印は見ない (運行管理者席の鍵だけ)', async () => {
+      localStorage.setItem('alc_dev_device_kiosk', '1')
+      localStorage.setItem('alc_dev_device_bp-station', '1')
+      vi.resetModules()
+      const { start } = (await import('~/composables/useActiveRooms')).useActiveRooms()
+
+      start()
+
+      expect(lastWs().url).toBe('ws://localhost:8787/watch-rooms')
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('運行管理者席の鍵に dev の印がある席', () => {
+    /** 印を保存した状態で module を読み直す (起動時に同期で読まれる) */
+    async function loadAsDev() {
+      localStorage.setItem(MANAGER_MARK_KEY, '1')
+      vi.resetModules()
+      return (await import('~/composables/useActiveRooms')).useActiveRooms()
+    }
+
+    /** 外から解決できる getter (トークンを待っている途中の状態を作る) */
+    function deferToken() {
+      let resolve!: (token: string | null) => void
+      tokenMocks.getManagerJwt.mockImplementationOnce(() => new Promise<string | null>((r) => { resolve = r }))
+      return (token: string | null) => resolve(token)
+    }
+
+    /** 待っている promise を流す (fake timers のままなので timer は進めない) */
+    const flush = () => vi.advanceTimersByTimeAsync(0)
+
+    it('/watch-rooms に ?token= を付けて繋ぐ', async () => {
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+      const { start, isWatching } = await loadAsDev()
+
+      start()
+      expect(wsInstances).toHaveLength(0)
+      await flush()
+
+      expect(wsInstances).toHaveLength(1)
+      expect(lastWs().url).toBe(`ws://localhost:8787/watch-rooms${TOKEN_QUERY}`)
+      lastWs().simulateOpen()
+      expect(isWatching.value).toBe(true)
+    })
+
+    it('/active-rooms に ?token= を付けて読む', async () => {
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ rooms: ['dev-1'] }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const { reload, activeRooms } = await loadAsDev()
+
+      await expect(reload()).resolves.toBe(true)
+
+      expect(fetchMock.mock.calls).toEqual([[`http://localhost:8787/active-rooms${TOKEN_QUERY}`]])
+      expect(activeRooms.value).toEqual(['dev-1'])
+    })
+
+    it('★ トークンが取れなければ fetch を出さず false を返す', async () => {
+      tokenMocks.getManagerJwt.mockResolvedValue(null)
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const { reload } = await loadAsDev()
+
+      await expect(reload()).resolves.toBe(false)
+
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('★ トークンが取れなければ WebSocket を作らず、3 秒ごとに試し直す', async () => {
+      tokenMocks.getManagerJwt.mockResolvedValue(null)
+      const { start } = await loadAsDev()
+
+      start()
+      await flush()
+      expect(wsInstances).toHaveLength(0)
+      expect(tokenMocks.getManagerJwt).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(tokenMocks.getManagerJwt).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(tokenMocks.getManagerJwt).toHaveBeenCalledTimes(2)
+      expect(wsInstances).toHaveLength(0)
+
+      // 取れるようになったら次の回で繋がる
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(wsInstances).toHaveLength(1)
+      expect(lastWs().url).toBe(`ws://localhost:8787/watch-rooms${TOKEN_QUERY}`)
+    })
+
+    it('試し直しを待つあいだに stop すると、試し直さない', async () => {
+      tokenMocks.getManagerJwt.mockResolvedValue(null)
+      const { start, stop } = await loadAsDev()
+      start()
+      await flush()
+
+      stop()
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(tokenMocks.getManagerJwt).toHaveBeenCalledTimes(1)
+      expect(wsInstances).toHaveLength(0)
+    })
+
+    it.each([[MANAGER_TOKEN], [null]])('トークンを待つあいだに stop されたら WebSocket を作らず、試し直しもしない (結果 %s)', async (token) => {
+      const resolveToken = deferToken()
+      const { start, stop } = await loadAsDev()
+
+      start()
+      stop()
+      resolveToken(token)
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(wsInstances).toHaveLength(0)
+      expect(tokenMocks.getManagerJwt).toHaveBeenCalledTimes(1)
+    })
+
+    it('待つあいだに stop → start されても WebSocket は 1 本だけ', async () => {
+      const resolveFirst = deferToken()
+      const resolveSecond = deferToken()
+      const { start, stop } = await loadAsDev()
+
+      start()
+      stop()
+      start()
+      resolveFirst(MANAGER_TOKEN)
+      resolveSecond(MANAGER_TOKEN)
+      await flush()
+
+      expect(wsInstances).toHaveLength(1)
+    })
+
+    it('切断後の張り直しでも ?token= を付ける (間隔は 3 秒のまま)', async () => {
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+      const { start } = await loadAsDev()
+      start()
+      await flush()
+      lastWs().simulateOpen()
+
+      lastWs().close()
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(wsInstances).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(wsInstances).toHaveLength(2)
+      expect(lastWs().url).toBe(`ws://localhost:8787/watch-rooms${TOKEN_QUERY}`)
+    })
   })
 })

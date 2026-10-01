@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:b4aacaa1cf9ef811f73759a90e3732c00093fc8c
+generated-from: alc-app:db0131c073045f4573dd83ede4f3c13b7fdb191d
 paths: [web/, cf-alc-signaling/, cf-alc-recorder/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・cf-alc-recorder/ (CoreS3 測定データ受口 DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「cf-alc-recorder」「alc-recorder」「CoreS3 測定」「alc.ippoan.org」等。
 ---
@@ -20,8 +20,8 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | 区画 | 中身 | 役割 |
 |---|---|---|
 | **`web/`** | Nuxt 4 PWA (`app/` 構成) + `server/` + `wrangler.jsonc` | フロント本体 (Cloudflare Workers `cloudflare_module`)。下表参照 |
-| **`cf-alc-signaling/`** | `src/{index,signaling-room,room-registry,camera-signaling-room}.ts` + `wrangler.toml` | WebRTC signaling worker。Durable Objects (Hibernatable WS) で SDP/ICE リレー。worker 名 `alc-signaling`。`CameraSignalingRoom` (`/cam-room/:siteId`) は拠点カメラ (C212) 中継用の別系統 DO — `SignalingRoom` と同じ device/admin 1:1 リレーだが `RoomRegistry` (着信通知) を呼ばない (ippoan/alc-app#129) |
-| **`cf-alc-recorder/`** | `src/{index,recorder-hub,auth,measurements}.ts` + `wrangler.toml` + `test/` | CoreS3 (alc-app-s3) 測定データ受口 worker (#106/#108)。上りは WS (`/ws`、テナント単位 DO `RecorderHub`) と Wi-Fi 客向け `POST /measurements` バッチ (#109、ステートレス) の 2 経路 — どちらも device JWT introspect (role allowlist: `device-hub` = CoreS3 / `device-print` = AtomS3 印刷ブリッジ ippoan/alc-app-s3#38 / `device-gateway` = P4 GW ippoan/alc-gw-p4#15。他 role は 403) → auth-worker `/alc-internal-proxy` → rust-alc-api `POST /api/hub/measurements` に転送。例外: `kind=crash_log` (CoreS3 異常リセット復帰レポート、ippoan/alc-app-s3#43) は backend へ転送せず R2 `CRASH_LOGS` (bucket `alc-crash-logs`、key `{tenant}/{device}/{seq 12桁0詰}.json`、再送冪等) へ直接保存して ack + メール通知 (`CRASH_EMAIL` send_email binding、best-effort、security-notification-app と同方式)。下り command push は WS のみ。worker 名 `alc-recorder`。**session_id (Refs ippoan/alc-app-s3#112)**: 1 回の点呼を束ねる端末発番の識別子を上り frame / POST body から素通しする。`normalizeSessionId` が字種 (英数字 `-` `_`、64 文字) を検証するが、**外れても測定ごと弾かず null に落とす** — session_id は付加情報で、これを理由に測定を捨てると点呼の記録そのものを失うため (log 1 行を残す)。上流 rust-alc-api は同じ制約で 400 を返すが、あちらは本 worker 以外の経路に対する多層防御 |
+| **`cf-alc-signaling/`** | `src/{index,signaling-room,room-registry,camera-signaling-room}.ts` + `wrangler.toml` | WebRTC signaling worker。Durable Objects (Hibernatable WS) で SDP/ICE リレー。worker 名 `alc-signaling`。`CameraSignalingRoom` (`/cam-room/:siteId`) は拠点カメラ (C212) 中継用の別系統 DO — `SignalingRoom` と同じ device/admin 1:1 リレーだが `RoomRegistry` (着信通知) を呼ばない (ippoan/alc-app#129)。**dev端末の区別 (Refs ippoan/alc-app#387)**: `/room/:roomId` `/watch-rooms` `GET /active-rooms` は任意の query `token` を受ける。worker (`index.ts` の `resolveDev`) が auth-worker の introspect で「dev端末の鍵か」を決め、DO へは内部ヘッダーで渡す (端末の申告は見ない)。token が無い接続は dev でないものとして従来どおり動く。**`?token=` を空で付ける・検証に落ちる → 401** (dev でない側に倒さない)。部屋の一覧を外へ出す経路は `RoomRegistry.getActiveRooms(viewerDev)` を必ず通る (**絞り点はこの 1 か所** — dev の購読者には dev の部屋だけ、dev でない購読者には dev でない部屋だけ)。dev の device が居る部屋に dev でない admin が入ろうとすると 403、先に居た dev でない admin は close code 1008 (`dev room`) で切られる。テストは `cf-alc-signaling/test/dev-rooms.test.ts` |
+| **`cf-alc-recorder/`** | `src/{index,recorder-hub,auth,measurements}.ts` + `wrangler.toml` + `test/` | CoreS3 (alc-app-s3) 測定データ受口 worker (#106/#108)。上りは WS (`/ws`、テナント単位 DO `RecorderHub`) と Wi-Fi 客向け `POST /measurements` バッチ (#109、ステートレス) の 2 経路 — どちらも device JWT introspect (role allowlist: `device-hub` = CoreS3 / `device-print` = AtomS3 印刷ブリッジ ippoan/alc-app-s3#38 / `device-gateway` = P4 GW ippoan/alc-gw-p4#15。他 role は 403) → auth-worker `/alc-internal-proxy` → rust-alc-api `POST /api/hub/measurements` に転送。例外: `kind=crash_log` (CoreS3 異常リセット復帰レポート、ippoan/alc-app-s3#43) は backend へ転送せず R2 `CRASH_LOGS` (bucket `alc-crash-logs`、key `{tenant}/{device}/{seq 12桁0詰}.json`、再送冪等) へ直接保存して ack + メール通知 (`CRASH_EMAIL` send_email binding、best-effort、security-notification-app と同方式)。下り command push は WS のみ。worker 名 `alc-recorder`。**session_id (Refs ippoan/alc-app-s3#112)**: 1 回の点呼を束ねる端末発番の識別子を上り frame / POST body から素通しする。`normalizeSessionId` が字種 (英数字 `-` `_`、64 文字) を検証するが、**外れても測定ごと弾かず null に落とす** — session_id は付加情報で、これを理由に測定を捨てると点呼の記録そのものを失うため (log 1 行を残す)。上流 rust-alc-api は同じ制約で 400 を返すが、あちらは本 worker 以外の経路に対する多層防御。**dev端末の区別 (Refs ippoan/alc-app#387)**: introspect の `dev_device === true` (読むのは `auth.ts` の `isDevIntrospect` だけ) の端末が送った測定・打刻は、backend へ `X-Device-Dev: 1` を付けて転送する (`measurements.ts`)。**端末の申告 (frame / body / ヘッダー) では決めない** — WS は attachment (introspect 済みの claims) から、ブラウザ打刻の内部 API は caller (web の server route) が立てた `X-Device-Dev: 1` から決める。打刻の合図は購読者の tag で分ける (`recorder-hub.ts`): dev でない購読者は `watch:timecard`、dev の購読者は `watch:timecard:dev`。**購読者はどちらか片方の tag しか持たない**ので、dev の打刻は dev の購読者にだけ、本番の打刻は本番の購読者にだけ届く |
 | **`fc1200-wasm/`** | (git ignored) Rust → WASM | FC-1200 RS232C プロトコル実装を WASM に compile して**ソース秘匿**。`web` から `fc1200-wasm` import |
 | **`docs/`** | mkdocs (`mkdocs.yml`, admin/ operator/) | 運用ドキュメント。`docs/*.pdf` = Tanita Confidential で **.gitignore** |
 | **`plan/`** | `implementation-plan.md` `initialplan.md` | 実装計画 |
@@ -37,8 +37,8 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | **composables (顔認証)** | `useFaceAuth.ts` `useFaceDetection.ts` `useFaceSync.ts` `useFingerprint.ts` | 顔検出 (Web Worker) / 同期 / 指紋 |
 | **composables (点呼/通話)** | `useWebRtc.ts` `useTenkoKiosk.ts` `useTenkoAdmin.ts` `useScreenShare.ts` `useVideoRecorder.ts` | WebRTC 通話 / 点呼キオスク / 管理者 / 画面共有 / 録画 |
 | **composables (その他)** | `useAuth.ts` `useManagerAuth.ts` `useOfflineSync.ts` `useDemoMode.ts` `useAndroidLandscape.ts` `useNfcBridgeUpdate.ts` `useGwStatus.ts` `useTimecardWatch.ts` | 認証 / オフライン同期 / デモ / Android / Windows GW (alc-gw) 疎通診断 (`127.0.0.1:11984` + WS 9876/9877/9878 を使い捨て接続で probe、#124) / **打刻更新の購読** (`useTimecardWatch.ts`: cf-alc-recorder `wss://…/watch-timecard` に `Sec-WebSocket-Protocol: ["alc.timecard.v1", <jwt>]` で繋ぎ、`{type:"timecard_punch"}` の**合図だけ**を受けて一覧を引き直す。**管理画面 `TimecardManager.vue` とキオスク `TimePunchKiosk.vue` で共有** — `onopen` で無条件に 1 回引き直し、**未接続の間だけ 30 秒ポーリング**、トークンが取れなければ WS を張らずポーリングのみ、Refs ippoan/alc-app-s3#134) |
-| **components** | `Tenko*.vue` (多数: Kiosk/VideoCall/RemoteAdminView/ScheduleManager 等) `*Dashboard.vue` `FaceAuth.vue` `AlcMeasurement.vue` `Device*.vue` `GwStatusCard.vue` `HubMeasurementsViewer.vue` | 点呼 UI / ダッシュボード / 測定 / デバイス管理 / GW 確認カード (DeviceSettings 内、GW 未検出時は折りたたみ) / ハブ測定値ビューア。**画面は独立ページではなく `AdminDashboard.vue` のタブ** (`hub_measurements` = 「ハブ測定値」、「デバイス管理」の隣) — 管理機能は index.vue のロールタブ → `*Dashboard.vue` 内タブという 2 段構成なので、`pages/` に足しても導線が無い。`HubMeasurementsViewer.vue` は CoreS3 統合ハブ (alc-app-s3) が cf-alc-recorder 経由で 溜めた測定を `GET /api/hub/measurements` (Refs ippoan/rust-alc-api#592) から読む閲覧専用。絞り込みは device_id / kind / 受信日時 (`created_at` の閉区間)、並びは backend 固定の `created_at DESC`。**総件数は API が返さない** (ingest テーブルが伸び続けるため) のでページャは `has_more` + offset だけ。`payload` は JSONB 素通しなので既定は畳む |
-| **utils** | `web/app/utils/{api,env,face-approval,face-db,fc1200,human-config,license,offline-queue,video-store}.ts` | API client / 顔 DB (IndexedDB) / FC-1200 / human 設定 / オフラインキュー |
+| **components** | `Tenko*.vue` (多数: Kiosk/VideoCall/RemoteAdminView/ScheduleManager 等) `*Dashboard.vue` `FaceAuth.vue` `AlcMeasurement.vue` `Device*.vue` `GwStatusCard.vue` `HubMeasurementsViewer.vue` | 点呼 UI / ダッシュボード / 測定 / デバイス管理 / GW 確認カード (DeviceSettings 内、GW 未検出時は折りたたみ) / ハブ測定値ビューア。**画面は独立ページではなく `AdminDashboard.vue` のタブ** (`hub_measurements` = 「ハブ測定値」、「デバイス管理」の隣) — 管理機能は index.vue のロールタブ → `*Dashboard.vue` 内タブという 2 段構成なので、`pages/` に足しても導線が無い。`HubMeasurementsViewer.vue` は CoreS3 統合ハブ (alc-app-s3) が cf-alc-recorder 経由で 溜めた測定を `GET /api/hub/measurements` (Refs ippoan/rust-alc-api#592) から読む閲覧専用。絞り込みは device_id / kind / 受信日時 (`created_at` の閉区間)、並びは backend 固定の `created_at DESC`。**総件数は API が返さない** (ingest テーブルが伸び続けるため) のでページャは `has_more` + offset だけ。`payload` は JSONB 素通しなので既定は畳む。**`DevDeviceRecords.vue`** (Refs ippoan/alc-app#387) = dev端末 (開発用の鍵) の記録を見る画面。`index.vue` のハンバーガーに、**キオスクの鍵に dev の印がある端末だけ**出る。一覧は管理画面と同じ `TenkoSessionMonitor` をそのまま置き、取得は端末の鍵のトークンに乗るので返るのは dev の記録だけ。印を外すボタン (`clearDevDeviceMark('kiosk')`) を持つ |
+| **utils** | `web/app/utils/{api,env,face-approval,face-db,fc1200,human-config,license,offline-queue,token-selection,video-store}.ts` | API client / 顔 DB (IndexedDB) / FC-1200 / human 設定 / オフラインキュー。**`token-selection.ts`** (Refs ippoan/alc-app#387) = 送るトークンの選び方の規則 1 つ: **端末の鍵のトークンに claim `dev_device` があれば、管理者のトークンより先にそれを使う** (管理者のトークンで送ると本番の行になるため)。「dev の印」は端末のトークンが取れたとき `noteDeviceToken` が記録し (memory + localStorage `alc_dev_device_<kind>`、起動時に同期で読む)、決定点は `isDevDevice(kind)` (同期) / `usesAdminToken` / `selectSendToken` を通す。`kind` は `'kiosk' \| 'manager-device' \| 'bp-station'`。signaling 用は `devSignalingToken(getter)` — **印がある端末だけが呼び、取れなければ throw** (token なしの接続へ落とさない)。`api.ts` の `RequestTokenScope` の `'tenko-monitor'` (遠隔点呼モニターの口) は `request()` の冒頭で解決される: 運行管理者席の鍵が dev でなければ `'default'`、dev なら `'manager-device'` |
 | **worker** | `web/app/workers/face-detect.worker.ts` | 顔検出 Web Worker (@vladmandic/human) |
 | **server route** | `web/server/api/{proxy/[...path],tenko-call/{register,tenko},devices/*,print/*,driver-master/run,timecard/punch,github-checksum.get}.ts` | **proxy/** = auth-worker proxy (`createAuthWorkerProxyHandler`、#434 step 3 / 方式 B): cookie/Bearer JWT + X-Alc-Proxy-Secret (=INTERNAL_SHARED_SECRET) を AUTH_WORKER service binding 経由で auth-worker `/alc-proxy/*` に thin-forward。introspect / ACL / OIDC mint / X-Tenant-ID + X-User-* 注入は auth-worker 側に集約 (SA key 排除)。**admin / device JWT を伴う呼び出しは `app/utils/api.ts` の `request()` / `proxyRawFetch` が `/api/proxy` 経由に寄せる (#434 step 3d caller #3、admin 直叩き撤去)**。残る `tenko-call/{register,tenko}` (public) と `devices/*` (FCM token / version / watchdog / claim / **re-pair**、Android 直叩き) は browser JWT 無しのため lockdown 化は caller #5 (Android)。`devices/re-pair.post.ts` は kiosk 端末再認証 (rust-alc-api#495)。管理者側の window 発行 (`authorizeRepair`) はテナント認証付きなので `request()` → `/api/proxy` 経由。NFC bridge checksum。**`timecard/punch.post.ts`** = ブラウザ打刻 (Refs ippoan/alc-app-s3#134): browser/kiosk JWT を introspect → `tenant_id` / `device_id` (キオスクは `sub`、利用者は `browser`) → RECORDER binding で cf-alc-recorder `POST /tenants/:t/devices/:d/timecard-punch`。**rust-alc-api へ直行させない** — recorder の DO を通さないと `/watch-timecard` の合図が鳴らず、「端末で打つと更新されるがブラウザで打つと更新されない」になる。`kind` (`timecard`) と `seq` は recorder が立てる |
 | **型 (生成)** | `web/app/types/generated/*` (91 file) + `web/app/types/index.ts` | rust-alc-api models.rs から **ts-rs 自動生成** (`Backend` namespace)。手動編集禁止。フロント固有型は index.ts に手動定義 |
@@ -105,17 +105,30 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 
 ### デプロイ
 
-- **web (Cloudflare Workers)**: 通常運用は **CI 経由** (auth-worker / ippoan 標準と統一、#33)。
+- **★ main へのマージは数分で本番に出る** (web / signaling / recorder のどれも)。「マージしても staging まで」ではない。
+- **web (Cloudflare Workers)**: **CI 経由** (auth-worker / ippoan 標準と統一、#33)。
   - PR → main: `test.yml` (frontend-ci.yml) の `deploy-staging` が staging に自動 deploy
     - URL: https://alc-staging.ippoan.org (custom domain) / alc-app-staging.m-tama-ramu.workers.dev
-  - `v*` tag push: `deploy-release` が **no-traffic upload** (`wrangler versions upload`) → Release Wave / `wrangler versions deploy <id>@100%` で明示 flip
+  - **本番**: main へマージ → Tag Release (`tag-release.yml`。`workflow_dispatch` で repo の外から起動される) が
+    `v*` を付ける → `deploy-release` が **no-traffic upload** (`wrangler versions upload`) →
+    Release Wave (`release-wave.yml`。ci-dashboard からの `repository_dispatch`) が
+    `wrangler versions deploy <新しい版>@100%` で本番の 100% に切り替える。**人の操作は挟まらない**
+    (実測 2026-10-01: マージから約 3 分)。Release Wave の run 名は dispatch の event 名がそのまま出るので
+    `…-rollback` と表示されるが、やっているのは新しい版への切り替え
     - URL: https://alc.ippoan.org (custom domain) / alc-app.m-tama-ramu.workers.dev
   - 緊急時 fallback (手動): `cd web && npm run deploy` (= `nuxt build && wrangler deploy`)
-- **cf-alc-signaling (Cloudflare Workers)**: `cd cf-alc-signaling && wrangler deploy`
+- **cf-alc-signaling (Cloudflare Workers)**: CI 経由 (`signaling-deploy.yml`: `tsc --noEmit` → `npx vitest run` →
+  `wrangler deploy`)。**単一環境** (staging / 本番の分割なし) — `cf-alc-signaling/**` を変える PR が
+  main に入った時点 (push) で本番に deploy される。PR では typecheck と test だけ。
+  手動 fallback: `cd cf-alc-signaling && wrangler deploy`
   - URL: https://alc-signaling.ippoan.org (custom domain) / alc-signaling.m-tama-ramu.workers.dev
-  - シークレット不要 (STUN P2P のみ。TURN は後日対応予定)。cam-room admin 接続の JWT 検証用に
-    AUTH_WORKER service binding + INTERNAL_SHARED_SECRET (既存 Secrets Store 共有) を追加済み
-- **cf-alc-recorder (Cloudflare Workers)**: CI 経由 (`recorder-deploy.yml`: `npx vitest run` → staging / release deploy)。手動 fallback: **タグを checkout してから** `cd cf-alc-recorder && wrangler deploy` (本番 tree がタグとずれると、次のタグが前タグとの tree 比較で skip され本番に載らない)
+  - シークレット不要 (STUN P2P のみ。TURN は後日対応予定)。JWT 検証用 (cam-room の admin 接続 /
+    dev端末の区別の `?token=`) に AUTH_WORKER service binding + INTERNAL_SHARED_SECRET
+    (既存 Secrets Store 共有) を持つ
+- **cf-alc-recorder (Cloudflare Workers)**: CI 経由 (`recorder-deploy.yml`: `npx vitest run` → deploy)。
+  main への push で **staging**、`v*` tag の push で**本番** (前のタグから `cf-alc-recorder/` が変わっていなければ
+  本番 deploy は skip)。タグは上の Tag Release が付けるので、**マージから数分で本番に出る**。
+  手動 fallback: **タグを checkout してから** `cd cf-alc-recorder && wrangler deploy` (本番 tree がタグとずれると、次のタグが前タグとの tree 比較で skip され本番に載らない)
 - **rust-alc-api (GCP Cloud Run)**: 別リポジトリで管理
 - **rust-nfc-bridge**: `v*` タグ push で GitHub Actions が自動リリース (Windows ビルド + MSI 作成 + GitHub Release にアップロード)
   - 手順: `Cargo.toml` の version を上げる → commit & push → `gh release create v0.x.x` → Actions が MSI を追加
@@ -131,7 +144,8 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | `web/app/components/TenkoRemoteAdminView.vue` | 管理者側: アクティブセッション一覧 + クリックで通話開始 |
 | `web/app/pages/index.vue` | 「遠隔点呼」タブ追加 (`?tab=remote`) |
 | `web/app/pages/dashboard.vue` | 点呼管理グループに「遠隔点呼」タブ追加 |
-| `web/app/composables/useWebRtc.ts` | `connect(signalingUrl, roomId)` — Room ID = tenko_session_id |
+| `web/app/composables/useWebRtc.ts` | `connect(signalingUrl, roomId, path = 'room', token?)` — Room ID = tenko_session_id。`path = 'cam-room'` は拠点カメラ中継、`token` はサーバ側で認証を要求する path 向け。**dev端末 (Refs ippoan/alc-app#387)**: `path === 'room'` で `token` を渡さない呼び出しは、端末の鍵に dev の印があるときだけ、その鍵のトークンを取って `&token=` で付ける (見る鍵は role で決まる — `admin` は運行管理者席、`device` はキオスク → 測定台 → 運行管理者席の順で最初に印があるもの)。**取れなければ接続しない** (fail-closed — WebSocket も peer connection も作らず `error` を立てて reject)。印が無い端末は今までどおり token なしで、同期の流れの中で繋ぐ。close code 1008 (dev の部屋から切られた) は `error` に出すだけで、自動では繋ぎ直さない |
+| `web/app/composables/useActiveRooms.ts` | signaling の部屋一覧の購読 (`GET /active-rooms` + `/watch-rooms` の WebSocket、アプリ全体で 1 本)。運行管理者席の鍵に dev の印があるときだけ `?token=` を付け、取れなければ繋がず 3 秒ごとに試し直す |
 | `cf-alc-signaling/src/signaling-room.ts` | Durable Object: device/admin 2ピア間で SDP/ICE をリレー |
 
 **接続フロー**: `nuxt.config.ts` の `NUXT_PUBLIC_SIGNALING_URL` に signaling Worker URL を設定。

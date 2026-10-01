@@ -1,4 +1,34 @@
 import type { SignalingInMessage, SignalingOutMessage } from '~/types'
+import type { DeviceTokenKind } from '~/utils/token-selection'
+import {
+  DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE,
+  devSignalingToken,
+  isDevDevice,
+} from '~/utils/token-selection'
+
+/**
+ * signaling が close code 1008 で切ってきたときの文言 (Refs ippoan/alc-app#387)。
+ * 開発用の端末の部屋に、開発用でない運行管理者が入っていた場合に signaling が切る。
+ */
+export const SIGNALING_REJECTED_MESSAGE = 'この通話には参加できません (開発用の端末の通話です)'
+const CLOSE_POLICY_VIOLATION = 1008
+
+/**
+ * `/room` に繋ぐとき、**どの端末の鍵の dev の印を見るか** (role ごと。先頭から見て最初に
+ * 印が立っているものを使う)。運行管理者は運行管理者席の鍵だけ。端末側はキオスクのほか、
+ * 画面共有 (`useScreenShare`) が測定台・運行管理者席でも出るので 3 種を順に見る。
+ */
+const DEV_KINDS: Record<'device' | 'admin', DeviceTokenKind[]> = {
+  admin: ['manager-device'],
+  device: ['kiosk', 'bp-station', 'manager-device'],
+}
+
+/** 印が立っている鍵の getter。**印があるときにしか呼ばない** (composable の生成もそのときだけ)。 */
+const DEV_TOKEN_GETTERS: Record<DeviceTokenKind, () => () => Promise<string | null>> = {
+  'kiosk': () => useDeviceToken().getDeviceJwt,
+  'bp-station': () => useBpStationDeviceToken().getBpStationJwt,
+  'manager-device': () => useManagerDeviceToken().getManagerJwt,
+}
 
 export function useWebRtc(role: 'device' | 'admin') {
   const isConnected = ref(false)
@@ -10,6 +40,9 @@ export function useWebRtc(role: 'device' | 'admin') {
   let pc: RTCPeerConnection | null = null
   let localStream: MediaStream | null = null
   let pingTimer: ReturnType<typeof setInterval> | null = null
+  // connect() / disconnect() の世代。dev端末がトークンを待つあいだに次の connect() や
+  // disconnect() が来たら、待っていた古い connect() は WebSocket を作らずに終わる
+  let connectGeneration = 0
   // cam-room の device peer (P4/alc-gw-p4) は non-trickle 実装で、admin からの
   // ice_candidate メッセージを受信しても無視する (alc-gw-p4/main/signaling_client.c)。
   // そのため admin 側は answer を即送信せず、ICE gathering 完了を待って全候補を
@@ -219,9 +252,35 @@ export function useWebRtc(role: 'device' | 'admin') {
     sendSignaling({ type: 'sdp_offer', sdp: offer.sdp! })
   }
 
-  /** シグナリングサーバーに接続。token は cam-room 等サーバー側で認証を要求する path 向け (省略可) */
+  /**
+   * シグナリングサーバーに接続。token は cam-room 等サーバー側で認証を要求する path 向け (省略可)。
+   *
+   * **dev端末 (端末の鍵に dev の印がある) が `/room` に繋ぐときだけ**、端末の鍵のトークンを
+   * 取って `token` として付ける (Refs ippoan/alc-app#387)。取れなければ接続しない
+   * (fail-closed) — token なしで繋ぐと部屋が本番の側に登録されるため。
+   * 印が無い端末・`cam-room`・token を明示した呼び出しは、この分岐に入らず今までどおり
+   * (WebSocket は connect() の同期の流れの中で作られる)。
+   */
   async function connect(signalingUrl: string, roomId: string, path: 'room' | 'cam-room' = 'room', token?: string) {
     error.value = null
+    const generation = ++connectGeneration
+
+    const devKind = path === 'room' && !token ? DEV_KINDS[role].find(isDevDevice) : undefined
+    if (devKind) {
+      // peer connection を作る前に取る — 取れなかったときに何も残さないため
+      try {
+        token = await devSignalingToken(DEV_TOKEN_GETTERS[devKind]())
+      }
+      catch (e) {
+        if (generation !== connectGeneration) return
+        disconnect()
+        error.value = DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE
+        throw e
+      }
+      // 待つあいだに disconnect() か次の connect() が来ていたら、こちらは何もしない
+      if (generation !== connectGeneration) return
+    }
+
     disconnect()
 
     waitForGatheringBeforeAnswer = path === 'cam-room'
@@ -260,6 +319,8 @@ export function useWebRtc(role: 'device' | 'admin') {
         clearInterval(pingTimer)
         pingTimer = null
       }
+      // 開発用の端末の部屋から signaling に切られた。自動では繋ぎ直さない
+      if (event?.code === CLOSE_POLICY_VIOLATION) error.value = SIGNALING_REJECTED_MESSAGE
     }
   }
 
@@ -289,6 +350,7 @@ export function useWebRtc(role: 'device' | 'admin') {
   /** 切断 */
   function disconnect() {
     log('disconnect')
+    connectGeneration += 1
     stopStatsLogging()
     if (pingTimer) {
       clearInterval(pingTimer)

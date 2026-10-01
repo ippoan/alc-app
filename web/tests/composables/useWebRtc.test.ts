@@ -1,6 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { withSetup } from '../helpers/with-setup'
-import { useWebRtc } from '~/composables/useWebRtc'
+import { devDeviceJwt } from '../helpers/dummy-jwt'
+import { useWebRtc, SIGNALING_REJECTED_MESSAGE } from '~/composables/useWebRtc'
+import {
+  DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE, noteDeviceToken, type DeviceTokenKind,
+} from '~/utils/token-selection'
+
+// --- 端末の鍵のトークンの getter (dev端末だけが使う。Refs ippoan/alc-app#387) ---
+const tokenMocks = vi.hoisted(() => ({
+  useDeviceToken: vi.fn(),
+  useBpStationDeviceToken: vi.fn(),
+  useManagerDeviceToken: vi.fn(),
+  getDeviceJwt: vi.fn(),
+  getBpStationJwt: vi.fn(),
+  getManagerJwt: vi.fn(),
+}))
+mockNuxtImport('useDeviceToken', () => tokenMocks.useDeviceToken)
+mockNuxtImport('useBpStationDeviceToken', () => tokenMocks.useBpStationDeviceToken)
+mockNuxtImport('useManagerDeviceToken', () => tokenMocks.useManagerDeviceToken)
 
 // --- Mock WebSocket ---
 let wsInstances: MockWebSocket[] = []
@@ -86,16 +104,44 @@ vi.stubGlobal('RTCIceCandidate', class MockRTCIceCandidate {
   constructor(public candidate: any) {}
 })
 
+const DEV_KINDS: DeviceTokenKind[] = ['kiosk', 'bp-station', 'manager-device']
+const KIOSK_TOKEN = devDeviceJwt('dev-kiosk')
+const BP_TOKEN = devDeviceJwt('dev-bp')
+const MANAGER_TOKEN = devDeviceJwt('dev-manager')
+
+/** その種類の端末の鍵に dev の印を立てる (トークンが 1 度取れた状態)。 */
+function markDev(...kinds: DeviceTokenKind[]) {
+  for (const kind of kinds) noteDeviceToken(kind, devDeviceJwt())
+}
+
+/** 外から解決できる getter (トークンを待っている途中の状態を作る)。 */
+function deferredToken() {
+  let resolve!: (token: string | null) => void
+  const promise = new Promise<string | null>((r) => { resolve = r })
+  return { getter: () => promise, resolve }
+}
+
+function expectNoTokenComposables() {
+  expect(tokenMocks.useDeviceToken).not.toHaveBeenCalled()
+  expect(tokenMocks.useBpStationDeviceToken).not.toHaveBeenCalled()
+  expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+}
+
 describe('useWebRtc', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
     wsInstances = []
     pcInstances = []
+    tokenMocks.useDeviceToken.mockReturnValue({ getDeviceJwt: tokenMocks.getDeviceJwt })
+    tokenMocks.useBpStationDeviceToken.mockReturnValue({ getBpStationJwt: tokenMocks.getBpStationJwt })
+    tokenMocks.useManagerDeviceToken.mockReturnValue({ getManagerJwt: tokenMocks.getManagerJwt })
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    for (const kind of DEV_KINDS) noteDeviceToken(kind, null)
+    localStorage.clear()
   })
 
   function getWs(): MockWebSocket {
@@ -950,5 +996,216 @@ describe('useWebRtc', () => {
     ws.onmessage?.({ data: JSON.stringify({ type: 'pong' }) } as any)
     // No error, no state change
     expect(rtc.error.value).toBeNull()
+  })
+
+  // --- dev端末の区別 (Refs ippoan/alc-app#387) ---
+
+  describe('dev の印が無い端末・席は今までどおり', () => {
+    it.each(['device', 'admin'] as const)(
+      '★ %s: connect() を待たずに呼んだ直後に、token なしの WebSocket と peer connection ができている',
+      (role) => {
+        const rtc = useWebRtc(role)
+
+        // await しない = 同期の流れの中で作られる (変更前と同じ。待ちを 1 つも足していない)
+        void rtc.connect('wss://sig.example.com', 'room-1')
+
+        expect(wsInstances).toHaveLength(1)
+        expect(pcInstances).toHaveLength(1)
+        expect(getWs().url).toBe(`wss://sig.example.com/room/room-1?role=${role}`)
+        expectNoTokenComposables()
+      },
+    )
+
+    it('admin: 印がキオスク・測定台にしか無ければ token を付けない (運行管理者席の鍵だけを見る)', () => {
+      markDev('kiosk', 'bp-station')
+      const rtc = useWebRtc('admin')
+
+      void rtc.connect('wss://sig.example.com', 'room-1')
+
+      expect(wsInstances).toHaveLength(1)
+      expect(getWs().url).toBe('wss://sig.example.com/room/room-1?role=admin')
+      expectNoTokenComposables()
+    })
+  })
+
+  describe('dev の印がある端末・席', () => {
+    it('device + キオスクの印 → キオスクの鍵のトークンを &token= で付ける', async () => {
+      markDev('kiosk')
+      tokenMocks.getDeviceJwt.mockResolvedValue(KIOSK_TOKEN)
+      const rtc = useWebRtc('device')
+
+      await rtc.connect('wss://sig.example.com', 'room-1')
+
+      expect(wsInstances).toHaveLength(1)
+      expect(getWs().url).toBe(`wss://sig.example.com/room/room-1?role=device&token=${encodeURIComponent(KIOSK_TOKEN)}`)
+      expect(tokenMocks.useBpStationDeviceToken).not.toHaveBeenCalled()
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it('device + 測定台の印だけ → 測定台の鍵のトークン', async () => {
+      markDev('bp-station')
+      tokenMocks.getBpStationJwt.mockResolvedValue(BP_TOKEN)
+      const rtc = useWebRtc('device')
+
+      await rtc.connect('wss://sig.example.com', 'room-1')
+
+      expect(getWs().url).toBe(`wss://sig.example.com/room/room-1?role=device&token=${encodeURIComponent(BP_TOKEN)}`)
+      expect(tokenMocks.useDeviceToken).not.toHaveBeenCalled()
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it('device + 運行管理者席の印だけ → 運行管理者席の鍵のトークン', async () => {
+      markDev('manager-device')
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+      const rtc = useWebRtc('device')
+
+      await rtc.connect('wss://sig.example.com', 'room-1')
+
+      expect(getWs().url).toBe(`wss://sig.example.com/room/room-1?role=device&token=${encodeURIComponent(MANAGER_TOKEN)}`)
+      expect(tokenMocks.useDeviceToken).not.toHaveBeenCalled()
+      expect(tokenMocks.useBpStationDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it('device + 印が複数 → キオスク → 測定台 → 運行管理者席の順で最初のものを使う', async () => {
+      markDev('manager-device', 'bp-station')
+      tokenMocks.getBpStationJwt.mockResolvedValue(BP_TOKEN)
+      const rtc = useWebRtc('device')
+
+      await rtc.connect('wss://sig.example.com', 'room-1')
+
+      expect(getWs().url).toContain(`&token=${encodeURIComponent(BP_TOKEN)}`)
+      expect(tokenMocks.useManagerDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it('admin + 運行管理者席の印 → 運行管理者席の鍵のトークンを &token= で付ける', async () => {
+      markDev('manager-device', 'kiosk')
+      tokenMocks.getManagerJwt.mockResolvedValue(MANAGER_TOKEN)
+      const rtc = useWebRtc('admin')
+
+      await rtc.connect('wss://sig.example.com', 'room-1')
+
+      expect(getWs().url).toBe(`wss://sig.example.com/room/room-1?role=admin&token=${encodeURIComponent(MANAGER_TOKEN)}`)
+      expect(tokenMocks.useDeviceToken).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['device', 'kiosk', tokenMocks.getDeviceJwt],
+      ['admin', 'manager-device', tokenMocks.getManagerJwt],
+    ] as const)('★ %s: トークンが取れなければ WebSocket も peer connection も作らず、error を立てて失敗する', async (role, kind, getter) => {
+      markDev(kind)
+      getter.mockResolvedValue(null)
+      const rtc = useWebRtc(role)
+
+      await expect(rtc.connect('wss://sig.example.com', 'room-1')).rejects.toThrow(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
+
+      expect(wsInstances).toHaveLength(0)
+      expect(pcInstances).toHaveLength(0)
+      expect(rtc.error.value).toBe(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
+      expect(rtc.isConnected.value).toBe(false)
+    })
+
+    it('トークンが取れなかった connect() は、前の接続も残さない', async () => {
+      tokenMocks.getDeviceJwt.mockResolvedValueOnce(KIOSK_TOKEN).mockResolvedValueOnce(null)
+      markDev('kiosk')
+      const rtc = useWebRtc('device')
+      await rtc.connect('wss://sig.example.com', 'room-1')
+      const firstWs = getWs()
+      const firstPc = getPc()
+
+      await expect(rtc.connect('wss://sig.example.com', 'room-2')).rejects.toThrow()
+
+      expect(firstWs.close).toHaveBeenCalled()
+      expect(firstPc.close).toHaveBeenCalled()
+      expect(wsInstances).toHaveLength(1)
+    })
+
+    it('トークンを待つあいだに disconnect() されたら WebSocket を作らない', async () => {
+      markDev('kiosk')
+      const pending = deferredToken()
+      tokenMocks.useDeviceToken.mockReturnValue({ getDeviceJwt: pending.getter })
+      const rtc = useWebRtc('device')
+
+      const connecting = rtc.connect('wss://sig.example.com', 'room-1')
+      rtc.disconnect()
+      pending.resolve(KIOSK_TOKEN)
+      await connecting
+
+      expect(wsInstances).toHaveLength(0)
+      expect(pcInstances).toHaveLength(0)
+      expect(rtc.error.value).toBeNull()
+    })
+
+    it('トークンを待つあいだに 2 回目の connect() が来たら、古い方は WebSocket を作らない', async () => {
+      markDev('kiosk')
+      const first = deferredToken()
+      tokenMocks.useDeviceToken
+        .mockReturnValueOnce({ getDeviceJwt: first.getter })
+        .mockReturnValueOnce({ getDeviceJwt: async () => KIOSK_TOKEN })
+      const rtc = useWebRtc('device')
+
+      const stale = rtc.connect('wss://sig.example.com', 'room-1')
+      await rtc.connect('wss://sig.example.com', 'room-2')
+      first.resolve(KIOSK_TOKEN)
+      await stale
+
+      expect(wsInstances).toHaveLength(1)
+      expect(getWs().url).toContain('/room/room-2?')
+      expect(getWs().close).not.toHaveBeenCalled()
+    })
+
+    it('待つあいだに disconnect() された connect() は、トークンが取れなくても error を立てない', async () => {
+      markDev('kiosk')
+      const pending = deferredToken()
+      tokenMocks.useDeviceToken.mockReturnValue({ getDeviceJwt: pending.getter })
+      const rtc = useWebRtc('device')
+
+      const connecting = rtc.connect('wss://sig.example.com', 'room-1')
+      rtc.disconnect()
+      pending.resolve(null)
+      await expect(connecting).resolves.toBeUndefined()
+
+      expect(rtc.error.value).toBeNull()
+      expect(wsInstances).toHaveLength(0)
+    })
+
+    it.each([
+      ['cam-room', ['wss://sig.example.com', 'site-1', 'cam-room'], 'wss://sig.example.com/cam-room/site-1?role=admin'],
+      ['cam-room + token', ['wss://sig.example.com', 'site-1', 'cam-room', 'cam.jwt'], 'wss://sig.example.com/cam-room/site-1?role=admin&token=cam.jwt'],
+      ['room + 明示した token', ['wss://sig.example.com', 'room-1', 'room', 'given.jwt'], 'wss://sig.example.com/room/room-1?role=admin&token=given.jwt'],
+    ] as const)('%s は印があっても変更前と同じ URL (端末の鍵を取りに行かない)', (_name, args, url) => {
+      markDev('kiosk', 'bp-station', 'manager-device')
+      const rtc = useWebRtc('admin')
+
+      void (rtc.connect as (...a: readonly unknown[]) => Promise<void>)(...args)
+
+      expect(wsInstances).toHaveLength(1)
+      expect(getWs().url).toBe(url)
+      expectNoTokenComposables()
+    })
+  })
+
+  describe('ws.onclose の close code', () => {
+    it('1008 (signaling が開発用の端末の部屋から切った) → error を立てる。繋ぎ直さない', async () => {
+      const rtc = useWebRtc('admin')
+      await rtc.connect('wss://sig.example.com', 'room-1')
+      const ws = getWs()
+      ws.onopen?.()
+
+      ws.onclose?.({ code: 1008, reason: 'dev room', wasClean: true })
+
+      expect(rtc.error.value).toBe(SIGNALING_REJECTED_MESSAGE)
+      expect(rtc.isConnected.value).toBe(false)
+      await vi.advanceTimersByTimeAsync(60000)
+      expect(wsInstances).toHaveLength(1)
+    })
+
+    it.each([1000, 1006])('%i では error を立てない', async (code) => {
+      const rtc = useWebRtc('admin')
+      await rtc.connect('wss://sig.example.com', 'room-1')
+
+      getWs().onclose?.({ code, reason: '', wasClean: code === 1000 })
+
+      expect(rtc.error.value).toBeNull()
+    })
   })
 })

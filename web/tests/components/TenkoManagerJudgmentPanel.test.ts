@@ -51,6 +51,15 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     wrapper.unmount()
   })
 
+  it('遠隔点呼モニターの口として送る (scope \'tenko-monitor\'。Refs ippoan/alc-app#387)', async () => {
+    const wrapper = await mountPanel()
+    const okButton = wrapper.findAll('button').find(b => b.text() === 'OK')
+    await okButton!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][2]).toBe('tenko-monitor')
+    wrapper.unmount()
+  })
+
   it('NG を押すと理由の自由記入欄が出る (即座には送信しない)', async () => {
     const wrapper = await mountPanel()
     const ngButton = wrapper.findAll('button').find(b => b.text() === 'NG')

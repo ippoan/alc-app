@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   clearDevDeviceMark, isDevDevice, isDevDeviceToken, noteDeviceToken, selectSendToken, usesAdminToken,
+  DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE, devSignalingToken,
   type DeviceTokenKind,
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
@@ -280,5 +281,22 @@ describe('clearDevDeviceMark — 画面から dev の印を外す', () => {
 
     expect(() => clearDevDeviceMark('kiosk')).not.toThrow()
     expect(isDevDevice('kiosk')).toBe(false)
+  })
+})
+
+describe('devSignalingToken — dev端末が signaling へ付けるトークン (取れなければ繋がない)', () => {
+  it('端末のトークンが取れたら、それを返す', async () => {
+    const getter = vi.fn(async () => DEV)
+
+    await expect(devSignalingToken(getter)).resolves.toBe(DEV)
+    expect(getter).toHaveBeenCalledTimes(1)
+  })
+
+  it('getter が null を返したら throw する (管理者のトークンへも token なしへも落とさない)', async () => {
+    await expect(devSignalingToken(async () => null)).rejects.toThrow(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
+  })
+
+  it.each([[null], [undefined]])('getter が無い (%s) なら throw する', async (getter) => {
+    await expect(devSignalingToken(getter)).rejects.toThrow(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
   })
 })
