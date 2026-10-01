@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import type { DriverInfo } from '~/types'
-import { getDriverInfo } from '~/utils/api'
+import { getDriverInfo, type RequestTokenScope } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   employeeId: string
   sessionId?: string
-}>()
+  /** どの資格で読むか。遠隔点呼モニターだけが `'tenko-monitor'` を渡す (Refs ippoan/alc-app#387) */
+  scope?: RequestTokenScope
+}>(), {
+  scope: 'default',
+})
 
 const emit = defineEmits<{
   close: []
@@ -30,7 +34,7 @@ const tabs = [
 async function load() {
   loading.value = true
   try {
-    info.value = await getDriverInfo(props.employeeId)
+    info.value = await getDriverInfo(props.employeeId, props.scope)
   } catch (e) {
     console.error('運転者情報取得エラー:', e)
   } finally {

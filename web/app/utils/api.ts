@@ -31,7 +31,7 @@ import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
 } from '~/utils/fetch-timeout'
-import { selectSendToken, usesAdminToken, type DeviceTokenKind } from '~/utils/token-selection'
+import { isDevDevice, selectSendToken, usesAdminToken, type DeviceTokenKind } from '~/utils/token-selection'
 
 let apiBase = ''
 let getAccessToken: (() => string | null) | null = null
@@ -180,8 +180,13 @@ function buildAuthHeaders(): Record<string, string> {
  * **だから getter は「測定台と決着したとき」にしか入れない** — 未確定のまま入れると、
  * この fail-closed がそのままキオスクの点呼 4 本を落とす
  * ({@link setBpStationJwtGetter}、Refs ippoan/alc-app#368)。
+ *
+ * - `'tenko-monitor'` … **遠隔点呼モニターの口** (Refs ippoan/alc-app#387)。それ自体の送り方は
+ *   持たず、`request()` の冒頭で上のどちらかに解決する ({@link resolveTenkoMonitorScope}):
+ *   運行管理者席の鍵が dev でなければ `'default'` (今までと同じ)、dev なら `'manager-device'`
+ *   (運行管理者席の鍵で送る)。付けてよいのは auth-worker の運行管理者の鍵の許可表に在る口だけ
  */
-export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station'
+export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station' | 'tenko-monitor'
 
 /**
  * 運行管理者席の端末で認証できなかったときの文言 (#338 と同じ趣旨 —
@@ -212,12 +217,29 @@ function deviceTokenKindOf(scope: RequestTokenScope): DeviceTokenKind {
   return 'kiosk'
 }
 
+/**
+ * `'tenko-monitor'` をどの scope で送るかに解決する (Refs ippoan/alc-app#387)。
+ *
+ * - 運行管理者席の鍵が dev でない → `'default'`。**今までの送り方と同じ**
+ * - dev で、運行管理者席の getter が入っている → `'manager-device'` (既存の分岐がそのまま
+ *   運行管理者席の鍵で送る。取れなければ既存の throw)
+ * - dev なのに getter が入っていない → **ここで投げる**。`'manager-device'` のまま進めると
+ *   {@link deviceTokenKindOf} がキオスクの鍵を見て admin JWT → キオスクの鍵へ落ち、
+ *   dev の席の送信が本番の行になる
+ */
+function resolveTenkoMonitorScope(): 'default' | 'manager-device' {
+  if (!isDevDevice('manager-device')) return 'default'
+  if (!getManagerDeviceJwt) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+  return 'manager-device'
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
   scope: RequestTokenScope = 'default',
 ): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
+  if (scope === 'tenko-monitor') scope = resolveTenkoMonitorScope()
   // 上限 (timeout) の `AbortSignal.timeout()` はここ 1 箇所で載せる
   // (実装は `~/utils/fetch-timeout`。Refs ippoan/alc-app#338)。下の 3 経路はどれも
   // この init をそのまま fetch へ素通しする (createAuthFetch も `{ ...init }` で signal を
@@ -415,8 +437,8 @@ export async function getMeasurement(id: string): Promise<ApiMeasurement> {
 }
 
 /** 乗務員一覧を取得 */
-export async function getEmployees(): Promise<ApiEmployee[]> {
-  return request<ApiEmployee[]>('/api/employees')
+export async function getEmployees(scope: RequestTokenScope = 'default'): Promise<ApiEmployee[]> {
+  return request<ApiEmployee[]>('/api/employees', {}, scope)
 }
 
 /**
@@ -437,13 +459,13 @@ export async function getEmployeeByNfcId(nfcId: string): Promise<ApiEmployee> {
 }
 
 /** 社員番号で乗務員を検索 */
-export async function getEmployeeByCode(code: string): Promise<ApiEmployee> {
-  return request<ApiEmployee>(`/api/employees/by-code/${encodeURIComponent(code)}`)
+export async function getEmployeeByCode(code: string, scope: RequestTokenScope = 'default'): Promise<ApiEmployee> {
+  return request<ApiEmployee>(`/api/employees/by-code/${encodeURIComponent(code)}`, {}, scope)
 }
 
 /** 乗務員をIDで取得 */
-export async function getEmployeeById(id: string): Promise<ApiEmployee> {
-  return request<ApiEmployee>(`/api/employees/${encodeURIComponent(id)}`)
+export async function getEmployeeById(id: string, scope: RequestTokenScope = 'default'): Promise<ApiEmployee> {
+  return request<ApiEmployee>(`/api/employees/${encodeURIComponent(id)}`, {}, scope)
 }
 
 /** 乗務員を登録 */
@@ -752,8 +774,8 @@ export async function startTenkoSession(data: StartTenkoSession): Promise<TenkoS
   })
 }
 
-export async function getTenkoSession(id: string): Promise<TenkoSession> {
-  return request<TenkoSession>(`/api/tenko/sessions/${id}`)
+export async function getTenkoSession(id: string, scope: RequestTokenScope = 'default'): Promise<TenkoSession> {
+  return request<TenkoSession>(`/api/tenko/sessions/${id}`, {}, scope)
 }
 
 export async function submitAlcohol(sessionId: string, data: SubmitAlcoholResult): Promise<TenkoSession> {
@@ -831,11 +853,15 @@ export async function cancelTenkoSession(sessionId: string, data: CancelTenkoSes
  * 運行管理者が点呼の OK/NG を判定して記録する (Refs ippoan/alc-app#315)。
  * NG でも `status` は変えない (点呼は完了扱いのまま、判定だけ記録する)。
  */
-export async function submitManagerJudgment(sessionId: string, data: SubmitManagerJudgment): Promise<TenkoSession> {
+export async function submitManagerJudgment(
+  sessionId: string,
+  data: SubmitManagerJudgment,
+  scope: RequestTokenScope = 'default',
+): Promise<TenkoSession> {
   return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/judgment`, {
     method: 'POST',
     body: JSON.stringify(data),
-  })
+  }, scope)
 }
 
 // --- セッション (管理者) ---
@@ -1335,8 +1361,8 @@ export async function submitCarryingItemChecks(sessionId: string, checks: Carryi
 
 // --- 運転者情報 ---
 
-export async function getDriverInfo(employeeId: string): Promise<DriverInfo> {
-  return request(`/api/tenko/driver-info/${employeeId}`)
+export async function getDriverInfo(employeeId: string, scope: RequestTokenScope = 'default'): Promise<DriverInfo> {
+  return request(`/api/tenko/driver-info/${employeeId}`, {}, scope)
 }
 
 // --- 労働時間 (dtako) ---

@@ -8,7 +8,13 @@
  * start/stop は参照カウント: 運行管理者ダッシュボード (親) と子画面が同時に持つので、
  * 子が unmount しても親が持っているあいだは WebSocket を落とさない。落とすと
  * 「signaling 切断」を見張っている側が誤検知する。
+ *
+ * **dev端末 (運行管理者席の鍵に dev の印がある) だけ**、運行管理者席の鍵のトークンを
+ * `?token=` で付ける (Refs ippoan/alc-app#387)。signaling はそれを見て dev の部屋だけを返す。
+ * 取れなければ**繋がない** (token なしで繋ぐと本番の部屋の一覧を受けてしまう)。
+ * 印が無い席は今までどおり token を付けず、`start()` の同期の流れの中で WebSocket を作る。
  */
+import { devSignalingToken, isDevDevice } from '~/utils/token-selection'
 
 /** 生存確認。signaling 側のアイドルタイムアウトより短く */
 const PING_INTERVAL = 30000
@@ -20,6 +26,9 @@ let ws: WebSocket | null = null
 let pingTimer: ReturnType<typeof setInterval> | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let refCount = 0
+// dev端末がトークンを待つあいだに stop() や次の connect() が来たら、待っていた古い方は
+// WebSocket を作らない (二重に張らない)
+let connectGeneration = 0
 
 export function useActiveRooms() {
   const config = useRuntimeConfig()
@@ -33,10 +42,18 @@ export function useActiveRooms() {
   const signalingHttpUrl = (config.public.signalingUrl as string).replace(/^wss/, 'https').replace(/^ws:/, 'http:')
   const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
 
+  /** dev端末だけが呼ぶ。運行管理者席の鍵のトークンを query にする (取れなければ throw) */
+  async function devTokenQuery(): Promise<string> {
+    return `?token=${encodeURIComponent(await devSignalingToken(useManagerDeviceToken().getManagerJwt))}`
+  }
+
   /** `GET /active-rooms` を 1 回。成功したら true (エラー文言は画面ごとに違うので投げない) */
   async function reload(): Promise<boolean> {
     try {
-      const res = await fetch(`${signalingHttpUrl}/active-rooms`)
+      let url = `${signalingHttpUrl}/active-rooms`
+      // dev端末: トークンが取れなければ throw → 下の catch で false (fetch を出さない)
+      if (isDevDevice('manager-device')) url += await devTokenQuery()
+      const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json() as { rooms: string[] }
       activeRooms.value = data.rooms
@@ -49,7 +66,32 @@ export function useActiveRooms() {
 
   function connect() {
     reconnectTimer = null
-    const socket = new WebSocket(`${signalingWsUrl}/watch-rooms`)
+    if (isDevDevice('manager-device')) {
+      void connectAsDev()
+      return
+    }
+    openSocket(`${signalingWsUrl}/watch-rooms`)
+  }
+
+  /** dev端末の接続。トークンが取れなければ WebSocket を作らず、いつもの間隔で試し直す */
+  async function connectAsDev() {
+    const generation = ++connectGeneration
+    let query: string | null = null
+    try {
+      query = await devTokenQuery()
+    }
+    catch { /* 下で試し直しに回す */ }
+    // 待つあいだに stop() された / 次の connect() が始まった
+    if (generation !== connectGeneration) return
+    if (query === null) {
+      reconnectTimer = setTimeout(connect, RECONNECT_DELAY)
+      return
+    }
+    openSocket(`${signalingWsUrl}/watch-rooms${query}`)
+  }
+
+  function openSocket(url: string) {
+    const socket = new WebSocket(url)
     ws = socket
 
     socket.onmessage = (event) => {
@@ -92,6 +134,7 @@ export function useActiveRooms() {
     refCount -= 1
     if (refCount > 0) return
 
+    connectGeneration += 1
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     if (ws) { ws.close(); ws = null }

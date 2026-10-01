@@ -16,7 +16,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   initApi,
   MANAGER_DEVICE_AUTH_FAILED_MESSAGE, BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
-  getEmployees, startTenkoSession,
+  getEmployees, getEmployeeByCode, getEmployeeById, getTenkoSession, submitManagerJudgment, getDriverInfo,
+  startTenkoSession,
   listSchedules, createSchedule, deleteSchedule,
   startMeasurement,
   uploadFacePhoto, uploadReportAudio, uploadBlowVideo, fetchFacePhoto, fetchMeasurementVideo,
@@ -299,6 +300,107 @@ describe('punchTimecard — ブラウザ打刻 (bearerRequest の直呼び)', ()
     initWithAdmin()
 
     await expect(punchTimecard('CARD-3')).rejects.toMatchObject({ punchFailure: 'unpaired' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// 遠隔点呼モニターの口 (`'tenko-monitor'`)。**運行管理者席の鍵が dev のときだけ**その鍵で送り、
+// dev でなければ `'default'` とまったく同じ送り方になる (本番の席の挙動を変えない)。
+describe("request() — scope 'tenko-monitor' (遠隔点呼モニター)", () => {
+  /** モニターが `'tenko-monitor'` を付けて呼ぶ 6 本。 */
+  const MONITOR_CALLS: [string, () => Promise<unknown>, string][] = [
+    ['getEmployees', () => getEmployees('tenko-monitor'), '/api/proxy/employees'],
+    ['getEmployeeByCode', () => getEmployeeByCode('c 1', 'tenko-monitor'), '/api/proxy/employees/by-code/c%201'],
+    ['getEmployeeById', () => getEmployeeById('e1', 'tenko-monitor'), '/api/proxy/employees/e1'],
+    ['getTenkoSession', () => getTenkoSession('s1', 'tenko-monitor'), '/api/proxy/tenko/sessions/s1'],
+    ['submitManagerJudgment', () => submitManagerJudgment('s1', { judgment: 'ok' } as never, 'tenko-monitor'), '/api/proxy/tenko/sessions/s1/judgment'],
+    ['getDriverInfo', () => getDriverInfo('e1', 'tenko-monitor'), '/api/proxy/tenko/driver-info/e1'],
+  ]
+
+  it('運行管理者席の印なし + admin JWT あり → admin JWT で送る (\'default\' と同じ)', async () => {
+    initWithAdmin()
+
+    await getEmployees('tenko-monitor')
+    await getEmployees()
+
+    expect(managerGetter).not.toHaveBeenCalled()
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent(0)).toEqual(sent(1))
+    expect(sent(0)).toEqual({ url: '/api/proxy/employees', bearer: `Bearer ${ADMIN_JWT}`, tenant: null })
+  })
+
+  it('運行管理者席の印なし + admin JWT なし → キオスクの鍵で送る (\'default\' と同じ)', async () => {
+    kioskGetter.mockResolvedValue(PLAIN_KIOSK_JWT)
+    initApi(API_BASE, undefined, () => 'test-tenant', undefined, kioskGetter, managerGetter)
+
+    await getEmployees('tenko-monitor')
+    await getEmployees()
+
+    expect(managerGetter).not.toHaveBeenCalled()
+    expect(kioskGetter).toHaveBeenCalledTimes(2)
+    expect(sent(0)).toEqual(sent(1))
+    expect(sent(0).bearer).toBe(`Bearer ${PLAIN_KIOSK_JWT}`)
+  })
+
+  it('印が立っているのがキオスクだけなら、運行管理者席の鍵は使わない (\'default\' と同じ)', async () => {
+    noteDeviceToken('kiosk', DEV_KIOSK_JWT)
+    initWithAdmin()
+
+    await getEmployees('tenko-monitor')
+    await getEmployees()
+
+    expect(managerGetter).not.toHaveBeenCalled()
+    expect(sent(0)).toEqual(sent(1))
+    expect(sent(0).bearer).toBe(`Bearer ${DEV_KIOSK_JWT}`)
+  })
+
+  it.each(MONITOR_CALLS)('★ 運行管理者席の印あり + admin JWT あり → %s は運行管理者席の鍵で送る', async (_name, call, url) => {
+    noteDeviceToken('manager-device', DEV_MANAGER_JWT)
+    initWithAdmin()
+
+    await call()
+
+    expect(managerGetter).toHaveBeenCalledTimes(1)
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent()).toEqual({ url, bearer: `Bearer ${DEV_MANAGER_JWT}`, tenant: null })
+  })
+
+  it.each(MONITOR_CALLS)('scope を渡さない %s は、運行管理者席の印があっても今までどおり admin JWT', async (name) => {
+    noteDeviceToken('manager-device', DEV_MANAGER_JWT)
+    initWithAdmin()
+    const plain: Record<string, () => Promise<unknown>> = {
+      getEmployees: () => getEmployees(),
+      getEmployeeByCode: () => getEmployeeByCode('c 1'),
+      getEmployeeById: () => getEmployeeById('e1'),
+      getTenkoSession: () => getTenkoSession('s1'),
+      submitManagerJudgment: () => submitManagerJudgment('s1', { judgment: 'ok' } as never),
+      getDriverInfo: () => getDriverInfo('e1'),
+    }
+
+    await plain[name]!()
+
+    expect(managerGetter).not.toHaveBeenCalled()
+    expect(sent().bearer).toBe(`Bearer ${ADMIN_JWT}`)
+  })
+
+  it('★ 印あり + 運行管理者席の鍵が取れない → 理由を投げる (admin JWT にもキオスクの鍵にも落とさない)', async () => {
+    noteDeviceToken('manager-device', DEV_MANAGER_JWT)
+    managerGetter.mockResolvedValue(null)
+    initWithAdmin()
+
+    await expect(getTenkoSession('s1', 'tenko-monitor')).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('★ 印あり + 運行管理者席の getter が未登録 → 同じ理由を投げる (admin JWT もキオスクの鍵も使わない)', async () => {
+    noteDeviceToken('manager-device', DEV_MANAGER_JWT)
+    initApi(API_BASE, () => ADMIN_JWT, () => 'test-tenant', undefined, kioskGetter)
+
+    await expect(getTenkoSession('s1', 'tenko-monitor')).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+
+    expect(kioskGetter).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })

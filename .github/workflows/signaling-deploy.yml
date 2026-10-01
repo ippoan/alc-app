@@ -45,7 +45,7 @@ jobs:
         run: npx tsc --noEmit
       - name: Test
         run: npx vitest run
-      # deploy は PR では skip (typecheck による gate のみ)。push / dispatch で反映。
+      # deploy は PR では skip (typecheck と vitest による gate のみ)。push / dispatch で反映。
       - name: Deploy
         if: github.event_name != 'pull_request'
         run: npx wrangler deploy

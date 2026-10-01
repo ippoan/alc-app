@@ -149,3 +149,28 @@ export async function selectSendToken(
   if (usesAdminToken(adminToken, kind)) return adminToken as string
   return getDeviceToken ? await getDeviceToken() : null
 }
+
+/**
+ * dev端末が signaling 用のトークンを取れなかったときの文言。
+ * 取れなければ**接続しない** — token を付けずに繋ぐと signaling は「dev でない」として扱い、
+ * 部屋が本番の側に登録されて本番の運行管理者に着信が出るため。
+ */
+export const DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE
+  = '開発用の端末の鍵でトークンを取得できなかったため、通話サーバーに接続しませんでした。'
+    + '端末が USB でつながっていて、鍵が登録されているか確認してください'
+
+/**
+ * signaling (cf-alc-signaling) へ付けるトークン。**印がある端末だけが呼ぶ** —
+ * 呼び出し側は {@link isDevDevice} (同期) が true のときだけここへ来て、false なら
+ * 今までどおり token を付けずに繋ぐ (待ちを 1 つも足さない)。
+ *
+ * 端末の鍵のトークンを返す。**取れなければ throw** — 管理者のトークンへも、token なしの
+ * 接続へも落とさない (fail-closed)。署名は検証しない (検証は signaling 側)。
+ */
+export async function devSignalingToken(
+  getDeviceToken: (() => Promise<string | null>) | null | undefined,
+): Promise<string> {
+  const token = getDeviceToken ? await getDeviceToken() : null
+  if (!token) throw new Error(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
+  return token
+}

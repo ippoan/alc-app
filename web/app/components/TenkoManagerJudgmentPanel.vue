@@ -59,7 +59,7 @@ async function submit(judgment: 'ok' | 'ng') {
     const body: SubmitManagerJudgment = { judgment, judged_by_employee_id: props.managerId }
     const trimmed = reason.value.trim()
     if (judgment === 'ng' && trimmed) body.reason = trimmed
-    const updated = await submitManagerJudgment(props.session.id, body)
+    const updated = await submitManagerJudgment(props.session.id, body, 'tenko-monitor')
     emit('judged', updated)
     ngMode.value = false
     reason.value = ''
