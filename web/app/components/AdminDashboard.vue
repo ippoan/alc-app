@@ -41,6 +41,7 @@ const TABS = [
   { key: 'devices', label: 'デバイス管理' },
   { key: 'tenko', label: '点呼' },
   { key: 'hub_measurements', label: 'ハブ測定値' },
+  { key: 'firmware', label: '端末のファーム' },
 ] as const
 
 type TabKey = typeof TABS[number]['key']
@@ -125,6 +126,10 @@ const cameraActive = computed(() => activeTab.value === 'camera')
            点呼と打刻の両方を出す「全部入り」ビュー -->
       <div v-if="activeTab === 'hub_measurements'">
         <HubMeasurementsViewer />
+      </div>
+
+      <div v-if="activeTab === 'firmware'">
+        <FirmwareManager />
       </div>
 
       <div v-if="activeTab === 'camera'" class="space-y-4">
