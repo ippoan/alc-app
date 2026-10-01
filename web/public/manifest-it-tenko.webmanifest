@@ -1,0 +1,17 @@
+{
+  "id": "/?role=it_tenko",
+  "start_url": "/?role=it_tenko",
+  "scope": "/",
+  "name": "IT点呼",
+  "short_name": "IT点呼",
+  "lang": "ja",
+  "display": "standalone",
+  "launch_handler": { "client_mode": "focus-existing" },
+  "background_color": "#ffffff",
+  "theme_color": "#6d28d9",
+  "icons": [
+    { "src": "/icon-it-tenko.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

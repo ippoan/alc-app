@@ -7,6 +7,7 @@ import {
   DRIVER_MANIFEST,
   MANAGER_MANIFEST,
   BP_MANIFEST,
+  IT_TENKO_MANIFEST,
   type ManifestRole,
 } from '~/composables/useRoleManifest'
 
@@ -41,6 +42,15 @@ describe('useRoleManifest', () => {
     app.unmount()
   })
 
+  it('it_tenko は IT点呼 の manifest と violet の theme-color (別アプリとしてインストールさせる。Refs ippoan/alc-app#387)', () => {
+    const role = ref<ManifestRole>('it_tenko')
+    const [result, app] = withSetup(() => useRoleManifest(role))
+    expect(result.manifestHref.value).toBe('/manifest-it-tenko.webmanifest')
+    expect(result.themeColor.value).toBe('#6d28d9')
+    expect(result.manifest.value).toEqual(IT_TENKO_MANIFEST)
+    app.unmount()
+  })
+
   it('ロールタブの切替に追従する', () => {
     const role = ref<ManifestRole>('driver')
     const [result, app] = withSetup(() => useRoleManifest(role))
@@ -54,14 +64,19 @@ describe('useRoleManifest', () => {
     expect(result.manifestHref.value).toBe('/manifest-bp.webmanifest')
     expect(result.themeColor.value).toBe('#0f766e')
 
+    role.value = 'it_tenko'
+    expect(result.manifestHref.value).toBe('/manifest-it-tenko.webmanifest')
+    expect(result.themeColor.value).toBe('#6d28d9')
+
     role.value = 'general'
     expect(result.manifestHref.value).toBe('/manifest-driver.webmanifest')
     app.unmount()
   })
 
-  it('3 つの manifest は href も theme-color も別 (同じだと Chrome が区別できない)', () => {
-    const hrefs = [DRIVER_MANIFEST.href, MANAGER_MANIFEST.href, BP_MANIFEST.href]
-    const colors = [DRIVER_MANIFEST.themeColor, MANAGER_MANIFEST.themeColor, BP_MANIFEST.themeColor]
+  it('4 つの manifest は href も theme-color も別 (同じだと Chrome が区別できない)', () => {
+    const all = [DRIVER_MANIFEST, MANAGER_MANIFEST, BP_MANIFEST, IT_TENKO_MANIFEST]
+    const hrefs = all.map(m => m.href)
+    const colors = all.map(m => m.themeColor)
     expect(new Set(hrefs).size).toBe(hrefs.length)
     expect(new Set(colors).size).toBe(colors.length)
   })
@@ -75,9 +90,10 @@ describe('manifestRoleFromQuery', () => {
     ['?role=general', { role: 'general' }, 'general'],
     ['クエリなし', {}, 'driver'],
     ['未知のロール', { role: 'nope' }, 'driver'],
-    // 運行管理者側の IT点呼 の役割タブ (Refs ippoan/alc-app#387)。`ROLES` に足していないので
-    // 運行者の manifest のまま (別の PWA にしない)
-    ['?role=it_tenko', { role: 'it_tenko' }, 'driver'],
+    // 運行管理者側の IT点呼 の役割タブ (Refs ippoan/alc-app#387)。別の PWA として入れられる
+    ['?role=it_tenko', { role: 'it_tenko' }, 'it_tenko'],
+    ['IT点呼 の ?tab=bp は素通し', { role: 'it_tenko', tab: 'bp' }, 'it_tenko'],
+    ['着信通知は ?role=it_tenko より優先', { mode: 'incoming_call', role: 'it_tenko' }, 'manager'],
     ['role が空', { role: '' }, 'driver'],
     ['role が null (?role)', { role: null }, 'driver'],
     ['着信通知からの直行', { mode: 'incoming_call' }, 'manager'],

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { DRIVER_MANIFEST, MANAGER_MANIFEST, BP_MANIFEST } from '~/composables/useRoleManifest'
+import { DRIVER_MANIFEST, MANAGER_MANIFEST, BP_MANIFEST, IT_TENKO_MANIFEST } from '~/composables/useRoleManifest'
 
 const publicDir = resolve(import.meta.dirname!, '../../public')
 
@@ -13,12 +13,15 @@ const driver = readManifest('manifest-driver.webmanifest')
 const manager = readManifest('manifest-manager.webmanifest')
 // 血圧だけを測る端末を別アイコンで入れるための 3 本目 (Refs ippoan/alc-app-s3#135)
 const bp = readManifest('manifest-bp.webmanifest')
+// 運行管理者側の IT点呼 の受け画面を別アイコンで入れるための 4 本目 (Refs ippoan/alc-app#387)
+const itTenko = readManifest('manifest-it-tenko.webmanifest')
 
 describe('public/manifest-*.webmanifest', () => {
   it.each([
     ['driver', driver],
     ['manager', manager],
     ['bp', bp],
+    ['it-tenko', itTenko],
   ])('%s は Chrome のインストール要件のキーを持つ', (_name, m) => {
     for (const key of ['id', 'start_url', 'name', 'short_name', 'icons', 'display', 'scope']) {
       expect(m[key], key).toBeTruthy()
@@ -37,9 +40,9 @@ describe('public/manifest-*.webmanifest', () => {
   })
 
   it('id と start_url が互いに違う (同じだと Chrome が「インストール済み」と扱う)', () => {
-    const ids = [driver.id, manager.id, bp.id]
-    const startUrls = [driver.start_url, manager.start_url, bp.start_url]
-    const names = [driver.name, manager.name, bp.name]
+    const ids = [driver.id, manager.id, bp.id, itTenko.id]
+    const startUrls = [driver.start_url, manager.start_url, bp.start_url, itTenko.start_url]
+    const names = [driver.name, manager.name, bp.name, itTenko.name]
     expect(new Set(ids).size).toBe(ids.length)
     expect(new Set(startUrls).size).toBe(startUrls.length)
     expect(new Set(names).size).toBe(names.length)
@@ -55,17 +58,22 @@ describe('public/manifest-*.webmanifest', () => {
     // 選んでリロードしたときにも同じ形になり誤爆する (Refs ippoan/alc-app#353、裏取りで発覚)
     expect(bp.id).toBe('/?role=driver&tab=bp&station=bp')
     expect(bp.start_url).toBe('/?role=driver&tab=bp&station=bp')
+    // IT点呼 は役割タブ (`?role=it_tenko`) を直接開く
+    expect(itTenko.id).toBe('/?role=it_tenko')
+    expect(itTenko.start_url).toBe('/?role=it_tenko')
+    expect(itTenko.name).toBe('IT点呼')
+    expect(itTenko.short_name).toBe('IT点呼')
   })
 
   it('start_url は相対パス (public repo に実ホスト名を書かない)', () => {
-    for (const m of [driver, manager, bp]) {
+    for (const m of [driver, manager, bp, itTenko]) {
       expect(m.start_url.startsWith('/')).toBe(true)
       expect(m.id.startsWith('/')).toBe(true)
     }
   })
 
   it('launch_handler focus-existing — OS からの起動は既存ウィンドウにフォーカスし 2 つ目を開かない (Refs #204)', () => {
-    for (const m of [driver, manager, bp]) {
+    for (const m of [driver, manager, bp, itTenko]) {
       expect(m.launch_handler).toEqual({ client_mode: 'focus-existing' })
     }
   })
@@ -74,6 +82,12 @@ describe('public/manifest-*.webmanifest', () => {
     expect(driver.theme_color).toBe(DRIVER_MANIFEST.themeColor)
     expect(manager.theme_color).toBe(MANAGER_MANIFEST.themeColor)
     expect(bp.theme_color).toBe(BP_MANIFEST.themeColor)
+    expect(itTenko.theme_color).toBe(IT_TENKO_MANIFEST.themeColor)
+  })
+
+  it('theme_color は 4 つとも別 (タスクバーとタイトルバーで見分ける)', () => {
+    const colors = [driver, manager, bp, itTenko].map(m => m.theme_color)
+    expect(new Set(colors).size).toBe(colors.length)
   })
 
   it('運行管理者は色違いの専用アイコンを先頭に持つ (タスクバーで区別する)', () => {
@@ -107,6 +121,28 @@ describe('public/manifest-*.webmanifest', () => {
     expect(svg).not.toContain('<text')
   })
 
+  it('IT点呼 は色違いの専用アイコンを先頭に持つ (タスクバーで区別する)', () => {
+    expect(itTenko.icons[0].src).toBe('/icon-it-tenko.svg')
+    expect(itTenko.icons[0].type).toBe('image/svg+xml')
+    expect(itTenko.icons[0].sizes).toBe('any')
+    expect(itTenko.icons[0].purpose).toBe('any maskable')
+    // 既存 PNG も fallback として並べる (運行管理者と同じ並び)
+    expect(itTenko.icons.map((i: { src: string }) => i.src)).toEqual(['/icon-it-tenko.svg', '/icon-192.png', '/icon-512.png'])
+
+    const svg = readFileSync(resolve(publicDir, 'icon-it-tenko.svg'), 'utf-8')
+    expect(svg).toContain('<svg')
+    expect(svg).toContain('viewBox="0 0 512 512"')
+    expect(svg).toContain(IT_TENKO_MANIFEST.themeColor)
+    // フォントに依存すると環境によっては白紙になるので図形だけで描く
+    expect(svg).not.toContain('<text')
+    // 外部の画像・フォントを参照しない (SVG 単体で完結。xmlns の宣言だけは URL の形)
+    expect(svg.replace('xmlns="http://www.w3.org/2000/svg"', '')).not.toMatch(/https?:|href=/)
+    // ほかのアイコンと絵柄が違う
+    for (const other of ['icon-manager.svg', 'icon-bp.svg']) {
+      expect(svg).not.toBe(readFileSync(resolve(publicDir, other), 'utf-8'))
+    }
+  })
+
   it('manifest の href は useRoleManifest が指すファイル名と一致する', () => {
     expect(DRIVER_MANIFEST.href).toBe('/manifest-driver.webmanifest')
     expect(MANAGER_MANIFEST.href).toBe('/manifest-manager.webmanifest')
@@ -114,5 +150,7 @@ describe('public/manifest-*.webmanifest', () => {
     expect(() => readManifest(DRIVER_MANIFEST.href.slice(1))).not.toThrow()
     expect(() => readManifest(MANAGER_MANIFEST.href.slice(1))).not.toThrow()
     expect(() => readManifest(BP_MANIFEST.href.slice(1))).not.toThrow()
+    expect(IT_TENKO_MANIFEST.href).toBe('/manifest-it-tenko.webmanifest')
+    expect(() => readManifest(IT_TENKO_MANIFEST.href.slice(1))).not.toThrow()
   })
 })

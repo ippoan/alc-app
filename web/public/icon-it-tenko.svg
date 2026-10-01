@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="IT点呼">
+  <title>IT点呼</title>
+  <!-- maskable 用に全面を violet で塗る (safe zone = 中心 半径 204 の円) -->
+  <rect width="512" height="512" fill="#6d28d9"/>
+  <!-- 通話 (吹き出し) と、点呼の確認 (チェック)。フォントに依存しないよう図形だけで描く -->
+  <path fill="#ffffff" d="M156 140h200a32 32 0 0 1 32 32v116a32 32 0 0 1-32 32H248l-72 64v-64h-20a32 32 0 0 1-32-32V172a32 32 0 0 1 32-32z"/>
+  <path fill="none" stroke="#6d28d9" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" d="M198 232l42 42 76-84"/>
+</svg>
