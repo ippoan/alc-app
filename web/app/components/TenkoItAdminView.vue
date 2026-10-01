@@ -337,7 +337,8 @@ onUnmounted(() => {
         :is-connected="webRtc.isConnected.value"
       />
 
-      <!-- 運転者情報 (登録済みの顔写真を含む) -->
+      <!-- 運転者情報。**測定時の顔写真は出さない** (本人確認は免許証で、本人は通話の映像で見る)。
+           顔写真はこのパネルが出す乗務員の登録写真だけ -->
       <TenkoDriverInfoPanel
         v-if="showDriverInfoPanel && session"
         :employee-id="session.employee_id"
