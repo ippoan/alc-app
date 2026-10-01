@@ -12,7 +12,7 @@ vi.mock('~/utils/api', () => ({
 }))
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
-const EMPLOYEE_ID = 'aaaaaaaa-0001-0001-0001-aaaaaaaaaaaa'
+const EMPLOYEE_ID = 'emp-1'
 
 describe('TenkoDriverInfoPanel — 読むときの scope', () => {
   beforeEach(() => {
