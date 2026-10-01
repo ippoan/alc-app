@@ -1535,4 +1535,17 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
     expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
     expect(wrapper.find(NOTE).exists()).toBe(false)
   })
+
+  it('FirmwareOtaHost には「いまのタブがデモか」を渡す (デモの間は CoreS3 の更新を始めない。Refs ippoan/alc-app#403)', async () => {
+    bpUi.state.value = 'show'
+    wrapper = await mountIndex('/?role=driver')
+    const demo = () => !!wrapper!.findComponent(FirmwareOtaHost).props('demo')
+    expect(demo()).toBe(false)
+    await clickMenuItem(wrapper, '自動点呼デモ')
+    expect(demo()).toBe(true)
+    await clickMenuItem(wrapper, '遠隔点呼デモ')
+    expect(demo()).toBe(true)
+    await clickMenuItem(wrapper, 'デバイス設定')
+    expect(demo()).toBe(false)
+  })
 })
