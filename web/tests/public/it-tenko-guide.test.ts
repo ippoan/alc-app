@@ -20,4 +20,11 @@ describe('public/it-tenko-guide.html', () => {
       expect(html).toContain(text)
     }
   })
+
+  // 運行管理者側の IT点呼 は、画面最上段の役割のタブに在る (運行管理者の画面の中のタブではない)
+  it('IT点呼 のタブの場所は、最上段の役割のタブとして案内する', () => {
+    expect(html).toContain('画面のいちばん上の役割のタブ')
+    expect(html).toContain('運行管理者の画面に入らなくても開けます')
+    expect(html).not.toContain('「遠隔点呼」の右')
+  })
 })
