@@ -87,15 +87,15 @@ describe('ManagerDashboard — IT点呼 の受け画面はここには無い (�
   })
 })
 
-// IT点呼 の試験の手順書のタブ (Refs ippoan/alc-app#387)。**開発用の印の有無に関係なく常に**、最後に出す。
+// IT点呼 の手順書のタブ (Refs ippoan/alc-app#387)。**開発用の印の有無に関係なく常に**、最後に出す。
 // ラベルで絞って集めると、新しいタブを足しても緑のまま (= 検知しない)。
 // ここでは絞らずに全部のタブのボタンを集めて、並びを完全一致で固定する
-describe('ManagerDashboard — IT点呼 試験の手順タブ (常に最後)', () => {
+describe('ManagerDashboard — IT点呼 の手順タブ (常に最後)', () => {
   const TABS_BEFORE = [
     '乗務員', '免許証', '点呼', '遠隔点呼', '画面共有', '予定管理',
     '健康基準', '故障記録', '携行品', '労働時間', 'タイムカード', 'デバイス管理',
   ]
-  const GUIDE_LABEL = 'IT点呼 試験の手順'
+  const GUIDE_LABEL = 'IT点呼 の手順'
   const GuideStub = { name: 'ItTenkoGuide', template: '<div data-testid="it-guide" />' }
   const stubs = {
     ItTenkoGuide: GuideStub,
@@ -124,7 +124,7 @@ describe('ManagerDashboard — IT点呼 試験の手順タブ (常に最後)', (
   it.each([
     ['印なし', false],
     ['印あり', true],
-  ])('★ %s: 全部のタブは既存の 12 個のあとに「IT点呼 試験の手順」が 1 つ (計 13、IT点呼 は無い)', async (_name, marked) => {
+  ])('★ %s: 全部のタブは既存の 12 個のあとに「IT点呼 の手順」が 1 つ (計 13、IT点呼 は無い)', async (_name, marked) => {
     if (marked) noteDeviceToken('manager-device', devDeviceJwt('dev-manager'))
     const wrapper = await mountDashboard()
     expect(allTabLabels(wrapper)).toEqual([...TABS_BEFORE, GUIDE_LABEL])

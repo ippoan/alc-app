@@ -22,8 +22,8 @@ const tabs: { key: TabKey, label: string }[] = [
   { key: 'work_hours', label: '労働時間' },
   { key: 'timecard', label: 'タイムカード' },
   { key: 'devices', label: 'デバイス管理' },
-  // IT点呼 の試験の手順書。開発用の印の有無に関係なく常に出す (手順の最初が「印が立ったか確かめる」ため)
-  { key: 'it_guide', label: 'IT点呼 試験の手順' },
+  // IT点呼 の手順書 (印刷用)。常に出す
+  { key: 'it_guide', label: 'IT点呼 の手順' },
 ]
 </script>
 

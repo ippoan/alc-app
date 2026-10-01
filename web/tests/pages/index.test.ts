@@ -1045,12 +1045,13 @@ describe('pages/index — dev端末の記録 (Refs ippoan/alc-app#387)', () => {
 })
 
 describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
-  // IT点呼 は**キオスクの鍵に dev の印がある端末にだけ**ハンバーガーへ出す
-  // (テストが済むまで本番の運行者には見せない)。印が無い端末の画面は 1 つも変わらない
+  // IT点呼 は**どの端末にも**ハンバーガーへ出す (開発用の印は見ない)。
+  // 「開発用の記録」は今までどおり、キオスクの鍵に dev の印がある端末にだけ出す
 
   let wrapper: VueWrapper | null = null
   const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
   const LABEL = 'IT点呼'
+  const DEV_RECORDS = '開発用の記録'
   /** 通常点呼タブの NormalMeasurement (it-mode が付いていない方) */
   const NORMAL = '.normal-measurement-stub:not([it-mode])'
   /** IT点呼タブの NormalMeasurement */
@@ -1096,33 +1097,18 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
   ])('$name', ({ isLandscape }) => {
     beforeEach(() => { landscape.on.value = isLandscape })
 
-    it('★ dev の印が無い端末ではメニューにも可視タブにも出ない', async () => {
-      wrapper = await mountIndex('/?role=driver')
-      expect(visibleTabLabels(wrapper)).not.toContain(LABEL)
-      await toggleMenu(wrapper)
-      expect(menuLabels(wrapper)).not.toContain(LABEL)
-      // 印が無い端末のメニューのタブは今までの 4 項目のまま (開発用の項目は 1 つも足さない)
-      expect(menuLabels(wrapper)).toEqual(expect.arrayContaining(['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定', '血圧測定']))
-      expect(menuLabels(wrapper)).not.toContain('開発用の記録')
-    })
-
-    it('dev でない端末のトークンが取れている端末でも出ない', async () => {
-      noteDeviceToken('kiosk', plainDeviceJwt())
-      wrapper = await mountIndex('/?role=driver')
-      await toggleMenu(wrapper)
-      expect(menuLabels(wrapper)).not.toContain(LABEL)
-    })
-
-    it('★ dev の印がある端末ではメニューに出て、選ぶと IT点呼 の画面が開く (可視タブ側へは移らない)', async () => {
-      noteDeviceToken('kiosk', devDeviceJwt())
+    it('★ 開発用の印が無い端末でもメニューに出て、選ぶと IT点呼 の画面が開く (可視タブ側へは移らない)', async () => {
       wrapper = await mountIndex('/?role=driver')
       expect(visibleTabLabels(wrapper)).not.toContain(LABEL)
       expect(wrapper.find(NORMAL).exists()).toBe(true)
       expect(wrapper.find(IT).exists()).toBe(false)
 
       await toggleMenu(wrapper)
-      const item = wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === LABEL)
-      expect(item).toBeTruthy()
+      // 今までの 4 項目に IT点呼 が加わる。「開発用の記録」は印が無ければ出ない
+      expect(menuLabels(wrapper)).toEqual(expect.arrayContaining(['自動点呼デモ', '遠隔点呼デモ', 'デバイス設定', '血圧測定', LABEL]))
+      expect(menuLabels(wrapper)).not.toContain(DEV_RECORDS)
+      // 横画面のメニューには同じ名前が 2 つ在る (「ロール切替」の受け画面と、こちらのタブ)。タブは後ろの方
+      const item = wrapper.find('.absolute.right-0').findAll('button').filter(b => b.text() === LABEL).at(-1)
       await item!.trigger('click')
       await nextTick()
 
@@ -1131,37 +1117,40 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
       expect(visibleTabLabels(wrapper)).not.toContain(LABEL)
       expect(hamburgerButton(wrapper).classes()).toContain('bg-blue-600')
     })
+
+    it('dev でない端末のトークンが取れている端末でも出る (開発用の記録は出ない)', async () => {
+      noteDeviceToken('kiosk', plainDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      await toggleMenu(wrapper)
+      expect(menuLabels(wrapper)).toContain(LABEL)
+      expect(menuLabels(wrapper)).not.toContain(DEV_RECORDS)
+    })
+
+    it('★ dev の印がある端末では IT点呼 と「開発用の記録」の両方が、この順で出る', async () => {
+      noteDeviceToken('kiosk', devDeviceJwt())
+      wrapper = await mountIndex('/?role=driver')
+      await toggleMenu(wrapper)
+      const labels = menuLabels(wrapper)
+      expect(labels).toContain(LABEL)
+      expect(labels).toContain(DEV_RECORDS)
+      expect(labels.indexOf(LABEL)).toBeLessThan(labels.indexOf(DEV_RECORDS))
+    })
   })
 
-  it('見るのはキオスクの鍵の印だけ (運行管理者席の鍵が dev でも出ない)', async () => {
-    noteDeviceToken('manager-device', devDeviceJwt())
-    wrapper = await mountIndex('/?role=driver')
-    await toggleMenu(wrapper)
-    expect(menuLabels(wrapper)).not.toContain(LABEL)
+  it('★ 開発用の印が無い端末も ?tab=it で開ける', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=it')
+    expect(wrapper.find(IT).exists()).toBe(true)
+    expect(wrapper.find(NORMAL).exists()).toBe(false)
   })
 
-  it('★ dev の印がある端末は ?tab=it で開ける', async () => {
+  it('dev の印がある端末も ?tab=it で開ける', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver&tab=it')
     expect(wrapper.find(IT).exists()).toBe(true)
     expect(wrapper.find(NORMAL).exists()).toBe(false)
   })
 
-  it('★ dev の印が無い端末が ?tab=it で開いても通常点呼になる', async () => {
-    wrapper = await mountIndex('/?role=driver&tab=it')
-    expect(wrapper.find(IT).exists()).toBe(false)
-    expect(wrapper.find(NORMAL).exists()).toBe(true)
-  })
-
-  it('dev でない端末のトークンが取れている端末が ?tab=it で開いても通常点呼になる', async () => {
-    noteDeviceToken('kiosk', plainDeviceJwt())
-    wrapper = await mountIndex('/?role=driver&tab=it')
-    expect(wrapper.find(IT).exists()).toBe(false)
-    expect(wrapper.find(NORMAL).exists()).toBe(true)
-  })
-
   it('IT点呼 の側には打刻履歴 (below-card slot) を付けない — 通常点呼タブには今までどおり付く', async () => {
-    noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver&tab=it')
     expect(wrapper.findComponent(TodayPunchHistory).exists()).toBe(false)
     wrapper.unmount()
@@ -1170,7 +1159,7 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
     expect(wrapper.find(NORMAL).findComponent(TodayPunchHistory).exists()).toBe(true)
   })
 
-  it('★ 印が外れた端末でメニューを開くと、項目が消えて通常点呼へ戻る', async () => {
+  it('★ IT点呼 を開いているときに印が外れても、IT点呼 のまま (消えるのは「開発用の記録」だけ)', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver&tab=it')
     expect(wrapper.find(IT).exists()).toBe(true)
@@ -1179,12 +1168,13 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
     await toggleMenu(wrapper)
     await nextTick()
 
-    expect(menuLabels(wrapper)).not.toContain(LABEL)
-    expect(wrapper.find(IT).exists()).toBe(false)
-    expect(wrapper.find(NORMAL).exists()).toBe(true)
+    expect(menuLabels(wrapper)).toContain(LABEL)
+    expect(menuLabels(wrapper)).not.toContain(DEV_RECORDS)
+    expect(wrapper.find(IT).exists()).toBe(true)
+    expect(wrapper.find(NORMAL).exists()).toBe(false)
   })
 
-  it('★ 開発用の記録の画面から印を外しても、項目が消えて通常点呼へ戻る', async () => {
+  it('★ 開発用の記録の画面から印を外すと通常点呼へ戻り、メニューには IT点呼 だけが残る', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver&tab=dev_records')
 
@@ -1194,26 +1184,14 @@ describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
 
     expect(wrapper.find(NORMAL).exists()).toBe(true)
     await toggleMenu(wrapper)
-    expect(menuLabels(wrapper)).not.toContain(LABEL)
-  })
-
-  it('印がある端末で通常点呼を開いているときに印が外れても、通常点呼のまま', async () => {
-    noteDeviceToken('kiosk', devDeviceJwt())
-    wrapper = await mountIndex('/?role=driver')
-
-    clearDevDeviceMark('kiosk')
-    await toggleMenu(wrapper)
-    await nextTick()
-
-    expect(wrapper.find(NORMAL).exists()).toBe(true)
-    expect(menuLabels(wrapper)).not.toContain(LABEL)
+    expect(menuLabels(wrapper)).toContain(LABEL)
+    expect(menuLabels(wrapper)).not.toContain(DEV_RECORDS)
   })
 })
 
 describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け画面。Refs ippoan/alc-app#387)', () => {
   // 運行管理者側の IT点呼 の受け画面 (`TenkoItAdminView`) を、画面最上段の役割タブとして出す。
-  // **運行管理者席の鍵に dev の印がある端末にだけ**出し、運行管理者の認証 (RoleAuthGate) は通さない。
-  // 印が無い端末 (= 本番の全端末) の役割タブとメニューは 1 つも変わらない
+  // **どの端末にも**出し (開発用の印は見ない)、運行管理者の認証 (RoleAuthGate) は通さない
 
   let wrapper: VueWrapper | null = null
   const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
@@ -1261,64 +1239,31 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
     return w.find('.absolute.right-0').findAll('button').map(b => b.text())
   }
 
-  /** いま運行者の画面 (通常点呼) に居て、受け画面は出ていない */
-  function expectDriver(w: VueWrapper) {
-    expect(w.find(NORMAL).exists()).toBe(true)
-    expect(w.findComponent(TenkoItAdminView).exists()).toBe(false)
-    expect(roleButton(w, '運行者').classes()).toContain('bg-white')
-  }
-
-  describe('(a) 出る端末', () => {
-    it('★ 印が無い端末では出ない — 役割タブは今までの 4 つのまま', async () => {
-      wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理'])
-    })
-
-    it('★ 印が無い端末 (PC でない) も今までの 3 つのまま', async () => {
-      setDevice(ANDROID_UA)
-      wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者'])
-    })
-
-    it('dev でない運行管理者席のトークンが取れている端末でも出ない', async () => {
-      noteDeviceToken('manager-device', plainDeviceJwt())
-      wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
-    })
-
-    it('見るのは運行管理者席の鍵の印だけ (キオスクの鍵が dev でも出ない)', async () => {
-      noteDeviceToken('kiosk', devDeviceJwt())
-      wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
-    })
-
-    it('★ 印がある端末では「汎用管理」の右 (最後) に出る', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
+  describe('(a) どの端末にも出る', () => {
+    it('★ 開発用の印が無い端末でも「汎用管理」の右 (最後) に出る', async () => {
       wrapper = await mountIndex('/?role=driver')
       expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL])
     })
 
-    it('PC のみ、の制約は掛けない — PC でない端末でも印があれば出る (汎用管理は出ない)', async () => {
+    it('★ PC のみ、の制約は掛けない — PC でない端末でも出る (汎用管理は出ない)', async () => {
       setDevice(ANDROID_UA)
-      noteDeviceToken('manager-device', devDeviceJwt())
       wrapper = await mountIndex('/?role=driver')
       expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', LABEL])
     })
 
-    it('mount 後に印が立つと、何も押さなくてもタブが現れる', async () => {
+    it.each([
+      ['dev でない運行管理者席のトークンが取れている端末', () => noteDeviceToken('manager-device', plainDeviceJwt())],
+      ['運行管理者席の鍵に dev の印がある端末', () => noteDeviceToken('manager-device', devDeviceJwt())],
+      ['キオスクの鍵に dev の印がある端末', () => noteDeviceToken('kiosk', devDeviceJwt())],
+    ])('%s でも並びは同じ', async (_name, arrange) => {
+      arrange()
       wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
-
-      noteDeviceToken('manager-device', devDeviceJwt())
-      await nextTick()
-
-      expect(roleTabLabels(wrapper)).toContain(LABEL)
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL])
     })
   })
 
   describe('(b) 選ぶと受け画面が RoleAuthGate なしで出る', () => {
-    it('★ タブを押すと TenkoItAdminView が出る。RoleAuthGate も ManagerDashboard も運行者の画面も出ない', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
+    it('★ 印が無い端末でタブを押すと TenkoItAdminView が出る。RoleAuthGate も ManagerDashboard も運行者の画面も出ない', async () => {
       const replaceState = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {})
       try {
         wrapper = await mountIndex('/?role=driver')
@@ -1340,7 +1285,6 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
     })
 
     it('警告デバイスのバー (ManagerAlarmBar) は IT点呼 の役割タブでも出る', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
       wrapper = await mountIndex('/?role=driver')
       expect(wrapper.findComponent(ManagerAlarmBar).exists()).toBe(false)
 
@@ -1352,55 +1296,30 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
     })
 
-    it('★ 印がある端末は ?role=it_tenko で直接開ける (RoleAuthGate なし)', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
+    it.each([
+      ['開発用の印が無い端末', () => {}],
+      ['dev でない運行管理者席のトークンが取れている端末', () => noteDeviceToken('manager-device', plainDeviceJwt())],
+      ['運行管理者席の鍵に dev の印がある端末', () => noteDeviceToken('manager-device', devDeviceJwt())],
+    ])('★ %s は ?role=it_tenko で直接開ける (運行者に倒さない。RoleAuthGate なし)', async (_name, arrange) => {
+      arrange()
       wrapper = await mountIndex('/?role=it_tenko')
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
       expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      expect(wrapper.find(NORMAL).exists()).toBe(false)
       expect(roleButton(wrapper, LABEL).classes()).toContain('bg-white')
     })
 
     it('運行管理者タブは今までどおり RoleAuthGate を通り、そこに受け画面は出ない', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
       wrapper = await mountIndex('/?role=manager')
       expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
     })
   })
 
-  describe('(c) 印が無い端末が ?role=it_tenko で開いたら運行者に倒す', () => {
-    it('★ 印なし → 運行者 (通常点呼)。受け画面もタブも出ない', async () => {
-      wrapper = await mountIndex('/?role=it_tenko')
-      expectDriver(wrapper)
-      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
-      expect(wrapper.findComponent(ManagerAlarmBar).exists()).toBe(false)
-    })
-
-    it('dev でない運行管理者席のトークンが取れている端末 → 運行者', async () => {
-      noteDeviceToken('manager-device', plainDeviceJwt())
-      wrapper = await mountIndex('/?role=it_tenko')
-      expectDriver(wrapper)
-    })
-
-    it('キオスクの鍵だけ dev の端末 → 運行者', async () => {
-      noteDeviceToken('kiosk', devDeviceJwt())
-      wrapper = await mountIndex('/?role=it_tenko')
-      expectDriver(wrapper)
-    })
-  })
-
-  describe('(d) Android 横画面のハンバーガーの「ロール切替」', () => {
+  describe('(c) Android 横画面のハンバーガーの「ロール切替」', () => {
     beforeEach(() => { landscape.on.value = true })
 
-    it('★ 印が無い端末では今までの 3 つのまま (IT点呼 は無い)', async () => {
-      wrapper = await mountIndex('/?role=driver')
-      await openMenu(wrapper)
-      expect(menuLabels(wrapper).slice(0, 3)).toEqual(['運行管理者', 'システム管理者', '汎用管理'])
-      expect(menuLabels(wrapper)).not.toContain(LABEL)
-    })
-
-    it('★ 印がある端末では「汎用管理」の次に出て、選ぶと受け画面が開く', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
+    it('★ 印が無い端末でも「汎用管理」の次に出て、選ぶと受け画面が開く', async () => {
       wrapper = await mountIndex('/?role=driver')
       await openMenu(wrapper)
       expect(menuLabels(wrapper).slice(0, 4)).toEqual(['運行管理者', 'システム管理者', '汎用管理', LABEL])
@@ -1415,29 +1334,10 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       expect(wrapper.text()).toContain('運行者に戻る')
       expect(wrapper.text()).toContain(LABEL)
     })
-
-    it('開いたまま印が立つと、開き直さなくても「ロール切替」に入る', async () => {
-      wrapper = await mountIndex('/?role=driver')
-      await openMenu(wrapper)
-      expect(menuLabels(wrapper)).not.toContain(LABEL)
-
-      noteDeviceToken('manager-device', devDeviceJwt())
-      await nextTick()
-
-      expect(menuLabels(wrapper)).toContain(LABEL)
-    })
-
-    it('印が外れた端末でメニューを開くと、項目は無い', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
-      wrapper = await mountIndex('/?role=driver')
-      clearDevDeviceMark('manager-device')
-      await openMenu(wrapper)
-      expect(menuLabels(wrapper)).not.toContain(LABEL)
-    })
   })
 
-  describe('(e) 途中で印が消えたら運行者に戻る', () => {
-    it('★ 受け画面を開いているときに印が外れると、運行者 (通常点呼) に戻り、タブも消える', async () => {
+  describe('(d) 途中で印が変わっても受け画面は閉じない', () => {
+    it('★ 受け画面を開いているときに運行管理者席の印が外れても、受け画面のまま (タブも残る)', async () => {
       noteDeviceToken('manager-device', devDeviceJwt())
       wrapper = await mountIndex('/?role=it_tenko')
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
@@ -1446,11 +1346,11 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       await nextTick()
       await nextTick()
 
-      expectDriver(wrapper)
-      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
+      expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
+      expect(roleTabLabels(wrapper)).toContain(LABEL)
     })
 
-    it('★ dev でないトークンに替わったときも同じ', async () => {
+    it('dev でないトークンに替わったときも同じ', async () => {
       noteDeviceToken('manager-device', devDeviceJwt())
       wrapper = await mountIndex('/?role=it_tenko')
 
@@ -1458,37 +1358,11 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       await nextTick()
       await nextTick()
 
-      expectDriver(wrapper)
-    })
-
-    it('別の役割を開いているときに印が外れても、その役割のまま (タブだけ消える)', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
-      wrapper = await mountIndex('/?role=admin')
-      expect(roleTabLabels(wrapper)).toContain(LABEL)
-
-      clearDevDeviceMark('manager-device')
-      await nextTick()
-      await nextTick()
-
-      expect(roleTabLabels(wrapper)).not.toContain(LABEL)
-      expect(roleButton(wrapper, 'システム管理者').classes()).toContain('bg-white')
-    })
-
-    it('キオスクの印が外れても、受け画面は閉じない (見るのは運行管理者席の印)', async () => {
-      noteDeviceToken('manager-device', devDeviceJwt())
-      noteDeviceToken('kiosk', devDeviceJwt())
-      wrapper = await mountIndex('/?role=it_tenko')
-
-      clearDevDeviceMark('kiosk')
-      await nextTick()
-      await nextTick()
-
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(true)
     })
   })
 
-  it('着信通知からの直行 (?mode=incoming_call) は今までどおり運行管理者タブ — 印があっても IT点呼 へは行かない', async () => {
-    noteDeviceToken('manager-device', devDeviceJwt())
+  it('着信通知からの直行 (?mode=incoming_call) は今までどおり運行管理者タブ — IT点呼 へは行かない', async () => {
     wrapper = await mountIndex('/?mode=incoming_call&role=it_tenko&room=r1')
     expect(wrapper.findComponent(ManagerDashboard).exists()).toBe(true)
     expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
@@ -1496,8 +1370,8 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
 })
 
 describe('pages/index — 通常点呼の中で IT点呼 を選べる端末 (Refs ippoan/alc-app#387)', () => {
-  // 通常点呼の `NormalMeasurement` に `itSelectable` が渡るのは、**キオスクの鍵に dev の印が
-  // ある端末だけ**。stub は prop を宣言していないので、渡した値は属性 `it-selectable` に出る
+  // 通常点呼の `NormalMeasurement` には**どの端末でも** `itSelectable` が true で渡る (開発用の印は
+  // 見ない)。stub は prop を宣言していないので、渡した値は属性 `it-selectable` に出る
 
   let wrapper: VueWrapper | null = null
   const NORMAL = '.normal-measurement-stub:not([it-mode])'
@@ -1511,37 +1385,29 @@ describe('pages/index — 通常点呼の中で IT点呼 を選べる端末 (Ref
     localStorage.clear()
   })
 
-  it('★ dev の印が無い端末では、通常点呼に itSelectable = false が渡る (選べない)', async () => {
-    wrapper = await mountIndex('/?role=driver')
-    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('false')
-  })
-
-  it('dev でない端末のトークンが取れている端末・運行管理者席の鍵だけが dev の端末でも false', async () => {
-    noteDeviceToken('kiosk', plainDeviceJwt())
-    noteDeviceToken('manager-device', devDeviceJwt())
-    wrapper = await mountIndex('/?role=driver')
-    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('false')
-  })
-
-  it('★ dev の印がある端末では、通常点呼に itSelectable = true が渡る。IT点呼タブの側には渡さない', async () => {
-    noteDeviceToken('kiosk', devDeviceJwt())
+  it.each([
+    ['開発用の印が無い端末', () => {}],
+    ['dev でない端末のトークンが取れている端末', () => noteDeviceToken('kiosk', plainDeviceJwt())],
+    ['キオスクの鍵に dev の印がある端末', () => noteDeviceToken('kiosk', devDeviceJwt())],
+  ])('★ %s: 通常点呼に itSelectable = true が渡る', async (_name, arrange) => {
+    arrange()
     wrapper = await mountIndex('/?role=driver')
     expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('true')
-    wrapper.unmount()
+  })
 
+  it('IT点呼タブの側には渡さない', async () => {
     wrapper = await mountIndex('/?role=driver&tab=it')
     expect(wrapper.find(IT).exists()).toBe(true)
     expect(wrapper.find(IT).attributes('it-selectable')).toBeUndefined()
   })
 
-  it('印が外れたら false に戻る', async () => {
+  it('印が外れても true のまま', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver')
-    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('true')
 
     clearDevDeviceMark('kiosk')
     await nextTick()
-    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('false')
+    expect(wrapper.find(NORMAL).attributes('it-selectable')).toBe('true')
   })
 })
 
@@ -1642,11 +1508,11 @@ describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/a
     expect(wrapper.find(BANNER).exists()).toBe(true)
   })
 
-  it('★ mount 後に印が立つと、メニューを開き直さなくても「IT点呼」「開発用の記録」が入る', async () => {
+  it('★ mount 後に印が立つと、メニューを開き直さなくても「開発用の記録」が入る (IT点呼 は元から在る)', async () => {
     wrapper = await mountIndex('/?role=driver')
     // メニューは開いたまま (開いた時点の読み直しでは、まだ印が無い)
     await toggleMenu(wrapper)
-    expect(menuLabels(wrapper)).not.toContain('IT点呼')
+    expect(menuLabels(wrapper)).toContain('IT点呼')
     expect(menuLabels(wrapper)).not.toContain('開発用の記録')
 
     noteDeviceToken('kiosk', devDeviceJwt())
@@ -1656,7 +1522,7 @@ describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/a
     expect(menuLabels(wrapper)).toContain('開発用の記録')
   })
 
-  it('★ IT点呼 を開いているときに印が外れると、メニューを開かなくても通常点呼へ戻る', async () => {
+  it('★ IT点呼 を開いているときに印が外れても、メニューを開かないまま IT点呼 に留まる', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver&tab=it')
     expect(wrapper.find(IT).exists()).toBe(true)
@@ -1665,8 +1531,8 @@ describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/a
     await nextTick()
     await nextTick()
 
-    expect(wrapper.find(IT).exists()).toBe(false)
-    expect(wrapper.find(NORMAL).exists()).toBe(true)
+    expect(wrapper.find(IT).exists()).toBe(true)
+    expect(wrapper.find(NORMAL).exists()).toBe(false)
   })
 
   it('unmount で listener を外す (そのあと印が変わっても例外にならない)', async () => {

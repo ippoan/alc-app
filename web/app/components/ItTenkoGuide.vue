@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// IT点呼 の試験の手順書 (Refs ippoan/alc-app#387)。手順書そのものは `public/it-tenko-guide.html`
-// (印刷用の CSS を持つ独立した HTML)。ここは「読む・印刷する」ための枠だけで、API は呼ばない。
-// IT点呼 を通常の点呼へ統合するときは、このコンポーネントと HTML をタブごと消す。
+// IT点呼 の手順書 (Refs ippoan/alc-app#387)。手順書そのものは `public/it-tenko-guide.html`
+// (印刷用の CSS を持つ独立した HTML。点呼をする人の操作だけを書く)。ここは「読む・印刷する」
+// ための枠だけで、API は呼ばない。
 const GUIDE_PATH = '/it-tenko-guide.html'
 
 const frame = ref<HTMLIFrameElement | null>(null)
@@ -16,7 +16,7 @@ function printGuide() {
 <template>
   <div class="space-y-3">
     <p class="text-sm text-gray-700">
-      IT点呼 の試験の手順書です (A4 2 枚)。印刷して使ってください。試験用に切り替えた端末の記録は、本番の点呼記録簿には出ません。
+      IT点呼 の手順書です (A4 2 枚)。印刷して使ってください。
     </p>
     <div class="flex items-center gap-4">
       <button
@@ -36,7 +36,7 @@ function printGuide() {
     <iframe
       ref="frame"
       :src="GUIDE_PATH"
-      title="IT点呼 試験の手順"
+      title="IT点呼 の手順"
       class="w-full h-[70vh] border border-gray-300 rounded-md bg-white"
     />
   </div>

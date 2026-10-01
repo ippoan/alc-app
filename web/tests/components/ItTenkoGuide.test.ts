@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import ItTenkoGuide from '~/components/ItTenkoGuide.vue'
 
-// IT点呼 の試験の手順書の枠 (Refs ippoan/alc-app#387)。手順書そのものは public/it-tenko-guide.html
+// IT点呼 の手順書の枠 (Refs ippoan/alc-app#387)。手順書そのものは public/it-tenko-guide.html
 const GUIDE_PATH = '/it-tenko-guide.html'
 
 describe('ItTenkoGuide', () => {
@@ -15,14 +15,14 @@ describe('ItTenkoGuide', () => {
     expect(link.text()).toBe('別のタブで開く')
     expect(link.attributes('target')).toBe('_blank')
     expect(link.attributes('rel')).toBe('noopener')
-    expect(iframe.attributes('title')).toBe('IT点呼 試験の手順')
+    expect(iframe.attributes('title')).toBe('IT点呼 の手順')
     wrapper.unmount()
   })
 
-  it('説明に A4 2 枚と、試験の記録が本番の記録簿に出ないことを書く', async () => {
+  it('説明は「IT点呼 の手順書です (A4 2 枚)。印刷して使ってください。」だけ (試験・本番の語を書かない)', async () => {
     const wrapper = await mountSuspended(ItTenkoGuide)
-    expect(wrapper.text()).toContain('A4 2 枚')
-    expect(wrapper.text()).toContain('本番の点呼記録簿には出ません')
+    expect(wrapper.find('p').text()).toBe('IT点呼 の手順書です (A4 2 枚)。印刷して使ってください。')
+    for (const word of ['試験', '開発', '本番']) expect(wrapper.text()).not.toContain(word)
     wrapper.unmount()
   })
 

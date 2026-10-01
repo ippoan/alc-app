@@ -1,5 +1,5 @@
 import type { ApiEmployee } from '~/types'
-import { getEmployeeByCode, getEmployeeById } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployeeByCode, getEmployeeById } from '~/utils/api'
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 
 /**
@@ -10,6 +10,9 @@ import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
  *
  * 席 (ブラウザ) に覚えさせるのは**社員の id だけ** (名前・社員番号は保存しない)。
  * 登録は「変更」(`clear`) を押すまで残り、名前と権限は `load` のたびにサーバから取り直す。
+ *
+ * 照会は `'manager-device'` の口 (運行管理者席の鍵) で送る — 受け画面はログインなしで開くので、
+ * 管理者のトークンを当てにしない。
  */
 export const IT_TENKO_MANAGER_STORAGE_KEY = 'alc_it_tenko_manager_id'
 
@@ -80,7 +83,7 @@ export function useItTenkoManager() {
     manager.value = { id, name: null }
     loading.value = true
     try {
-      const emp = await getEmployeeById(id, 'tenko-monitor')
+      const emp = await getEmployeeById(id, 'manager-device')
       if (gen !== generation) return
       if (!canJudge(emp)) {
         // 運行管理者の権限を失った
@@ -104,9 +107,13 @@ export function useItTenkoManager() {
   async function registerByCode(code: string): Promise<ItTenkoManagerRegisterResult> {
     let emp: ApiEmployee
     try {
-      emp = await getEmployeeByCode(code, 'tenko-monitor')
+      emp = await getEmployeeByCode(code, 'manager-device')
     }
-    catch {
+    catch (e) {
+      // 席の鍵が取れなかったときは「見つかりません」にせず、その理由をそのまま返す
+      if (e instanceof Error && e.message === MANAGER_DEVICE_AUTH_FAILED_MESSAGE) {
+        return { ok: false, message: e.message }
+      }
       return { ok: false, message: employeeNotFoundByCode(code) }
     }
     if (!canJudge(emp)) {

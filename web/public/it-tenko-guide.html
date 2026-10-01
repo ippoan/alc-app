@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>IT点呼 試験の手順 (点呼者用)</title>
+<title>IT点呼 の手順</title>
 <style>
   @page { size: A4; margin: 11mm 13mm 10mm 13mm; }
-  :root { --ink: #111; --sub: #555; --line: #999; --soft: #f2f2f2; --stop: #000; }
+  :root { --ink: #111; --sub: #555; }
   * { box-sizing: border-box; }
   html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body {
@@ -24,27 +24,13 @@
   h2 { font-size: 12pt; font-weight: 700; margin: 2.8mm 0 0.8mm; padding: 0.5mm 3mm; background: var(--ink); color: #fff; break-after: avoid; }
   p { margin: 0 0 2mm; }
   .lead { font-size: 10.5pt; }
-  .box { border: 1pt solid var(--line); padding: 1.6mm 3.5mm; margin: 2mm 0; break-inside: avoid; }
-  .box.stop { border: 2.5pt solid var(--stop); }
-  .box h3 { font-size: 10.5pt; margin: 0 0 1mm; font-weight: 700; }
-  .box.soft { background: var(--soft); border-color: var(--soft); }
   ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: s; }
-  ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 7mm 9mm 1fr; gap: 0 1mm; padding: 1.15mm 0; border-bottom: 0.5pt solid #ccc; break-inside: avoid; }
+  ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 9mm 1fr; gap: 0 1mm; padding: 1.15mm 0; border-bottom: 0.5pt solid #ccc; break-inside: avoid; }
   ol.steps > li:last-child { border-bottom: none; }
-  ol.steps > li::before { content: ""; width: 4.5mm; height: 4.5mm; border: 1.2pt solid var(--ink); margin-top: 0.6mm; }
   ol.steps > li > .n::before { content: counter(s); font-weight: 700; font-size: 11.5pt; }
   .n { text-align: center; }
   .ui { font-weight: 700; border: 0.8pt solid var(--ink); padding: 0 1.5mm; border-radius: 1.5mm; white-space: nowrap; }
   .note { color: var(--sub); font-size: 9.3pt; display: block; margin-top: 0.5mm; }
-  .gate { font-weight: 700; }
-  ul.plain { margin: 0; padding-left: 5mm; }
-  ul.plain li { margin-bottom: 0.5mm; } ul.none { list-style: none; padding-left: 0; }
-  table.rec { width: 100%; border-collapse: collapse; margin-top: 2mm; break-inside: avoid; }
-  table.rec th, table.rec td { border: 0.8pt solid var(--line); padding: 1.3mm 2.5mm; text-align: left; vertical-align: top; font-size: 9.8pt; }
-  table.rec th { width: 34mm; background: var(--soft); font-weight: 500; }
-  table.rec td { height: 6mm; }
-  table.rec td.tall { height: 9mm; }
-  footer { margin-top: 1.2mm; font-size: 9pt; color: var(--sub); display: flex; justify-content: space-between; }
   @media screen { body { background: #e9e9e9; } .sheet { background: #fff; margin: 6mm auto; padding: 12mm 12mm; box-shadow: 0 0 0 1px #ccc; } .page + .page { margin-top: 10mm; border-top: 1px dashed #bbb; padding-top: 10mm; } }
   @media print { .sheet { padding: 0; max-width: none; } }
 </style>
@@ -54,110 +40,56 @@
 
 <section class="page">
   <header class="top">
-    <h1>IT点呼 試験の手順<br>① 乗務員役 (点呼を受ける端末)</h1>
-    <div class="tag">点呼者用 / 1 枚目 (全 2 枚)</div>
+    <h1>IT点呼 の手順<br>① 乗務員 (点呼を受ける側)</h1>
+    <div class="tag">1 枚目 (全 2 枚)</div>
   </header>
 
-  <p class="lead">新しい「IT点呼」の試験です。<b>試験用に切り替えた端末の記録は、本番の点呼記録簿には出ません。</b>ふだんの点呼の代わりにはなりません。</p>
+  <p class="lead">IT点呼 は、いつもの通常点呼の最後に運行管理者と通話し、運行管理者の判定 (OK / NG) が出たら完了する点呼です。</p>
 
-  <div class="box soft">
-    <h3>始める前に (開発担当がやります)</h3>
-    <ul class="plain none">
-      <li>□ この端末を「開発用」に切り替えた　　　□ 運行管理者席を「開発用」に切り替えた (② の前)</li>
-      <li>開発担当から「切り替えました」と連絡があってから始めてください。</li>
-    </ul>
-  </div>
-
-  <h2>A. 端末が試験用になったか確かめる</h2>
+  <h2>IT点呼 を受ける</h2>
   <ol class="steps">
-    <li><span class="n"></span><div>端末 (測定器はつないだまま) で、画面を<b>再読み込み</b>する。</div></li>
-    <li><span class="n"></span><div>乗務員の画面で、メニュー (三本線のボタン) を開く。</div></li>
-    <li><span class="n"></span><div class="gate">メニューに <span class="ui">IT点呼</span> と <span class="ui">開発用の記録</span> の 2 つが出ていることを確かめる。
-      <span class="note">出ていないときは 1 分待って、もう一度再読み込みする。</span></div></li>
-  </ol>
-
-  <div class="box stop">
-    <h3>■ 2 つが出ていないあいだは、点呼をしないでください</h3>
-    <p>出ていない端末で点呼をすると、試験の記録が<b>本番の記録簿に入ります</b>。出ないときは止めて、開発担当に連絡してください。</p>
-  </div>
-
-  <h2>B. ふつうの点呼を 1 回 (最初の確認)</h2>
-  <ol class="steps">
-    <li><span class="n"></span><div>いつもの「通常点呼」を 1 回、最後 (保存) までやる。</div></li>
-    <li><span class="n"></span><div>メニュー → <span class="ui">開発用の記録</span> を開き、いまの 1 件が出ていることを確かめる。</div></li>
-    <li><span class="n"></span><div class="gate">開発担当に「1 回やりました」と連絡し、<b>返事が来るまで待つ</b>。
-      <span class="note">開発担当が、本番の記録が増えていないことを確かめます。OK が出たら ② へ。</span></div></li>
-  </ol>
-
-  <h2>C. IT点呼 (② の運行管理者席と一緒にやる)</h2>
-  <ol class="steps">
-    <li><span class="n"></span><div>メニュー → <span class="ui">IT点呼</span> を開く。</div></li>
-    <li><span class="n"></span><div><b>運転免許証</b>をカードリーダーにタッチする。
-      <span class="note">IT点呼 の本人確認は免許証だけです (社員番号の手入力や、ほかのカードは使えません)。1 回目で進まないときは、もう一度タッチし、その旨を記録に書いてください。</span></div></li>
-    <li><span class="n"></span><div>測定して保存する。画面が「IT点呼 — 運行管理者の判定を待っています」になり、通話が始まる。</div></li>
-    <li><span class="n"></span><div>運行管理者と通話し、判定 (OK / NG) が画面に出るのを確かめる。これで完了。
-      <span class="note">通話がつながらないまま終えるときは <span class="ui">未完了のまま終了</span> を押す (記録は未完了で残り、運行管理者があとで確定します)。</span></div></li>
+    <li><span class="n"></span><div>いつもの通常点呼を始め、<b>運転免許証</b>をカードリーダーにタッチする。
+      <span class="note">IT点呼 は、運転免許証で本人確認したときに選べます。</span></div></li>
+    <li><span class="n"></span><div>体温・血圧・アルコールを測る。</div></li>
+    <li><span class="n"></span><div>測定のあとに出る「保存の方法を選んでください」で <span class="ui">IT点呼 (運行管理者と通話)</span> を押す。
+      <span class="note">30 秒押さないと、通常点呼として保存されます。</span></div></li>
+    <li><span class="n"></span><div>画面が「IT点呼 — 運行管理者の判定を待っています」になり、通話が始まる。運行管理者と話し、判定 (OK / NG) が画面に出たら完了。</div></li>
+    <li><span class="n"></span><div>つながらないときは <span class="ui">未完了のまま終了</span> を押す。
+      <span class="note">記録は未完了で残り、運行管理者があとで確定します。</span></div></li>
   </ol>
 
 </section>
 
 <section class="page">
   <header class="top">
-    <h1>IT点呼 試験の手順<br>② 運行管理者席 (点呼をする側)</h1>
-    <div class="tag">点呼者用 / 2 枚目 (全 2 枚)</div>
+    <h1>IT点呼 の手順<br>② 運行管理者席 (点呼をする側)</h1>
+    <div class="tag">2 枚目 (全 2 枚)</div>
   </header>
 
-  <div class="box stop">
-    <h3>■ この席について</h3>
-    <ul class="plain">
-      <li>警告デバイス (卓上の機器) を <b>USB でつないだまま</b>にしてください。外すと試験用になりません。</li>
-      <li>試験用にした席は、<b>本番の遠隔点呼の着信が見えなくなります。</b>本番の遠隔点呼を受ける席では試さないでください。</li>
-    </ul>
-  </div>
-
-  <h2>D. 席が試験用になったか確かめる</h2>
+  <h2>準備</h2>
   <ol class="steps">
-    <li><span class="n"></span><div>開発担当から「運行管理者席を切り替えました」と連絡が来たら、画面を<b>再読み込み</b>する。</div></li>
-    <li><span class="n"></span><div>この手順書を読むために、いつもどおり運行管理者の画面に入る (社員番号 + 顔認証)。</div></li>
-    <li><span class="n"></span><div class="gate">画面のいちばん上の役割のタブ (運行者 / 運行管理者 / …) の右端に <span class="ui">IT点呼</span> が出ていることを確かめる。
-      <span class="note">出ていないときは、ここで止めて開発担当に連絡する。</span></div></li>
+    <li><span class="n"></span><div>警告デバイス (卓上の機器) を <b>USB でつないでおく</b>。</div></li>
+    <li><span class="n"></span><div>画面のいちばん上の役割のタブの <span class="ui">IT点呼</span> を開く。
+      <span class="note">運行管理者の画面に入らなくても開けます。</span></div></li>
+    <li><span class="n"></span><div>「この席の運行管理者を登録してください (社員番号)」に社員番号を入れ、<span class="ui">登録</span> を押す。
+      <span class="note">最初の 1 回だけです。人が替わるときは <span class="ui">変更</span> を押して、登録し直します。</span></div></li>
   </ol>
 
-  <h2>E. 着信を受けて、通話して、判定する</h2>
+  <h2>着信を受ける</h2>
   <ol class="steps">
-    <li><span class="n"></span><div><span class="ui">IT点呼</span> タブを開いて待つ (運行管理者の画面に入らなくても開けます)。乗務員役が ①-C をやると、着信が出て警告デバイスが鳴る。</div></li>
-    <li><span class="n"></span><div>着信の行の <span class="ui">通話する</span> を押す。社員番号を聞かれたら入力する。
-      <span class="note">IT点呼 では顔認証は出ません (出たら記録に書いてください)。</span></div></li>
+    <li><span class="n"></span><div>乗務員が IT点呼 を選ぶと、「着信」に行が出て、警告デバイスが鳴る。</div></li>
+    <li><span class="n"></span><div>着信の行の <span class="ui">通話する</span> を押す。
+      <span class="note">IT点呼 のタブを開いているときは、警告デバイス本体のボタンでも応答できます。</span></div></li>
     <li><span class="n"></span><div>通話で本人と測定結果 (アルコール・体温・血圧) を確かめる。</div></li>
-    <li><span class="n"></span><div>「運行管理者の判定」で、<b>確認の方法</b>が <span class="ui">IT点呼 (通話で確認)</span> になっていることを確かめ、OK / NG を送る。</div></li>
-    <li><span class="n"></span><div>乗務員側の画面に判定が出たことを、通話か声で確かめる。</div></li>
+    <li><span class="n"></span><div>「運行管理者の判定」で、<b>確認の方法</b>が <span class="ui">IT点呼 (通話で確認)</span> になっていることを確かめ、OK / NG を送る。
+      <span class="note">NG のときは <span class="ui">NG</span> を押し、理由を入れて (任意) <span class="ui">NG として記録する</span> を押します。</span></div></li>
   </ol>
 
-  <h2>F. 通話なしで確定する (もう 1 回)</h2>
+  <h2>通話できなかったとき</h2>
   <ol class="steps">
-    <li><span class="n"></span><div>乗務員役がもう一度 ①-C をやり、今度は通話を取らずに、乗務員役が <span class="ui">未完了のまま終了</span> を押す。</div></li>
-    <li><span class="n"></span><div><span class="ui">IT点呼</span> タブの「未完了の IT点呼」の一覧に、その 1 件が出ることを確かめる。</div></li>
-    <li><span class="n"></span><div>その行の <span class="ui">通話なしで確定する</span> を押し、<b>確認の方法</b>が <span class="ui">対面で確認</span> になっていることを確かめて、OK / NG を送る。</div></li>
-    <li><span class="n"></span><div>一覧からその 1 件が消えることを確かめ、開発担当に「終わりました」と連絡する。
-      <span class="note">開発担当が端末と席を元に戻します。メニューとタブから「IT点呼」が消えてから、ふだんの業務に使ってください。</span></div></li>
+    <li><span class="n"></span><div>「未完了の IT点呼」の一覧の行で <span class="ui">通話なしで確定する</span> を押す。</div></li>
+    <li><span class="n"></span><div>「運行管理者の判定」で、<b>確認の方法</b>を <span class="ui">対面で確認</span> にして、OK / NG を送る。</div></li>
   </ol>
-
-  <div class="box stop">
-    <h3>■ すぐ止めて開発担当に連絡するとき</h3>
-    <ul class="plain">
-      <li>メニューやタブに「IT点呼」が出ないのに、点呼を進めてしまいそうなとき。</li>
-      <li>本番の乗務員・運行管理者の画面に、見慣れないタブや着信が出たとき。</li>
-      <li>通話がつながらない、判定を送れない、画面にエラーが出たとき (文言を書き留める)。</li>
-    </ul>
-  </div>
-
-  <table class="rec">
-    <tr><th>実施日・時刻</th><td></td><th>実施した人</th><td></td></tr>
-    <tr><th>B 通常点呼</th><td>□ できた　□ できない</td><th>E 通話して判定</th><td>□ できた　□ できない</td></tr>
-    <tr><th>C 免許証のタッチ</th><td>□ 1 回目で進んだ　□ 2 回以上</td><th>F 通話なしで確定</th><td>□ できた　□ できない</td></tr>
-    <tr><th>気づいたこと</th><td class="tall" colspan="3"></td></tr>
-  </table>
-
 
 </section>
 

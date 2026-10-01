@@ -11,17 +11,24 @@
  * **`defaultMethod` を渡したときだけ** IT点呼 の「確認の方法」(通話で確認 / 対面で確認) を出し、
  * 送信に `method` を足す (Refs ippoan/alc-app#387)。渡さなければ画面も送信も今までと同一 —
  * 遠隔点呼モニターは渡さない (IT点呼 でない記録に `method` を送ると 400 になる)。
+ *
+ * 判定を送る口は prop `scope` (既定は遠隔点呼モニターの `'tenko-monitor'`)。IT点呼 の受け画面だけが
+ * `'manager-device'` (運行管理者席の鍵) を渡す。
  */
 import type { TenkoSession, SubmitManagerJudgment } from '~/types'
-import { submitManagerJudgment } from '~/utils/api'
+import { submitManagerJudgment, type RequestTokenScope } from '~/utils/api'
 import { MANAGER_JUDGMENT_METHOD, itTenkoRoomId, type ManagerJudgmentMethod } from '~/utils/it-tenko'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   session: TenkoSession
   managerId: string | null
   /** IT点呼 の受け画面だけが渡す。最初に選んでおく確認の方法 (既に確定していればそちらが先) */
   defaultMethod?: ManagerJudgmentMethod
-}>()
+  /** 判定を送る口。渡さなければ遠隔点呼モニターの口 (今までと同じ) */
+  scope?: RequestTokenScope
+}>(), {
+  scope: 'tenko-monitor',
+})
 
 const emit = defineEmits<{
   judged: [TenkoSession]
@@ -76,7 +83,7 @@ async function submit(judgment: 'ok' | 'ng') {
     const trimmed = reason.value.trim()
     if (judgment === 'ng' && trimmed) body.reason = trimmed
     if (method.value) body.method = method.value
-    const updated = await submitManagerJudgment(props.session.id, body, 'tenko-monitor')
+    const updated = await submitManagerJudgment(props.session.id, body, props.scope)
     // 判定が付いた点呼の部屋は、相手が閉じて消えるまで着信として数えない (警告デバイスを
     // 鳴らさない)。部屋の id は遠隔点呼なら記録の id そのまま、IT点呼 なら `it-<id>` —
     // 一覧に在る方だけが印になる
