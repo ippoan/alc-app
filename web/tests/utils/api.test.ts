@@ -1891,10 +1891,11 @@ restoreNativeApis()
 
     it('listTenkoSessions: 既存の filter だけの呼び出しは今までと同じ URL (欄の順も同じ)', async () => {
       stubOk({ sessions: [], total: 0 })
-      await listTenkoSessions({ status: 'completed', date_from: '2026-08-01', page: 2, per_page: 20 })
+      // live (実物の backend) でも走るので、date_from は backend が受ける日時の形で渡す
+      await listTenkoSessions({ status: 'completed', date_from: '2026-08-01T00:00:00Z', page: 2, per_page: 20 })
       assertMock(() => {
         expect(mockFetch.mock.calls[0][0]).toBe(
-          'https://api.example.com/api/tenko/sessions?status=completed&date_from=2026-08-01&page=2&per_page=20',
+          'https://api.example.com/api/tenko/sessions?status=completed&date_from=2026-08-01T00%3A00%3A00Z&page=2&per_page=20',
         )
       })
     })
