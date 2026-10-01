@@ -210,6 +210,14 @@ mockNuxtImport('useBpUiEnabled', () => () => ({
   showBpUi: computed(() => bpUi.state.value === 'show'),
 }))
 
+// 署名ボンドの読み口 (`useSignedBpBond`)。実物は module スコープに「試し終えたら true」を
+// 持つので、ここでは差し替える。既定は「まだ試していない」(= 自動点呼を塞がない)
+const signedBond = { probed: ref(false), bonded: ref<boolean | null>(null) }
+mockNuxtImport('useSignedBpBond', () => () => ({
+  signedBpBonded: readonly(signedBond.bonded),
+  hasProbedBpBond: readonly(signedBond.probed),
+}))
+
 // Android 横画面 (トップのタブバーが縦画面と別の描画になる)。既定は縦
 const landscape = { on: ref(false) }
 mockNuxtImport('useAndroidLandscape', () => () => ({
@@ -1327,5 +1335,191 @@ describe('pages/index — 開発用の端末であることの帯 (Refs ippoan/a
     expect(removeSpy.mock.calls.some(([name]) => name === DEV_DEVICE_MARK_EVENT)).toBe(true)
     expect(() => noteDeviceToken('kiosk', devDeviceJwt())).not.toThrow()
     removeSpy.mockRestore()
+  })
+})
+
+describe('pages/index — 血圧を測れない端末では自動点呼のタブを選べない (Refs ippoan/alc-app#401)', () => {
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+  const NOTE = '[data-testid="auto-tenko-blocked-note"]'
+  const NORMAL = '.normal-measurement-stub'
+  const AUTO = 'tenko-kiosk-stub:not([remote-mode]):not([demo-mode])'
+  const DEMO = 'tenko-kiosk-stub[demo-mode]:not([remote-mode])'
+  const REMOTE = 'tenko-kiosk-stub[remote-mode]:not([demo-mode])'
+  const HEAD = 'この端末は血圧計が登録されていないため、自動点呼を使えません。'
+  const FIX_PAIR = '自動点呼を使うには、この端末に血圧計を登録 (ペアリング) してください。'
+  const FIX_SETTING = '自動点呼を使うには、端末の設定で血圧計を使う設定にしてください。'
+  const TAIL = 'それまでは通常点呼か遠隔点呼を使ってください。分からないときは運行管理者に連絡してください。'
+
+  function block(bonded: boolean | null = null) {
+    signedBond.probed.value = true
+    signedBond.bonded.value = bonded
+    bpUi.state.value = 'unused'
+  }
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    signedBond.probed.value = false
+    signedBond.bonded.value = null
+    landscape.on.value = false
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    bpUi.state.value = 'unused'
+    signedBond.probed.value = false
+    signedBond.bonded.value = null
+    landscape.on.value = false
+  })
+
+  function tabButton(w: VueWrapper, label: string) {
+    const row = w.find(landscape.on.value ? '.border-b.bg-gray-50' : '.bg-blue-100')
+    const b = row.findAll('button').find(x => x.text() === label)
+    if (!b) throw new Error(`tab not found: ${label}`)
+    return b
+  }
+
+  async function clickMenuItem(w: VueWrapper, label: string) {
+    const hamburger = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!hamburger) throw new Error('hamburger not found')
+    await hamburger.trigger('click')
+    await nextTick()
+    const item = w.find('.absolute.right-0').findAll('button').find(x => x.text() === label)
+    if (!item) throw new Error(`menu item not found: ${label}`)
+    await item.trigger('click')
+    await nextTick()
+  }
+
+  describe.each([
+    { name: '縦画面', isLandscape: false },
+    { name: 'Android 横画面', isLandscape: true },
+  ])('$name', ({ isLandscape }) => {
+    beforeEach(() => { landscape.on.value = isLandscape })
+
+    it('★ 試し終えて unused の端末は、自動点呼を押しても通常点呼のまま・案内が出る・タブは aria-disabled', async () => {
+      block()
+      wrapper = await mountIndex('/?role=driver')
+      expect(tabButton(wrapper, '自動点呼').attributes('aria-disabled')).toBe('true')
+      // 他のタブは塞がない
+      expect(tabButton(wrapper, '通常点呼').attributes('aria-disabled')).toBeUndefined()
+      expect(tabButton(wrapper, '遠隔点呼').attributes('aria-disabled')).toBeUndefined()
+      // 押せないのではなく、押すと案内が出る (disabled 属性は付けない)
+      expect(tabButton(wrapper, '自動点呼').attributes('disabled')).toBeUndefined()
+      expect(wrapper.find(NOTE).exists()).toBe(false)
+
+      await tabButton(wrapper, '自動点呼').trigger('click')
+      await nextTick()
+
+      expect(wrapper.find(AUTO).exists()).toBe(false)
+      expect(wrapper.find(NORMAL).exists()).toBe(true)
+      expect(wrapper.find(NOTE).exists()).toBe(true)
+    })
+
+    it.each(['show', 'checking'] as const)('%s では今までどおり自動点呼に切り替わり、案内は出ない', async (state) => {
+      signedBond.probed.value = true
+      bpUi.state.value = state
+      wrapper = await mountIndex('/?role=driver')
+      expect(tabButton(wrapper, '自動点呼').attributes('aria-disabled')).toBeUndefined()
+
+      await tabButton(wrapper, '自動点呼').trigger('click')
+      await nextTick()
+
+      expect(wrapper.find(AUTO).exists()).toBe(true)
+      expect(wrapper.find(NOTE).exists()).toBe(false)
+    })
+
+    it('unused でも署名をまだ試していなければ塞がない (CoreS3 の署名が届けば show に変わる)', async () => {
+      bpUi.state.value = 'unused'
+      wrapper = await mountIndex('/?role=driver')
+      expect(tabButton(wrapper, '自動点呼').attributes('aria-disabled')).toBeUndefined()
+
+      await tabButton(wrapper, '自動点呼').trigger('click')
+      await nextTick()
+
+      expect(wrapper.find(AUTO).exists()).toBe(true)
+      expect(wrapper.find(NOTE).exists()).toBe(false)
+    })
+
+    it('unregistered / unavailable も塞がない', async () => {
+      signedBond.probed.value = true
+      bpUi.state.value = 'unregistered'
+      wrapper = await mountIndex('/?role=driver')
+      expect(tabButton(wrapper, '自動点呼').attributes('aria-disabled')).toBeUndefined()
+      bpUi.state.value = 'unavailable'
+      await nextTick()
+      expect(tabButton(wrapper, '自動点呼').attributes('aria-disabled')).toBeUndefined()
+    })
+  })
+
+  it('★ ?tab=tenko で開いても blocked なら通常点呼に戻り、案内が出る', async () => {
+    block()
+    wrapper = await mountIndex('/?role=driver&tab=tenko')
+    expect(wrapper.find(AUTO).exists()).toBe(false)
+    expect(wrapper.find(NORMAL).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(true)
+  })
+
+  it('★ 自動点呼を開いている最中に blocked へ変わると通常点呼に戻って案内が出る。外れると案内が消える', async () => {
+    signedBond.probed.value = false
+    wrapper = await mountIndex('/?role=driver&tab=tenko')
+    expect(wrapper.find(AUTO).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(false)
+
+    signedBond.probed.value = true
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find(AUTO).exists()).toBe(false)
+    expect(wrapper.find(NORMAL).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(true)
+
+    bpUi.state.value = 'show'
+    await nextTick()
+    expect(wrapper.find(NOTE).exists()).toBe(false)
+    // 外れたあと、また塞がれても押していないのに案内は出ない
+    bpUi.state.value = 'unused'
+    await nextTick()
+    expect(wrapper.find(NOTE).exists()).toBe(false)
+  })
+
+  it('案内の文言: signedBpBonded が false なら登録 (ペアリング) を案内する', async () => {
+    block(false)
+    wrapper = await mountIndex('/?role=driver&tab=tenko')
+    expect(wrapper.find(NOTE).findAll('p').map(p => p.text())).toEqual([HEAD, FIX_PAIR, TAIL])
+  })
+
+  it.each([null, true])('案内の文言: signedBpBonded が %s なら端末の設定を案内する', async (bonded) => {
+    block(bonded)
+    wrapper = await mountIndex('/?role=driver&tab=tenko')
+    expect(wrapper.find(NOTE).findAll('p').map(p => p.text())).toEqual([HEAD, FIX_SETTING, TAIL])
+  })
+
+  it('★ 自動点呼デモ (メニュー) も同じ: 選んでも通常点呼のまま・案内が出る', async () => {
+    block()
+    wrapper = await mountIndex('/?role=driver')
+    await clickMenuItem(wrapper, '自動点呼デモ')
+    expect(wrapper.find(DEMO).exists()).toBe(false)
+    expect(wrapper.find(NORMAL).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(true)
+  })
+
+  it('塞がれていなければ自動点呼デモは開ける', async () => {
+    bpUi.state.value = 'show'
+    wrapper = await mountIndex('/?role=driver')
+    await clickMenuItem(wrapper, '自動点呼デモ')
+    expect(wrapper.find(DEMO).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(false)
+  })
+
+  it('遠隔点呼・遠隔点呼デモ・デバイス設定は塞がれていても開ける', async () => {
+    block()
+    wrapper = await mountIndex('/?role=driver&tab=remote')
+    expect(wrapper.find(REMOTE).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(false)
+    await clickMenuItem(wrapper, '遠隔点呼デモ')
+    expect(wrapper.find('tenko-kiosk-stub[remote-mode][demo-mode]').exists()).toBe(true)
+    await clickMenuItem(wrapper, 'デバイス設定')
+    expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
+    expect(wrapper.find(NOTE).exists()).toBe(false)
   })
 })

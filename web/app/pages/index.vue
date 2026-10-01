@@ -203,6 +203,42 @@ const menuTabs = computed(() => [
 // 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
 const isMenuTabActive = computed(() => menuTabs.value.some(t => t.key === driverSubTab.value))
 
+// 血圧を測れないと確定した端末では、自動点呼 (業務前は血圧が必須) のタブを選べなくする
+// (Refs ippoan/alc-app#401)。**署名の試行が終わった (`hasProbedBpBond`) 端末だけ**を塞ぐ —
+// 試行前の `unused` はサーバが端末設定を答えただけで、CoreS3 の署名が届けば `show` に変わる
+// ので、そこで塞ぐと血圧計のある端末を誤って締め出す。`checking` / `unregistered` /
+// `unavailable` / `show` のあいだは塞がない (今までどおり)
+const { signedBpBonded, hasProbedBpBond } = useSignedBpBond()
+const autoTenkoBlocked = computed(() => hasProbedBpBond.value && bpUiState.value === 'unused')
+// 自動点呼デモも同じ `onMedicalSubmit` で medical をサーバへ送る (血圧が無ければ 400) ので塞ぐ
+const AUTO_TENKO_TABS: readonly DriverSubTab[] = ['tenko', 'demo']
+const AUTO_TENKO_BLOCKED_HEAD = 'この端末は血圧計が登録されていないため、自動点呼を使えません。'
+const AUTO_TENKO_BLOCKED_FIX_PAIR = '自動点呼を使うには、この端末に血圧計を登録 (ペアリング) してください。'
+const AUTO_TENKO_BLOCKED_FIX_SETTING = '自動点呼を使うには、端末の設定で血圧計を使う設定にしてください。'
+const AUTO_TENKO_BLOCKED_TAIL = 'それまでは通常点呼か遠隔点呼を使ってください。分からないときは運行管理者に連絡してください。'
+const autoTenkoBlockedLines = computed(() => [
+  AUTO_TENKO_BLOCKED_HEAD,
+  signedBpBonded.value === false ? AUTO_TENKO_BLOCKED_FIX_PAIR : AUTO_TENKO_BLOCKED_FIX_SETTING,
+  AUTO_TENKO_BLOCKED_TAIL,
+])
+const autoTenkoBlockedNoteShown = ref(false)
+// `driverSubTab` の代入は 6 か所 (`?tab=` の直開き・タブのクリック・メニュー・開いている最中に
+// 確定) あるので、書き換えずにここ 1 本で覆う。塞がれた画面は通常点呼へ戻し、案内を出す。
+// 塞ぎが外れたら案内も畳む (次に塞がれたとき、押していないのに案内が出ない)
+watch([driverSubTab, autoTenkoBlocked], ([tab, blocked]) => {
+  if (!blocked) {
+    autoTenkoBlockedNoteShown.value = false
+  }
+  else if (AUTO_TENKO_TABS.includes(tab)) {
+    driverSubTab.value = 'normal'
+    autoTenkoBlockedNoteShown.value = true
+  }
+}, { immediate: true })
+/** 可視タブのうち、いま選べないもの (押すと上の watch が戻して案内を出す) */
+function isTabBlocked(key: DriverSubTab) {
+  return key === 'tenko' && autoTenkoBlocked.value
+}
+
 // URL クエリ同期。`?station=bp` (測定台として起動した印) が元々付いていれば引き継ぐ —
 // 落としても測定台の判定自体は変わらないので詰まりはしないが、リロードするたびに
 // 測定台の印が消える不安定な挙動になる (Refs ippoan/alc-app#353)。
@@ -450,9 +486,12 @@ function onRoleTabClick(role: RoleTab) {
             v-for="tab in visibleTabs"
             :key="tab.key"
             class="flex-1 whitespace-nowrap px-1 py-2 rounded-md text-xs sm:px-3 sm:text-sm font-medium transition-colors"
-            :class="driverSubTab === tab.key
-              ? 'bg-white text-blue-800 shadow-sm'
-              : 'text-blue-700 hover:text-blue-900'"
+            :class="isTabBlocked(tab.key)
+              ? 'text-gray-400 cursor-not-allowed'
+              : driverSubTab === tab.key
+                ? 'bg-white text-blue-800 shadow-sm'
+                : 'text-blue-700 hover:text-blue-900'"
+            :aria-disabled="isTabBlocked(tab.key) ? 'true' : undefined"
             @click="driverSubTab = tab.key"
           >
             {{ tab.label }}
@@ -520,9 +559,12 @@ function onRoleTabClick(role: RoleTab) {
             v-for="tab in visibleTabs"
             :key="tab.key"
             class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            :class="driverSubTab === tab.key
-              ? 'bg-blue-100 text-blue-800'
-              : 'text-blue-600 hover:text-blue-800 hover:bg-blue-50'"
+            :class="isTabBlocked(tab.key)
+              ? 'text-gray-400 cursor-not-allowed'
+              : driverSubTab === tab.key
+                ? 'bg-blue-100 text-blue-800'
+                : 'text-blue-600 hover:text-blue-800 hover:bg-blue-50'"
+            :aria-disabled="isTabBlocked(tab.key) ? 'true' : undefined"
             @click="driverSubTab = tab.key"
           >
             {{ tab.label }}
@@ -609,6 +651,18 @@ function onRoleTabClick(role: RoleTab) {
                 ページ更新
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- 自動点呼を選べない理由と、使えるようにする方法 (Refs ippoan/alc-app#401)。
+             塞がれているあいだだけ。押せるものは持たない -->
+        <div
+          v-if="autoTenkoBlocked && autoTenkoBlockedNoteShown"
+          data-testid="auto-tenko-blocked-note"
+          class="w-full max-w-lg mx-auto px-4 mt-2 shrink-0"
+        >
+          <div class="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700 space-y-1">
+            <p v-for="line in autoTenkoBlockedLines" :key="line">{{ line }}</p>
           </div>
         </div>
 

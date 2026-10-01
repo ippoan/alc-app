@@ -1,6 +1,6 @@
 ---
 name: alc-app-map
-generated-from: alc-app:58f7ea24da543232bffd7d53ab106788b4dde9a2
+generated-from: alc-app:5d10581d19f9457fa617b6616ff5adb6226c8b86
 paths: [web/, cf-alc-signaling/, cf-alc-recorder/]
 description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカーシステム / 複合 repo) の構造ナビゲーション。タニタ FC-1200 + NFC + 顔認証による本人確認付きアルコール測定 + 遠隔点呼。web/ (Nuxt 4 PWA on Workers)・cf-alc-signaling/ (WebRTC signaling DO)・cf-alc-recorder/ (CoreS3 測定データ受口 DO)・fc1200-wasm (秘匿) の区画、WebSerial/WebRTC/顔認証の composable 配置、秘匿ファイル・テストの gotcha を 1 枚にまとめる。トリガー:「alc-app」「アルコールチェッカー」「FC-1200」「fc1200」「点呼」「遠隔点呼」「顔認証」「NFC bridge」「WebRTC signaling」「cf-alc-signaling」「cf-alc-recorder」「alc-recorder」「CoreS3 測定」「alc.ippoan.org」等。
 ---
@@ -58,6 +58,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 - **semver patch のみ**: バージョンアップは常に patch (0.2.1→0.2.2)。minor/major は上げない。
 - **WebRTC は Hibernatable WebSockets API 必須** (Durable Objects)。
 - **体温の段 (`medical`) の名前と血圧待ち** (Refs ippoan/alc-app#387): `NormalMeasurement.vue` の段の名前 (パンくずと見出しの「体温」/「体温・血圧」) は `bpEnabled` ではなく **`useBpUiEnabled()` の `showBpUi`** で決める — `BleStatus.vue` の自動で次へ進む条件 (`autoNextReady`) と同じ見方 (CoreS3 キオスクは `bpEnabled` が常に false)。`showBpUi` で体温だけ届き血圧がまだの間、`BleStatus.vue` は「血圧の測定を待っています」(`data-testid="bp-waiting-note"`) を出す。`NormalMeasurement.vue` の保存内容側 (`bpEnabled && measurementResult.systolic`) は未変更。
+- **自動点呼のタブは `hasProbedBpBond && bpUiState === 'unused'` の端末で塞ぐ** (Refs ippoan/alc-app#401): 血圧を測れないと確定した端末 (CoreS3 のボンド無し / 「血圧を使わない」設定) では、`index.vue` が運行者の「自動点呼」と「自動点呼デモ」(どちらも `onMedicalSubmit` で medical をサーバへ送る) を選べなくし、赤枠の案内 (`data-testid="auto-tenko-blocked-note"`、`signedBpBonded === false` なら「血圧計を登録」、それ以外は「端末の設定で血圧計を使う設定に」) を出す。**機構は `index.vue` の watch 1 つ** (`driverSubTab` の 6 か所の代入は書き換えない。塞がれた画面は通常点呼へ戻す)。`hasProbedBpBond` を条件に入れるのは、署名の試行前の `unused` (サーバが端末設定を答えただけ) で CoreS3 を誤って塞がないため。タブには `aria-disabled` を付けるだけで `disabled` は付けない (押すと案内が出る)。`useTenkoKiosk` の `isBpRequirementUnknown` (「false は通す」) は変えていない — `unused` の端末はここまで来ない。**サーバ側 (rust-alc-api) も自動点呼の業務前は常に血圧必須** (Refs ippoan/alc-app#401。この画面の変更が先に本番へ出る)。
 - **テスト (CLAUDE.md に詳細)**: Vitest 4 + `@nuxt/test-utils` (happy-dom)。fc1200-wasm と `virtual:pwa-register/vue` は `tests/mocks/` でモック (CI に wasm-pack 不要 / Windows での virtual module 解決エラー回避)。ブラウザ API (WebSerial/BLE/NFC) は `Object.defineProperty(navigator, ...)` でモック。**`v8 ignore` 禁止** (`withSetup` / テスト追加 / 到達不能コード削除で対処)。モジュールスコープ状態を持つ composable (`useBleGateway` `useFaceDetection` `useFc1200Serial`) は `vi.resetModules()` + dynamic import で分離。
 - **mock/live 統一テスト**: `web/tests/utils/api.test.ts` は 1 ファイルで mock と live (実 rust-alc-api コンテナ) 両対応。`API_BASE_URL` 環境変数の有無で切替。fake ID 禁止 (`api-test-data.ts` の実在 UUID を使う)。`docker-compose.test.yml` で GHCR `rust-alc-api:latest` + PG 起動。
 - **型同期**: `cd ~/rust/rust-alc-api && bash scripts/sync-types.sh` → `web/app/types/generated/` に生成 (git 管理、CI で差分チェック)。
