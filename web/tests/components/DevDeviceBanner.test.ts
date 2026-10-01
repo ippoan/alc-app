@@ -1,7 +1,7 @@
 // 「開発用の端末です」の帯 (Refs ippoan/alc-app#387)。
 //
-// 端末の鍵に dev の印がある端末には黄色の帯、印が 1 つも無い端末 (= 本番の全端末) には
-// 「本番」の表示を、画面の一番上に出す (どちらか一方が必ず出る)。印は reactive ではないので、
+// 端末の鍵に dev の印がある端末にだけ、画面の一番上に出す。**印が 1 つも無い端末
+// (= 本番の全端末) では DOM に 1 つも出さない**。印は reactive ではないので、
 // 印が変わったときのイベント (DEV_DEVICE_MARK_EVENT) で読み直す。
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { nextTick } from 'vue'
@@ -13,7 +13,6 @@ import {
 import { devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 
 const BANNER = '[data-testid="dev-device-banner"]'
-const PROD = '[data-testid="prod-device-banner"]'
 const KINDS: DeviceTokenKind[] = ['kiosk', 'manager-device', 'bp-station']
 
 afterEach(() => {
@@ -23,20 +22,17 @@ afterEach(() => {
 })
 
 describe('DevDeviceBanner', () => {
-  it('★ 印が 1 つも無い端末では黄色の帯は無く、「本番」の表示が出る', async () => {
+  it('★ 印が 1 つも無い端末では何も描画しない (帯の要素ごと無い)', async () => {
     const wrapper = await mountSuspended(DevDeviceBanner)
     expect(wrapper.find(BANNER).exists()).toBe(false)
     expect(wrapper.html()).not.toContain('開発用')
-    expect(wrapper.find(PROD).exists()).toBe(true)
-    expect(wrapper.find(PROD).text()).toBe('本番')
     wrapper.unmount()
   })
 
-  it('dev でない端末のトークンが取れている端末でも黄色の帯は出ず、「本番」が出る', async () => {
+  it('dev でない端末のトークンが取れている端末でも出ない', async () => {
     noteDeviceToken('kiosk', plainDeviceJwt())
     const wrapper = await mountSuspended(DevDeviceBanner)
     expect(wrapper.find(BANNER).exists()).toBe(false)
-    expect(wrapper.find(PROD).text()).toBe('本番')
     wrapper.unmount()
   })
 
@@ -46,7 +42,6 @@ describe('DevDeviceBanner', () => {
 
     const banner = wrapper.find(BANNER)
     expect(banner.exists()).toBe(true)
-    expect(wrapper.find(PROD).exists()).toBe(false)
     expect(banner.text()).toContain('開発用の端末です')
     expect(banner.text()).toContain('この端末の記録は本番の記録簿に出ません (キオスク)')
     // 表示だけ — 押せるものを持たない
@@ -72,25 +67,22 @@ describe('DevDeviceBanner', () => {
     wrapper.unmount()
   })
 
-  it('★ mount 後に印が立つと (イベントで) 「本番」が消えて帯が現れ、外すと帯が消えて「本番」が出る', async () => {
+  it('★ mount 後に印が立つと (イベントで) 帯が現れ、外すと消える', async () => {
     const wrapper = await mountSuspended(DevDeviceBanner)
     expect(wrapper.find(BANNER).exists()).toBe(false)
-    expect(wrapper.find(PROD).exists()).toBe(true)
 
     noteDeviceToken('manager-device', devDeviceJwt())
     await nextTick()
     expect(wrapper.find(BANNER).exists()).toBe(true)
     expect(wrapper.find(BANNER).text()).toContain('運行管理者席')
-    expect(wrapper.find(PROD).exists()).toBe(false)
 
     clearDevDeviceMark('manager-device')
     await nextTick()
     expect(wrapper.find(BANNER).exists()).toBe(false)
-    expect(wrapper.find(PROD).text()).toBe('本番')
     wrapper.unmount()
   })
 
-  it('dev でないトークンに替わると帯が消えて「本番」が出る', async () => {
+  it('dev でないトークンに替わっても消える', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     const wrapper = await mountSuspended(DevDeviceBanner)
     expect(wrapper.find(BANNER).exists()).toBe(true)
@@ -98,7 +90,6 @@ describe('DevDeviceBanner', () => {
     noteDeviceToken('kiosk', plainDeviceJwt())
     await nextTick()
     expect(wrapper.find(BANNER).exists()).toBe(false)
-    expect(wrapper.find(PROD).text()).toBe('本番')
     wrapper.unmount()
   })
 
