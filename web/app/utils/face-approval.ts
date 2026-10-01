@@ -1,5 +1,4 @@
 /** 顔承認ステータスチェック (共通ユーティリティ) */
-import type { TenkoSession } from '~/types'
 
 /**
  * 顔認証をどう扱うかの判定 (Refs ippoan/alc-app-s3#135)。
@@ -43,17 +42,4 @@ export function checkFaceApproval(emp: { name: string; face_approval_status?: st
   }
   const msg = blockedMessages[status] ?? '顔データが未承認です'
   return { kind: 'blocked', message: `${emp.name}さん: ${msg}` }
-}
-
-/**
- * 遠隔点呼モニターで着信を取るとき、運行管理者の顔認証を飛ばしてよいか (Refs ippoan/alc-app#387)。
- *
- * 飛ばすのは **IT点呼で、まだ運行管理者が判定していない**着信だけ。遠隔点呼の着信・判定済みの
- * 点呼・点呼の中身が分からないとき (session を引けなかった) は従来どおり顔認証を要求する。
- * 社員番号の段を残すかどうか、どの席でこの判定を使うかは呼び出し側 (TenkoRemoteAdminView) が決める。
- */
-export function shouldSkipManagerFaceAuth(
-  session: Pick<TenkoSession, 'tenko_method' | 'manager_judgment'> | null | undefined,
-): boolean {
-  return session?.tenko_method === 'IT点呼' && session.manager_judgment == null
 }

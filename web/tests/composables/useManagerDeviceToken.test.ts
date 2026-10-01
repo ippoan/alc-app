@@ -322,4 +322,80 @@ describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
 
     expect(isDevDevice('manager-device')).toBe(false)
   })
+
+  describe('prefetchManagerJwt — 警告デバイスが繋がったときの先取り (Refs ippoan/alc-app#387)', () => {
+    it('取れたら cache に載り、抑止の期限には触らない (続く getManagerJwt は通信しない)', async () => {
+      const fetchMock = stubHappyPath()
+      const t = (await load())()
+
+      await expect(t.prefetchManagerJwt()).resolves.toBeUndefined()
+
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(t.backoffUntil.value).toBe(0)
+      expect(await t.getManagerJwt()).toBe(TOKEN)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('★ 取れなかったら抑止の期限を先取りの前の値 (0) へ戻し、直後の本物の要求はもう一度取りに行って通る', async () => {
+      const fetchMock = vi.fn()
+        // 先取り: 繋がった直後で nonce が取れない
+        .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+        // 本物の要求: nonce → token
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: TOKEN, expires_in: 900 }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const t = (await load())()
+
+      await t.prefetchManagerJwt()
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(t.backoffUntil.value).toBe(0)
+      expect(await t.getManagerJwt()).toBe(TOKEN)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
+    it('本物の要求の失敗で立っていた抑止は、先取りが消さない (前の値のまま)', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) })
+      vi.stubGlobal('fetch', fetchMock)
+      const t = (await load())()
+      expect(await t.getManagerJwt()).toBeNull()
+      const before = t.backoffUntil.value
+      expect(before).toBeGreaterThan(Date.now())
+
+      await t.prefetchManagerJwt()
+
+      // 抑止中なので通信せず、期限も動かない
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(t.backoffUntil.value).toBe(before)
+    })
+
+    it('VoiceS3R が繋がっていなければ通信 0', async () => {
+      alarmMock.isConnected.value = false
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const t = (await load())()
+
+      await t.prefetchManagerJwt()
+
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(t.backoffUntil.value).toBe(0)
+    })
+
+    it('中で例外が出ても reject しない', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const t = (await load())()
+      // 接続の状態を読むところで落とす (getManagerJwt は reject する)
+      const connected = alarmMock.isConnected
+      alarmMock.isConnected = null as unknown as typeof connected
+      try {
+        await expect(t.getManagerJwt()).rejects.toThrow()
+        await expect(t.prefetchManagerJwt()).resolves.toBeUndefined()
+      }
+      finally {
+        alarmMock.isConnected = connected
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
 })

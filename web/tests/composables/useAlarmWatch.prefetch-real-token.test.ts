@@ -1,6 +1,5 @@
 // 先取りの失敗が、後続の本物の要求を遅らせないこと (Refs ippoan/alc-app#387)。
-// useManagerDeviceToken は**本物**を繋ぐ — 抑止の期限 (readonly で返る) を戻す書き込みが
-// 本物の module スコープに届くことは、モックでは確かめられないため。
+// useManagerDeviceToken は**本物**を繋ぎ、警告デバイスが繋がる → 先取り → 本物の要求、を通しで見る。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, readonly, nextTick } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
