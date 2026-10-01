@@ -117,7 +117,7 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'it'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
@@ -128,6 +128,8 @@ const driverSubTab = ref<DriverSubTab>(
   // dev端末の記録 (Refs ippoan/alc-app#387)。**dev の印がある端末でだけ開く** — 印の無い
   // 端末が URL で開いても、メニューに無い画面が出るだけなので通常点呼へ倒す
   : route.query.tab === 'dev_records' && isDevDevice('kiosk') ? 'dev_records'
+  // IT点呼 も同じ (テストが済むまで本番の運行者には見せない)
+  : route.query.tab === 'it' && isDevDevice('kiosk') ? 'it'
   : 'normal',
 )
 
@@ -153,6 +155,9 @@ const MENU_TABS: readonly SubTabDef[] = [
 // 印 (`isDevDevice`) は同期で読める代わりに reactive ではないので、ここに写しを持ち、
 // メニューを開くたびに読み直す — 起動後に dev の鍵でトークンが取れた端末でも、開けば出る
 const DEV_RECORDS_TAB: SubTabDef = { key: 'dev_records', label: '開発用の記録' }
+// IT点呼 (通常点呼の最後に運行管理者と通話し、判定が付いたら完了)。出し方は上と同じ —
+// **dev の印がある端末にだけ**出す。テストが済むまで本番の運行者には見せない
+const IT_TENKO_TAB: SubTabDef = { key: 'it', label: 'IT点呼' }
 const devKioskMark = ref(isDevDevice('kiosk'))
 function refreshDevKioskMark() {
   devKioskMark.value = isDevDevice('kiosk')
@@ -162,6 +167,11 @@ function onDevMarkCleared() {
   refreshDevKioskMark()
   driverSubTab.value = 'normal'
 }
+// 印が消えたとき (メニューを開いて読み直した結果を含む) に IT点呼 を開いていたら、
+// メニューから消えた画面に留まらせず通常点呼へ戻す。印が無い端末では一度も動かない
+watch(devKioskMark, (mark) => {
+  if (!mark && driverSubTab.value === 'it') driverSubTab.value = 'normal'
+})
 
 // 血圧測定の置き場所。**`BloodPressureMeasurement` が中身を出せる状態 (`showBpUi`) と同じ
 // 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
@@ -183,7 +193,7 @@ const visibleTabs = computed(() => bpInVisible.value ? [...VISIBLE_TABS, BP_TAB]
 const menuTabs = computed(() => [
   ...MENU_TABS,
   ...(bpInVisible.value ? [] : [BP_TAB]),
-  ...(devKioskMark.value ? [DEV_RECORDS_TAB] : []),
+  ...(devKioskMark.value ? [IT_TENKO_TAB, DEV_RECORDS_TAB] : []),
 ])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
 // 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
@@ -628,6 +638,9 @@ function onRoleTabClick(role: RoleTab) {
               />
             </template>
           </NormalMeasurement>
+          <!-- IT点呼 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る。
+               IC カードからの開始 (ref) と打刻履歴 (slot) は通常点呼タブのものなので付けない -->
+          <NormalMeasurement v-if="driverSubTab === 'it'" it-mode :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'tenko'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'remote'" :remote-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'remote_demo'" :remote-mode="true" :demo-mode="true" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />

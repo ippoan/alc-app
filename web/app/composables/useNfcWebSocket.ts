@@ -49,8 +49,9 @@ export function useNfcWebSocket(url: string = DEFAULT_URL) {
 
         switch (data.type) {
           case 'nfc_read':
-            // **source はここで立てる。** ブリッジから来た JSON に名乗らせない
-            readCallbacks.forEach(cb => cb({ ...data, source: 'bridge' }))
+            // **source はここで立てる。** ブリッジから来た JSON に名乗らせない。
+            // card_type も同じ — 載せるのは下の免許証イベントから作る read だけ
+            readCallbacks.forEach(cb => cb({ ...data, source: 'bridge', card_type: undefined }))
             break
           case 'nfc_license_read':
             console.log('[NFC] License read:', data)
@@ -62,7 +63,9 @@ export function useNfcWebSocket(url: string = DEFAULT_URL) {
               const employeeId = data.card_type === 'driver_license' && data.card_id.length >= 26
                 ? data.card_id.substring(10, 26)
                 : data.card_id
-              readCallbacks.forEach(cb => cb({ type: 'nfc_read', employee_id: employeeId, source: 'bridge' }))
+              // card_type は**この read 自身に**載せる (受け手が前の読み取りを覚えなくて済むように)。
+              // 上の素の `nfc_read` には載せない (Refs ippoan/alc-app#387)
+              readCallbacks.forEach(cb => cb({ type: 'nfc_read', employee_id: employeeId, source: 'bridge', card_type: data.card_type }))
             }
             break
           case 'nfc_debug':

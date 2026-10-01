@@ -168,6 +168,59 @@ describe('useNfcWebSocket', () => {
       // **ブリッジ経路は必ず source: 'bridge'。** 打刻を打つ側かどうかがこれで決まる
       expect(cb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'EMP001', source: 'bridge' })
     })
+
+    // IT点呼 の本人確認 (免許証だけ) は read 自身に載る card_type を見る (Refs ippoan/alc-app#387)
+    it('★ 素の nfc_read には card_type が載らない (ブリッジが名乗ってきても落とす)', async () => {
+      const seen: import('~/types').NfcReadEvent[] = []
+      const nfc = useNfcWebSocket()
+      nfc.onRead(e => seen.push(e))
+      nfc.connect()
+      await vi.advanceTimersByTimeAsync(10)
+
+      lastWs().simulateMessage(JSON.stringify({ type: 'nfc_read', employee_id: 'EMP001' }))
+      lastWs().simulateMessage(JSON.stringify({ type: 'nfc_read', employee_id: 'EMP002', card_type: 'driver_license' }))
+
+      expect(seen.map(e => e.card_type)).toEqual([undefined, undefined])
+    })
+
+    it('★ 免許証 → 素の read の順に来ても、2 件目に前の card_type が残らない', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const seen: import('~/types').NfcReadEvent[] = []
+      const nfc = useNfcWebSocket()
+      nfc.onRead(e => seen.push(e))
+      nfc.connect()
+      await vi.advanceTimersByTimeAsync(10)
+
+      lastWs().simulateMessage(JSON.stringify({
+        type: 'nfc_license_read', card_id: '0123456789ABCDEFGHIJKLMNOP', card_type: 'driver_license', atr: 'XX',
+      }))
+      lastWs().simulateMessage(JSON.stringify({ type: 'nfc_read', employee_id: 'EMP001' }))
+
+      expect(seen.map(e => [e.employee_id, e.card_type])).toEqual([
+        ['ABCDEFGHIJKLMNOP', 'driver_license'],
+        ['EMP001', undefined],
+      ])
+      consoleSpy.mockRestore()
+    })
+
+    it.each(['driver_license', 'car_inspection', 'other'] as const)(
+      'nfc_license_read (%s) から作られた read には同じ card_type が載る',
+      async (cardType) => {
+        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+        const seen: import('~/types').NfcReadEvent[] = []
+        const nfc = useNfcWebSocket()
+        nfc.onRead(e => seen.push(e))
+        nfc.connect()
+        await vi.advanceTimersByTimeAsync(10)
+
+        lastWs().simulateMessage(JSON.stringify({
+          type: 'nfc_license_read', card_id: 'CARD', card_type: cardType, atr: 'XX',
+        }))
+
+        expect(seen.map(e => e.card_type)).toEqual([cardType])
+        consoleSpy.mockRestore()
+      },
+    )
   })
 
   describe('onmessage: nfc_license_read', () => {
@@ -191,7 +244,7 @@ describe('useNfcWebSocket', () => {
       }))
 
       expect(licenseCb).toHaveBeenCalledWith(expect.objectContaining({ type: 'nfc_license_read', card_id: cardId }))
-      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'ABCDEFGHIJKLMNOP', source: 'bridge' })
+      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'ABCDEFGHIJKLMNOP', source: 'bridge', card_type: 'driver_license' })
       consoleSpy.mockRestore()
     })
 
@@ -210,7 +263,7 @@ describe('useNfcWebSocket', () => {
         atr: 'XX',
       }))
 
-      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'SHORT', source: 'bridge' })
+      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: 'SHORT', source: 'bridge', card_type: 'other' })
       consoleSpy.mockRestore()
     })
 
@@ -229,7 +282,7 @@ describe('useNfcWebSocket', () => {
         atr: 'XX',
       }))
 
-      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: '0123456789', source: 'bridge' })
+      expect(readCb).toHaveBeenCalledWith({ type: 'nfc_read', employee_id: '0123456789', source: 'bridge', card_type: 'driver_license' })
       consoleSpy.mockRestore()
     })
   })

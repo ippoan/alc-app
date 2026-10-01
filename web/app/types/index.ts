@@ -58,6 +58,15 @@ export interface NfcReadEvent {
    * 二重にする側へ倒れる。
    */
   source: NfcReadSource
+  /**
+   * カードの種類 (Refs ippoan/alc-app#387)。**免許証イベント (`nfc_license_read` /
+   * `EVT NFC_LICENSE`) から作られた read にだけ載る。素の `nfc_read` には載らない。**
+   *
+   * IT点呼 の本人確認 (免許証だけ) がこれを見る。**read 自身に載せて運ぶ** — 受け手が
+   * 「直前の免許証イベント」を覚えておく作りにすると、続けて来た免許証でないカードが
+   * 前の人の `'driver_license'` で通ってしまう。
+   */
+  card_type?: NfcLicenseReadEvent['card_type']
 }
 
 /** [`NfcReadEvent.source`] の値。 */
@@ -173,6 +182,12 @@ export interface ApiMeasurement {
   pulse?: number | null
   medical_measured_at?: string | null
   medical_manual_input?: boolean | null
+  /**
+   * 完了の PUT が作った点呼の記録の id (Refs ippoan/alc-app#387)。IT点呼 はこれを通話の
+   * 部屋の id に使う。null = 記録が作られなかった (結果がエラー / 完了でない / 作成に失敗 /
+   * 同じ乗務員・同じ時刻の別の測定)。この欄を返さない backend では undefined
+   */
+  tenko_session_id?: string | null
 }
 
 /** API: 乗務員 */
