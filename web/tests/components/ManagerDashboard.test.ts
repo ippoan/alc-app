@@ -150,3 +150,79 @@ describe('ManagerDashboard — IT点呼タブ (開発用の印がある席だけ
     wrapper.unmount()
   })
 })
+
+// IT点呼 の試験の手順書のタブ (Refs ippoan/alc-app#387)。**開発用の印の有無に関係なく常に**、最後に出す。
+// 上の `tabLabels` は変更前のラベルだけに絞って集めるので、新しいタブを足しても緑のまま
+// (= 検知しない)。ここでは絞らずに全部のタブのボタンを集めて、並びを完全一致で固定する
+describe('ManagerDashboard — IT点呼 試験の手順タブ (常に最後)', () => {
+  const TABS_BEFORE = [
+    '乗務員', '免許証', '点呼', '遠隔点呼', '画面共有', '予定管理',
+    '健康基準', '故障記録', '携行品', '労働時間', 'タイムカード', 'デバイス管理',
+  ]
+  const GUIDE_LABEL = 'IT点呼 試験の手順'
+  const GuideStub = { name: 'ItTenkoGuide', template: '<div data-testid="it-guide" />' }
+  const stubs = {
+    ItTenkoGuide: GuideStub,
+    TenkoItAdminView: { template: '<div data-testid="it-admin-view" />' },
+  }
+
+  async function mountDashboard() {
+    const wrapper = await mountSuspended(ManagerDashboard, { global: { stubs } })
+    await flush()
+    await wrapper.vm.$nextTick()
+    return wrapper
+  }
+  // ラベルでは絞らずに、タブ列 (`bg-blue-100` の帯) のボタンを全部集める。
+  // 帯の外のボタン (既定の「点呼」タブの中身など) は数えない
+  const allTabLabels = (wrapper: Awaited<ReturnType<typeof mountDashboard>>) =>
+    wrapper.findAll('div.bg-blue-100 > button').map(b => b.text())
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    noteDeviceToken('manager-device', null)
+    noteDeviceToken('kiosk', null)
+    localStorage.clear()
+  })
+
+  it('★ 印なし: 全部のタブは既存の 12 個のあとに「IT点呼 試験の手順」が 1 つ (計 13、IT点呼 は無い)', async () => {
+    const wrapper = await mountDashboard()
+    expect(allTabLabels(wrapper)).toEqual([...TABS_BEFORE, GUIDE_LABEL])
+    expect(allTabLabels(wrapper)).not.toContain('IT点呼')
+    wrapper.unmount()
+  })
+
+  it('★ 印あり: 全部のタブは 14 個で、IT点呼 は遠隔点呼の直後、手順は最後', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt('dev-manager'))
+    const wrapper = await mountDashboard()
+    const labels = allTabLabels(wrapper)
+    expect(labels).toHaveLength(14)
+    expect(labels[labels.indexOf('遠隔点呼') + 1]).toBe('IT点呼')
+    expect(labels[labels.length - 1]).toBe(GUIDE_LABEL)
+    expect(labels.filter(l => l !== 'IT点呼' && l !== GUIDE_LABEL)).toEqual(TABS_BEFORE)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['印なし', false],
+    ['印あり', true],
+  ])('%s: 押すと ItTenkoGuide が描画される (既定のタブでは描画されない)', async (_name, marked) => {
+    if (marked) noteDeviceToken('manager-device', devDeviceJwt('dev-manager'))
+    const wrapper = await mountDashboard()
+    expect(wrapper.find('[data-testid="it-guide"]').exists()).toBe(false)
+
+    await wrapper.findAll('button').find(b => b.text() === GUIDE_LABEL)!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-guide"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('別のタブへ移ると ItTenkoGuide は消える', async () => {
+    const wrapper = await mountDashboard()
+    await wrapper.findAll('button').find(b => b.text() === GUIDE_LABEL)!.trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.findAll('button').find(b => b.text() === '点呼')!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-guide"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
