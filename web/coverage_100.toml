@@ -39,6 +39,10 @@ path = "app/composables/useItTenkoCall.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useItTenkoManager.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useAuth.ts"
 branches = true
 

@@ -6,12 +6,15 @@ import TenkoManagerJudgmentPanel from '~/components/TenkoManagerJudgmentPanel.vu
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 
 // 運行管理者側の IT点呼 の受け画面 (Refs ippoan/alc-app#387)。
-// 遠隔点呼とは別物: 社員番号で運行管理者を特定 (顔認証なし) → 通話 → 判定。
+// 遠隔点呼とは別物: 運行管理者を席に登録 (社員番号だけ・顔認証なし) → 通話 → 判定。
+// 判定者は「この席に登録された運行管理者」(useItTenkoManager。localStorage に id だけ) で、
+// 運行管理者タブ・遠隔点呼が共有する ID (useManagerAuth) は引き継がない・書き込まない。
 // 着信は `it-` で始まる部屋だけ、通話が成立しなかった分は「未完了の IT点呼」の一覧から確定する。
 
 // --- API のモック ---
 
 const getEmployeeByCodeMock = vi.fn()
+const getEmployeeByIdMock = vi.fn()
 const getEmployeesMock = vi.fn()
 const getTenkoSessionMock = vi.fn()
 const listTenkoSessionsMock = vi.fn()
@@ -19,6 +22,7 @@ const getMeasurementMock = vi.fn()
 
 vi.mock('~/utils/api', () => ({
   getEmployeeByCode: (...args: unknown[]) => getEmployeeByCodeMock(...args),
+  getEmployeeById: (...args: unknown[]) => getEmployeeByIdMock(...args),
   getEmployees: (...args: unknown[]) => getEmployeesMock(...args),
   getTenkoSession: (...args: unknown[]) => getTenkoSessionMock(...args),
   listTenkoSessions: (...args: unknown[]) => listTenkoSessionsMock(...args),
@@ -69,14 +73,10 @@ mockNuxtImport('useCamera', () => () => ({
   stop: cameraStopMock,
 }))
 
-const managerIdRef = ref<string | null>(null)
-const setManagerIdMock = vi.fn((id: string | null) => { managerIdRef.value = id })
-const loadFromDeviceMock = vi.fn()
-mockNuxtImport('useManagerAuth', () => () => ({
-  authenticatedManagerId: managerIdRef,
-  setManagerId: setManagerIdMock,
-  loadFromDevice: loadFromDeviceMock,
-}))
+// 席の運行管理者 (useItTenkoManager) と共有の ID (useManagerAuth) は実物を使う
+
+const MANAGER_KEY = 'alc_it_tenko_manager_id'
+const MANAGER = { id: 'mgr-1', name: '運行 管理', role: ['manager'] }
 
 // --- データ ---
 
@@ -118,6 +118,8 @@ async function mountView() {
 const incoming = (w: Wrapper) => w.find('[data-testid="it-incoming"]')
 const pendingRows = (w: Wrapper) => w.findAll('[data-testid="it-pending-row"]')
 const idModal = (w: Wrapper) => w.find('[data-testid="it-manager-id"]')
+const card = (w: Wrapper) => w.find('[data-testid="it-manager-card"]')
+const changeButton = (w: Wrapper) => card(w).findAll('button').find(b => b.text() === '変更')!
 const panel = (w: Wrapper) => w.findComponent(TenkoManagerJudgmentPanel)
 
 async function click(el: { trigger: (e: string) => Promise<unknown> }, w: Wrapper) {
@@ -131,11 +133,20 @@ async function submitManagerCode(w: Wrapper, code: string) {
   await click(idModal(w).findAll('button').find(b => b.text() === '次へ')!, w)
 }
 
+async function registerOnCard(w: Wrapper, code: string) {
+  await card(w).find('input').setValue(code)
+  await click(card(w).findAll('button').find(b => b.text() === '登録')!, w)
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   webRtcRoles.length = 0
   activeRoomsRef.value = []
-  managerIdRef.value = 'mgr-1'
+  // 既定: この席には運行管理者 mgr-1 が登録済み
+  localStorage.clear()
+  localStorage.setItem(MANAGER_KEY, 'mgr-1')
+  getEmployeeByIdMock.mockResolvedValue(MANAGER)
+  useManagerAuth().authenticatedManagerId.value = null
   connectMock.mockImplementation(async () => {})
   reloadRoomsMock.mockImplementation(async () => true)
   getEmployeesMock.mockResolvedValue(EMPLOYEES)
@@ -267,25 +278,134 @@ describe('TenkoItAdminView — 一覧', () => {
   })
 })
 
-describe('TenkoItAdminView — 運行管理者の特定 (社員番号だけ)', () => {
-  beforeEach(() => {
-    managerIdRef.value = null
+describe('TenkoItAdminView — この席の運行管理者 (上部の枠)', () => {
+  it('保存済みの id が在れば名前を出し、着信を押しても ID を聞かずに開く', async () => {
     activeRoomsRef.value = ['it-session-1']
-  })
-
-  it('運行管理者が特定済みなら社員番号を聞かずに進む (デバイスから読み直す)', async () => {
-    managerIdRef.value = 'mgr-1'
     const w = await mountView()
+    expect(getEmployeeByIdMock).toHaveBeenCalledWith('mgr-1', 'tenko-monitor')
+    expect(card(w).text()).toContain('いまの運行管理者:')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    expect(card(w).find('input').exists()).toBe(false)
+
     await click(incoming(w).find('button'), w)
-    expect(loadFromDeviceMock).toHaveBeenCalled()
     expect(idModal(w).exists()).toBe(false)
     expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
     expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(panel(w).props('managerId')).toBe('mgr-1')
     w.unmount()
   })
 
-  it('未特定なら社員番号を聞く。manager は通り、そのまま通話へ進む', async () => {
-    getEmployeeByCodeMock.mockResolvedValue({ id: 'mgr-2', name: '運行 管理', role: ['manager'] })
+  it('名前を取り直しているあいだは「確認中」、取れなければその旨を出す (id は残る)', async () => {
+    let reject!: (e: unknown) => void
+    getEmployeeByIdMock.mockImplementation(() => new Promise((_r, rj) => { reject = rj }))
+    const w = await mountView()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('確認中...')
+
+    reject(new Error('network'))
+    await flush()
+    await w.vm.$nextTick()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('(名前を取得できません)')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
+    w.unmount()
+  })
+
+  it('未登録なら枠に入力が出て、着信が無くても登録できる → 名前が出て席に残る', async () => {
+    localStorage.clear()
+    getEmployeeByCodeMock.mockResolvedValue({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
+    const w = await mountView()
+    expect(getEmployeeByIdMock).not.toHaveBeenCalled()
+    expect(card(w).find('input').exists()).toBe(true)
+    expect(card(w).text()).not.toContain('いまの運行管理者')
+    // 空の入力では照会しない
+    expect(card(w).findAll('button').find(b => b.text() === '登録')!.attributes('disabled')).toBeDefined()
+    await card(w).find('input').trigger('keyup.enter')
+    await flush()
+    expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
+
+    await registerOnCard(w, ' 001 ')
+    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'tenko-monitor')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('点呼 次郎')
+    expect(card(w).find('input').exists()).toBe(false)
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-2')
+    // 登録しただけでは何も開かない
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('枠からの登録: 権限なし・見つからないはエラーの 1 行を出して未登録のまま', async () => {
+    localStorage.clear()
+    const w = await mountView()
+    getEmployeeByCodeMock.mockResolvedValueOnce({ id: 'emp-1', name: '山田 太郎', role: ['driver'] })
+    await registerOnCard(w, '003')
+    expect(card(w).find('[data-testid="it-manager-card-error"]').text()).toBe('山田 太郎さんには運行管理者の権限がありません')
+
+    getEmployeeByCodeMock.mockRejectedValueOnce(new Error('API エラー (404)'))
+    await registerOnCard(w, '999')
+    expect(card(w).find('[data-testid="it-manager-card-error"]').text()).toContain('社員番号「999」の乗務員が見つかりません')
+    expect(card(w).find('input').exists()).toBe(true)
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
+    w.unmount()
+  })
+
+  it('「変更」で入力に戻り、保存が消える', async () => {
+    const w = await mountView()
+    expect(changeButton(w).attributes('disabled')).toBeUndefined()
+    await click(changeButton(w), w)
+    expect(card(w).find('input').exists()).toBe(true)
+    expect(card(w).text()).not.toContain('いまの運行管理者')
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
+    w.unmount()
+  })
+
+  it('点呼を開いている間 (繋いでいる途中を含む) は「変更」が押せない', async () => {
+    activeRoomsRef.value = ['it-session-1']
+    let resolveConnect!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((resolve) => { resolveConnect = resolve }))
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    // 繋いでいる途中
+    expect(changeButton(w).attributes('disabled')).toBeDefined()
+
+    resolveConnect()
+    await flush()
+    await w.vm.$nextTick()
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(true)
+    expect(changeButton(w).attributes('disabled')).toBeDefined()
+
+    await click(w.findAll('button').find(b => b.text() === '通話終了')!, w)
+    expect(changeButton(w).attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('運行管理者タブ・遠隔点呼の共有の ID が在っても、席に登録が無ければ ID を聞く。登録しても共有の ID は変わらない', async () => {
+    localStorage.clear()
+    const shared = useManagerAuth()
+    shared.authenticatedManagerId.value = 'shared-mgr'
+    activeRoomsRef.value = ['it-session-1']
+    getEmployeeByCodeMock.mockResolvedValue({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
+    const w = await mountView()
+    expect(card(w).find('input').exists()).toBe(true)
+
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(connectMock).not.toHaveBeenCalled()
+
+    await submitManagerCode(w, '001')
+    expect(panel(w).props('managerId')).toBe('mgr-2')
+    expect(shared.authenticatedManagerId.value).toBe('shared-mgr')
+    w.unmount()
+  })
+})
+
+describe('TenkoItAdminView — 未登録のまま開こうとしたとき (モーダル)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    activeRoomsRef.value = ['it-session-1']
+  })
+
+  it('未登録で着信を押すと社員番号を聞く。manager は席に登録され、そのまま通話へ進む', async () => {
+    getEmployeeByCodeMock.mockResolvedValue({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
     const w = await mountView()
     await click(incoming(w).find('button'), w)
     expect(idModal(w).exists()).toBe(true)
@@ -293,30 +413,39 @@ describe('TenkoItAdminView — 運行管理者の特定 (社員番号だけ)', (
 
     await submitManagerCode(w, ' 001 ')
     expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'tenko-monitor')
-    expect(setManagerIdMock).toHaveBeenCalledWith('mgr-2')
     expect(idModal(w).exists()).toBe(false)
     expect(connectMock).toHaveBeenCalledTimes(1)
     expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    // 席に登録され、判定パネルへはその id が渡る
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-2')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('点呼 次郎')
+    expect(panel(w).props('managerId')).toBe('mgr-2')
     w.unmount()
   })
 
-  it('admin も通る', async () => {
+  it('未登録で未完了の行 (通話なし) を押しても同じ: 登録 → そのまま開く', async () => {
+    activeRoomsRef.value = []
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-2')], total: 1, page: 1, per_page: 50 })
     getEmployeeByCodeMock.mockResolvedValue({ id: 'adm-1', name: '管理 者', role: ['admin'] })
     const w = await mountView()
-    await click(incoming(w).find('button'), w)
+    await click(pendingRows(w)[0]!.find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+
     await submitManagerCode(w, '002')
-    expect(setManagerIdMock).toHaveBeenCalledWith('adm-1')
-    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(idModal(w).exists()).toBe(false)
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="it-opened"]').text()).toContain('通話なしで確定する IT点呼')
+    expect(panel(w).props('managerId')).toBe('adm-1')
     w.unmount()
   })
 
-  it('manager / admin でなければエラーで止まる (通話しない)', async () => {
+  it('manager / admin でなければエラーで止まる (登録も通話もしない)', async () => {
     getEmployeeByCodeMock.mockResolvedValue({ id: 'emp-1', name: '山田 太郎', role: ['driver'] })
     const w = await mountView()
     await click(incoming(w).find('button'), w)
     await submitManagerCode(w, '003')
     expect(idModal(w).text()).toContain('山田 太郎さんには運行管理者の権限がありません')
-    expect(setManagerIdMock).not.toHaveBeenCalled()
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
     expect(connectMock).not.toHaveBeenCalled()
     w.unmount()
   })
@@ -341,6 +470,22 @@ describe('TenkoItAdminView — 運行管理者の特定 (社員番号だけ)', (
     await click(idModal(w).findAll('button').find(b => b.text() === 'キャンセル')!, w)
     expect(idModal(w).exists()).toBe(false)
     expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('照会を待つあいだにキャンセルされたら、登録はするが開かない', async () => {
+    let resolveLookup!: (v: unknown) => void
+    getEmployeeByCodeMock.mockImplementation(() => new Promise((resolve) => { resolveLookup = resolve }))
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    await submitManagerCode(w, '001')
+    await click(idModal(w).findAll('button').find(b => b.text() === 'キャンセル')!, w)
+
+    resolveLookup({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
+    await flush()
+    await w.vm.$nextTick()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('点呼 次郎')
     w.unmount()
   })
 })
