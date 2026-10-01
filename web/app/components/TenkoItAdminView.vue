@@ -46,6 +46,7 @@ const camera = useCamera()
 // mount で 1 回・unmount で 1 回だけ呼ぶ (エラー時や判定の後には呼ばない)
 const {
   activeRooms,
+  callingRooms,
   start: startWatchingRooms,
   stop: stopWatchingRooms,
   setJoined,
@@ -310,6 +311,16 @@ onMounted(() => {
 
 // 部屋が増減した = 新しい IT点呼 が始まった / 終わった
 watch(activeRooms, () => void loadPending())
+
+// 警告デバイス本体のボタン (着信で鳴っている間に押された) = 着信の先頭の IT点呼 に応答する。
+// この画面が開いているときだけ効く (mount より前の押下は拾わない)。対象は**着信として数えている
+// 部屋** (`callingRooms`) の IT点呼 で、判定済みでまだ消えていない部屋を含む `itRooms` は使わない。
+// 遠隔点呼の着信だけのとき・点呼を開いている / 繋いでいる途中・社員番号を聞いている間は何もしない
+watch(useAlarmDevice().buttonPressCount, () => {
+  if (opened.value || connecting.value || waiting.value) return
+  const roomId = splitRooms(callingRooms.value).it[0]
+  if (roomId) requestCall(roomId)
+})
 
 onUnmounted(() => {
   close()

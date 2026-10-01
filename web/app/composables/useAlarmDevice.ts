@@ -38,6 +38,12 @@
  * `DEVICE <kind>` の判定は useSerialArbiter が 1 本で行う (Refs ippoan/alc-app#182,
  * #353)。ここは預かったポートの使い方だけを持つ。
  *
+ * 本体のボタンの押下は専用の行を持たない。鳴っている間 (alarming) に押すと firmware が
+ * muted に移して `EVT ALARM state=muted cause=<押した瞬間の理由>` を即出すので、
+ * **着信で鳴っていた (`alarming`/`call`) → 黙った (`muted`/`call`)** の遷移を押下として数える
+ * (`buttonPressCount`。alarming → muted を作るのは本体のボタンだけ、Refs ippoan/alc-app#387)。
+ * 5 秒ごとの再送・`STATUS` の応答・接続直後の最初の行・ほかの遷移では数えない。
+ *
  * 診断ログ (`[ALARM-DEV]`) は運行者端末の DevTools で読む用に出しっぱなし (Refs #197)。
  */
 
@@ -90,6 +96,14 @@ const RECONNECT_MARK_KEY = 'alarm_dev_connected'
 // シングルトン: 管理者 PC につながる警告デバイスは 1 台なので状態も 1 つ
 const isConnected = ref(false)
 const deviceState = ref<AlarmDeviceState | null>(null)
+/** 着信で鳴っている間に本体のボタンが押された回数 (増えるだけ。読む側は watch する) */
+const buttonPressCount = ref(0)
+
+/**
+ * 状態行 (`state=`/`cause=` を積む行) の始まり。行頭とは限らない — シリアルの行は原子的でなく、
+ * 直前のログ行が途中で切れて連結されうる (useSerialArbiter の request の照合と同じ理由)
+ */
+const STATE_LINE = /STATUS alarm|EVT ALARM/
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 /** 預かっているポートの writer (未接続なら null)。grace の送り先 */
@@ -116,14 +130,9 @@ export function useAlarmDevice() {
   // --- 行の解釈 ---
 
   /**
-   * `state=`/`cause=` を積む行か (機種識別ではなく、状態行の振り分けにだけ使う。
-   * 機種識別は `DEVICE alarm` を見る arbiter 側、Refs ippoan/alc-app#353)。
+   * `state=` / `cause=` を拾って deviceState に畳む。着信で鳴っていた状態から黙った遷移
+   * (= 本体のボタン) のときだけ buttonPressCount を 1 つ進める
    */
-  function isStateLine(line: string): boolean {
-    return line.startsWith('STATUS alarm') || line.startsWith('EVT ALARM')
-  }
-
-  /** `state=` / `cause=` を拾って deviceState に畳む */
   function applyLine(line: string): void {
     let state: AlarmDeviceState['state'] | null = null
     let cause = 'none'
@@ -131,11 +140,22 @@ export function useAlarmDevice() {
       if (token.startsWith('state=')) state = token.slice(6) as AlarmDeviceState['state']
       else if (token.startsWith('cause=')) cause = token.slice(6)
     }
-    if (state) deviceState.value = { state, cause }
+    if (!state) return
+    const prev = deviceState.value
+    deviceState.value = { state, cause }
+    if (prev?.state === 'alarming' && prev.cause === 'call' && state === 'muted' && cause === 'call') {
+      buttonPressCount.value += 1
+      log('button pressed while calling')
+    }
   }
 
+  /**
+   * 状態行だけを畳む (機種識別ではなく、状態行の振り分けにだけ使う。機種識別は `DEVICE alarm` を
+   * 見る arbiter 側、Refs ippoan/alc-app#353)。行の途中に在っても拾い、見つけた位置から後ろだけを読む
+   */
   function handleLine(line: string): void {
-    if (isStateLine(line)) applyLine(line)
+    const at = line.search(STATE_LINE)
+    if (at >= 0) applyLine(line.slice(at))
   }
 
   // --- heartbeat ---
@@ -213,7 +233,7 @@ export function useAlarmDevice() {
       isConnected.value = true
       sessionStorage.setItem(RECONNECT_MARK_KEY, '1')
       log(`claimed port (probe lines=${lines.length})`)
-      // プローブ中に来ていた行を畳む (`DEVICE ...` の名乗りそのものは isStateLine に
+      // プローブ中に来ていた行を畳む (`DEVICE ...` の名乗りそのものは状態行に
       // 当てはまらないので無視される)
       for (const line of lines) handleLine(line)
       // `DEVICE` は名乗り専用で状態を持たないため、初期状態 (state=/cause=) を
@@ -292,6 +312,7 @@ export function useAlarmDevice() {
     isSupported,
     isConnected: readonly(isConnected),
     deviceState: readonly(deviceState),
+    buttonPressCount: readonly(buttonPressCount),
     connect,
     disconnect,
     requestPort,
