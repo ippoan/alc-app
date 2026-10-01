@@ -119,6 +119,8 @@ function formatTime(ms: number): string {
 }
 
 async function update(d: FirmwareDevice) {
+  // disabled の属性だけに頼らない (属性を外して click されても送らない)
+  if (!canUpdate(d) || busy.value.has(d.device_id)) return
   if (!confirm(`${deviceName(d)} を ${latestOf(d)} に更新します。よろしいですか?`)) return
   busy.value = new Set(busy.value).add(d.device_id)
   try {

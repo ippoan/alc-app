@@ -245,6 +245,31 @@ describe('FirmwareManager', () => {
       wrapper.unmount()
     })
 
+    it('disabled の属性を外して click されても、条件を満たさない行 / busy の行は confirm も updateFirmware も呼ばない', async () => {
+      let resolve!: (v: { sent: number }) => void
+      updateFirmware.mockReturnValue(new Promise((r) => { resolve = r }))
+      const wrapper = await mountManager([
+        dev({ device_id: 'a1', version: '1.2.0' }), // 版が同じ = 押せない
+        dev({ device_id: 'a2' }),
+      ])
+      const enable = (i: number) => (rows(wrapper)[i]!.find('[data-testid="firmware-update"]').element as HTMLButtonElement).removeAttribute('disabled')
+
+      enable(0)
+      await button(rows(wrapper)[0]).trigger('click')
+      expect(confirm).not.toHaveBeenCalled()
+      expect(updateFirmware).not.toHaveBeenCalled()
+
+      await button(rows(wrapper)[1]).trigger('click') // 1 回目: 送る (busy になる)
+      expect(updateFirmware).toHaveBeenCalledTimes(1)
+      enable(1)
+      await button(rows(wrapper)[1]).trigger('click') // busy の間は 2 回目を送らない
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(updateFirmware).toHaveBeenCalledTimes(1)
+      resolve({ sent: 1 })
+      await flush()
+      wrapper.unmount()
+    })
+
     it('OK なら device_id で 1 回呼び、呼んでいる間その行だけ disabled', async () => {
       let resolve!: (v: { sent: number }) => void
       updateFirmware.mockReturnValue(new Promise((r) => { resolve = r }))
