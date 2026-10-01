@@ -105,9 +105,6 @@ type RoleTab = 'driver' | 'manager' | 'admin' | 'general' | 'it_tenko'
 const roleTabOptions: RoleTab[] = ['driver', 'manager', 'admin', 'general', 'it_tenko']
 const activeRole = ref<RoleTab>(
   incomingCallMode.value ? 'manager'
-  // 運行管理者側の IT点呼 (Refs ippoan/alc-app#387)。**運行管理者席の鍵に dev の印がある端末で
-  // だけ開く** — 印の無い端末が URL で開いても、タブに無い画面が出るだけなので運行者へ倒す
-  : route.query.role === 'it_tenko' && !isDevDevice('manager-device') ? 'driver'
   : roleTabOptions.includes(route.query.role as RoleTab)
     ? (route.query.role as RoleTab)
     : 'driver',
@@ -131,8 +128,8 @@ const driverSubTab = ref<DriverSubTab>(
   // dev端末の記録 (Refs ippoan/alc-app#387)。**dev の印がある端末でだけ開く** — 印の無い
   // 端末が URL で開いても、メニューに無い画面が出るだけなので通常点呼へ倒す
   : route.query.tab === 'dev_records' && isDevDevice('kiosk') ? 'dev_records'
-  // IT点呼 も同じ (テストが済むまで本番の運行者には見せない)
-  : route.query.tab === 'it' && isDevDevice('kiosk') ? 'it'
+  // IT点呼 は印に関係なくどの端末でも開ける
+  : route.query.tab === 'it' ? 'it'
   : 'normal',
 )
 
@@ -152,15 +149,16 @@ const MENU_TABS: readonly SubTabDef[] = [
   { key: 'device', label: 'デバイス設定' },
 ]
 
+// IT点呼 (通常点呼の最後に運行管理者と通話し、判定が付いたら完了)。**どの端末にも**ハンバーガーへ
+// 出す (開発用の印は見ない。Refs ippoan/alc-app#387)
+const IT_TENKO_TAB: SubTabDef = { key: 'it', label: 'IT点呼' }
+
 // dev端末 (開発用の鍵。本番環境でのテスト用) の記録を見る項目 (Refs ippoan/alc-app#387)。
 // **キオスクの鍵に dev の印がある端末にだけ**ハンバーガーへ足す。選んでもハンバーガーに
 // 留まる (可視側へ移るのは下の `bp` だけの規則)。
 // 印 (`isDevDevice`) は同期で読める代わりに reactive ではないので、ここに写しを持ち、
 // メニューを開くたびに読み直す — 起動後に dev の鍵でトークンが取れた端末でも、開けば出る
 const DEV_RECORDS_TAB: SubTabDef = { key: 'dev_records', label: '開発用の記録' }
-// IT点呼 (通常点呼の最後に運行管理者と通話し、判定が付いたら完了)。出し方は上と同じ —
-// **dev の印がある端末にだけ**出す。テストが済むまで本番の運行者には見せない
-const IT_TENKO_TAB: SubTabDef = { key: 'it', label: 'IT点呼' }
 const devKioskMark = ref(isDevDevice('kiosk'))
 function refreshDevKioskMark() {
   devKioskMark.value = isDevDevice('kiosk')
@@ -170,28 +168,10 @@ function onDevMarkCleared() {
   refreshDevKioskMark()
   driverSubTab.value = 'normal'
 }
-// 印が消えたとき (メニューを開いて読み直した結果を含む) に IT点呼 を開いていたら、
-// メニューから消えた画面に留まらせず通常点呼へ戻す。印が無い端末では一度も動かない
-watch(devKioskMark, (mark) => {
-  if (!mark && driverSubTab.value === 'it') driverSubTab.value = 'normal'
-})
-
-// 運行管理者側の IT点呼 の受け画面 (`TenkoItAdminView`) を、役割のタブ「IT点呼」として出す
-// (Refs ippoan/alc-app#387)。**運行管理者席の鍵に dev の印がある端末にだけ**出す (テストが
-// 済むまで本番の運行管理者には見せない)。写しの持ち方は上の `devKioskMark` と同じ
-const devManagerMark = ref(isDevDevice('manager-device'))
-// 印が消えたら、タブから消えた画面に留まらせず運行者へ戻す。印が無い端末では一度も動かない
-watch(devManagerMark, (mark) => {
-  if (!mark && activeRole.value === 'it_tenko') activeRole.value = 'driver'
-})
-function refreshDevMarks() {
-  refreshDevKioskMark()
-  devManagerMark.value = isDevDevice('manager-device')
-}
 // 印が変わった瞬間 (端末のトークンが取れた / 外した) に写しを読み直す — メニューを開かなくても
-// 「IT点呼」「開発用の記録」が現れる。印が無い端末ではイベントが 1 度も出ない
-onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevMarks))
-onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevMarks))
+// 「開発用の記録」が現れる。印が無い端末ではイベントが 1 度も出ない
+onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevKioskMark))
+onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevKioskMark))
 
 // 血圧測定の置き場所。**`BloodPressureMeasurement` が中身を出せる状態 (`showBpUi`) と同じ
 // 述語**で決める — 出せない端末に可視タブだけ出しても押して空の画面になる。
@@ -213,7 +193,8 @@ const visibleTabs = computed(() => bpInVisible.value ? [...VISIBLE_TABS, BP_TAB]
 const menuTabs = computed(() => [
   ...MENU_TABS,
   ...(bpInVisible.value ? [] : [BP_TAB]),
-  ...(devKioskMark.value ? [IT_TENKO_TAB, DEV_RECORDS_TAB] : []),
+  IT_TENKO_TAB,
+  ...(devKioskMark.value ? [DEV_RECORDS_TAB] : []),
 ])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
 // 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
@@ -310,18 +291,11 @@ const roleLabels: Record<RoleTab, string> = {
   it_tenko: 'IT点呼',
 }
 
-// 汎用管理は PC だけ、IT点呼 は運行管理者席の鍵に dev の印がある端末だけ (PC に限らない)
-const visibleRoleTabs = computed(() => roleTabOptions.filter(r =>
-  r === 'general' ? isPC.value
-  : r === 'it_tenko' ? devManagerMark.value
-  : true,
-))
+// 汎用管理は PC だけ。IT点呼 (運行管理者側の受け画面) はどの端末にも出す (PC に限らない)
+const visibleRoleTabs = computed(() => roleTabOptions.filter(r => r !== 'general' || isPC.value))
 // Android 横画面のハンバーガーの「ロール切替」。運行者以外を並べる (汎用管理は今までどおり
-// PC でなくても出す)。IT点呼 は上と同じ条件で最後に足す
-const menuRoleTabs = computed<RoleTab[]>(() => [
-  'manager', 'admin', 'general',
-  ...(devManagerMark.value ? ['it_tenko' as const] : []),
-])
+// PC でなくても出す)。IT点呼 は最後
+const menuRoleTabs: readonly RoleTab[] = ['manager', 'admin', 'general', 'it_tenko']
 
 // ハンバーガーメニュー
 const menuOpen = ref(false)
@@ -339,7 +313,7 @@ function refreshWatchdogStatus() {
 watch(menuOpen, (open) => {
   if (!open) return
   refreshWatchdogStatus()
-  refreshDevMarks()
+  refreshDevKioskMark()
 })
 
 // QRスキャンでデバイス登録
@@ -701,7 +675,7 @@ function onRoleTabClick(role: RoleTab) {
                リンクより上 (= 画面最下部はリンクのまま) に置かれ、NormalMeasurement 自身が
                持つ flex-1 + overflow-y-auto で一緒にスクロールする。ラッパーの特別な class 分岐は
                不要 (#248 の overflow-y-auto トリックは NormalMeasurement 側に既にあるため) -->
-          <NormalMeasurement v-if="driverSubTab === 'normal'" ref="normalMeasurement" :landscape="isAndroidLandscape" :ic-prompt-active="icPromptActive" :it-selectable="devKioskMark" class="flex-1 min-h-0">
+          <NormalMeasurement v-if="driverSubTab === 'normal'" ref="normalMeasurement" :landscape="isAndroidLandscape" :ic-prompt-active="icPromptActive" :it-selectable="true" class="flex-1 min-h-0">
             <template #nfc-punch-prompt>
               <!-- IC カードでかざした人をアルコールチェックへ案内する (Refs ippoan/rust-alc-api#644)。
                    人が見ている NFC のタッチ枠の中に出す (below-card = カードの下は見られない) -->
@@ -817,8 +791,8 @@ function onRoleTabClick(role: RoleTab) {
       </div>
     </template>
 
-    <!-- IT点呼 タブ (運行管理者側の受け画面。Refs ippoan/alc-app#387)。運行管理者席の鍵に dev の印が
-         ある端末にだけタブが出る。**RoleAuthGate は通さない** — 運行管理者の特定 (社員番号) は
+    <!-- IT点呼 タブ (運行管理者側の受け画面。Refs ippoan/alc-app#387)。どの端末にもタブが出る
+         (開発用の印は見ない)。**RoleAuthGate は通さない** — 運行管理者の特定 (社員番号) は
          受け画面が通話・判定の手前で自分で聞く -->
     <div v-if="activeRole === 'it_tenko'" class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
       <TenkoItAdminView />

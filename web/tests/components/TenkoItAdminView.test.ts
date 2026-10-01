@@ -4,6 +4,7 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import TenkoManagerJudgmentPanel from '~/components/TenkoManagerJudgmentPanel.vue'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 
 // 運行管理者側の IT点呼 の受け画面 (Refs ippoan/alc-app#387)。
 // 遠隔点呼とは別物: 運行管理者を席に登録 (社員番号だけ・顔認証なし) → 通話 → 判定。
@@ -20,7 +21,9 @@ const getTenkoSessionMock = vi.fn()
 const listTenkoSessionsMock = vi.fn()
 const getMeasurementMock = vi.fn()
 
-vi.mock('~/utils/api', () => ({
+vi.mock('~/utils/api', async importOriginal => ({
+  // 席の鍵が取れないときに `request()` が投げる文言。実物の定数をそのまま使う
+  MANAGER_DEVICE_AUTH_FAILED_MESSAGE: (await importOriginal<typeof import('~/utils/api')>()).MANAGER_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployeeByCode: (...args: unknown[]) => getEmployeeByCodeMock(...args),
   getEmployeeById: (...args: unknown[]) => getEmployeeByIdMock(...args),
   getEmployees: (...args: unknown[]) => getEmployeesMock(...args),
@@ -113,7 +116,7 @@ async function mountView() {
     global: {
       stubs: {
         TenkoVideoCall: { template: '<div data-testid="video-call" />' },
-        TenkoDriverInfoPanel: { template: '<div data-testid="driver-info" />' },
+        TenkoDriverInfoPanel: { props: ['scope'], template: '<div data-testid="driver-info" :data-scope="scope" />' },
       },
     },
   })
@@ -202,13 +205,13 @@ describe('TenkoItAdminView — 一覧', () => {
     w.unmount()
   })
 
-  it('未完了の一覧は IT点呼 + 判定未確定の filter と tenko-monitor の口で引く', async () => {
+  it('未完了の一覧は IT点呼 + 判定未確定の filter と、席の鍵の口 (manager-device) で引く', async () => {
     const w = await mountView()
     expect(listTenkoSessionsMock).toHaveBeenCalledWith(
       { tenko_method: 'IT点呼', judgment_pending: true, per_page: 50 },
-      'tenko-monitor',
+      'manager-device',
     )
-    expect(getEmployeesMock).toHaveBeenCalledWith('tenko-monitor')
+    expect(getEmployeesMock).toHaveBeenCalledWith('manager-device')
     expect(w.text()).toContain('未完了の IT点呼 はありません')
     w.unmount()
   })
@@ -243,11 +246,31 @@ describe('TenkoItAdminView — 一覧', () => {
     w.unmount()
   })
 
-  it('一覧の取得に失敗したらエラー文を出す (backend が出る前の 403 等)', async () => {
+  it('一覧の取得に失敗したらエラー文を出す (403 等。理由が利用者向けでない失敗は固定の文言)', async () => {
     listTenkoSessionsMock.mockRejectedValue(new Error('API エラー (403)'))
     const w = await mountView()
     expect(w.text()).toContain('未完了の IT点呼 の取得に失敗しました')
+    expect(w.text()).not.toContain('API エラー')
     expect(pendingRows(w)).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('★ 席の鍵が取れないとき、一覧のエラーに request() の文言をそのまま出す', async () => {
+    listTenkoSessionsMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+    const w = await mountView()
+    expect(w.find('[data-testid="it-pending"]').text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(w.text()).not.toContain('未完了の IT点呼 の取得に失敗しました')
+    expect(pendingRows(w)).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('★ 席の鍵が取れないとき、枠からの登録のエラーにも同じ文言を出す (「見つかりません」にしない)', async () => {
+    localStorage.clear()
+    const w = await mountView()
+    getEmployeeByCodeMock.mockRejectedValueOnce(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+    await registerOnCard(w, '001')
+    expect(card(w).find('[data-testid="it-manager-card-error"]').text()).toBe(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
     w.unmount()
   })
 
@@ -290,7 +313,7 @@ describe('TenkoItAdminView — この席の運行管理者 (上部の枠)', () =
   it('保存済みの id が在れば名前を出し、着信を押しても ID を聞かずに開く', async () => {
     activeRoomsRef.value = ['it-session-1']
     const w = await mountView()
-    expect(getEmployeeByIdMock).toHaveBeenCalledWith('mgr-1', 'tenko-monitor')
+    expect(getEmployeeByIdMock).toHaveBeenCalledWith('mgr-1', 'manager-device')
     expect(card(w).text()).toContain('いまの運行管理者:')
     expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
     expect(card(w).find('input').exists()).toBe(false)
@@ -331,7 +354,7 @@ describe('TenkoItAdminView — この席の運行管理者 (上部の枠)', () =
     expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
 
     await registerOnCard(w, ' 001 ')
-    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'tenko-monitor')
+    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'manager-device')
     expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('点呼 次郎')
     expect(card(w).find('input').exists()).toBe(false)
     expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-2')
@@ -420,7 +443,7 @@ describe('TenkoItAdminView — 未登録のまま開こうとしたとき (モ�
     expect(connectMock).not.toHaveBeenCalled()
 
     await submitManagerCode(w, ' 001 ')
-    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'tenko-monitor')
+    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'manager-device')
     expect(idModal(w).exists()).toBe(false)
     expect(connectMock).toHaveBeenCalledTimes(1)
     expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
@@ -516,8 +539,12 @@ describe('TenkoItAdminView — 通話', () => {
     expect(connectMock.mock.calls[0]).toHaveLength(2)
     expect(setJoinedMock).toHaveBeenLastCalledWith('it-session-1')
 
-    // 点呼の記録は接頭辞を剥がした id で、tenko-monitor の口から引く
-    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-1', 'tenko-monitor')
+    // 点呼の記録は接頭辞を剥がした id で、席の鍵の口から引く
+    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-1', 'manager-device')
+    // 判定の送信も、運転者情報の取得も席の鍵の口
+    expect(panel(w).props('scope')).toBe('manager-device')
+    await click(w.findAll('button').find(b => b.text() === '運転者情報')!, w)
+    expect(w.find('[data-testid="driver-info"]').attributes('data-scope')).toBe('manager-device')
     expect(w.find('[data-testid="it-opened"]').text()).toContain('通話中の IT点呼')
     expect(w.find('[data-testid="it-opened"]').text()).toContain('山田 太郎')
     expect(w.find('[data-testid="it-opened"]').text()).toContain('正常')
@@ -648,7 +675,8 @@ describe('TenkoItAdminView — 判定', () => {
     expect(connectMock).not.toHaveBeenCalled()
     expect(cameraStartMock).not.toHaveBeenCalled()
     expect(setJoinedMock).not.toHaveBeenCalledWith('it-session-2')
-    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-2', 'tenko-monitor')
+    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-2', 'manager-device')
+    expect(panel(w).props('scope')).toBe('manager-device')
     expect(w.find('[data-testid="it-opened"]').text()).toContain('通話なしで確定する IT点呼')
     expect(panel(w).props('defaultMethod')).toBe('in_person')
 
@@ -707,7 +735,7 @@ describe('TenkoItAdminView — 警告デバイス本体のボタン', () => {
     expect(connectMock).toHaveBeenCalledTimes(1)
     expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
     expect(setJoinedMock).toHaveBeenLastCalledWith('it-session-1')
-    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-1', 'tenko-monitor')
+    expect(getTenkoSessionMock).toHaveBeenCalledWith('session-1', 'manager-device')
     expect(w.find('[data-testid="it-opened"]').text()).toContain('通話中の IT点呼')
     w.unmount()
   })

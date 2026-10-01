@@ -6,11 +6,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const getEmployeeByIdMock = vi.fn()
 const getEmployeeByCodeMock = vi.fn()
 
-vi.mock('~/utils/api', () => ({
+vi.mock('~/utils/api', async importOriginal => ({
+  // 席の鍵が取れないときに `request()` が投げる文言。実物の定数をそのまま使う
+  MANAGER_DEVICE_AUTH_FAILED_MESSAGE: (await importOriginal<typeof import('~/utils/api')>()).MANAGER_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployeeById: (...args: unknown[]) => getEmployeeByIdMock(...args),
   getEmployeeByCode: (...args: unknown[]) => getEmployeeByCodeMock(...args),
 }))
 
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import {
   IT_TENKO_MANAGER_STORAGE_KEY,
   clearStoredItTenkoManager,
@@ -65,7 +68,7 @@ describe('useItTenkoManager', () => {
       expect(getEmployeeByIdMock).not.toHaveBeenCalled()
     })
 
-    it('保存された id の名前を tenko-monitor の口で取り直す。待つあいだも id は使える', async () => {
+    it('保存された id の名前を席の鍵の口 (manager-device) で取り直す。待つあいだも id は使える', async () => {
       localStorage.setItem(KEY, 'mgr-1')
       let resolve!: (v: unknown) => void
       getEmployeeByIdMock.mockImplementation(() => new Promise((r) => { resolve = r }))
@@ -76,7 +79,7 @@ describe('useItTenkoManager', () => {
 
       resolve(MANAGER)
       await done
-      expect(getEmployeeByIdMock).toHaveBeenCalledWith('mgr-1', 'tenko-monitor')
+      expect(getEmployeeByIdMock).toHaveBeenCalledWith('mgr-1', 'manager-device')
       expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
       expect(loading.value).toBe(false)
       expect(localStorage.getItem(KEY)).toBe('mgr-1')
@@ -162,7 +165,7 @@ describe('useItTenkoManager', () => {
       getEmployeeByCodeMock.mockResolvedValue(MANAGER)
       const { manager, registerByCode } = useItTenkoManager()
       expect(await registerByCode('001')).toEqual({ ok: true })
-      expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'tenko-monitor')
+      expect(getEmployeeByCodeMock).toHaveBeenCalledWith('001', 'manager-device')
       expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
       expect(localStorage.getItem(KEY)).toBe('mgr-1')
       // 名前・社員番号は保存しない
@@ -186,6 +189,22 @@ describe('useItTenkoManager', () => {
       })
       expect(manager.value).toBeNull()
       expect(localStorage.getItem(KEY)).toBeNull()
+    })
+
+    it('★ 席の鍵が取れなかったら、その文言をそのまま返す (「見つかりません」にしない)', async () => {
+      getEmployeeByCodeMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+      const { manager, registerByCode } = useItTenkoManager()
+      expect(await registerByCode('001')).toEqual({ ok: false, message: MANAGER_DEVICE_AUTH_FAILED_MESSAGE })
+      expect(manager.value).toBeNull()
+      expect(localStorage.getItem(KEY)).toBeNull()
+    })
+
+    it('Error でない値が投げられたら「見つかりません」の文言', async () => {
+      getEmployeeByCodeMock.mockRejectedValue('boom')
+      const { registerByCode } = useItTenkoManager()
+      const res = await registerByCode('999')
+      expect(res.ok).toBe(false)
+      expect(res).toMatchObject({ message: expect.stringContaining('社員番号「999」の乗務員が見つかりません') })
     })
 
     it('manager / admin でなければ文言を返し、前の登録を変えない', async () => {

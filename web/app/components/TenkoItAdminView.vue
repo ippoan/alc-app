@@ -7,9 +7,10 @@
  * **通話で確認した (IT) か、本人が来て対面で確認した (対面) か**を選んで確定する。
  * 通話が成立しなかった分は「未完了の IT点呼」の一覧から後で確定する。
  *
- * **運行管理者席の鍵に開発用の印がある席にだけ出る** (`index.vue` の最上段の役割タブ `it_tenko`。
- * 運行管理者タブの入口 `RoleAuthGate` は通さない)。
- * 通信は全部 `'tenko-monitor'` の口 (= 開発用の席では運行管理者席の鍵) で送る。
+ * **どの席にも出る** (`index.vue` の最上段の役割タブ `it_tenko`。開発用の印は見ない。
+ * 運行管理者タブの入口 `RoleAuthGate` は通さない = ログインなしで受ける)。
+ * 通信は全部 `'manager-device'` の口 (= 運行管理者席の鍵) で送る。席の鍵が取れないときは
+ * `request()` が投げた文言 (`MANAGER_DEVICE_AUTH_FAILED_MESSAGE`) を一覧と登録のエラーにそのまま出す。
  *
  * **判定者は「この席に登録された運行管理者」** (`useItTenkoManager`)。画面の上部の枠で社員番号を
  * 登録すると席 (localStorage) が id を覚え、「変更」を押すまで残る。運行管理者タブ・遠隔点呼が
@@ -19,7 +20,7 @@
  * 経路なので触らない。共通化は IT点呼 を通常の点呼へ統合するときに行う)。
  */
 import type { TenkoSession } from '~/types'
-import { getEmployees, getTenkoSession, listTenkoSessions } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployees, getTenkoSession, listTenkoSessions } from '~/utils/api'
 import { alcoholResultLabel } from '~/utils/alcohol'
 import { IT_TENKO_METHOD, defaultJudgmentMethod, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
@@ -69,7 +70,7 @@ let pendingSeq = 0
 
 async function loadEmployeeNames() {
   try {
-    const employees = await getEmployees('tenko-monitor')
+    const employees = await getEmployees('manager-device')
     employeeNames.value = Object.fromEntries(employees.map(e => [e.id, e.name]))
   }
   catch { /* 名前が引けなくても一覧は出す */ }
@@ -82,14 +83,17 @@ async function loadPending() {
   try {
     const res = await listTenkoSessions(
       { tenko_method: IT_TENKO_METHOD, judgment_pending: true, per_page: 50 },
-      'tenko-monitor',
+      'manager-device',
     )
     if (seq !== pendingSeq) return
     pending.value = res.sessions
   }
-  catch {
+  catch (e) {
     if (seq !== pendingSeq) return
-    pendingError.value = '未完了の IT点呼 の取得に失敗しました'
+    // 席の鍵が取れなかったときだけ、その理由をそのまま出す (直し方が書いてある)
+    pendingError.value = e instanceof Error && e.message === MANAGER_DEVICE_AUTH_FAILED_MESSAGE
+      ? e.message
+      : '未完了の IT点呼 の取得に失敗しました'
   }
   pendingLoading.value = false
 }
@@ -274,7 +278,7 @@ async function startCall(roomId: string, gen: number): Promise<boolean> {
 
 async function fetchSession(sessionId: string, gen: number) {
   try {
-    const s = await getTenkoSession(sessionId, 'tenko-monitor')
+    const s = await getTenkoSession(sessionId, 'manager-device')
     if (gen === generation) session.value = s
   }
   catch {
@@ -420,7 +424,7 @@ onUnmounted(() => {
         v-if="showDriverInfoPanel && session"
         :employee-id="session.employee_id"
         :session-id="session.id"
-        scope="tenko-monitor"
+        scope="manager-device"
         @close="showDriverInfoPanel = false"
       />
 
@@ -458,6 +462,7 @@ onUnmounted(() => {
         :session="session"
         :manager-id="manager?.id ?? null"
         :default-method="defaultJudgmentMethod(opened.roomId !== null)"
+        scope="manager-device"
         @judged="onJudged"
       />
     </div>

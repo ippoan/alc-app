@@ -51,12 +51,25 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     wrapper.unmount()
   })
 
-  it('遠隔点呼モニターの口として送る (scope \'tenko-monitor\'。Refs ippoan/alc-app#387)', async () => {
+  it('★ prop scope を渡さなければ、遠隔点呼モニターの口として送る (scope \'tenko-monitor\'。Refs ippoan/alc-app#387)', async () => {
     const wrapper = await mountPanel()
     const okButton = wrapper.findAll('button').find(b => b.text() === 'OK')
     await okButton!.trigger('click')
     await flush()
     expect(submitManagerJudgmentMock.mock.calls[0][2]).toBe('tenko-monitor')
+    wrapper.unmount()
+  })
+
+  it('★ scope="manager-device" を渡すと、その口で送る (IT点呼 の受け画面)', async () => {
+    const wrapper = await mountSuspended(TenkoManagerJudgmentPanel, {
+      props: { session: SESSION_UNJUDGED, managerId: MANAGER_ID, scope: 'manager-device' },
+    })
+    await flush()
+    const okButton = wrapper.findAll('button').find(b => b.text() === 'OK')
+    await okButton!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock).toHaveBeenCalledTimes(1)
+    expect(submitManagerJudgmentMock.mock.calls[0][2]).toBe('manager-device')
     wrapper.unmount()
   })
 

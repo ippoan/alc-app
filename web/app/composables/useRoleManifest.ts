@@ -48,9 +48,8 @@ export const BP_MANIFEST: RoleManifest = {
  * 運行管理者側の IT点呼 の受け画面用 (Refs ippoan/alc-app#387)。役割タブ「IT点呼」
  * (`?role=it_tenko`) を別アイコンでインストールできるようにする。
  *
- * **manifest は URL の `?role=` だけで決まる** (SSR の HTML に出すため、端末の開発用の印は
- * 見られない)。印の無い端末が `?role=it_tenko` を直接開くと、画面は運行者に倒れるが
- * (`index.vue`)、`<link rel="manifest">` はこれが出る。
+ * **manifest は URL の `?role=` だけで決まる** (SSR の HTML に出すため)。受け画面はどの端末でも
+ * `?role=it_tenko` で開くので (`index.vue`)、画面と manifest は常に揃う。
  */
 export const IT_TENKO_MANIFEST: RoleManifest = {
   href: '/manifest-it-tenko.webmanifest',
