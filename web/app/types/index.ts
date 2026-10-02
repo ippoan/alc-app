@@ -262,14 +262,14 @@ export interface RefreshResponse {
 
 /** シグナリングメッセージ (クライアント → サーバー) */
 export interface SignalingOutMessage {
-  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'ping'
+  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'ping' | 'end_share'
   sdp?: string
   candidate?: RTCIceCandidateInit
 }
 
 /** シグナリングメッセージ (サーバー → クライアント) */
 export interface SignalingInMessage {
-  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'peer_joined' | 'peer_left' | 'error' | 'pong'
+  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'peer_joined' | 'peer_left' | 'error' | 'pong' | 'end_share'
   sdp?: string
   candidate?: RTCIceCandidateInit
   role?: 'device' | 'admin'

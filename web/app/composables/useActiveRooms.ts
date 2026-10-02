@@ -22,10 +22,16 @@
  *
  * 「着信中か」の判定はここ 1 か所 (警告デバイスの `call=1` と `ManagerAlarmBar` の表示が読む)。
  * 管理者がどの部屋にも入っておらず、**対応を終えてもいない**部屋だけを数える。
- * 対応を終えた部屋 = **運行管理者の判定を保存できた**点呼の部屋 (`markHandled`)。相手が画面を
- * 閉じて部屋が消えるまで一覧に残るが、もう着信ではない。一覧から消えたら印も消えるので、同じ id の
- * 部屋が後で再び現れたら新しい着信として数える。判定せずに通話を閉じた・画面を離れた・通信が
- * 切れて落ちた部屋は、部屋が残っている限り数え続ける (判定が付いていないのに黙らせない)。
+ * 対応を終えた部屋 (`markHandled`) は部屋の種別で違う:
+ * - **点呼の部屋** (遠隔点呼・IT点呼) = **運行管理者の判定を保存できた**部屋。判定せずに通話を
+ *   閉じた・画面を離れた・通信が切れて落ちた部屋は、部屋が残っている限り数え続ける
+ *   (判定が付いていないのに黙らせない)。
+ * - **画面共有の部屋** = **運行管理者が視聴を始めた**部屋。視聴をやめても数え直さない
+ *   (その席ではもう鳴らない)。画面共有を見ている間も、点呼の着信は今までどおり数える
+ *   (`setJoined` は使わない — 立てると全種別の着信が黙る)。
+ *
+ * どちらも、相手が画面を閉じて部屋が消えるまで一覧に残るが、もう着信ではない。一覧から消えたら
+ * 印も消えるので、同じ id の部屋が後で再び現れたら新しい着信として数える。
  */
 import { DEV_DEVICE_MARK_EVENT, devSignalingToken, isDevDevice } from '~/utils/token-selection'
 
@@ -55,7 +61,7 @@ export function useActiveRooms() {
   const isWatching = useState<boolean>('active-rooms-watching', () => false)
   /** 運行管理者が今どの room に入っているか (未参加は null) */
   const joinedRoomId = useState<string | null>('active-rooms-joined', () => null)
-  /** 対応を終えた部屋 (判定を保存できた)。常に一覧に在る id だけを持つ */
+  /** 対応を終えた部屋 (点呼は判定を保存できた・画面共有は視聴を始めた)。常に一覧に在る id だけを持つ */
   const handledRooms = useState<string[]>('active-rooms-handled', () => [])
   const callingRooms = computed(() => joinedRoomId.value !== null
     ? []
@@ -206,9 +212,9 @@ export function useActiveRooms() {
   }
 
   /**
-   * その部屋を「対応を終えた」として着信から外す。**呼ぶのは判定の保存が成功したときだけ**
-   * (通話を抜けただけでは呼ばない)。一覧に無い id は印にしない — 残すと、同じ id の部屋が
-   * 後で現れたときに鳴らなくなる
+   * その部屋を「対応を終えた」として着信から外す。**呼ぶのは、点呼の部屋なら判定の保存が
+   * 成功したとき (通話を抜けただけでは呼ばない)、画面共有の部屋なら視聴を始めたときだけ。**
+   * 一覧に無い id は印にしない — 残すと、同じ id の部屋が後で現れたときに鳴らなくなる
    */
   function markHandled(roomId: string) {
     if (activeRooms.value.includes(roomId) && !handledRooms.value.includes(roomId)) {

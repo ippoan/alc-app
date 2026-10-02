@@ -1,13 +1,41 @@
 <script setup lang="ts">
+/**
+ * 画面共有を見る部品。運行管理者タブ (`ManagerDashboard.vue`) と、IT点呼 の受け画面
+ * (`TenkoItAdminView.vue`。警告デバイスが繋がっている席だけ) が置く。
+ *
+ * **視聴を始めた時点で、その部屋だけを着信から外す** (`useActiveRooms().markHandled`)。
+ * `setJoined` は使わない — 立てると点呼の着信まで鳴らなくなる。
+ *
+ * 止め方は 2 つ: 「視聴をやめる」は自分が抜けるだけで共有は続く。「画面共有を終了」は
+ * 共有している側に合図を送って共有そのものを止めさせる (部屋が一覧から消えたら終わり)。
+ */
+import { splitRooms } from '~/utils/it-tenko'
+
+/** 「画面共有を終了」を押してから、部屋が消えるのを待つ時間。過ぎたら失敗の文を出す */
+const END_SHARE_TIMEOUT_MS = 5000
+
+const props = defineProps<{
+  /** true の間は見始められない (IT点呼 の受け画面が、点呼を開いている間に渡す) */
+  disabled?: boolean
+}>()
+const emit = defineEmits<{
+  /** 視聴を始めた / やめた */
+  'update:viewing': [viewing: boolean]
+}>()
+
 const config = useRuntimeConfig()
 
 const webRtc = useWebRtc('admin')
 
-const { activeRooms, start: startWatchingRooms, stop: stopWatchingRooms, reload: reloadActiveRooms } = useActiveRooms()
+const { activeRooms, start: startWatchingRooms, stop: stopWatchingRooms, reload: reloadActiveRooms, markHandled } = useActiveRooms()
 const selectedRoomId = ref<string | null>(null)
 const isViewActive = ref(false)
 const isLoading = ref(false)
 const loadError = ref<string | null>(null)
+/** 「画面共有を終了」を押して、部屋が消えるのを待っている */
+const isEnding = ref(false)
+const endError = ref<string | null>(null)
+let endTimer: ReturnType<typeof setTimeout> | null = null
 
 const videoContainer = ref<HTMLElement | null>(null)
 const videoRef = ref<HTMLVideoElement | null>(null)
@@ -25,10 +53,35 @@ function toggleFullscreen() {
   }
 }
 
-// screen- プレフィックスのみフィルタリング
-const screenRooms = computed(() => activeRooms.value.filter(r => r.startsWith('screen-')))
+function onFullscreenChange() {
+  isFullscreen.value = !!document.fullscreenElement
+}
+
+const screenRooms = computed(() => splitRooms(activeRooms.value).screen)
 
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
+
+function setViewing(viewing: boolean) {
+  if (isViewActive.value === viewing) return
+  isViewActive.value = viewing
+  emit('update:viewing', viewing)
+}
+
+function clearEnding() {
+  if (endTimer) { clearTimeout(endTimer); endTimer = null }
+  isEnding.value = false
+}
+
+/** 自分の接続とマイクを手放す (共有している側は止めない) */
+function releaseView() {
+  clearEnding()
+  webRtc.disconnect()
+  adminMicStream?.getTracks().forEach(t => t.stop())
+  adminMicStream = null
+  hasMic.value = false
+  isMuted.value = false
+  setViewing(false)
+}
 
 async function loadActiveRooms() {
   isLoading.value = true
@@ -40,15 +93,12 @@ async function loadActiveRooms() {
 }
 
 async function startViewing(roomId: string) {
-  if (isViewActive.value) {
-    webRtc.disconnect()
-    adminMicStream?.getTracks().forEach(t => t.stop())
-    adminMicStream = null
-    isViewActive.value = false
-  }
+  if (props.disabled) return
+  releaseView()
+  loadError.value = null
+  endError.value = null
 
   selectedRoomId.value = roomId
-  isMuted.value = false
   try {
     // マイク音声を取得
     try {
@@ -65,7 +115,9 @@ async function startViewing(roomId: string) {
       await webRtc.startStreaming(adminMicStream)
     }
 
-    isViewActive.value = true
+    setViewing(true)
+    // 見始めた = この画面共有にはもう応じた。この部屋だけを着信から外す
+    markHandled(roomId)
   } catch {
     adminMicStream?.getTracks().forEach(t => t.stop())
     adminMicStream = null
@@ -74,14 +126,22 @@ async function startViewing(roomId: string) {
   }
 }
 
+/** 「視聴をやめる」: 自分が抜けるだけ。共有は続き、一覧からもう一度見られる */
 function stopViewing() {
-  webRtc.disconnect()
-  adminMicStream?.getTracks().forEach(t => t.stop())
-  adminMicStream = null
-  hasMic.value = false
-  isViewActive.value = false
+  releaseView()
   selectedRoomId.value = null
-  isMuted.value = false
+}
+
+/** 「画面共有を終了」: 共有している側に止めさせる。止まれば部屋が一覧から消え、下の watch が閉じる */
+function endShare() {
+  endError.value = null
+  isEnding.value = true
+  webRtc.sendEndShare()
+  endTimer = setTimeout(() => {
+    endTimer = null
+    isEnding.value = false
+    endError.value = '終了できませんでした。もう一度お試しください'
+  }, END_SHARE_TIMEOUT_MS)
 }
 
 function toggleMute() {
@@ -106,16 +166,16 @@ watch(() => webRtc.remoteStream.value, (stream) => {
 onMounted(() => {
   loadActiveRooms()
   startWatchingRooms()
-  document.addEventListener('fullscreenchange', () => {
-    isFullscreen.value = !!document.fullscreenElement
-  })
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
+// 見ている最中に画面ごと消える場合に、置いている側へ「もう見ていない」を伝える
+// (unmount の後では emit が届かないので before で)
+onBeforeUnmount(() => releaseView())
+
 onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
   stopWatchingRooms()
-  webRtc.disconnect()
-  adminMicStream?.getTracks().forEach(t => t.stop())
-  adminMicStream = null
 })
 </script>
 
@@ -219,12 +279,28 @@ onUnmounted(() => {
             {{ selectedRoomId }}
           </div>
 
-          <button
-            class="w-full py-2 text-sm rounded-lg bg-red-100 hover:bg-red-200 text-red-700 font-medium transition-colors"
-            @click="stopViewing"
-          >
-            視聴終了
-          </button>
+          <div v-if="endError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700" data-testid="screen-end-error">
+            {{ endError }}
+          </div>
+
+          <!-- 「視聴をやめる」= 自分が抜けるだけ (共有は続く) / 「画面共有を終了」= 相手の共有を止める -->
+          <div class="flex gap-2">
+            <button
+              class="flex-1 py-2 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors"
+              data-testid="screen-stop-viewing"
+              @click="stopViewing"
+            >
+              視聴をやめる
+            </button>
+            <button
+              class="flex-1 py-2 text-sm rounded-lg bg-red-100 hover:bg-red-200 text-red-700 font-medium transition-colors disabled:opacity-50"
+              data-testid="screen-end-share"
+              :disabled="isEnding"
+              @click="endShare"
+            >
+              {{ isEnding ? '終了しています...' : '画面共有を終了' }}
+            </button>
+          </div>
         </div>
 
         <div
@@ -253,10 +329,14 @@ onUnmounted(() => {
         <div
           v-for="roomId in screenRooms"
           :key="roomId"
-          class="rounded-xl border p-4 cursor-pointer transition-colors"
-          :class="selectedRoomId === roomId && isViewActive
-            ? 'border-blue-400 bg-blue-50'
-            : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'"
+          class="rounded-xl border p-4 transition-colors"
+          :class="[
+            selectedRoomId === roomId && isViewActive
+              ? 'border-blue-400 bg-blue-50'
+              : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50',
+            disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+          ]"
+          data-testid="screen-room"
           @click="startViewing(roomId)"
         >
           <div class="flex items-center justify-between">
@@ -269,7 +349,10 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="mt-1 text-xs text-gray-400 font-mono truncate">{{ roomId }}</div>
-          <div class="mt-2 text-xs text-blue-600 font-medium">
+          <div v-if="disabled" class="mt-2 text-xs text-gray-500 font-medium">
+            いまは視聴できません
+          </div>
+          <div v-else class="mt-2 text-xs text-blue-600 font-medium">
             クリックして視聴 →
           </div>
         </div>

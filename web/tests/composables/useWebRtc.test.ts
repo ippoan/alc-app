@@ -500,6 +500,49 @@ describe('useWebRtc', () => {
     expect(rtc.remoteStream.value).toBeNull()
   })
 
+  // --- 画面共有の終了 (end_share) ---
+
+  it('sendEndShare: end_share を送る', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'screen-1')
+    const ws = getWs()
+    ws.onopen?.()
+
+    rtc.sendEndShare()
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'end_share' }))
+  })
+
+  it('handleSignalingMessage: end_share → endShareCount が 1 ずつ進む (接続は切らない)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'screen-1')
+    const ws = getWs()
+    ws.onopen?.()
+    expect(rtc.endShareCount.value).toBe(0)
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'end_share' }) } as any)
+    expect(rtc.endShareCount.value).toBe(1)
+    ws.onmessage?.({ data: JSON.stringify({ type: 'end_share' }) } as any)
+    expect(rtc.endShareCount.value).toBe(2)
+
+    // 止めるのは読む側 (useScreenShare)。ここは合図を数えるだけ
+    expect(ws.close).not.toHaveBeenCalled()
+    expect(rtc.isConnected.value).toBe(true)
+    expect(rtc.error.value).toBeNull()
+  })
+
+  it('★ end_share 以外の message では endShareCount が進まない (peer_left・error・pong)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'screen-1')
+    const ws = getWs()
+    ws.onopen?.()
+
+    for (const type of ['peer_joined', 'peer_left', 'error', 'pong']) {
+      ws.onmessage?.({ data: JSON.stringify({ type }) } as any)
+    }
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rtc.endShareCount.value).toBe(0)
+  })
+
   it('handleSignalingMessage: error → error ref 設定', async () => {
     const rtc = useWebRtc('device')
     await rtc.connect('wss://sig.example.com', 'room-1')

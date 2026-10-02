@@ -11,13 +11,13 @@ interface IceCandidate {
 }
 
 interface SignalingMessage {
-  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'ping';
+  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'ping' | 'end_share';
   sdp?: string;
   candidate?: IceCandidate;
 }
 
 interface ServerMessage {
-  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'peer_joined' | 'peer_left' | 'error' | 'pong';
+  type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'peer_joined' | 'peer_left' | 'error' | 'pong' | 'end_share';
   sdp?: string;
   candidate?: IceCandidate;
   role?: ClientRole;
@@ -38,6 +38,12 @@ interface PeerAttachment {
 
 /** dev の部屋から dev でない admin を切るときの close code (1008 = Policy Violation)。 */
 const CLOSE_DEV_ROOM = 1008;
+
+/**
+ * 画面共有の部屋の id の接頭辞。web 側の定数 `SCREEN_SHARE_ROOM_PREFIX`
+ * (`web/app/utils/it-tenko.ts`) と同じ値 — 別 package で import できないので、変えるときは両方。
+ */
+const SCREEN_SHARE_ROOM_PREFIX = 'screen-';
 
 export class SignalingRoom extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
@@ -148,9 +154,25 @@ export class SignalingRoom extends DurableObject<Env> {
         this.send(ws, { type: 'pong' });
         break;
 
+      case 'end_share': {
+        // 画面共有を見ている側 (admin) が、共有している側 (device) に共有をやめさせる合図。
+        // admin から・画面共有の部屋でだけ中継する。それ以外は知らない type と同じ扱い
+        const roomId = await this.getRoomIdFromStorage();
+        if (senderRole !== 'admin' || !roomId?.startsWith(SCREEN_SHARE_ROOM_PREFIX)) {
+          this.sendUnknownType(ws, data.type);
+          return;
+        }
+        this.notifyPeer(senderRole, { type: 'end_share' });
+        break;
+      }
+
       default:
-        this.send(ws, { type: 'error', message: `Unknown message type: ${(data as { type: string }).type}` });
+        this.sendUnknownType(ws, (data as { type: string }).type);
     }
+  }
+
+  private sendUnknownType(ws: WebSocket, type: string): void {
+    this.send(ws, { type: 'error', message: `Unknown message type: ${type}` });
   }
 
   // ws は runtime 側で既に close 済み (このハンドラが呼ばれる契機そのもの)。

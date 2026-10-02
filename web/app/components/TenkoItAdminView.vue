@@ -23,6 +23,10 @@
  * (`useAlarmWatch` の切断の猶予)。そのあいだは保存の失敗を待たずに、開いている点呼を閉じて
  * 一覧へ戻し、理由を出す。繋がり直すまで点呼は開かない。
  *
+ * **画面共有** (`ScreenShareAdminView`) もここから見られる。出すのは**警告デバイスが繋がっている席**で
+ * 画面共有の部屋が在るときだけ (IT点呼 のタブはどの端末にも出るので、運行管理者席に絞る)。
+ * 点呼を開いている間は見始められず、見ている間は点呼を開かない (マイクと通話を取り合うため)。
+ *
  * 通話の手順は `TenkoRemoteAdminView.vue` からの複製 (あちらは本番で動いている
  * 経路なので触らない。共通化は IT点呼 を通常の点呼へ統合するときに行う)。
  */
@@ -67,6 +71,24 @@ const {
 } = useActiveRooms()
 /** 着信 = IT点呼 の部屋だけ (遠隔点呼の部屋は遠隔点呼モニターが受ける) */
 const itRooms = computed(() => splitRooms(activeRooms.value).it)
+
+// --- 画面共有 (見るのは ScreenShareAdminView。ここは出すか・点呼との排他だけ) ---
+
+/** 画面共有を見ている最中か (部品が知らせてくる) */
+const screenViewing = ref(false)
+/** 画面共有を見ている間に点呼を開こうとした (案内を出す。視聴をやめたら消える) */
+const screenViewingBlocked = ref(false)
+/**
+ * 画面共有の部品を出すか。警告デバイスが繋がっている席で、画面共有の部屋が在るときだけ。
+ * 見ている最中は条件が外れても消さない (部品が自分で視聴を閉じてから消える)
+ */
+const showScreenShare = computed(() => screenViewing.value
+  || (alarmDevice.isConnected.value && splitRooms(activeRooms.value).screen.length > 0))
+
+function onScreenViewing(viewing: boolean) {
+  screenViewing.value = viewing
+  if (!viewing) screenViewingBlocked.value = false
+}
 
 // WebSocket用: https://→wss:// または http://→ws://
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
@@ -147,6 +169,11 @@ const managerName = computed(() =>
 function request(target: Target) {
   // 警告デバイスが切れて 2 分たった席では開かない (理由は画面に出ている)
   if (seatExpired.value) return
+  // 画面共有を見ている間は開かない (着信の警告は鳴り続けるので、視聴をやめてから応答する)
+  if (screenViewing.value) {
+    screenViewingBlocked.value = true
+    return
+  }
   idError.value = null
   // 席に登録が在れば社員番号は聞かない
   if (manager.value) {
@@ -439,6 +466,10 @@ onUnmounted(() => {
       警告デバイスの接続が切れたため、この席では点呼の確認と判定ができません。USB をつなぎ直してください
     </div>
 
+    <div v-if="screenViewingBlocked" class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800" data-testid="it-screen-viewing-block">
+      画面共有を見ている間は点呼を開けません。先に視聴をやめてください
+    </div>
+
     <div v-if="callError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700" data-testid="it-call-error">
       {{ callError }}
     </div>
@@ -601,6 +632,15 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 画面共有 (警告デバイスが繋がっている席で、共有中の画面が在るときだけ)。
+         点呼を開いている・繋いでいる途中・社員番号を聞いている間は見始められない -->
+    <div v-if="showScreenShare" class="rounded-xl border border-gray-200 bg-white p-4" data-testid="it-screen-share">
+      <ScreenShareAdminView
+        :disabled="opened !== null || connecting || waiting !== null"
+        @update:viewing="onScreenViewing"
+      />
     </div>
   </div>
 

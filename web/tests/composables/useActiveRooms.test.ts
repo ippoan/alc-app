@@ -542,6 +542,32 @@ describe('useActiveRooms', () => {
       expect(callingRooms.value).toEqual(['room-a'])
     })
 
+    // 画面共有の部屋は「視聴を始めた」で印にする (setJoined は使わない)。見ている間も
+    // 点呼の着信は数え続ける
+    it('★ 画面共有の部屋を印にしても、ほかの着信 (IT点呼・遠隔点呼) は数え続ける', () => {
+      const { callingRooms, markHandled, joinedRoomId } = startWithRooms(['screen-a', 'it-s1', 'room-a'])
+
+      markHandled('screen-a')
+
+      expect(callingRooms.value).toEqual(['it-s1', 'room-a'])
+      expect(joinedRoomId.value).toBeNull()
+
+      // 見ている間に新しい着信が来ても数える。画面共有が終わって部屋が消えても変わらない
+      pushRooms(['screen-a', 'it-s1', 'room-a', 'it-s2'])
+      expect(callingRooms.value).toEqual(['it-s1', 'room-a', 'it-s2'])
+      pushRooms(['it-s1', 'room-a', 'it-s2'])
+      expect(callingRooms.value).toEqual(['it-s1', 'room-a', 'it-s2'])
+    })
+
+    it('印にした画面共有の部屋だけが在るあいだは着信なし。別の画面共有が始まれば数える', () => {
+      const { callingRooms, markHandled } = startWithRooms(['screen-a'])
+      markHandled('screen-a')
+      expect(callingRooms.value).toEqual([])
+
+      pushRooms(['screen-a', 'screen-b'])
+      expect(callingRooms.value).toEqual(['screen-b'])
+    })
+
     it('同じ部屋の判定を押し直しても、印は 1 つだけ', () => {
       const { markHandled } = startWithRooms(['room-a'])
 
