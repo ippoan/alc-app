@@ -37,8 +37,9 @@ import { evtArg } from '~/composables/useCoreS3Serial'
  *
  * # 引けなかったときは従来どおりに倒す
  *
- * 台帳に無いカード (未登録 / 登録直後) と、氏名が引けないときは**何もしない**。
- * サーバ由来のボタンが従来どおり出るので、**遅くなるだけで壊れない**。
+ * 台帳に無いカード (未登録 / 登録直後)・台帳が古すぎるとき・氏名が引けないときは
+ * **ボタンを出さない**。サーバ由来のボタンが従来どおり出るので、**遅くなるだけで壊れない**。
+ * 黙って倒れると気づけない (Refs ippoan/alc-app#387) ので、理由だけを 1 行 warn に残す。
  */
 
 /**
@@ -52,6 +53,14 @@ import { evtArg } from '~/composables/useCoreS3Serial'
  * `FRESH_WINDOW_MS` を既に過ぎており、**ボタンは出ない** (寿命は延びない)。
  */
 const MERGE_WINDOW_MS = 60_000
+
+/**
+ * 手元の台帳で引けなかったことを残す。**カードの番号・社員の ID・氏名は出さない**
+ * (理由の語だけ)。
+ */
+function warnUnresolved(reason: string): void {
+  console.warn(`[HubTimecardPunch] 手元の台帳で引けないカード (${reason}。サーバ経由の案内に任せる)`)
+}
 
 export function useHubTimecardPunch(resolveName: (employeeId: string) => string | null) {
   const coreS3 = useCoreS3Serial()
@@ -69,9 +78,15 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
     if (!cardId) return
     // **card_id はここから外へ出さない。** 突き合わせは手元の台帳だけで行う
     const employeeId = cards.resolve(cardId)
-    if (!employeeId) return
+    if (!employeeId) {
+      warnUnresolved(cards.isFresh() ? '台帳に無い' : '台帳が古い')
+      return
+    }
     const name_ = resolveName(employeeId)
-    if (!name_) return
+    if (!name_) {
+      warnUnresolved('名前が無い')
+      return
+    }
     const punch: LatestPunch = {
       id: `serial:${++seq}`,
       employeeId,

@@ -14,8 +14,9 @@ import { listTimecardCards } from '~/utils/api'
  *
  * # 鮮度
  *
- * **古くても使う。**「古いから引き直してから答える」にするとクラウド待ちに戻り、
+ * **少し古くても使う。**「古いから引き直してから答える」にするとクラウド待ちに戻り、
  * 目的 (WS を待たない) が崩れる。**手元の答えを即返し、引き直しは背景で**行う。
+ * ただし**古すぎる台帳では引かない** (`STALE_LIMIT_MS`。下の定数の doc 参照)。
  *
  * 引き直す契機は 4 つ。**どれも背景で走り、`resolve()` を待たせない**:
  *
@@ -23,7 +24,7 @@ import { listTimecardCards } from '~/utils/api'
  * |---|---|
  * | `refresh()` の明示呼び出し | 呼び出し側が打刻の合図などで叩く |
  * | **経過時間 (`startPeriodicRefresh`)** | 打刻が一度も来なくても古びないように。**朝いちばんの 1 人目**が古い台帳に当たらない |
- * | **`resolve()` のたび** | 取得時刻を見て古ければ引き直す (`MAX_AGE_MS`) |
+ * | **`resolve()` のたび** | 取得時刻を見て古ければ引き直す (`MAX_AGE_MS`)。古すぎて引かなかったときも |
  * | **引けなかったとき** | 運用中に登録された新しいカードを拾う (`MISS_MIN_AGE_MS`) |
  *
  * ## ★ 時刻での同期が要る本当の理由は「削除」
@@ -56,7 +57,40 @@ const MAX_AGE_MS = 5 * 60 * 1000
  */
 const MISS_MIN_AGE_MS = 30 * 1000
 
-/** `card_id` → 社員 ID。**氏名は入れない** (`timecard-card-db.ts` の doc 参照) */
+/**
+ * この時間を過ぎた台帳では**引かない** (`resolve()` が `null` を返す)。定期同期の間隔の 2 倍。
+ * 台帳をサーバから取れた時刻が分からないとき (一度も取れていない / 時刻を持たない写しを
+ * IndexedDB から戻した) も同じ扱い (Refs ippoan/alc-app#387)。
+ *
+ * # なぜ上限が要るのか
+ *
+ * ここで引けた打刻は「この端末の機体で読んだ社員証」として扱われ、その回は IT点呼 を
+ * 選べる (`useHubTimecardPunch` の `readOnThisDevice`)。カードを別の人に付け替えた後も
+ * 古い写しで引き続けると、**前の持ち主の名義**でその回を始められてしまう。取得に失敗し
+ * 続けた台帳・リロード直後に IndexedDB から戻した古い台帳で起きるので、**結び付く幅を
+ * 同期 1〜2 回ぶんに抑える**。
+ *
+ * 引かなかったときはサーバ経由の案内に倒れる (IT点呼 は選べない)。**遅くなるだけで壊れない。**
+ */
+const STALE_LIMIT_MS = 2 * MAX_AGE_MS
+
+/**
+ * カードの番号を突き合わせ用の形に揃える。**台帳に入れるとき (キー) と引くとき (引数) の
+ * 両方に通す** (Refs ippoan/alc-app#387)。
+ *
+ * 機体 (CoreS3) は読み取った番号を**大文字の 16 進**で出し、サーバの台帳は正規化済み
+ * (**小文字**) で返す。揃えずに完全一致で引くと、a〜f を含むカードが常に引けない。
+ *
+ * 規則は backend と同じ 3 つだけ — 前後の空白を落とす・小文字にする・`:` を除く。
+ * **`-` や内側の空白は消さない** (backend が消さないので、消すと別のカードに当たり得る)。
+ * 写し元: rust-alc-api `crates/alc-core/src/repository/timecard.rs` の `normalize_card_id`
+ * (`card_id.trim().to_lowercase().replace(':', "")`)。規則を変えるときは両方を揃えること。
+ */
+export function normalizeCardId(cardId: string): string {
+  return cardId.trim().toLowerCase().replace(/:/g, '')
+}
+
+/** 正規化済みの `card_id` → 社員 ID。**氏名は入れない** (`timecard-card-db.ts` の doc 参照) */
 const index = new Map<string, string>()
 /** 台帳をサーバから取れた時刻 (0 = まだ一度も取れていない) */
 let fetchedAt = 0
@@ -79,7 +113,8 @@ export function _resetTimecardCardIndex(): void {
 
 function apply(entries: readonly TimecardCardEntry[], at: number): void {
   index.clear()
-  for (const e of entries) index.set(e.cardId, e.employeeId)
+  // サーバから取ったぶんも IndexedDB から戻したぶんもここを通る (キーの正規化は 1 か所)
+  for (const e of entries) index.set(normalizeCardId(e.cardId), e.employeeId)
   fetchedAt = at
 }
 
@@ -156,11 +191,24 @@ export function useTimecardCardIndex() {
   }
 
   /**
-   * `card_id` から社員 ID を引く。**同期。** 引けなければ `null` を返し、
-   * **背景で引き直す** (新しく登録されたカードを次から拾えるように)。
+   * 台帳が引いてよい新しさか。サーバから取れた時刻が分からない (0) か、
+   * `STALE_LIMIT_MS` より古ければ `false`。
+   */
+  function isFresh(): boolean {
+    return fetchedAt > 0 && Date.now() - fetchedAt <= STALE_LIMIT_MS
+  }
+
+  /**
+   * `card_id` (読み取った生値でよい) から社員 ID を引く。**同期。** 引けなければ `null` を
+   * 返し、**背景で引き直す** (新しく登録されたカードを次から拾えるように)。
+   * **台帳が古すぎるときも `null`** (`STALE_LIMIT_MS`)。
    */
   function resolve(cardId: string): string | null {
-    const employeeId = index.get(cardId)
+    if (!isFresh()) {
+      void refresh(MAX_AGE_MS)
+      return null
+    }
+    const employeeId = index.get(normalizeCardId(cardId))
     if (employeeId) {
       // 引けた。**答えは即返し**、古ければ背景で引き直すだけ
       void refresh(MAX_AGE_MS)
@@ -171,5 +219,5 @@ export function useTimecardCardIndex() {
     return null
   }
 
-  return { restore, refresh, resolve, startPeriodicRefresh, stopPeriodicRefresh }
+  return { restore, refresh, resolve, isFresh, startPeriodicRefresh, stopPeriodicRefresh }
 }
