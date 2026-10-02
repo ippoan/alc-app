@@ -22,6 +22,8 @@ const isSupported = alarm.isSupported
 // ([つなぐ] で true になった瞬間に useAlarmWatch が見張りを始める)
 const { enabled, setEnabled } = useAlarmDeviceSetting()
 const { isWatching, callingRooms } = useActiveRooms()
+// 繋がっていた警告デバイスが切れてからの猶予の残り秒 (数えていないときは null。数えるのは useAlarmWatch)
+const { remainingSeconds: disconnectRemainingSeconds } = useSeatDisconnectGrace()
 
 const alarmCauseLabels: Record<string, string> = {
   silence: '無音',
@@ -152,9 +154,18 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
             <span class="text-sm font-medium text-gray-800">警告デバイス</span>
             <span class="text-xs px-2 py-0.5 rounded-full" :class="alarmPillClass">{{ alarmStatusText }}</span>
           </div>
-          <p v-if="alarmVisual === 'disconnected'" class="text-xs text-red-700 font-medium">
-            <span class="font-bold">警告デバイスが接続されていません</span> — USB を確認して「接続」を押してください
-          </p>
+          <template v-if="alarmVisual === 'disconnected'">
+            <p
+              v-if="disconnectRemainingSeconds !== null"
+              class="text-xs text-red-700 font-bold"
+              data-testid="alarm-disconnect-countdown"
+            >
+              警告デバイスの接続が切れました。あと {{ disconnectRemainingSeconds }} 秒で、この席では点呼の確認と判定ができなくなります。USB をつなぎ直してください
+            </p>
+            <p class="text-xs text-red-700 font-medium">
+              <span class="font-bold">警告デバイスが接続されていません</span> — USB を確認して「接続」を押してください
+            </p>
+          </template>
           <p v-else-if="!isWatching" class="text-xs text-red-600">着信を受けられません (signaling 未接続)</p>
           <p v-else-if="isCalling" class="text-xs text-amber-700 font-medium">{{ callingText }}</p>
           <p v-else class="text-xs text-gray-500">運行管理者のブラウザを見張っています (閉じると鳴ります)</p>

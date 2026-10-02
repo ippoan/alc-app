@@ -26,7 +26,12 @@ mockNuxtImport('useAlarmDeviceSetting', () => () => ({
 
 // 先取りの中身 (抑止の期限を戻す・例外を出さない) は useManagerDeviceToken.test.ts が見る
 const prefetchManagerJwt = vi.fn(async () => {})
-mockNuxtImport('useManagerDeviceToken', () => () => ({ prefetchManagerJwt }))
+// 切断の猶予 (期限を入れる・外す) は useAlarmWatch.disconnect-grace.test.ts が見る
+mockNuxtImport('useManagerDeviceToken', () => () => ({
+  prefetchManagerJwt,
+  setDisconnectDeadline: vi.fn(),
+  clearDisconnectDeadline: vi.fn(),
+}))
 
 let useAlarmWatch: typeof import('~/composables/useAlarmWatch').useAlarmWatch
 

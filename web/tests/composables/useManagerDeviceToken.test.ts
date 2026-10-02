@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 // useManagerDeviceToken はモジュールスコープに cache / 抑止 / 失敗理由を持つシングルトンなので、
@@ -397,5 +397,172 @@ describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
       }
       expect(fetchMock).not.toHaveBeenCalled()
     })
+  })
+})
+
+// 警告デバイスの切断による期限 (Refs ippoan/alc-app#387)。いつ入れ・外すかは useAlarmWatch の側
+// (useAlarmWatch.disconnect-grace.test.ts)。ここは「期限でトークンが使えなくなる」ことと、
+// そのときに**トークンそのものと開発用の印に触らない**こと。
+describe('useManagerDeviceToken — 切断による期限 (#387)', () => {
+  const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+  const devJwt = `${seg({ alg: 'HS256' })}.${seg({ sub: 'm1', aud: 'device', dev_device: true })}.sig`
+  const T0 = Date.UTC(2026, 0, 1, 0, 0, 0)
+  const GRACE_MS = 120_000
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** 印の書き換えを数える (`noteDeviceToken` は印が変わるたびにこのイベントを出す) */
+  async function watchDevMark() {
+    const { isDevDevice, DEV_DEVICE_MARK_EVENT } = await import('~/utils/token-selection')
+    const onChange = vi.fn()
+    window.addEventListener(DEV_DEVICE_MARK_EVENT, onChange)
+    return { isDevDevice, onChange, off: () => window.removeEventListener(DEV_DEVICE_MARK_EVENT, onChange) }
+  }
+
+  it('期限を入れると、期限の直前までは cache を返し、期限ちょうどで使わなくなる (USB なしなら null)', async () => {
+    const fetchMock = stubHappyPath()
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+
+    // 切れた: 2 分後を期限にする
+    alarmMock.isConnected.value = false
+    t.setDisconnectDeadline(T0 + GRACE_MS)
+
+    vi.setSystemTime(T0 + GRACE_MS - 1)
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(t.lastFailureStage.value).toBeNull()
+
+    vi.setSystemTime(T0 + GRACE_MS)
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(t.lastFailureStage.value).toBe('no-alarm-device')
+    // 取り直しには行っていない (USB が無いので通信 0) / 抑止も立てない
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(t.backoffUntil.value).toBe(0)
+  })
+
+  it('★ 期限を入れても・期限が切れても、開発用の印は変わらない (トークンを捨てない = 印を落とさない)', async () => {
+    stubHappyPath({ access_token: devJwt, expires_in: 900 })
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(devJwt)
+    const mark = await watchDevMark()
+    expect(mark.isDevDevice('manager-device')).toBe(true)
+
+    alarmMock.isConnected.value = false
+    t.setDisconnectDeadline(T0 + GRACE_MS)
+    expect(mark.isDevDevice('manager-device')).toBe(true)
+
+    vi.setSystemTime(T0 + GRACE_MS + 1000)
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(mark.isDevDevice('manager-device')).toBe(true)
+    expect(localStorage.getItem('alc_dev_device_manager-device')).toBe('1')
+
+    // その場で期限を切っても (設定 off)、外しても同じ
+    t.setDisconnectDeadline(Date.now())
+    t.clearDisconnectDeadline()
+    expect(mark.isDevDevice('manager-device')).toBe(true)
+    expect(mark.onChange).not.toHaveBeenCalled()
+    mark.off()
+  })
+
+  it('期限 = 今 (設定 off) なら、その場で cache を使わなくなる', async () => {
+    stubHappyPath()
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+
+    alarmMock.isConnected.value = false
+    t.setDisconnectDeadline(T0)
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(t.lastFailureStage.value).toBe('no-alarm-device')
+  })
+
+  it('期限が切れた後に USB が繋がっていれば取り直す。期限を外した後の新しいトークンは元の 15 分', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: TOKEN, expires_in: 900 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: 'second', expires_in: 900 }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+
+    t.setDisconnectDeadline(T0 + GRACE_MS)
+    const reconnectedAt = T0 + GRACE_MS + 5000
+    vi.setSystemTime(reconnectedAt)
+    // 繋がり直した: 期限を外す (切り詰めた cache の期限は戻らないので、次の要求が取り直す)
+    t.clearDisconnectDeadline()
+    expect(await t.getManagerJwt()).toBe('second')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+
+    // 新しいトークンは 900 秒 − 手前マージン 60 秒の直前まで cache に当たる
+    vi.setSystemTime(reconnectedAt + 840_000 - 1)
+    expect(await t.getManagerJwt()).toBe('second')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('猶予のあいだに繋がり直して期限を外しても、切り詰めた期限は戻らない (元の期限の所で取り直すだけ)', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: TOKEN, expires_in: 900 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: 'second', expires_in: 900 }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+
+    t.setDisconnectDeadline(T0 + GRACE_MS)
+    vi.setSystemTime(T0 + 30_000)
+    t.clearDisconnectDeadline()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    vi.setSystemTime(T0 + GRACE_MS)
+    expect(await t.getManagerJwt()).toBe('second')
+  })
+
+  it('★ 期限が入っている間に書き込まれたトークン (切断をまたいだ取得) も、同じ期限で使えなくなる', async () => {
+    // token の応答を、切断の後まで保留する
+    let resolveToken!: (v: unknown) => void
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: NONCE }) })
+      .mockReturnValueOnce(new Promise((resolve) => { resolveToken = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    const t = (await load())()
+    const pending = t.getManagerJwt()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    // 取得の途中で切れた
+    alarmMock.isConnected.value = false
+    vi.setSystemTime(T0 + 1000)
+    t.setDisconnectDeadline(T0 + 1000 + GRACE_MS)
+
+    resolveToken({ ok: true, status: 200, json: async () => ({ access_token: TOKEN, expires_in: 900 }) })
+    expect(await pending).toBe(TOKEN)
+
+    // 15 分ではなく、切断による期限で切れる
+    vi.setSystemTime(T0 + 1000 + GRACE_MS - 1)
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    vi.setSystemTime(T0 + 1000 + GRACE_MS)
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(t.lastFailureStage.value).toBe('no-alarm-device')
+  })
+
+  it('切断による期限より先に切れるトークンの期限は延ばさない', async () => {
+    const fetchMock = stubHappyPath({ access_token: TOKEN, expires_in: 90 })
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+
+    // 元の期限 (90 秒 − 手前マージン 60 秒 = 30 秒後) の方が、2 分後より早い
+    alarmMock.isConnected.value = false
+    t.setDisconnectDeadline(T0 + GRACE_MS)
+    vi.setSystemTime(T0 + 30_000)
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

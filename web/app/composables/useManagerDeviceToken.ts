@@ -75,6 +75,20 @@ let cachedExpMs = 0
 // 読めるようにする (Refs ippoan/alc-app#387)。cache の書き換え・破棄のすべてに追従する。
 // 取得の経路・タイミングは変えない (見ているだけ)
 watch(cachedJwt, token => noteDeviceToken('manager-device', token), { flush: 'sync' })
+/**
+ * 警告デバイスの切断による期限 (ms epoch)。入っていなければ null (Refs ippoan/alc-app#387)。
+ *
+ * USB が切れてから一定の時間が過ぎたら、手元のトークンを使うのをやめる (`useAlarmWatch` が入れ、
+ * 繋がり直したら外す)。**期限 (`cachedExpMs`) を切り詰めるだけで、`cachedJwt` は捨てない** —
+ * 捨てると開発用の印が落ち (上の watch)、送る側が席の鍵ではない別の経路を選んでしまう。
+ * 期限が過ぎた後は自然な期限切れと同じ道を通る (取り直し → USB が無ければ `no-alarm-device` で null)。
+ */
+let disconnectDeadlineMs: number | null = null
+/** 切断による期限が入っていれば、cache の期限を「その時刻ちょうどで使えなくなる」所まで切り詰める */
+function clampToDisconnectDeadline(): void {
+  if (disconnectDeadlineMs === null) return
+  cachedExpMs = Math.min(cachedExpMs, disconnectDeadlineMs + REFRESH_BEFORE_MS)
+}
 let inFlight: Promise<string | null> | null = null
 const backoffUntil = ref(0)
 const lastError = ref<string | null>(null)
@@ -160,6 +174,8 @@ export function useManagerDeviceToken() {
       const ttl = typeof tokenData.expires_in === 'number' ? tokenData.expires_in : DEFAULT_TTL_SECONDS
       cachedJwt.value = tokenData.access_token
       cachedExpMs = nowMs + ttl * 1000
+      // 切断をまたいで返ってきたトークンが、切断による期限より長い期限を書き戻さないように
+      clampToDisconnectDeadline()
       return cachedJwt.value
     }
     catch (e) {
@@ -203,9 +219,28 @@ export function useManagerDeviceToken() {
     catch { /* 先取りは best effort */ }
   }
 
+  /**
+   * 切断による期限を入れる (`deadlineMs` = その時刻を過ぎたら手元のトークンを使わない)。
+   * トークンそのものと開発用の印には触らない。
+   */
+  function setDisconnectDeadline(deadlineMs: number): void {
+    disconnectDeadlineMs = deadlineMs
+    clampToDisconnectDeadline()
+  }
+
+  /**
+   * 切断による期限を外す (警告デバイスが繋がり直したとき)。切り詰めた cache の期限は戻さない
+   * — 足りなくなれば次の要求が取り直す。
+   */
+  function clearDisconnectDeadline(): void {
+    disconnectDeadlineMs = null
+  }
+
   return {
     getManagerJwt,
     prefetchManagerJwt,
+    setDisconnectDeadline,
+    clearDisconnectDeadline,
     /** 直近の失敗理由。成功 / 未試行なら null */
     lastError: readonly(lastError),
     /** 直近の失敗がどの段で起きたか。成功 / 未試行なら null */

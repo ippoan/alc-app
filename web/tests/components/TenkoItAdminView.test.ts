@@ -60,6 +60,10 @@ const buttonPressCountRef = ref(0)
 const cardReadRef = ref<{ seq: number, lookupId: string } | null>(null)
 mockNuxtImport('useAlarmDevice', () => () => ({ buttonPressCount: buttonPressCountRef, cardRead: cardReadRef }))
 
+// 警告デバイスが切れて 2 分たったままか (実物は useAlarmWatch が数える module の ref)
+const seatExpiredRef = ref(false)
+mockNuxtImport('useSeatDisconnectGrace', () => () => ({ remainingSeconds: ref(null), expired: seatExpiredRef }))
+
 const connectMock = vi.fn(async (..._args: unknown[]) => {})
 const startStreamingMock = vi.fn(async () => {})
 const disconnectMock = vi.fn()
@@ -158,6 +162,7 @@ beforeEach(() => {
   activeRoomsRef.value = []
   callingRoomsRef.value = []
   cardReadRef.value = null
+  seatExpiredRef.value = false
   // 既定: この席には運行管理者 mgr-1 が登録済み
   localStorage.clear()
   localStorage.setItem(MANAGER_KEY, 'mgr-1')
@@ -1163,6 +1168,206 @@ describe('TenkoItAdminView — 警告デバイスへのカードのタッチ', (
     cardReadRef.value = null
     await settle(w)
     expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+})
+
+// 繋がっていた警告デバイスが切れて 2 分たった席 (席の鍵の口が通らない)。保存の失敗を待たずに、
+// 開いている点呼を閉じて一覧へ戻し、理由を出す。繋がり直すまで点呼は開かない
+describe('TenkoItAdminView — 警告デバイスが切れて 2 分たった席', () => {
+  const SEAT_EXPIRED_TEXT = '警告デバイスの接続が切れたため、この席では点呼の確認と判定ができません。USB をつなぎ直してください'
+  const seatExpired = (w: Wrapper) => w.find('[data-testid="it-seat-expired"]')
+  const opened = (w: Wrapper) => w.find('[data-testid="it-opened"]')
+
+  async function setExpired(w: Wrapper, v: boolean) {
+    seatExpiredRef.value = v
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  beforeEach(() => {
+    activeRoomsRef.value = ['it-session-1']
+    callingRoomsRef.value = ['it-session-1']
+  })
+
+  it('★ 通話中に切れたら、通話を終えて一覧へ戻り、理由を出す (判定は保存しない)', async () => {
+    const api = await import('~/utils/api')
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(opened(w).exists()).toBe(true)
+    expect(panel(w).exists()).toBe(true)
+    expect(seatExpired(w).exists()).toBe(false)
+    disconnectMock.mockClear()
+    cameraStopMock.mockClear()
+    const listed = listTenkoSessionsMock.mock.calls.length
+
+    await setExpired(w, true)
+
+    // 手で「通話終了」を押したときと同じ後始末
+    expect(disconnectMock).toHaveBeenCalled()
+    expect(cameraStopMock).toHaveBeenCalled()
+    expect(setJoinedMock).toHaveBeenLastCalledWith(null)
+    expect(opened(w).exists()).toBe(false)
+    expect(panel(w).exists()).toBe(false)
+    expect(w.find('[data-testid="video-call"]').exists()).toBe(false)
+    expect(seatExpired(w).text()).toBe(SEAT_EXPIRED_TEXT)
+    expect(api.submitManagerJudgment).not.toHaveBeenCalled()
+    // 判定が付いたときの取り直しもしない・監視も止めない
+    expect(listTenkoSessionsMock.mock.calls.length).toBe(listed)
+    expect(stopWatchingMock).not.toHaveBeenCalled()
+    // 一覧は残る (着信の行は出たまま)
+    expect(incoming(w).findAll('button')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('閉じた後は、通話中の記録の引き直しも止まる', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    vi.advanceTimersByTime(IT_TENKO_POLL_INTERVAL_MS)
+    const fetched = getTenkoSessionMock.mock.calls.length
+
+    await setExpired(w, true)
+    vi.advanceTimersByTime(IT_TENKO_POLL_INTERVAL_MS * 3)
+    expect(getTenkoSessionMock.mock.calls.length).toBe(fetched)
+    w.unmount()
+  })
+
+  it('通話なしで開いている最中に切れても、閉じて一覧へ戻り、理由を出す', async () => {
+    activeRoomsRef.value = []
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-7')], total: 1, page: 1, per_page: 50 })
+    const w = await mountView()
+    await click(pendingRows(w)[0]!.find('button'), w)
+    expect(opened(w).text()).toContain('通話なしで確定する IT点呼')
+
+    await setExpired(w, true)
+    expect(opened(w).exists()).toBe(false)
+    expect(seatExpired(w).text()).toBe(SEAT_EXPIRED_TEXT)
+    w.unmount()
+  })
+
+  it('★ 繋いでいる途中に切れたら、開いたぶんを閉じて何も残さない (後から繋がっても開かない)', async () => {
+    let resolveConnect!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((resolve) => { resolveConnect = resolve }))
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    disconnectMock.mockClear()
+
+    await setExpired(w, true)
+    expect(disconnectMock).toHaveBeenCalled()
+    expect(seatExpired(w).text()).toBe(SEAT_EXPIRED_TEXT)
+    // 繋いでいる途中の「押せない」は解ける (開けないのは切れているから)
+    expect(incoming(w).find('button').attributes('disabled')).toBeUndefined()
+
+    resolveConnect()
+    await flush()
+    await w.vm.$nextTick()
+    expect(opened(w).exists()).toBe(false)
+    expect(setJoinedMock).not.toHaveBeenCalledWith('it-session-1')
+    expect(getTenkoSessionMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('開いていないときに切れたら、理由だけ出す (閉じる後始末は走らない)', async () => {
+    const w = await mountView()
+    setJoinedMock.mockClear()
+    disconnectMock.mockClear()
+
+    await setExpired(w, true)
+    expect(seatExpired(w).text()).toBe(SEAT_EXPIRED_TEXT)
+    expect(disconnectMock).not.toHaveBeenCalled()
+    expect(setJoinedMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('切れている席で画面を開いても、理由が出る', async () => {
+    seatExpiredRef.value = true
+    const w = await mountView()
+    expect(seatExpired(w).text()).toBe(SEAT_EXPIRED_TEXT)
+    w.unmount()
+  })
+
+  it('★ 切れている間は、着信・未完了の行・本体のボタンのどれでも開かない (通話に入らない)', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [makeSession('session-1'), makeSession('session-7')], total: 2, page: 1, per_page: 50,
+    })
+    const w = await mountView()
+    await setExpired(w, true)
+
+    // 着信の「通話する」
+    await click(incoming(w).find('button'), w)
+    // 未完了の行 (部屋が在る = 通話する / 部屋が無い = 通話なしで確定する)
+    await click(pendingRows(w)[0]!.find('button'), w)
+    await click(pendingRows(w)[1]!.find('button'), w)
+    // 警告デバイス本体のボタン
+    buttonPressCountRef.value += 1
+    await flush()
+    await w.vm.$nextTick()
+
+    expect(cameraStartMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(getTenkoSessionMock).not.toHaveBeenCalled()
+    expect(setJoinedMock).not.toHaveBeenCalledWith('it-session-1')
+    expect(opened(w).exists()).toBe(false)
+    expect(idModal(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('切れている間は、席が未登録でも社員番号のモーダルを出さない', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    const w = await mountView()
+    await setExpired(w, true)
+
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(false)
+    expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('★ 社員番号を聞いている途中に切れたらモーダルを閉じ、照会が後から通っても開かない', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    let resolveLookup!: (v: unknown) => void
+    getEmployeeByCodeMock.mockImplementation(() => new Promise((resolve) => { resolveLookup = resolve }))
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    await submitManagerCode(w, '001')
+
+    await setExpired(w, true)
+    expect(idModal(w).exists()).toBe(false)
+    expect(seatExpired(w).text()).toBe(SEAT_EXPIRED_TEXT)
+
+    resolveLookup(MANAGER)
+    await flush()
+    await w.vm.$nextTick()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(opened(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('★ 繋ぎ直したら理由が消え、今までどおり開ける (閉じた点呼は自動では開き直さない)', async () => {
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    await setExpired(w, true)
+    expect(opened(w).exists()).toBe(false)
+    connectMock.mockClear()
+
+    await setExpired(w, false)
+    expect(seatExpired(w).exists()).toBe(false)
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(opened(w).exists()).toBe(false)
+
+    await click(incoming(w).find('button'), w)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(opened(w).text()).toContain('通話中の IT点呼')
+    w.unmount()
+  })
+
+  it('理由の文言に「トークン」「鍵」「認証」「VoiceS3R」を入れない', async () => {
+    const w = await mountView()
+    await setExpired(w, true)
+    for (const word of ['トークン', '鍵', '認証', 'VoiceS3R']) expect(seatExpired(w).text()).not.toContain(word)
     w.unmount()
   })
 })

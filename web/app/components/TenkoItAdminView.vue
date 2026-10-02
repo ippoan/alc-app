@@ -19,6 +19,10 @@
  * 警告デバイスに社員証か運転免許証をタッチしても登録できる (打刻はしない)。登録済みの席では
  * 確認なしでその人に切り替わる。受けるのは、点呼を開いていないときだけ。
  *
+ * 繋がっていた警告デバイスが切れて 2 分たつと、この席では席の鍵の口が通らなくなる
+ * (`useAlarmWatch` の切断の猶予)。そのあいだは保存の失敗を待たずに、開いている点呼を閉じて
+ * 一覧へ戻し、理由を出す。繋がり直すまで点呼は開かない。
+ *
  * 通話の手順は `TenkoRemoteAdminView.vue` からの複製 (あちらは本番で動いている
  * 経路なので触らない。共通化は IT点呼 を通常の点呼へ統合するときに行う)。
  */
@@ -45,6 +49,8 @@ const {
 } = useItTenkoManager()
 // 警告デバイス (本体のボタンの押下と、NFC で読んだカード)
 const alarmDevice = useAlarmDevice()
+// 警告デバイスが切れて 2 分たったまま、繋がり直していないか (数えるのは useAlarmWatch)
+const { expired: seatExpired } = useSeatDisconnectGrace()
 const webRtc = useWebRtc('admin')
 const camera = useCamera()
 
@@ -139,6 +145,8 @@ const managerName = computed(() =>
 )
 
 function request(target: Target) {
+  // 警告デバイスが切れて 2 分たった席では開かない (理由は画面に出ている)
+  if (seatExpired.value) return
   idError.value = null
   // 席に登録が在れば社員番号は聞かない
   if (manager.value) {
@@ -312,6 +320,15 @@ function onJudged() {
   void loadPending()
 }
 
+// 警告デバイスが切れて 2 分たった: 保存の失敗を待たずに、開いている点呼 (繋いでいる途中を含む) を
+// 手で閉じたときと同じ後始末で閉じて一覧へ戻す。判定は保存しない。社員番号を聞いている途中なら
+// それもやめる (登録できても開かないので)。繋がり直しても、閉じた点呼は自動では開き直さない
+watch(seatExpired, (expired) => {
+  if (!expired) return
+  cancelIdInput()
+  if (opened.value || connecting.value) close()
+}, { flush: 'sync' })
+
 onMounted(() => {
   void loadManager()
   void loadEmployeeNames()
@@ -416,6 +433,10 @@ onUnmounted(() => {
       </div>
       <!-- 登録の失敗。カードのタッチは登録済みのときも受けるので、どちらの表示でも出す -->
       <p v-if="cardError" class="mt-2 text-sm text-red-700" data-testid="it-manager-card-error">{{ cardError }}</p>
+    </div>
+
+    <div v-if="seatExpired" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700" data-testid="it-seat-expired">
+      警告デバイスの接続が切れたため、この席では点呼の確認と判定ができません。USB をつなぎ直してください
     </div>
 
     <div v-if="callError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700" data-testid="it-call-error">
