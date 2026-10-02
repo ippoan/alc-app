@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
-import { useKioskScreen } from '~/composables/useKioskScreen'
+import { readReloadContext, resetReloadContext, useKioskScreen } from '~/composables/useKioskScreen'
 
 // 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
 // カードをかざす → 顔認証 → 血圧を測る → 完了 だけを行い、**点呼の記録は作らない**。
@@ -259,6 +259,109 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     expect(src).not.toMatch(/useTenkoKiosk\s*\(/)
     expect(src).not.toMatch(/\bsaveMeasurement\s*\(/)
 
+    wrapper.unmount()
+  })
+})
+
+// 本番 flip 後の新版への載せ替え (Refs ippoan/alc-app#387)。測定台はカードのタッチを待って開いた
+// ままになるので、カード待ちの間は「いまリロードして失うものが無い」と申告する。
+// 読むのは plugin と同じ口 (`readReloadContext`)
+describe('BloodPressureMeasurement — 新版への載せ替えの申告 (Refs ippoan/alc-app#387)', () => {
+  const safe = () => readReloadContext().safe
+
+  beforeEach(() => {
+    resetReloadContext()
+    bpUiState.value = 'show'
+    latestBloodPressure.value = null
+    employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }
+    getEmployeeByNfcIdMock.mockReset()
+    getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
+    startMeasurementMock.mockReset()
+    startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+    updateMeasurementMock.mockReset()
+    updateMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+  })
+
+  it('★ カード待ちの間は安全。画面を離れたら申告を残さない', async () => {
+    const wrapper = await mountBp()
+    expect(readReloadContext()).toEqual({ screen: null, safe: 1, blocked: 0 })
+
+    wrapper.unmount()
+    expect(readReloadContext()).toEqual({ screen: null, safe: 0, blocked: 0 })
+  })
+
+  it('★ カードの照合中は段が動かなくても外れ、進んだ先でも外れたまま。「次の人へ」で戻る', async () => {
+    let found!: (emp: unknown) => void
+    getEmployeeByNfcIdMock.mockImplementation(() => new Promise((resolve) => { found = resolve }))
+    const wrapper = await mountBp()
+    expect(safe()).toBe(1)
+
+    // 照合の応答待ち: 画面はまだカード待ちのまま
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'test-card-0001')
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(safe()).toBe(0)
+
+    found(employee.value)
+    await flush(wrapper)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(safe()).toBe(0)
+
+    await wrapper.findComponent(FaceAuthStub).vm.$emit('result', { verified: true, similarity: 0.9 })
+    await wrapper.vm.$nextTick()
+    expect(safe()).toBe(0)
+    latestBloodPressure.value = { systolic: 130, diastolic: 84, measuredAt: new Date('2026-09-16T02:00:00.000Z') }
+    await flush(wrapper)
+    expect(wrapper.text()).toContain('測定完了')
+    expect(safe()).toBe(0)
+
+    await wrapper.findAll('button').find(b => b.text() === '次の人へ')!.trigger('click')
+    expect(safe()).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('★ 照合が失敗で終わっても、照合中の印は戻る', async () => {
+    let fail!: (e: unknown) => void
+    getEmployeeByNfcIdMock.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject }))
+    const wrapper = await mountBp()
+
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'test-card-0001')
+    expect(safe()).toBe(0)
+    fail(new Error('not found'))
+    await flush(wrapper)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(safe()).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('★ 顔の審査で弾かれてカード待ちに残ったときも、照合中の印は戻る', async () => {
+    employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'rejected' }
+    const wrapper = await mountBp()
+
+    await tapCard(wrapper)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(safe()).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('★ 2 回目のタッチが 1 回目の応答より先に終わっても、1 回目を待っている間は外れたまま', async () => {
+    const resolvers: Array<(emp: unknown) => void> = []
+    const rejecters: Array<(e: unknown) => void> = []
+    getEmployeeByNfcIdMock.mockImplementation(() => new Promise((resolve, reject) => {
+      resolvers.push(resolve)
+      rejecters.push(reject)
+    }))
+    const wrapper = await mountBp()
+
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'test-card-0001')
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'test-card-0002')
+    expect(resolvers).toHaveLength(2)
+    rejecters[1]!(new Error('not found'))
+    await flush(wrapper)
+    expect(safe()).toBe(0)
+
+    rejecters[0]!(new Error('not found'))
+    await flush(wrapper)
+    expect(safe()).toBe(1)
     wrapper.unmount()
   })
 })

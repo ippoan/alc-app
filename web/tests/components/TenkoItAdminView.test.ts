@@ -5,6 +5,7 @@ import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import TenkoManagerJudgmentPanel from '~/components/TenkoManagerJudgmentPanel.vue'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
+import { readReloadContext, resetReloadContext } from '~/composables/useKioskScreen'
 
 // 運行管理者側の IT点呼 の受け画面 (Refs ippoan/alc-app#387)。
 // 遠隔点呼とは別物: 運行管理者を席に登録 (社員番号だけ・顔認証なし) → 通話 → 判定。
@@ -1687,6 +1688,197 @@ describe('TenkoItAdminView — 画面共有', () => {
     for (const word of ['トークン', '鍵', '認証', '試験', '開発']) {
       expect(viewingBlock(w).text()).not.toContain(word)
     }
+    w.unmount()
+  })
+})
+
+// 本番 flip 後の新版への載せ替え (Refs ippoan/alc-app#387)。受け画面は着信を待って開いたままに
+// なるので、待ち受けだけしている間は「いまリロードして失うものが無い」と申告する。
+// 読むのは plugin と同じ口 (`readReloadContext`)
+describe('TenkoItAdminView — 新版への載せ替えの申告', () => {
+  const safe = () => readReloadContext().safe
+
+  beforeEach(() => {
+    resetReloadContext()
+  })
+
+  /** 応答を自分で返す照会。返した関数で resolve / reject する */
+  function defer(mock: ReturnType<typeof vi.fn>) {
+    const calls: Array<{ resolve: (v: unknown) => void, reject: (e: unknown) => void }> = []
+    mock.mockImplementation(() => new Promise((resolve, reject) => { calls.push({ resolve, reject }) }))
+    return calls
+  }
+
+  async function settle(w: Wrapper) {
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  it('★ 待ち受けだけしている間は安全。画面を離れたら申告を残さない', async () => {
+    const w = await mountView()
+    expect(readReloadContext()).toEqual({ screen: null, safe: 1, blocked: 0 })
+
+    w.unmount()
+    expect(readReloadContext()).toEqual({ screen: null, safe: 0, blocked: 0 })
+  })
+
+  it('★ 未登録の席でも、何も入力していなければ安全', async () => {
+    localStorage.clear()
+    const w = await mountView()
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 着信が鳴っている間は外れ、鳴りやんだら戻る (種別を問わない)', async () => {
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    callingRoomsRef.value = ['it-session-1']
+    expect(safe()).toBe(0)
+    callingRoomsRef.value = []
+    expect(safe()).toBe(1)
+
+    // 遠隔点呼・画面共有の着信でも同じ
+    callingRoomsRef.value = ['session-9']
+    expect(safe()).toBe(0)
+    callingRoomsRef.value = ['screen-abc']
+    expect(safe()).toBe(0)
+    callingRoomsRef.value = []
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 繋いでいる途中・通話中は外れ、閉じたら戻る', async () => {
+    activeRoomsRef.value = ['it-session-1']
+    let connected!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((resolve) => { connected = resolve }))
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    // 繋いでいる途中 (signaling の応答待ち)
+    await click(incoming(w).find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+    expect(safe()).toBe(0)
+
+    // 通話中
+    connected()
+    await settle(w)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(true)
+    expect(safe()).toBe(0)
+
+    await click(w.findAll('button').find(b => b.text() === '通話終了')!, w)
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 通話なしで開いている間も外れる', async () => {
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-2')], total: 1, page: 1, per_page: 50 })
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    await click(pendingRows(w)[0]!.find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').text()).toContain('通話なしで確定する IT点呼')
+    expect(safe()).toBe(0)
+
+    await click(w.findAll('button').find(b => b.text() === '閉じる')!, w)
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 社員番号のモーダルが出ている間は外れ、キャンセルで戻る', async () => {
+    localStorage.clear()
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(safe()).toBe(0)
+
+    await click(idModal(w).findAll('button').find(b => b.text() === 'キャンセル')!, w)
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 上部の欄に入力の途中の文字が在る間は外れ、消したら戻る', async () => {
+    localStorage.clear()
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    await card(w).find('input').setValue('00')
+    expect(safe()).toBe(0)
+    await card(w).find('input').setValue('')
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 社員番号での登録の照会中は外れ、成功で戻る', async () => {
+    localStorage.clear()
+    const calls = defer(getEmployeeByCodeMock)
+    const w = await mountView()
+
+    await registerOnCard(w, '001')
+    expect(calls).toHaveLength(1)
+    expect(safe()).toBe(0)
+
+    calls[0]!.resolve({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
+    await settle(w)
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('点呼 次郎')
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 社員番号での登録の照会が失敗で終わっても、照会中の印は戻る (欄の文字が残る間は外れたまま)', async () => {
+    localStorage.clear()
+    const calls = defer(getEmployeeByCodeMock)
+    const w = await mountView()
+
+    await registerOnCard(w, '999')
+    expect(safe()).toBe(0)
+    calls[0]!.reject(new Error('not found'))
+    await settle(w)
+    expect(card(w).find('[data-testid="it-manager-card-error"]').exists()).toBe(true)
+    // 失敗のときは入力を残すので、まだ安全ではない。消せば戻る = 照会中の印は残っていない
+    expect(safe()).toBe(0)
+    await card(w).find('input').setValue('')
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ カードのタッチでの登録の照会中は外れ、成功・失敗のどちらで終わっても戻る', async () => {
+    const calls = defer(lookupEmployeeByCardMock)
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    cardReadRef.value = { seq: 1, lookupId: '04a1b2c3' }
+    await settle(w)
+    expect(calls).toHaveLength(1)
+    expect(safe()).toBe(0)
+    calls[0]!.resolve({ id: 'mgr-2', name: '交代 管理', role: ['admin'] })
+    await settle(w)
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('交代 管理')
+    expect(safe()).toBe(1)
+
+    cardReadRef.value = { seq: 2, lookupId: '04a1b2c3' }
+    await settle(w)
+    expect(safe()).toBe(0)
+    calls[1]!.reject(Object.assign(new Error('not found'), { status: 404 }))
+    await settle(w)
+    expect(card(w).find('[data-testid="it-manager-card-error"]').exists()).toBe(true)
+    expect(safe()).toBe(1)
+    w.unmount()
+  })
+
+  it('★ 画面共有を見ている間は外れ、やめたら戻る', async () => {
+    alarmConnectedRef.value = true
+    activeRoomsRef.value = ['screen-abc']
+    const w = await mountView()
+    expect(safe()).toBe(1)
+
+    w.findComponent('[data-testid="screen-share-view"]').vm.$emit('update:viewing', true)
+    expect(safe()).toBe(0)
+    w.findComponent('[data-testid="screen-share-view"]').vm.$emit('update:viewing', false)
+    expect(safe()).toBe(1)
     w.unmount()
   })
 })

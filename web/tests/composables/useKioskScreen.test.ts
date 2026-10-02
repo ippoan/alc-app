@@ -131,6 +131,47 @@ describe('composables/useKioskScreen', () => {
       scope.stop()
       expect(readReloadContext().blocked).toBe(0)
     })
+
+    it('キオスクが待機中でも、拒否が立っている間は安全にならない (待機中の端末が画面共有をしている。Refs ippoan/alc-app#387)', () => {
+      const kioskScope = effectScope()
+      const shareScope = effectScope()
+      const sharing = ref(false)
+      kioskScope.run(() => { useKioskScreen().track(() => ({ step: KIOSK_FIRST_STEP, busy: false })) })
+      shareScope.run(() => { useKioskScreen().declareReloadBlocked(sharing) })
+      expect(safeNow()).toBe(true)
+
+      // 拒否は同期で立つ (キオスクの現在地の反映を待たない)
+      sharing.value = true
+      expect(readReloadContext()).toEqual({ screen: { step: KIOSK_FIRST_STEP, busy: false }, safe: 0, blocked: 1 })
+      expect(safeNow()).toBe(false)
+
+      sharing.value = false
+      expect(safeNow()).toBe(true)
+
+      kioskScope.stop()
+      shareScope.stop()
+    })
+
+    it('待機中の画面の申告 (通常点呼・血圧) と拒否 (画面共有) が同居しても、拒否が優先する', () => {
+      const tabScope = effectScope()
+      const shareScope = effectScope()
+      const sharing = ref(true)
+      tabScope.run(() => { useKioskScreen().declareSafeToReload(() => true) })
+      shareScope.run(() => { useKioskScreen().declareReloadBlocked(sharing) })
+      expect(safeNow()).toBe(false)
+
+      // タブを切り替えても (申告する画面が入れ替わっても) 共有中は安全にならない
+      tabScope.stop()
+      const nextTabScope = effectScope()
+      nextTabScope.run(() => { useKioskScreen().declareSafeToReload(() => true) })
+      expect(safeNow()).toBe(false)
+
+      sharing.value = false
+      expect(safeNow()).toBe(true)
+
+      nextTabScope.stop()
+      shareScope.stop()
+    })
   })
 
   describe('再マウント (pages/index.vue の managerAuthKey / adminAuthKey)', () => {

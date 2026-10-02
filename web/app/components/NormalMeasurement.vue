@@ -391,6 +391,14 @@ const employeeName = ref('')
 const approvalError = ref<string | null>(null)
 
 /**
+ * 段が `nfc` のまま本人確認の照会 (社員の照合 → 測定の開始 → 打刻) を待っている件数
+ * (Refs ippoan/alc-app#387)。入口は 3 つ — カードのタッチ・手入力・打刻の案内のボタン。
+ * どれも応答が返るまで `step` は `nfc` のままなので、「待機中」の判定には段だけでなくこれも要る。
+ * 数で持つのは、1 回目の応答を待つあいだに 2 回目のタッチが届きうるため (`tryPunch` の doc)
+ */
+const identityLookups = ref(0)
+
+/**
  * 社員が決まったところから種別の選択 (choice) の手前までの共通部分。
  * **打刻は含まない** — 打刻が要るかどうかは入口ごとに違う (免許証のタッチは打つ、
  * 手入力と IC カードは打たない)。
@@ -446,6 +454,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
     licenseExpiryDate.value = expiryDate
     licenseExpiryStatus.value = checkLicenseExpiry(expiryDate)
   }
+  identityLookups.value += 1
   try {
     const emp = await getEmployeeByNfcId(nfcId)
     await prepareMeasurementFor(emp)
@@ -457,6 +466,8 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
     const msg = employeeNotFoundByNfc(nfcId)
     console.error(msg)
     approvalError.value = msg
+  } finally {
+    identityLookups.value -= 1
   }
 }
 
@@ -464,6 +475,19 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
 const isIdle = computed(() => step.value === 'nfc')
 // ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。待機中でなければ機体を使用中
 useKioskScreen().declareDeviceBusy(() => !isIdle.value)
+
+// 本番 flip 後の新版への載せ替えを、待機中のこの画面でも許す (Refs ippoan/alc-app#387)。
+// 通常点呼・IT点呼 のタブはカードのタッチを待って開いたままになるので、申告しないと古い版を
+// 永久に掴み続ける。**`isIdle` より狭い** — 段が `nfc` でも、リロードで失うものがある間は下ろす:
+// 本人確認の照会中 / 手入力の欄に文字が在る / IC カードの打刻の案内が出ている /
+// 未送信の測定や顔データを同期している
+const reloadSafe = computed(() => step.value === 'nfc'
+  && identityLookups.value === 0
+  && manualIdInput.value === ''
+  && !props.icPromptActive
+  && !isSyncing.value
+  && !isFaceSyncing.value)
+useKioskScreen().declareSafeToReload(reloadSafe)
 
 /**
  * **社員を指定して**測定へ入る (Refs ippoan/rust-alc-api#644)。
@@ -486,7 +510,12 @@ async function startForEmployee(id: string, name: string, readOnThisDevice = fal
   if (step.value !== 'nfc') return false
   approvalError.value = null
   clearPunchState()
-  await prepareMeasurementFor({ id, name })
+  identityLookups.value += 1
+  try {
+    await prepareMeasurementFor({ id, name })
+  } finally {
+    identityLookups.value -= 1
+  }
   identityMethod.value = readOnThisDevice ? IDENTITY_METHOD.IC_CARD : IDENTITY_METHOD.REMOTE_PUNCH
   // IC カードの打刻は免許証の確認を経ていないので、点呼 (始業/終業) には入れない。
   // 「〈名前〉さんのアルコールチェックへ」の文言どおり、種別なしの測定へ直行する
@@ -507,6 +536,7 @@ async function onManualSubmit() {
   manualError.value = null
   approvalError.value = null
   clearPunchState()
+  identityLookups.value += 1
   try {
     const emp = await getEmployeeByCode(input)
     await prepareMeasurementFor(emp)
@@ -516,6 +546,8 @@ async function onManualSubmit() {
     step.value = 'choice'
   } catch {
     manualError.value = employeeNotFoundByCode(input)
+  } finally {
+    identityLookups.value -= 1
   }
 }
 

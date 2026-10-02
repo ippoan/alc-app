@@ -163,6 +163,8 @@ const idError = ref<string | null>(null)
 /** 上部の枠 (着信が無くても登録できる) の入力 */
 const cardInput = ref('')
 const cardError = ref<string | null>(null)
+/** 席の運行管理者の登録の照会 (社員番号・カードのタッチ) を待っている件数 */
+const registering = ref(0)
 
 const managerName = computed(() =>
   manager.value?.name ?? (managerLoading.value ? '確認中...' : '(名前を取得できません)'),
@@ -201,7 +203,8 @@ async function register(input: Ref<string>, error: Ref<string | null>): Promise<
   const code = input.value.trim()
   if (!code) return false
   error.value = null
-  const res = await registerByCode(code)
+  registering.value += 1
+  const res = await registerByCode(code).finally(() => { registering.value -= 1 })
   if (!res.ok) {
     error.value = res.message
     return false
@@ -252,6 +255,19 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 // open() / close() の世代。カメラや signaling を待つあいだに close() が来たら、
 // 待っていた古い open() は何も残さずに終わる
 let generation = 0
+
+// 本番 flip 後の新版への載せ替えを、待ち受けだけしているこの画面でも許す (Refs ippoan/alc-app#387)。
+// 受け画面は着信を待って開いたままになるので、申告しないと古い版を永久に掴み続ける。
+// リロードで失うものがある間は下ろす: 点呼を開いている・繋いでいる途中・社員番号のモーダル・
+// 画面共有を見ている・席の登録の照会中・上部の欄に入力の途中の文字が在る・着信が鳴っている
+// (種別を問わない。鳴っている最中に画面を読み込み直さない)
+useKioskScreen().declareSafeToReload(() => opened.value === null
+  && !connecting.value
+  && waiting.value === null
+  && !screenViewing.value
+  && registering.value === 0
+  && cardInput.value === ''
+  && callingRooms.value.length === 0)
 
 function releaseMedia() {
   webRtc.disconnect()
@@ -402,7 +418,8 @@ watch(alarmDevice.cardRead, async (read) => {
   if (!wanted()) return
   cardError.value = null
   idError.value = null
-  const res = await registerByCardId(read.lookupId, wanted)
+  registering.value += 1
+  const res = await registerByCardId(read.lookupId, wanted).finally(() => { registering.value -= 1 })
   if (!wanted()) return
   if (!res.ok) {
     // モーダルが出ていればモーダルに、無ければ上部の枠に出す

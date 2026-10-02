@@ -37,8 +37,8 @@
  * 保存中のシステム管理画面まで問答無用でリロードしてしまい、ここが避けたはずの事故を
  * 別の画面で再現する。なので **opt-in**: 画面が
  * {@link ~/composables/useKioskScreen.useKioskScreen} の口で「いま失うものが無い」と
- * 申告したときだけ安全とし、同じ画面の中の「いまは困る」が 1 件でもあれば止める。
- * **誰も申告しなければ従来どおり安全ではない** (fail-closed)。
+ * 申告したときだけ安全とし、「いまは困る」が 1 件でもあれば止める (キオスクが載っている
+ * ときも同じ)。**誰も申告しなければ従来どおり安全ではない** (fail-closed)。
  *
  * DOM / Nuxt に触る wiring は `~/plugins/app-update.client.ts` 側。ここは副作用を
  * すべて {@link AppUpdateGateDeps} で受け取る純ロジックに保つ。
@@ -89,15 +89,18 @@ export interface ReloadContext {
 /**
  * いまリロードして失うものが無いか。
  *
- * - キオスクが載っている → 従来どおり「最初の画面かつ手が離せる」ときだけ
- * - 載っていない → **安全の申告が 1 件以上あり、拒否が 0 件**のときだけ
+ * - キオスクが載っている → 「最初の画面かつ手が離せる」ときだけ
+ * - 載っていない → **安全の申告が 1 件以上**あるときだけ
  *   (誰も申告していない画面は従来どおり対象外)
+ * - **どちらでも、拒否が 1 件でもあれば止める** — 拒否はキオスクの外からも立つ
+ *   (待機中のキオスクの端末が画面共有をしている、など。Refs ippoan/alc-app#387)
  */
 export function isSafeToReload(context: ReloadContext): boolean {
+  if (context.blocked > 0) return false
   if (context.screen !== null) {
     return context.screen.step === KIOSK_FIRST_STEP && !context.screen.busy
   }
-  return context.safe > 0 && context.blocked === 0
+  return context.safe > 0
 }
 
 export interface AppUpdateGateDeps {
