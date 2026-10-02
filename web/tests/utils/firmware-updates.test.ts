@@ -66,10 +66,17 @@ describe('fetchLatestFirmwareVersions', () => {
     expect(f.mock.calls.map(c => (c as unknown[])[0])).toEqual(['https://ippoan.github.io/alc-app-s3/manifest-timecard-station.json'])
   })
 
+  it('警告デバイス (alarm) は表に在る: flavor 1 件の manifest だけを取りに行く (Refs ippoan/alc-app#425)', async () => {
+    const f = vi.fn(async () => ({ ok: true, json: async () => ({ version: '0.1.0' }) }))
+    vi.stubGlobal('fetch', f)
+    expect(await fetchLatestFirmwareVersions('alarm')).toEqual({ alarm: '0.1.0' })
+    expect(f.mock.calls.map(c => (c as unknown[])[0])).toEqual(['https://ippoan.github.io/alc-app-s3/manifest-alarm.json'])
+  })
+
   it('表に無い対象は空の結果 (どこにも取りに行かない)', async () => {
     const f = vi.fn()
     vi.stubGlobal('fetch', f)
-    for (const target of ['alarm', 'https://evil.example/manifest.json', '__proto__', 'toString', '']) {
+    for (const target of ['vein', 'https://evil.example/manifest.json', '__proto__', 'toString', '']) {
       expect(await fetchLatestFirmwareVersions(target)).toEqual({})
     }
     expect(f).not.toHaveBeenCalled()

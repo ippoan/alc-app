@@ -30,6 +30,8 @@ const webRtc = useWebRtc('admin')
 const { activeRooms, start: startWatchingRooms, stop: stopWatchingRooms, reload: reloadActiveRooms, markHandled } = useActiveRooms()
 const selectedRoomId = ref<string | null>(null)
 const isViewActive = ref(false)
+// 画面共有を見ている間は、席の警告デバイスの更新を始めさせない (Refs ippoan/alc-app#425)
+useKioskScreen().declareDeviceBusy(() => isViewActive.value)
 const isLoading = ref(false)
 const loadError = ref<string | null>(null)
 /** 「画面共有を終了」を押して、部屋が消えるのを待っている */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDeviceLine } from '~/utils/device-line'
+import { findDeviceLine, parseDeviceLine } from '~/utils/device-line'
 
 // 端末の名乗りの行 (`DEVICE <kind> VER=… BOARD=… FLAVOR=…`) の parse (Refs ippoan/alc-app#403)。
 // 欄は順序も有無も機種とファームの版で変わるので、欄ごとに拾う。
@@ -36,5 +36,23 @@ describe('parseDeviceLine', () => {
     expect(parseDeviceLine('DEVICE cores3 XVER=1 XBOARD=cores3 XFLAVOR=cores3'))
       .toEqual({ ver: null, board: null, flavor: null })
     expect(parseDeviceLine('DEVICE cores3')).toEqual({ ver: null, board: null, flavor: null })
+  })
+})
+
+// プローブ中に溜まった行から名乗りを拾う (Refs ippoan/alc-app#425。CoreS3 と警告デバイスの deviceInfo が共用する)
+describe('findDeviceLine', () => {
+  it('名乗りの行が在れば、その欄を返す (ほかの行は読まない)', () => {
+    expect(findDeviceLine(['EVT ALARM state=idle cause=none', 'DEVICE alarm VER=0.1.0 FLAVOR=alarm']))
+      .toEqual({ ver: '0.1.0', board: null, flavor: 'alarm' })
+  })
+
+  it('★ 行の途中に連結されていても、見つけた位置から後ろだけを読む (手前の VER= を採らない)', () => {
+    expect(findDeviceLine(['I (12) boot: VER=9.9.9 DEVICE cores3 VER=0.2.0 BOARD=cores3 FLAVOR=cores3']))
+      .toEqual({ ver: '0.2.0', board: 'cores3', flavor: 'cores3' })
+  })
+
+  it('名乗りの行が無ければ null', () => {
+    expect(findDeviceLine([])).toBeNull()
+    expect(findDeviceLine(['STATUS alarm state=idle cause=none VER=0.1.0'])).toBeNull()
   })
 })

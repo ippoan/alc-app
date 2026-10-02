@@ -7,7 +7,7 @@
  *
  * - **URL やファイルは受け取らない。** 配布中の版も、失敗のときの案内先も、`target` の語で
  *   `utils/firmware-targets.ts` の表から引く
- * - 「更新中」の幕は `FirmwareOtaHost.vue` が出す。ここでは重ねて作らない
+ * - 「更新中」の幕は `FirmwareOtaOverlay.vue` が出す。ここでは重ねて作らない
  * - 判定は文字列の不一致だけ (`isFirmwareDifferent`)。大小は比べない
  */
 import type { SerialOtaResult } from '~/composables/useSerialOta'
@@ -59,7 +59,7 @@ onBeforeUnmount(stopRefresh)
 /** `start()` の結果を待っている間 (ボタンを押せない) */
 const starting = ref(false)
 /** 直前の結果のうち、画面に出すもの。閉じるまで残す (機体が使用中でも消さない) */
-const result = ref<'failed' | 'retry' | null>(null)
+const result = ref<'failed' | 'retry' | 'unsupported' | null>(null)
 
 const showBand = computed(() =>
   props.connected
@@ -79,7 +79,7 @@ async function onStart(): Promise<void> {
   result.value = null
   try {
     const outcome = await props.start()
-    if (outcome === 'failed') result.value = 'failed'
+    if (outcome === 'failed' || outcome === 'unsupported') result.value = outcome
     else if (outcome === 'busy' || outcome === 'skipped') result.value = 'retry'
   }
   catch {
@@ -126,6 +126,16 @@ async function onStart(): Promise<void> {
           data-testid="device-firmware-installer"
           class="underline"
         >配布ページ</a><template v-else>配布ページ</template>から書き直してください
+      </span>
+      <span v-else-if="result === 'unsupported'">
+        この端末は、<a
+          v-if="installerUrl"
+          :href="installerUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="device-firmware-installer"
+          class="underline"
+        >配布ページ</a><template v-else>配布ページ</template>から 1 回書き直すと、画面から更新できるようになります
       </span>
       <span v-else>いまは更新できません。少し待ってから、もう一度押してください</span>
       <button

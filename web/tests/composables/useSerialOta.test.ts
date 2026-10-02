@@ -29,6 +29,18 @@ const hub = vi.hoisted(() => ({
 }))
 mockNuxtImport('useCoreS3Serial', () => () => hub)
 
+/** 警告デバイス (useAlarmDevice の `ota` / `isConnected`) の偽物 */
+const alarm = vi.hoisted(() => ({
+  isConnected: null as unknown as { value: boolean },
+  ota: {
+    begin: null as unknown as ReturnType<typeof vi.fn>,
+    end: null as unknown as ReturnType<typeof vi.fn>,
+    request: null as unknown as ReturnType<typeof vi.fn>,
+    rest: null as unknown as ReturnType<typeof vi.fn>,
+  },
+}))
+mockNuxtImport('useAlarmDevice', () => () => alarm)
+
 const fw = vi.hoisted(() => ({
   deviceId: null as unknown as { value: string | null },
   report: null as unknown as ReturnType<typeof vi.fn>,
@@ -40,9 +52,14 @@ mockNuxtImport('useFirmwareReport', () => () => fw)
 /** 呼ばれた順 (錠・保留・報告・機体へ送った行・取得・接続の変化) を 1 本に記録する */
 let events: string[]
 
-/** CoreS3 と報告の偽物を作り直す (既定は「CoreS3 は繋がっていない」) */
+/** CoreS3・警告デバイス・報告の偽物を作り直す (既定は「CoreS3 も警告デバイスも繋がっていない」) */
 function resetHubMocks(): void {
   events = []
+  alarm.isConnected = ref(false)
+  alarm.ota.begin = vi.fn(() => { events.push('alarm:begin') })
+  alarm.ota.end = vi.fn(() => { events.push('alarm:end') })
+  alarm.ota.rest = vi.fn(async () => { events.push('alarm:rest') })
+  alarm.ota.request = vi.fn(async () => { throw new Error('unexpected request to alarm') })
   hub.isConnected = ref(false)
   hub.ota.begin = vi.fn(() => { events.push('begin') })
   hub.ota.end = vi.fn(() => { events.push('end') })
@@ -70,6 +87,10 @@ interface FakeDevice {
   flavorAfterReboot: string | null
   /** 再起動後に名乗る VER */
   verAfterReboot: string | null
+  /** 書き込みの前の `OTA CONFIRM` (受信リングの探り) への応答。`'silent'` は応答しない */
+  probeLine: string
+  /** 再起動した後か (`OTA CONFIRM` が探りか確定かの区別) */
+  rebooted: boolean
   /** `OTA SERIAL` への応答 */
   readyLine: string
   /** 累計 n バイトを受けたときの応答 (既定は `OTA ACK n`) */
@@ -86,8 +107,13 @@ interface FakeDevice {
 
 let dev: FakeDevice
 
-function fakeRequest(payload: string | Uint8Array, matchPrefix: string, _timeoutMs: number, errPrefix?: string): Promise<string> {
+function fakeRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
   const answer = (line: string): Promise<string> => {
+    if (line === 'silent') {
+      return new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`request(timecard): timeout waiting for "${matchPrefix}"`)), timeoutMs)
+      })
+    }
     // arbiter と同じく、errPrefix で始まる行は reject、matchPrefix の行は resolve
     if (errPrefix && line.startsWith(errPrefix)) return Promise.reject(new Error(line))
     if (line.startsWith(matchPrefix)) return Promise.resolve(line)
@@ -107,7 +133,7 @@ function fakeRequest(payload: string | Uint8Array, matchPrefix: string, _timeout
     return answer(`DEVICE timecard${ver} FLAVOR=${dev.flavor}`)
   }
   if (payload.startsWith('OTA SERIAL ')) return answer(dev.readyLine)
-  if (payload === 'OTA CONFIRM') return answer('OTA CONFIRMED')
+  if (payload === 'OTA CONFIRM') return answer(dev.rebooted ? 'OTA CONFIRMED RX=8192' : dev.probeLine)
   return Promise.reject(new Error(`unknown command ${payload}`))
 }
 
@@ -118,6 +144,7 @@ function reboot(): void {
   setTimeout(() => {
     dev.ver = dev.verAfterReboot
     dev.flavor = dev.flavorAfterReboot ?? dev.flavor
+    dev.rebooted = true
     link.isConnected.value = true
   }, 12_000)
 }
@@ -137,7 +164,9 @@ describe('useSerialOta', () => {
       flavor: 'timecard-station',
       flavorAfterReboot: null,
       verAfterReboot: '0.2.0',
-      readyLine: 'OTA READY 4096',
+      probeLine: 'OTA CONFIRMED RX=8192',
+      rebooted: false,
+      readyLine: 'OTA READY 4096 RX=8192',
       ackFor: n => `OTA ACK ${n}`,
       finalLine: 'OTA OK',
       disconnects: true,
@@ -192,7 +221,9 @@ describe('useSerialOta', () => {
     stop()
 
     expect(dev.log[0]).toBe('DEVICE')
-    expect(dev.log[1]).toBe(`OTA SERIAL ${imageBytes} timecard-station`)
+    // 受信リングの探り → 書き込み (Vein Station は錠も `HB OFF` も無い)
+    expect(dev.log[1]).toBe('OTA CONFIRM')
+    expect(dev.log[2]).toBe(`OTA SERIAL ${imageBytes} timecard-station`)
     // 4096 B ずつ、最後は端数
     const chunks = chunkWrites()
     expect(chunks).toHaveLength(Math.ceil(imageBytes / 4096))
@@ -323,15 +354,63 @@ describe('useSerialOta', () => {
     dev.ackFor = n => (n >= 3 * 4096 ? 'OTA ERR write' : `OTA ACK ${n}`)
     await runToEnd()
     expect(chunkWrites()).toHaveLength(3)
-    expect(dev.log).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'OTA ERR write' })
   })
 
   it('(3) 検証で OTA ERR verify なら failed (再起動を待たない)', async () => {
     dev.finalLine = 'OTA ERR verify'
     expect(await runToEnd()).toBe('failed')
-    expect(dev.log).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'OTA ERR verify' })
+  })
+
+  // ---------- 受信リングの探り (Refs ippoan/alc-app#425) ----------
+
+  it.each([
+    ['大きさを名乗らない古い版 (欄なし)', 'OTA CONFIRMED'],
+    ['受信リングがチャンクより小さい (RX=1024)', 'OTA CONFIRMED RX=1024'],
+    ['受け口の無い版 (ERR UNSUPPORTED)', 'ERR UNSUPPORTED (timecard)'],
+  ])('★ 探り: %s → unsupported。OTA SERIAL もイメージも送らず、失敗の幕も出さない', async (_name, line) => {
+    dev.probeLine = line
+    const states: string[] = []
+    const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
+    expect(await runToEnd()).toBe('unsupported')
+    stop()
+
+    expect(dev.log).toEqual(['DEVICE', 'OTA CONFIRM'])
+    expect(states).toEqual(['downloading', 'idle'])
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(fw.report).not.toHaveBeenCalled()
+  })
+
+  it('★ 探りが無応答 (5 秒) → busy。OTA SERIAL を送らず、失敗の幕も出さない', async () => {
+    dev.probeLine = 'silent'
+    expect(await runToEnd()).toBe('busy')
+    expect(dev.log).toEqual(['DEVICE', 'OTA CONFIRM'])
+    expect(ota.state.value).toEqual({ kind: 'idle' })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('探り: 受信リングがちょうどチャンク長 (RX=4096) なら進む。行の途中の RX= も読む', async () => {
+    dev.probeLine = 'OTA CONFIRMED RX=4096'
+    expect(await runToEnd()).toBe('updated')
+    expect(mod.MIN_RX_RING_BYTES).toBe(4096)
+  })
+
+  it('★ OTA READY のチャンク長が探りの受信リングを超える → 1 バイトも送らず failed', async () => {
+    dev.probeLine = 'OTA CONFIRMED RX=4096'
+    dev.readyLine = 'OTA READY 8192 RX=4096'
+    expect(await runToEnd()).toBe('failed')
+    expect(chunkWrites()).toHaveLength(0)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason: 'chunk 8192 exceeds rx ring 4096' })
+  })
+
+  it('要求の形: 探りは 5 秒で、失敗側の合図は ERR UNSUPPORTED だけ', async () => {
+    await runToEnd()
+    expect(link.request.mock.calls.filter(c => c[0] === 'OTA CONFIRM')[0]).toEqual(['OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'ERR UNSUPPORTED'])
   })
 
   it('ACK の累計が送った量と合わなければ止める', async () => {
@@ -354,14 +433,16 @@ describe('useSerialOta', () => {
     dev.flavorAfterReboot = 'timecard-vein'
     await runToEnd()
     expect(dev.log.at(-1)).toBe('DEVICE')
-    expect(dev.log).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'flavor mismatch after reboot (timecard-vein)' })
   })
 
   it('(4) 再起動しても切れなければ (90 秒) 確定せず failed', async () => {
     dev.disconnects = false
     await runToEnd()
-    expect(dev.log).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'reconnect timeout' })
   })
 
@@ -372,7 +453,8 @@ describe('useSerialOta', () => {
     expect(ota.state.value).toEqual({ kind: 'rebooting' })
     await vi.advanceTimersByTimeAsync(31_000)
     expect(await p).toBe('failed')
-    expect(dev.log).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'reconnect timeout' })
   })
 
@@ -425,7 +507,7 @@ describe('useSerialOta', () => {
     expect(fw.hold).not.toHaveBeenCalled()
     expect(fw.report).not.toHaveBeenCalled()
     // 錠も保留も掛けていないので、本物はどちらも何もしない
-    expect(events).toEqual(['end', 'release'])
+    expect(events).toEqual(['end', 'alarm:end', 'release'])
   })
 
   it('取得には時間切れを付ける (固まった取得で「更新中」のまま残らない)', async () => {
@@ -561,6 +643,8 @@ interface FakeHub {
   board: string | null
   flavor: string
   flavorAfterReboot: string
+  /** 書き込みの前の `OTA CONFIRM` (受信リングの探り) への応答 */
+  probeLine: string
   hbOffLine: string
   readyLine: string
   ackFor: (received: number) => string
@@ -604,7 +688,7 @@ function hubRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs
   if (payload === 'HB OFF') return answer(hubDev.hbOffLine)
   if (payload === 'AUTH STATUS') return answer(hubDev.authLine ?? (hubDev.id === '' ? 'AUTH UNPAIRED' : `AUTH PAIRED tenant-a ${hubDev.id}`))
   if (payload.startsWith('OTA SERIAL ')) return answer(hubDev.readyLine)
-  return answer(hubDev.confirmLine)
+  return answer(events.includes('reconnected') ? hubDev.confirmLine : hubDev.probeLine)
 }
 
 function hubReboot(): void {
@@ -638,11 +722,12 @@ describe('useSerialOta (cores3)', () => {
       board: 'cores3',
       flavor: 'cores3',
       flavorAfterReboot: 'cores3',
+      probeLine: 'OTA CONFIRMED RX=65536',
       hbOffLine: 'OK HB OFF',
-      readyLine: 'OTA READY 65536',
+      readyLine: 'OTA READY 65536 RX=65536',
       ackFor: n => `OTA ACK ${n}`,
       finalLine: 'OTA OK',
-      confirmLine: 'OTA CONFIRMED',
+      confirmLine: 'OTA CONFIRMED RX=65536',
       authLine: null,
       reconnects: true,
       busy: {},
@@ -761,6 +846,7 @@ describe('useSerialOta (cores3)', () => {
       'report:downloading',
       `fetch:${appUrl}`,
       'begin',
+      'tx:OTA CONFIRM', // 受信リングの探り (錠の後・HB OFF の前)
       'tx:HB OFF',
       `tx:OTA SERIAL ${imageBytes} cores3`,
       'report:writing',
@@ -775,6 +861,7 @@ describe('useSerialOta (cores3)', () => {
       'tx:OTA CONFIRM',
       'report:done',
       'end', // finally (錠は解けているので本物は何もしない)
+      'alarm:end', // 警告デバイスの錠は掛けていない (空振り)
       'release',
     ])
     // チャンクは `OTA SERIAL` の後・1 回目の `end` の前
@@ -808,7 +895,11 @@ describe('useSerialOta (cores3)', () => {
     expect(calls.find(c => c[0] === 'HB OFF')).toEqual(['HB OFF', 'OK HB OFF', 5_000])
     expect(calls.find(c => typeof c[0] === 'string' && c[0].startsWith('OTA SERIAL'))!.slice(1)).toEqual(['OTA READY', 60_000, 'OTA ERR'])
     expect(calls.find(c => c[0] === 'AUTH STATUS')).toEqual(['AUTH STATUS', 'AUTH ', 3_000, undefined])
-    expect(calls.find(c => c[0] === 'OTA CONFIRM')).toEqual(['OTA CONFIRM', 'OTA CONFIRMED', 10_000, 'OTA ERR'])
+    // 1 回目は受信リングの探り (5 秒・失敗側は ERR UNSUPPORTED)、2 回目が再起動後の確定
+    expect(calls.filter(c => c[0] === 'OTA CONFIRM')).toEqual([
+      ['OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'ERR UNSUPPORTED'],
+      ['OTA CONFIRM', 'OTA CONFIRMED', 10_000, 'OTA ERR'],
+    ])
     expect(calls.filter(c => typeof c[0] !== 'string').every(c => c[3] === 'OTA ERR')).toBe(true)
   })
 
@@ -917,7 +1008,7 @@ describe('useSerialOta (cores3)', () => {
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(reports()).toEqual(['downloading', 'idle'])
     expect(fw.report).toHaveBeenLastCalledWith('idle', {})
-    expect(order().slice(-4)).toEqual(['release', 'report:idle', 'end', 'release'])
+    expect(order().slice(-5)).toEqual(['release', 'report:idle', 'end', 'alarm:end', 'release'])
 
     // 空いた → 受けが runQueued を呼ぶ
     busy = false
@@ -958,7 +1049,7 @@ describe('useSerialOta (cores3)', () => {
   it('★ HB OFF がほかの要求と当たって弾かれた → skipped: busy (OTA SERIAL を送らない)', async () => {
     hubDev.busy['HB OFF'] = 1
     expect(await runToEnd()).toBe('busy')
-    expect(sent()).toEqual(['DEVICE'])
+    expect(sent()).toEqual(['DEVICE', 'OTA CONFIRM'])
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'busy' })
     expect(events.indexOf('end')).toBeLessThan(events.indexOf('report:skipped'))
@@ -971,8 +1062,66 @@ describe('useSerialOta (cores3)', () => {
   ])('HB OFF に機体が%s → 失敗にせず OTA SERIAL へ進む', async (_name, line) => {
     hubDev.hbOffLine = line
     await runToEnd()
-    expect(sent().slice(0, 3)).toEqual(['DEVICE', 'HB OFF', `OTA SERIAL ${imageBytes} cores3`])
+    expect(sent().slice(0, 4)).toEqual(['DEVICE', 'OTA CONFIRM', 'HB OFF', `OTA SERIAL ${imageBytes} cores3`])
     expect(ota.state.value.kind).toBe('done')
+  })
+
+  // ---------- 受信リングの探り (Refs ippoan/alc-app#425) ----------
+
+  it.each([
+    ['大きさを名乗らない古い版 (欄なし)', 'OTA CONFIRMED'],
+    ['受信リングがチャンクより小さい (RX=1024)', 'OTA CONFIRMED RX=1024'],
+    ['受け口の無い版 (ERR UNSUPPORTED)', 'ERR UNSUPPORTED (cores3)'],
+  ])('★ 探り: %s → unsupported。HB OFF も OTA SERIAL も送らず、錠を解いてから一覧へ skipped: reflash_needed', async (_name, line) => {
+    hubDev.probeLine = line
+    const states: string[] = []
+    const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
+    expect(await runToEnd()).toBe('unsupported')
+    stop()
+
+    expect(sent()).toEqual(['DEVICE', 'OTA CONFIRM'])
+    expect(chunks()).toBe(0)
+    // 失敗の幕は出ない (取得の間の「0%」が消えるだけ)
+    expect(states).toEqual(['downloading', 'idle'])
+    expect(warnSpy).not.toHaveBeenCalled()
+    // BOARD が対象外のときの理由 `unsupported` (「対象外の機種」) とは別の語
+    expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'reflash_needed' })
+    expect(reports()).toEqual(['downloading', 'skipped'])
+    expect(events.indexOf('end')).toBeLessThan(events.indexOf('report:skipped'))
+    expectUnlockedAndReleased()
+  })
+
+  it.each([
+    ['無応答 (5 秒)', (d: FakeHub) => { d.probeLine = 'silent' }],
+    ['ほかの要求と当たって弾かれた', (d: FakeHub) => { d.busy['OTA CONFIRM'] = 1 }],
+  ] as Array<[string, (d: FakeHub) => void]>)('★ 探りが%s → skipped: busy。HB OFF も OTA SERIAL も送らない', async (_name, arrange) => {
+    arrange(hubDev)
+    expect(await runToEnd()).toBe('busy')
+
+    expect(sent()).not.toContain('HB OFF')
+    expect(sent().filter(l => l.startsWith('OTA SERIAL'))).toEqual([])
+    expect(ota.state.value).toEqual({ kind: 'idle' })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'busy' })
+    expect(events.indexOf('end')).toBeLessThan(events.indexOf('report:skipped'))
+    expectUnlockedAndReleased()
+  })
+
+  it('★ HB OFF は、探りが通った回にだけ・OTA SERIAL の前に 1 回だけ出る', async () => {
+    await runToEnd()
+    expect(sent().filter(l => l === 'HB OFF')).toHaveLength(1)
+    expect(sent().indexOf('OTA CONFIRM')).toBeLessThan(sent().indexOf('HB OFF'))
+    expect(sent().indexOf('HB OFF')).toBeLessThan(sent().indexOf(`OTA SERIAL ${imageBytes} cores3`))
+  })
+
+  it('★ OTA READY のチャンク長が探りの受信リングを超える → 1 バイトも送らず failed: chunk_too_large', async () => {
+    hubDev.probeLine = 'OTA CONFIRMED RX=4096'
+    expect(await runToEnd()).toBe('failed')
+
+    expect(chunks()).toBe(0)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason: 'chunk 65536 exceeds rx ring 4096' })
+    expect(fw.report).toHaveBeenLastCalledWith('failed', { reason: 'chunk_too_large' })
+    expectUnlockedAndReleased()
   })
 
   // ---------- 失敗: どの経路でも錠と保留を残さない ----------
@@ -1008,7 +1157,8 @@ describe('useSerialOta (cores3)', () => {
     expect(ota.state.value).toEqual({ kind: 'failed', reason })
     expect(fw.report).toHaveBeenLastCalledWith('failed', { reason: word })
     expect(fw.report.mock.calls.filter(c => c[0] === 'failed')).toHaveLength(1)
-    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(word === 'confirm' || word === 'no_response' ? 1 : 0)
+    // 探りの 1 回 + (確定まで進んだ回だけ) 確定の 1 回
+    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(word === 'confirm' || word === 'no_response' ? 2 : 1)
     // 報告 (端末の token を取りに行く) は錠を解いた後
     expect(events.lastIndexOf('end', events.indexOf('report:failed'))).toBeGreaterThan(events.indexOf('begin'))
     expectUnlockedAndReleased()
@@ -1027,7 +1177,8 @@ describe('useSerialOta (cores3)', () => {
     await runToEnd()
 
     expect(sent().at(-1)).toBe('AUTH STATUS')
-    expect(sent()).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'device changed after reboot' })
     expect(fw.report).toHaveBeenLastCalledWith('failed', { reason: 'device_changed' })
     expectUnlockedAndReleased()
@@ -1068,7 +1219,8 @@ describe('useSerialOta (cores3)', () => {
 
     // 60 秒を 2 秒おき: 最初の 1 回 + 送り直し 30 回
     expect(hub.ota.request.mock.calls.length - before).toBeLessThanOrEqual(31)
-    expect(sent()).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: PORT_BUSY })
     expect(fw.report).toHaveBeenLastCalledWith('failed', { reason: 'busy' })
     expectUnlockedAndReleased()
@@ -1078,7 +1230,8 @@ describe('useSerialOta (cores3)', () => {
     hubDev.authLine = 'silent'
     await runToEnd()
     expect(sent().filter(l => l === 'AUTH STATUS')).toHaveLength(1)
-    expect(sent()).not.toContain('OTA CONFIRM')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
+    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(fw.report).toHaveBeenLastCalledWith('failed', { reason: 'no_response' })
     expectUnlockedAndReleased()
   })
@@ -1162,5 +1315,411 @@ describe('useSerialOta (cores3)', () => {
     expect(await finish(p)).toBe('updated')
     expect(sent().filter(l => l.startsWith('OTA SERIAL'))).toHaveLength(1)
     expect(link.request).not.toHaveBeenCalled()
+  })
+})
+
+// ---------- 警告デバイス (Refs ippoan/alc-app#425) ----------
+
+const ALARM_MANIFEST_URL = `${HUB_PAGES}manifest-alarm.json`
+const ALARM_APP_URL = `${HUB_PAGES}firmware/alc-hub-atoms3-alarm-app.bin`
+/** arbiter が、席の署名などの応答待ちで送らずに弾くときの文言 */
+const ALARM_PORT_BUSY = 'request(alarm): 既に応答待ちです'
+
+/** 偽の警告デバイス。`'silent'` は応答しない (時間切れで reject) */
+interface FakeAlarm {
+  ver: string
+  verAfterReboot: string
+  flavor: string | null
+  flavorAfterReboot: string
+  /** 書き込みの前の `OTA CONFIRM` (受け口の有無の探り) への応答 */
+  probeLine: string
+  readyLine: string
+  ackFor: (received: number) => string
+  finalLine: string
+  /** 再起動後の `OTA CONFIRM` への応答 */
+  confirmLine: string
+  reconnects: boolean
+  /** 行ごとの「既に応答待ち」で弾く残り回数 (弾いた行は機体へ届かない) */
+  busy: Record<string, number>
+  rebooted: boolean
+  received: number
+}
+
+let alarmDev: FakeAlarm
+
+function alarmRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
+  const answer = (line: string): Promise<string> => {
+    if (line === 'silent') {
+      return new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`request(alarm): timeout waiting for "${matchPrefix}"`)), timeoutMs)
+      })
+    }
+    if (line.startsWith(errPrefix ?? `ERR ${String(payload).split(' ')[0]}`)) return Promise.reject(new Error(line))
+    return Promise.resolve(line)
+  }
+  if (typeof payload !== 'string') {
+    alarmDev.received += payload.length
+    events.push('tx:<chunk>')
+    if (matchPrefix === 'OTA ACK') return answer(alarmDev.ackFor(alarmDev.received))
+    if (alarmDev.finalLine === 'OTA OK') alarmReboot()
+    return answer(alarmDev.finalLine)
+  }
+  if ((alarmDev.busy[payload] ?? 0) > 0) {
+    alarmDev.busy[payload]!--
+    return Promise.reject(new Error(ALARM_PORT_BUSY))
+  }
+  events.push(`tx:${payload}`)
+  if (payload === 'DEVICE') {
+    const flavor = alarmDev.flavor === null ? '' : ` FLAVOR=${alarmDev.flavor}`
+    return answer(`DEVICE alarm VER=${alarmDev.ver}${flavor}`)
+  }
+  if (payload.startsWith('OTA SERIAL ')) return answer(alarmDev.readyLine)
+  return answer(alarmDev.rebooted ? alarmDev.confirmLine : alarmDev.probeLine)
+}
+
+function alarmReboot(): void {
+  setTimeout(() => { alarm.isConnected.value = false }, 500)
+  if (!alarmDev.reconnects) return
+  setTimeout(() => {
+    alarmDev.ver = alarmDev.verAfterReboot
+    alarmDev.flavor = alarmDev.flavorAfterReboot
+    alarmDev.rebooted = true
+    alarm.isConnected.value = true
+  }, 12_000)
+}
+
+describe('useSerialOta (alarm)', () => {
+  let mod: Mod
+  let ota: ReturnType<Mod['useSerialOta']>
+  let fetchMock: ReturnType<typeof vi.fn>
+  let imageBytes: number
+  let appResponse: () => Response
+  let warnSpy: ReturnType<typeof vi.spyOn>
+  let stopWatch: () => void
+  let states: string[]
+  let stopStates: () => void
+
+  beforeEach(async () => {
+    vi.useFakeTimers()
+    alarmDev = {
+      ver: '0.1.0',
+      verAfterReboot: '0.2.0',
+      flavor: 'alarm',
+      flavorAfterReboot: 'alarm',
+      probeLine: 'OTA CONFIRMED RX=65536',
+      readyLine: 'OTA READY 65536 RX=65536',
+      ackFor: n => `OTA ACK ${n}`,
+      finalLine: 'OTA OK',
+      confirmLine: 'OTA CONFIRMED',
+      reconnects: true,
+      busy: {},
+      rebooted: false,
+      received: 0,
+    }
+    // 運行管理者の席: 繋がっているのは警告デバイスだけ
+    link.isConnected = ref(false)
+    link.request = vi.fn(async () => { throw new Error('unexpected request to vein') })
+    resetHubMocks()
+    alarm.isConnected.value = true
+    alarm.ota.request = vi.fn(alarmRequest)
+    stopWatch = watch(() => alarm.isConnected.value, c => events.push(c ? 'reconnected' : 'disconnected'), { flush: 'sync' })
+    imageBytes = 256 * 1024 + 100
+    appResponse = () => new Response(new Uint8Array(imageBytes))
+    fetchMock = vi.fn(async (url: string) => {
+      events.push(`fetch:${url}`)
+      if (url === ALARM_MANIFEST_URL) return new Response(JSON.stringify({ version: '0.2.0' }))
+      if (url === ALARM_APP_URL) return appResponse()
+      return new Response('not found', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.resetModules()
+    mod = await import('~/composables/useSerialOta')
+    ota = mod.useSerialOta()
+    states = []
+    stopStates = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
+  })
+
+  afterEach(() => {
+    stopStates()
+    stopWatch()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+    warnSpy.mockRestore()
+  })
+
+  /** 終わるまで 1 秒ずつ時計を進める */
+  async function finish<T>(p: Promise<T>): Promise<T> {
+    let settled = false
+    void p.finally(() => { settled = true })
+    for (let i = 0; i < 300 && !settled; i++) await vi.advanceTimersByTimeAsync(1_000)
+    return await p
+  }
+
+  const runToEnd = (opts?: { isBusy?: () => boolean }): Promise<SerialOtaResult> => finish(ota.run('alarm', opts))
+
+  const sent = (): string[] => events.filter(e => e.startsWith('tx:')).map(e => e.slice(3))
+  /** チャンクと CoreS3 側の空振り (`end`) を除いた、呼ばれた順 */
+  const order = (): string[] => events.filter(e => e !== 'tx:<chunk>' && e !== 'end')
+  const chunks = (): number => events.filter(e => e === 'tx:<chunk>').length
+  /** 幕が出た状態 (idle への代入は数えない) */
+  const curtains = (): string[] => states.filter(kind => kind !== 'idle')
+
+  /** 錠が掛かったまま終わっていない (最後の `ota.end()` は最後の `ota.begin()` より後) */
+  function expectUnlocked(): void {
+    expect(alarm.ota.end.mock.calls.length).toBeGreaterThanOrEqual(1)
+    expect(events.lastIndexOf('alarm:end')).toBeGreaterThan(events.lastIndexOf('alarm:begin'))
+  }
+
+  /** 見張りを休ませる行は高々 1 回で、`HB OFF` はどこにも出ない */
+  function expectWatchKept(rests: 0 | 1): void {
+    expect(alarm.ota.rest).toHaveBeenCalledTimes(rests)
+    expect(sent()).not.toContain('HB OFF')
+  }
+
+  // ---------- 成功 ----------
+
+  it('★ 成功: 探り → 見張りの猶予 → 書き込み → 錠を解く → 再起動 → 確定 の順', async () => {
+    expect(await runToEnd()).toBe('updated')
+
+    expect(order()).toEqual([
+      'tx:DEVICE',
+      `fetch:${ALARM_MANIFEST_URL}`,
+      `fetch:${ALARM_APP_URL}`,
+      'alarm:begin',
+      'tx:OTA CONFIRM', // 受け口の有無の探り
+      'alarm:rest', // HB OK grace=120 (1 回だけ)
+      `tx:OTA SERIAL ${imageBytes} alarm`,
+      // (チャンク)
+      'alarm:end', // `OTA OK` の直後。再起動 (切断) を待つ前
+      'disconnected',
+      'reconnected',
+      'tx:DEVICE',
+      'tx:OTA CONFIRM',
+      'alarm:end', // finally (錠は解けているので本物は何もしない)
+      'release',
+    ])
+    expect(chunks()).toBe(Math.ceil(imageBytes / 65536))
+    expect(events.indexOf('tx:<chunk>')).toBeGreaterThan(events.indexOf('alarm:rest'))
+    expect(events.lastIndexOf('tx:<chunk>')).toBeLessThan(events.indexOf('alarm:end'))
+    expect(alarmDev.received).toBe(imageBytes)
+    // 幕は探りが通ってから。取得の間は出さない
+    expect([...new Set(states)]).toEqual(['downloading', 'writing', 'rebooting', 'confirming', 'done'])
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
+    expectUnlocked()
+    expectWatchKept(1)
+  })
+
+  it('CoreS3 にも Vein Station にも報告にも触らない (宛先の照合も無い)', async () => {
+    await runToEnd()
+    expect(hub.ota.request).not.toHaveBeenCalled()
+    expect(hub.ota.begin).not.toHaveBeenCalled()
+    expect(link.request).not.toHaveBeenCalled()
+    expect(fw.report).not.toHaveBeenCalled()
+    expect(fw.hold).not.toHaveBeenCalled()
+  })
+
+  it('要求の形: 探りは 5 秒で ERR UNSUPPORTED を失敗側に、書き込みと確定は OTA ERR を失敗側にする', async () => {
+    await runToEnd()
+    const calls = alarm.ota.request.mock.calls
+    const confirms = calls.filter(c => c[0] === 'OTA CONFIRM')
+    expect(confirms[0]).toEqual(['OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'ERR UNSUPPORTED'])
+    expect(confirms[1]).toEqual(['OTA CONFIRM', 'OTA CONFIRMED', 10_000, 'OTA ERR'])
+    expect(calls.find(c => typeof c[0] === 'string' && c[0].startsWith('OTA SERIAL'))).toEqual([
+      `OTA SERIAL ${imageBytes} alarm`, 'OTA READY', 60_000, 'OTA ERR',
+    ])
+  })
+
+  it('確定の条件は FLAVOR だけ: 再起動後の版が配布中と違っても確定する', async () => {
+    alarmDev.verAfterReboot = '0.1.9'
+    expect(await runToEnd()).toBe('updated')
+    expect(sent().at(-1)).toBe('OTA CONFIRM')
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.1.9' })
+  })
+
+  // ---------- 始めない出口 ----------
+
+  it('警告デバイスが繋がっていなければ何もしない', async () => {
+    alarm.isConnected.value = false
+    events.length = 0
+    expect(await runToEnd()).toBe('skipped')
+    expect(alarm.ota.request).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(alarm.ota.begin).not.toHaveBeenCalled()
+  })
+
+  it('版が配布中と同じなら up_to_date (探りも錠も取得もしない)', async () => {
+    alarmDev.ver = '0.2.0'
+    expect(await runToEnd()).toBe('up_to_date')
+    expect(sent()).toEqual(['DEVICE'])
+    expect(alarm.ota.begin).not.toHaveBeenCalled()
+    expect(curtains()).toEqual([])
+    expectWatchKept(0)
+  })
+
+  it.each([
+    ['FLAVOR を名乗らない古い版', null],
+    ['別の機種の FLAVOR', 'timecard-station'],
+  ])('%s → skipped (取得も探りもしない)', async (_name, flavor) => {
+    alarmDev.flavor = flavor
+    expect(await runToEnd()).toBe('skipped')
+    expect(sent()).toEqual(['DEVICE'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(alarm.ota.begin).not.toHaveBeenCalled()
+  })
+
+  it('★ 書き込みの直前に使用中 (通話・着信・鳴動) になっていたら、錠も探りもせず busy', async () => {
+    expect(await runToEnd({ isBusy: () => true })).toBe('busy')
+    expect(sent()).toEqual(['DEVICE'])
+    expect(alarm.ota.begin).not.toHaveBeenCalled()
+    expect(curtains()).toEqual([])
+    expect(ota.state.value).toEqual({ kind: 'idle' })
+    expectWatchKept(0)
+  })
+
+  it.each([
+    ['取得が失敗', () => new Response('not found', { status: 404 })],
+    ['256 KB 未満', () => new Response(new Uint8Array(1024))],
+  ])('イメージの%s → 幕を出さず busy (機体へは名乗りしか聞いていない)', async (_name, response) => {
+    appResponse = response
+    expect(await runToEnd()).toBe('busy')
+    expect(sent()).toEqual(['DEVICE'])
+    expect(curtains()).toEqual([])
+    expect(alarm.ota.begin).not.toHaveBeenCalled()
+    expectWatchKept(0)
+  })
+
+  // ---------- 受け口の有無の探り ----------
+
+  it.each([
+    ['受け口の無い版 (ERR UNSUPPORTED)', 'ERR UNSUPPORTED (alarm)'],
+    ['大きさを名乗らない古い版 (欄なし)', 'OTA CONFIRMED'],
+    ['受信リングがチャンクより小さい (RX=1024)', 'OTA CONFIRMED RX=1024'],
+  ])('★ 探り: %s → unsupported。幕も見張りの猶予も OTA SERIAL も無く、錠は解ける', async (_name, line) => {
+    alarmDev.probeLine = line
+    expect(await runToEnd()).toBe('unsupported')
+
+    expect(order()).toEqual([
+      'tx:DEVICE',
+      `fetch:${ALARM_MANIFEST_URL}`,
+      `fetch:${ALARM_APP_URL}`,
+      'alarm:begin',
+      'tx:OTA CONFIRM',
+      'alarm:end',
+      'release',
+    ])
+    expect(curtains()).toEqual([])
+    expect(warnSpy).not.toHaveBeenCalled()
+    expectUnlocked()
+    expectWatchKept(0)
+  })
+
+  it('★ 行の途中に連結された ERR UNSUPPORTED でも unsupported (arbiter は見つけた位置から後ろを返す)', async () => {
+    alarm.ota.request = vi.fn(async (payload: string) => {
+      events.push(`tx:${payload}`)
+      if (payload === 'DEVICE') return 'DEVICE alarm VER=0.1.0 FLAVOR=alarm'
+      throw new Error('I (99) alarm: tick ERR UNSUPPORTED (alarm)')
+    })
+    ota = mod.useSerialOta()
+    expect(await runToEnd()).toBe('unsupported')
+    expectUnlocked()
+  })
+
+  it.each([
+    ['無応答 (5 秒で時間切れ)', (d: FakeAlarm) => { d.probeLine = 'silent' }],
+    ['席の署名の応答待ちと当たって弾かれた', (d: FakeAlarm) => { d.busy['OTA CONFIRM'] = 1 }],
+  ])('★ 探りが%s → 幕を出さず busy。見張りの猶予も OTA SERIAL も送らず、錠は解ける', async (_name, mutate) => {
+    mutate(alarmDev)
+    expect(await runToEnd()).toBe('busy')
+
+    expect(sent().filter(l => l.startsWith('OTA SERIAL'))).toEqual([])
+    expect(curtains()).toEqual([])
+    expect(ota.state.value).toEqual({ kind: 'idle' })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expectUnlocked()
+    expectWatchKept(0)
+  })
+
+  // ---------- 書き込みを始めた後の失敗: 失敗の幕 + 錠は必ず解ける ----------
+
+  it.each([
+    ['OTA SERIAL が OTA ERR busy (警告デバイスは引き返さない)', (d: FakeAlarm) => { d.readyLine = 'OTA ERR busy' }, 'OTA ERR busy'],
+    ['OTA SERIAL が無応答', (d: FakeAlarm) => { d.readyLine = 'silent' }, 'request(alarm): timeout waiting for "OTA READY"'],
+    ['途中の OTA ERR write', (d: FakeAlarm) => { d.ackFor = () => 'OTA ERR write' }, 'OTA ERR write'],
+    ['検証の OTA ERR verify', (d: FakeAlarm) => { d.finalLine = 'OTA ERR verify' }, 'OTA ERR verify'],
+    ['再接続の時間切れ', (d: FakeAlarm) => { d.reconnects = false }, 'reconnect timeout'],
+    ['再起動後の FLAVOR が違う', (d: FakeAlarm) => { d.flavorAfterReboot = 'timecard-station' }, 'flavor mismatch after reboot (timecard-station)'],
+    ['再起動後の確定が OTA ERR', (d: FakeAlarm) => { d.confirmLine = 'OTA ERR confirm' }, 'OTA ERR confirm'],
+  ] as Array<[string, (d: FakeAlarm) => void, string]>)('%s → failed の幕。錠は解け、見張りの猶予は 1 回だけ', async (_name, mutate, reason) => {
+    mutate(alarmDev)
+    expect(await runToEnd()).toBe('failed')
+
+    expect(ota.state.value).toEqual({ kind: 'failed', reason })
+    // 警告デバイスは管理者の一覧へ報告しない
+    expect(fw.report).not.toHaveBeenCalled()
+    expectUnlocked()
+    expectWatchKept(1)
+  })
+
+  it('★ OTA READY のチャンク長が探りの受信リングを超える → 1 バイトも送らず failed (錠は解け、猶予は 1 回だけ)', async () => {
+    alarmDev.probeLine = 'OTA CONFIRMED RX=4096'
+    expect(await runToEnd()).toBe('failed')
+    expect(chunks()).toBe(0)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason: 'chunk 65536 exceeds rx ring 4096' })
+    expectUnlocked()
+    expectWatchKept(1)
+  })
+
+  it('再起動後の FLAVOR が違えば OTA CONFIRM を送らない (送ったのは探りの 1 回だけ)', async () => {
+    alarmDev.flavorAfterReboot = 'timecard-station'
+    await runToEnd()
+    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
+  })
+
+  // ---------- 再起動後: 席の署名と当たったときだけ再試行 ----------
+
+  it.each(['DEVICE', 'OTA CONFIRM'])('再接続後の %s が「既に応答待ち」で 2 回弾かれても、2 秒おきに送り直して確定する', async (line) => {
+    alarm.ota.request = vi.fn((...args: Parameters<typeof alarmRequest>) => {
+      if (alarmDev.rebooted && alarmDev.busy[line] === undefined) alarmDev.busy[line] = 2
+      return alarmRequest(...args)
+    })
+    ota = mod.useSerialOta()
+    expect(await runToEnd()).toBe('updated')
+
+    expect(alarm.ota.request.mock.calls.filter(c => c[0] === line).length).toBeGreaterThanOrEqual(4)
+    expect(sent().slice(-2)).toEqual(['DEVICE', 'OTA CONFIRM'])
+    expectWatchKept(1)
+  })
+
+  it('再接続後の DEVICE が 60 秒弾かれ続けたら failed (OTA CONFIRM は探りの 1 回だけ)', async () => {
+    alarm.ota.request = vi.fn((...args: Parameters<typeof alarmRequest>) => {
+      if (alarmDev.rebooted) alarmDev.busy.DEVICE = 1
+      return alarmRequest(...args)
+    })
+    ota = mod.useSerialOta()
+    expect(await runToEnd()).toBe('failed')
+
+    expect(sent().filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason: ALARM_PORT_BUSY })
+    expectUnlocked()
+  })
+
+  // ---------- 排他 ----------
+
+  it('実行中にもう 1 回押しても 2 本目は走らない (見張りの猶予は 1 回だけ)', async () => {
+    const p = ota.run('alarm')
+    expect(await ota.run('alarm')).toBe('busy')
+    expect(await finish(p)).toBe('updated')
+    expect(sent().filter(l => l.startsWith('OTA SERIAL'))).toHaveLength(1)
+    expectWatchKept(1)
+  })
+
+  it('終わった後は、もう一度走らせられる (running が解けている)', async () => {
+    alarmDev.probeLine = 'ERR UNSUPPORTED (alarm)'
+    expect(await runToEnd()).toBe('unsupported')
+    alarmDev.probeLine = 'silent'
+    expect(await runToEnd()).toBe('busy')
+    alarmDev.probeLine = 'OTA CONFIRMED RX=65536'
+    expect(await runToEnd()).toBe('updated')
   })
 })

@@ -53,12 +53,19 @@
  * 同じカードの連続の読み取りを抑えるのは機体の役目で、ここは届いた行の数だけ合図を出す。
  * **カードの id はログに出さない。**
  *
+ * 画面からの更新 (Refs ippoan/alc-app#425): 機体の名乗り (`DEVICE alarm VER=… FLAVOR=…`) の欄を
+ * `deviceInfo` に持ち、書き込みだけが使う口 `ota` (錠) を出す。機体は `OTA SERIAL` の後、受けた
+ * バイトを全部イメージとして読むので、錠の間は heartbeat も `STATUS` も grace も通常の `request`
+ * (席の署名) も送らない。通るのは `ota.request` と `ota.rest` (錠の間だけ書ける) だけ。**使うのは `useSerialOta` だけ**
+ *
  * 診断ログ (`[ALARM-DEV]`) は運行者端末の DevTools で読む用に出しっぱなし (Refs #197)。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { msSinceLoad, writeLine } from '~/composables/useSerialArbiter'
-import { evtArg } from '~/composables/useCoreS3Serial'
+import { evtArg, OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
+import { findDeviceLine } from '~/utils/device-line'
+import type { DeviceLine } from '~/utils/device-line'
 import { licenseNfcId } from '~/utils/license'
 
 /** デバイスが報告する鳴動状態 */
@@ -100,6 +107,13 @@ export const HEARTBEAT_INTERVAL = 3000
 export const RELOAD_GRACE_SEC = 45
 
 /**
+ * 画面からの更新の直前に送る ` grace=<秒>` (機体が受ける上限)。書き込みの間は heartbeat を
+ * 送れないので、その間だけ沈黙の猶予を広げる。`HB OFF` と違い武装は消えない — 期限が来れば
+ * 機体が自分で見張りに戻る (途中でタブを閉じても、鳴らないままにならない)
+ */
+export const OTA_GRACE_SEC = 120
+
+/**
  * 購読 (WebSocket) が切れてから `HB NG signaling` に切り替えるまでの猶予。
  * WS の 3 秒再接続 (useActiveRooms) で鳴らさないため。沈黙の 10 秒より長いのは、
  * 本当に切れていれば heartbeat 自体が NG で届き続けるため (Refs ippoan/alc-app#198)。
@@ -119,6 +133,8 @@ const deviceState = ref<AlarmDeviceState | null>(null)
 const buttonPressCount = ref(0)
 /** 機体が最後に読んだカード (まだ 1 枚も読んでいなければ null。読む側は watch する) */
 const cardRead = ref<AlarmCardRead | null>(null)
+/** 繋がっている機体の名乗りの欄 (CoreS3 と同形)。未接続と、名乗りを拾えなかった接続は null */
+const deviceInfo = ref<DeviceLine | null>(null)
 
 /**
  * 状態行 (`state=`/`cause=` を積む行) の始まり。行頭とは限らない — シリアルの行は原子的でなく、
@@ -142,6 +158,11 @@ let ngSince: number | null = null
 let ngWatchInstalled = false
 /** 直前に送った heartbeat の中身。変化したときだけログに出す */
 let lastLine: string | null = null
+/**
+ * ファームの書き込み中の錠 (Refs ippoan/alc-app#425。CoreS3 の `otaLocked` と同じ役目)。
+ * 掛かっている間に機体へ届くのは `ota.request` と `ota.rest` だけ
+ */
+let otaLocked = false
 
 function log(message: string): void {
   console.log(`[ALARM-DEV] ${message} (+${msSinceLoad()}ms)`)
@@ -270,7 +291,8 @@ export function useAlarmDevice() {
    * (reload の直前なので、ポートを返す後始末は要らない)。送ったら true
    */
   function sendGrace(): boolean {
-    if (!held) return false
+    // ファームの書き込み中 (錠) は送らない (イメージに混ざる)
+    if (!held || otaLocked) return false
     void writeLine(held, `${heartbeatLine()} grace=${RELOAD_GRACE_SEC}`)
     log(`sent grace=${RELOAD_GRACE_SEC}`)
     return true
@@ -281,6 +303,7 @@ export function useAlarmDevice() {
   const claimant: SerialClaimant = {
     onOpen(_port, _reader, w, lines) {
       held = w
+      deviceInfo.value = findDeviceLine(lines)
       isConnected.value = true
       sessionStorage.setItem(RECONNECT_MARK_KEY, '1')
       log(`claimed port (probe lines=${lines.length})`)
@@ -288,6 +311,8 @@ export function useAlarmDevice() {
       // 当てはまらないので無視される)。**状態行だけ** — ここに混ざったカードの行は
       // 繋ぐ前のタッチなので合図にしない
       for (const line of lines) handleStateLine(line)
+      // ファームの書き込み中 (錠) は何も送らない。`ota.end()` が heartbeat を始め直す
+      if (otaLocked) return
       // `DEVICE` は名乗り専用で状態を持たないため、初期状態 (state=/cause=) を
       // ここで `STATUS` を 1 回撃って取る。応答は通常の onLine 経由で handleLine に届く
       // (次の `EVT ALARM` の定期送信 (5 秒ごと) を待たない、Refs ippoan/alc-app#353)
@@ -302,6 +327,7 @@ export function useAlarmDevice() {
       lastLine = null
       isConnected.value = false
       deviceState.value = null
+      deviceInfo.value = null
       stopHeartbeat()
       log('port closed')
     },
@@ -354,10 +380,52 @@ export function useAlarmDevice() {
   /**
    * 1 行送って応答 1 つを待つ (#214 の警告デバイス認証で使用)。
    * 実体は arbiter 側 (useSerialArbiter.request) — 警告デバイスが預かっているポートに送る
-   * (useCoreS3Serial.request と同型)。
+   * (useCoreS3Serial.request と同型)。ファームの書き込み中 (錠) は送らずに reject する。
    */
   function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    if (otaLocked) return Promise.reject(new Error(OTA_LOCKED_MESSAGE))
     return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+  }
+
+  // --- ファームの書き込みだけが使う口 (Refs ippoan/alc-app#425。形は useCoreS3Serial の `ota` と同じ) ---
+
+  /** 錠を掛け、heartbeat を止める。以後 `otaEnd()` まで、機体へ届くのは `otaRequest` と `otaRest` だけ */
+  function otaBegin(): void {
+    otaLocked = true
+    stopHeartbeat()
+  }
+
+  /**
+   * 錠を解く。繋がっていれば heartbeat を始め直す (grace の無い `HB OK` を即 1 本 + 3 秒ごと。
+   * 機体の見張りは通常の 10 秒に戻る)。未接続なら何もしない (次の onOpen が始める)。
+   * 掛かっていないときに呼んだら何もしない (走っている heartbeat に触らない)
+   */
+  function otaEnd(): void {
+    if (!otaLocked) return
+    otaLocked = false
+    if (held) startHeartbeat(held)
+  }
+
+  /**
+   * 錠に関係なく、行またはバイト列を送って応答 1 つを待つ (`useCoreS3Serial().ota.request` と同じ形)。
+   * 失敗側の合図が `ERR <先頭トークン>` の形でないときは `errPrefix` で明示する
+   */
+  function otaRequest(line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
+  function otaRequest(bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  function otaRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
+    // 実装側の引数は union なので、arbiter のどちらの overload にも当てはまるよう
+    // バイト列 overload (errPrefix 必須) の形に寄せて渡す
+    return arbiter.request(CLAIMANT_NAME, payload as Uint8Array, matchPrefix, timeoutMs, errPrefix as string)
+  }
+
+  /**
+   * 書き込みの間、機体の見張りを休ませる: `HB OK grace=120` を 1 行書く (機体は返信しない)。
+   * **1 回の更新につき 1 回だけ呼ぶこと** — 猶予は機体側で 1 行ごとに置き換わる。
+   * **錠の外からは呼べない**: 錠が立っていないとき (と未接続) は何も書かない — 走っている
+   * heartbeat の合間に猶予だけを広げる口にしない。書けなくても握る (次の `OTA SERIAL` の応答で分かる)
+   */
+  async function otaRest(): Promise<void> {
+    if (held && otaLocked) await writeLine(held, `HB OK grace=${OTA_GRACE_SEC}`)
   }
 
   return {
@@ -366,10 +434,12 @@ export function useAlarmDevice() {
     deviceState: readonly(deviceState),
     buttonPressCount: readonly(buttonPressCount),
     cardRead: readonly(cardRead),
+    deviceInfo: readonly(deviceInfo),
     connect,
     disconnect,
     requestPort,
     notifyIntentionalReload,
     request,
+    ota: { begin: otaBegin, end: otaEnd, request: otaRequest, rest: otaRest },
   }
 }

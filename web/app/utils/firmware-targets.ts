@@ -53,4 +53,11 @@ export const FIRMWARE_TARGETS: Readonly<Record<string, FirmwareTarget>> = {
       'cores3-dev': image('manifest-dev.json', 'alc-hub-cores3-dev-app.bin'),
     },
   },
+  // 警告デバイス (Atom VoiceS3R、運行管理者の席の見張り)。名乗りに BOARD が無いので boards は置かない
+  'alarm': {
+    installerUrl: `${PAGES_BASE}alarm.html`,
+    flavors: {
+      alarm: image('manifest-alarm.json', 'alc-hub-atoms3-alarm-app.bin'),
+    },
+  },
 }

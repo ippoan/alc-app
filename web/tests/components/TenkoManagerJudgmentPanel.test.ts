@@ -340,3 +340,36 @@ describe('TenkoManagerJudgmentPanel — 確認の方法 (defaultMethod)', () => 
     wrapper.unmount()
   })
 })
+
+// 席の警告デバイスの更新を始めてよいかの材料 (Refs ippoan/alc-app#425)。リロードの申告とは別の集合
+describe('TenkoManagerJudgmentPanel — 「機体を使用中」の申告', () => {
+  it('★ NG 理由の入力中は申告し、キャンセルで下ろす。unmount でも下りる', async () => {
+    const wrapper = await mountPanel()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    expect(isDeviceBusy.value).toBe(true)
+    await wrapper.findAll('button').find(b => b.text() === 'キャンセル')!.trigger('click')
+    expect(isDeviceBusy.value).toBe(false)
+
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    expect(isDeviceBusy.value).toBe(true)
+    wrapper.unmount()
+    expect(isDeviceBusy.value).toBe(false)
+  })
+
+  it('送信中も申告し、送り終えたら下ろす', async () => {
+    let finish!: (value: unknown) => void
+    submitManagerJudgmentMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }) as never)
+    const wrapper = await mountPanel()
+    const { isDeviceBusy } = useKioskScreen()
+
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    expect(isDeviceBusy.value).toBe(true)
+    finish({ ...SESSION_UNJUDGED, manager_judgment: 'ok' })
+    await flush()
+    expect(isDeviceBusy.value).toBe(false)
+    wrapper.unmount()
+  })
+})

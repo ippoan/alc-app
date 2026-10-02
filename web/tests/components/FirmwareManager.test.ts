@@ -199,6 +199,10 @@ describe('FirmwareManager', () => {
       expect(await status({ phase: 'failed' })).toBe('失敗')
     })
 
+    it('skipped: 画面からの更新を受けられない版 (reflash_needed) は、書き直しが要ると出す (Refs ippoan/alc-app#425)', async () => {
+      expect(await status({ phase: 'skipped', reason: 'reflash_needed' })).toBe('更新しませんでした: 配布ページからの書き直しが必要です')
+    })
+
     it('skipped: 理由 4 つ + 未知の理由 + 理由なし', async () => {
       expect(await status({ phase: 'skipped', reason: 'up_to_date' })).toBe('更新しませんでした: 最新です')
       expect(await status({ phase: 'skipped', reason: 'busy' })).toBe('更新しませんでした: 使用中でした')

@@ -83,6 +83,7 @@ const SKIP_REASONS: Record<string, string> = {
   up_to_date: '最新です',
   busy: '使用中でした',
   unsupported: '対象外の機種です',
+  reflash_needed: '配布ページからの書き直しが必要です',
   flavor_mismatch: '対象外の種類です',
 }
 

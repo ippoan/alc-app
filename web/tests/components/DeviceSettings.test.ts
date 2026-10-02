@@ -49,8 +49,11 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
 // 警告デバイス (Atom VoiceS3R)。血圧計の設定は CoreS3 と同じ 1 行の口で撃つ
 const alarmConnected = ref(false)
 const alarmRequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
+// 警告デバイスの名乗り (未接続・名乗りを拾えなかった接続は null)
+const alarmDeviceInfo = ref<{ ver: string | null, board: string | null, flavor: string | null } | null>(null)
 mockNuxtImport('useAlarmDevice', () => () => ({
   isConnected: alarmConnected,
+  deviceInfo: alarmDeviceInfo,
   request: alarmRequestMock,
 }))
 
@@ -163,6 +166,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     coreS3RequestMock.mockReset()
     coreS3RequestMock.mockImplementation(async line => echoOmron(line))
     alarmConnected.value = false
+    alarmDeviceInfo.value = null
     alarmRequestMock.mockReset()
     alarmRequestMock.mockImplementation(async line => echoOmron(line))
     atomS3Connected.value = false
@@ -215,6 +219,25 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       const wrapper = await mountDeviceSettings()
       expect(wrapper.find(SELECTOR).exists()).toBe(false)
       coreS3DeviceInfo.value = { ver: null, board: 'cores3', flavor: 'cores3' }
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find(SELECTOR).exists()).toBe(false)
+    })
+  })
+
+  describe('警告デバイスの版 (Refs ippoan/alc-app#425)', () => {
+    const SELECTOR = '[data-testid="alarm-device-version"]'
+
+    it('★ 繋がっている警告デバイスが名乗った版を 1 行出す', async () => {
+      alarmConnected.value = true
+      alarmDeviceInfo.value = { ver: '0.1.0+abc', board: null, flavor: 'alarm' }
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.find(SELECTOR).text()).toBe('警告デバイスの版: 0.1.0+abc')
+    })
+
+    it('取れていなければ行ごと出さない (未接続 / 名乗りを拾えなかった / VER が無い)', async () => {
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.find(SELECTOR).exists()).toBe(false)
+      alarmDeviceInfo.value = { ver: null, board: null, flavor: 'alarm' }
       await wrapper.vm.$nextTick()
       expect(wrapper.find(SELECTOR).exists()).toBe(false)
     })

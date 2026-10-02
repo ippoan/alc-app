@@ -1882,3 +1882,55 @@ describe('TenkoItAdminView — 新版への載せ替えの申告', () => {
     w.unmount()
   })
 })
+
+// 席の警告デバイスの更新を始めてよいかの材料 (Refs ippoan/alc-app#425)。
+// PWA の載せ替えの申告とは別の集合 (useKioskScreen().isDeviceBusy は実物を読む)
+describe('TenkoItAdminView — 「機体を使用中」の申告', () => {
+  beforeEach(() => {
+    activeRoomsRef.value = ['it-session-1']
+  })
+
+  it('★ 待機中は申告しない。点呼を開いている間は申告し、判定で閉じたら下ろす', async () => {
+    const w = await mountView()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    await click(incoming(w).find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(true)
+    expect(isDeviceBusy.value).toBe(true)
+
+    panel(w).vm.$emit('judged', makeSession('session-1', { manager_judgment: 'ok', manager_judgment_method: 'it' }))
+    await flush()
+    await w.vm.$nextTick()
+    expect(isDeviceBusy.value).toBe(false)
+    w.unmount()
+  })
+
+  it('★ 繋いでいる途中 (まだ開いていない) も申告する。unmount で下りる', async () => {
+    cameraStartMock.mockImplementationOnce(() => new Promise<void>(() => {}))
+    const w = await mountView()
+    const { isDeviceBusy } = useKioskScreen()
+
+    await click(incoming(w).find('button'), w)
+    expect(w.find('[data-testid="it-opened"]').exists()).toBe(false)
+    expect(isDeviceBusy.value).toBe(true)
+
+    w.unmount()
+    expect(isDeviceBusy.value).toBe(false)
+  })
+
+  it('★ 運行管理者の確認を待っている間 (社員番号の入力) も申告し、キャンセルで下ろす', async () => {
+    localStorage.clear()
+    const w = await mountView()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(isDeviceBusy.value).toBe(true)
+
+    await click(idModal(w).findAll('button').find(b => b.text() === 'キャンセル')!, w)
+    expect(isDeviceBusy.value).toBe(false)
+    w.unmount()
+  })
+})

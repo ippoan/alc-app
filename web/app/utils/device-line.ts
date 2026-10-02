@@ -21,3 +21,12 @@ export function parseDeviceLine(line: string): DeviceLine {
   }
   return { ver: field('VER'), board: field('BOARD'), flavor: field('FLAVOR') }
 }
+
+/**
+ * プローブ中に集まった行から機体の名乗りを拾う。`DEVICE ` は行頭とは限らない (直前のログ行が
+ * 途中で切れて連結されうる。arbiter の機種判定と同じ見方) ので、見つけた位置から後ろを読む
+ */
+export function findDeviceLine(lines: string[]): DeviceLine | null {
+  const line = lines.find(l => l.includes('DEVICE '))
+  return line === undefined ? null : parseDeviceLine(line.slice(line.indexOf('DEVICE ')))
+}

@@ -1,6 +1,6 @@
 // CoreS3 のファームの更新の置き場 (Refs ippoan/alc-app#403)。
-// 報告 (useFirmwareReport) を mount で始め、unmount で止める。更新の状態 (useSerialOta().state) が
-// idle でない間だけ、画面全体に「更新中」の幕を出す。CoreS3 の更新の合図 (target `cores3`) を受ける。
+// 報告 (useFirmwareReport) を mount で始め、unmount で止める。CoreS3 の更新の合図 (target `cores3`) を受ける。
+// 「更新中」の幕は描かない (役割に依らない位置の FirmwareOtaOverlay.vue が出す。Refs ippoan/alc-app#425)。
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
@@ -43,7 +43,7 @@ interface WatchOptions {
 }
 const watchOptions = (): WatchOptions => timecardWatch.mock.calls[0]![0] as WatchOptions
 
-const overlay = (wrapper: { find: (selector: string) => { exists: () => boolean, text: () => string, classes: () => string[] } }) =>
+const overlay = (wrapper: { find: (selector: string) => { exists: () => boolean } }) =>
   wrapper.find('[data-testid="serial-ota-overlay"]')
 
 describe('FirmwareOtaHost', () => {
@@ -67,43 +67,21 @@ describe('FirmwareOtaHost', () => {
     expect(reportMock.start).toHaveBeenCalledTimes(1)
   })
 
-  it('更新していない間は描画するものは無い (要素を 1 つも出さない)', async () => {
+  it.each([
+    [{ kind: 'idle' }],
+    [{ kind: 'downloading' }],
+    [{ kind: 'writing', pct: 42 }],
+    [{ kind: 'failed', reason: 'OTA ERR write' }],
+  ] as Array<[SerialOtaState]>)('★ 状態 %o でも描画するものは無い (幕は FirmwareOtaOverlay が出す)', async (state) => {
+    ota.state.value = state
     const wrapper = await mountSuspended(FirmwareOtaHost)
     expect(wrapper.element.nodeType).not.toBe(Node.ELEMENT_NODE)
     expect(wrapper.text()).toBe('')
-    wrapper.unmount()
-  })
-
-  it.each([
-    [{ kind: 'downloading' }, '端末を更新しています 0%'],
-    [{ kind: 'writing', pct: 42 }, '端末を更新しています 42%'],
-    [{ kind: 'rebooting' }, '端末を再起動しています…'],
-    [{ kind: 'confirming' }, '端末を再起動しています…'],
-    [{ kind: 'done', ver: '0.2.0' }, '更新しました 0.2.0'],
-    [{ kind: 'failed', reason: 'OTA ERR write' }, '更新できませんでした (元の版のまま)'],
-  ] as Array<[SerialOtaState, string]>)('状態 %o は画面全体に「%s」と出す', async (state, text) => {
-    const wrapper = await mountSuspended(FirmwareOtaHost)
-    expect(overlay(wrapper).exists()).toBe(false)
-
-    ota.state.value = state
-    await flushPromises()
-    expect(overlay(wrapper).text()).toBe(text)
-
-    ota.state.value = { kind: 'idle' }
-    await flushPromises()
     expect(overlay(wrapper).exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('幕はどのモーダル (z-50) よりも上に出る', async () => {
-    ota.state.value = { kind: 'writing', pct: 1 }
-    const wrapper = await mountSuspended(FirmwareOtaHost)
-    expect(overlay(wrapper).classes()).toContain('z-[60]')
-    expect(overlay(wrapper).classes()).not.toContain('z-50')
-    wrapper.unmount()
-  })
-
-  it('幕を描くだけでは、更新を始めない', async () => {
+  it('状態が変わっても、更新を始めない', async () => {
     const wrapper = await mountSuspended(FirmwareOtaHost)
     ota.state.value = { kind: 'downloading' }
     await flushPromises()

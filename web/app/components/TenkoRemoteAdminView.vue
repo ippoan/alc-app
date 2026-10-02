@@ -63,6 +63,11 @@ const modalIdError = ref<string | null>(null)
 useKioskScreen().declareSafeToReload(
   () => !isCallActive.value && !faceAuthActive.value && !isLoading.value,
 )
+// 通話中・顔認証中・読み込み中は、席の警告デバイスの更新を始めさせない (Refs ippoan/alc-app#425)。
+// リロードの申告 (上) とは別の集合
+useKioskScreen().declareDeviceBusy(
+  () => isCallActive.value || faceAuthActive.value || isLoading.value,
+)
 
 // 運転者情報パネル
 const showDriverInfoPanel = ref(false)

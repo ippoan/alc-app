@@ -395,3 +395,23 @@ describe('ScreenShareAdminView — disabled / 後始末', () => {
     remove.mockRestore()
   })
 })
+
+// 席の警告デバイスの更新を始めてよいかの材料 (Refs ippoan/alc-app#425)
+describe('ScreenShareAdminView — 「機体を使用中」の申告', () => {
+  it('★ 画面共有を見ている間だけ申告する (見始める → やめる)。unmount でも下りる', async () => {
+    activeRoomsRef.value = ['screen-a']
+    const w = await mountView()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    await click(rooms(w)[0]!, w)
+    expect(isDeviceBusy.value).toBe(true)
+    await click(stopButton(w), w)
+    expect(isDeviceBusy.value).toBe(false)
+
+    await click(rooms(w)[0]!, w)
+    expect(isDeviceBusy.value).toBe(true)
+    w.unmount()
+    expect(isDeviceBusy.value).toBe(false)
+  })
+})
