@@ -4,7 +4,7 @@ import { withSetup } from '../helpers/with-setup'
 import type { LatestPunch } from '~/types'
 
 // --- useCoreS3Serial のモック (EVT を流す口だけ) ---
-const { onEventMock, emitEvent, unsubscribeMock } = vi.hoisted(() => {
+const { onEventMock, emitEvent, unsubscribeMock, clearHandlers } = vi.hoisted(() => {
   const handlers: Array<(name: string, args: string[]) => void> = []
   const unsubscribeMock = vi.fn()
   return {
@@ -14,17 +14,21 @@ const { onEventMock, emitEvent, unsubscribeMock } = vi.hoisted(() => {
     }),
     emitEvent: (name: string, args: string[]) => handlers.forEach(h => h(name, args)),
     unsubscribeMock,
+    // unmount の解除は mock なので、前の test の購読が残る。test ごとに捨てる
+    clearHandlers: () => { handlers.length = 0 },
   }
 })
 mockNuxtImport('useCoreS3Serial', () => () => ({ onEvent: onEventMock }))
 
 // --- useTimecardCardIndex のモック (台帳の引き当てだけ) ---
 const resolveMock = vi.fn<(cardId: string) => string | null>()
+const isFreshMock = vi.fn<() => boolean>()
 const restoreMock = vi.fn(async () => {})
 const startPeriodicRefreshMock = vi.fn()
 const stopPeriodicRefreshMock = vi.fn()
 mockNuxtImport('useTimecardCardIndex', () => () => ({
   resolve: resolveMock,
+  isFresh: isFreshMock,
   restore: restoreMock,
   refresh: vi.fn(async () => {}),
   startPeriodicRefresh: startPeriodicRefreshMock,
@@ -52,6 +56,7 @@ function serverPunch(over: Partial<LatestPunch> = {}): LatestPunch {
 
 describe('useHubTimecardPunch', () => {
   beforeEach(() => {
+    clearHandlers()
     onEventMock.mockClear()
     unsubscribeMock.mockClear()
     restoreMock.mockClear()
@@ -59,6 +64,8 @@ describe('useHubTimecardPunch', () => {
     stopPeriodicRefreshMock.mockClear()
     resolveMock.mockReset()
     resolveMock.mockReturnValue('emp-1')
+    isFreshMock.mockReset()
+    isFreshMock.mockReturnValue(true)
   })
 
   it('★ EVT TIMECARD を受けて、その人ぶんの最新打刻を立てる (クラウドを待たない)', () => {
@@ -103,6 +110,81 @@ describe('useHubTimecardPunch', () => {
 
     expect(hub.latest.value).toBeNull()
     app.unmount()
+  })
+
+  // -------------------------------------------------------------------------
+  // 引けなかったことを 1 行残す (Refs ippoan/alc-app#387)
+  // 黙って倒れていたので、USB 由来が本番で一度も引けていないことに気づけなかった。
+  // **カードの番号・社員の ID・氏名は出さない。**
+  // -------------------------------------------------------------------------
+
+  /** warn に出た行をまとめた文字列 (漏れの検査用) */
+  function captureWarn() {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    return {
+      warn,
+      text: () => warn.mock.calls.map(c => c.map(String).join(' ')).join('\n'),
+    }
+  }
+
+  it('★ 台帳に無いカードは warn を 1 行出す (番号を含まない)', () => {
+    const w = captureWarn()
+    resolveMock.mockReturnValue(null)
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', ['card_id=0A1B2C3D4E5F6071', 'card_kind=felica_idm'])
+
+    expect(hub.latest.value).toBeNull()
+    expect(w.warn).toHaveBeenCalledTimes(1)
+    expect(w.text()).toContain('手元の台帳で引けないカード')
+    expect(w.text()).toContain('台帳に無い')
+    expect(w.text().toLowerCase()).not.toContain('0a1b2c3d4e5f6071')
+    app.unmount()
+    w.warn.mockRestore()
+  })
+
+  it('★ 台帳が古くて引かなかったときは、その理由を warn に出す (番号を含まない)', () => {
+    const w = captureWarn()
+    resolveMock.mockReturnValue(null)
+    isFreshMock.mockReturnValue(false)
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', ['card_id=0A1B2C3D4E5F6071', 'card_kind=felica_idm'])
+
+    expect(hub.latest.value).toBeNull()
+    expect(w.warn).toHaveBeenCalledTimes(1)
+    expect(w.text()).toContain('台帳が古い')
+    expect(w.text().toLowerCase()).not.toContain('0a1b2c3d4e5f6071')
+    app.unmount()
+    w.warn.mockRestore()
+  })
+
+  it('★ 氏名が引けないときも warn を 1 行出す (番号・社員の ID を含まない)', () => {
+    const w = captureWarn()
+    resolveMock.mockReturnValue('emp-unknown')
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', ['card_id=0A1B2C3D4E5F6071', 'card_kind=felica_idm'])
+
+    expect(hub.latest.value).toBeNull()
+    expect(w.warn).toHaveBeenCalledTimes(1)
+    expect(w.text()).toContain('名前が無い')
+    expect(w.text().toLowerCase()).not.toContain('0a1b2c3d4e5f6071')
+    expect(w.text()).not.toContain('emp-unknown')
+    app.unmount()
+    w.warn.mockRestore()
+  })
+
+  it('引けたときは warn を出さない (氏名も warn に出ない)', () => {
+    const w = captureWarn()
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', ['card_id=0A1B2C3D4E5F6071', 'card_kind=felica_idm'])
+
+    expect(hub.latest.value?.employeeId).toBe('emp-1')
+    expect(w.warn).not.toHaveBeenCalled()
+    app.unmount()
+    w.warn.mockRestore()
   })
 
   it('card_id が無い行は捨てる', () => {

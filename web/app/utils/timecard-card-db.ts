@@ -35,7 +35,7 @@ export interface TimecardCardEntry {
   cardId: string
   /** 解決先の社員 ID */
   employeeId: string
-  /** サーバから引いた時刻 (古さが分かるように持つ。古くても使う) */
+  /** サーバから引いた時刻 (古さが分かるように持つ。古すぎれば `useTimecardCardIndex` が引かない) */
   fetchedAt: number
 }
 
