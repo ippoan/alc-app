@@ -194,8 +194,8 @@ export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station' | 't
  * auth-worker が 401 を返すので (403 ではなく) このメッセージになる。
  */
 export const MANAGER_DEVICE_AUTH_FAILED_MESSAGE
-  = '運行管理者席の端末で認証できませんでした。この席の警告デバイス (VoiceS3R) が USB でつながっていて、'
-    + '用途「運行管理者席」で鍵が登録されているか確認してください'
+  = 'この席の端末を確認できませんでした。警告デバイスが USB でつながっているか確認してください。'
+    + 'つながっていても直らないときは、管理者に連絡してください'
 
 /**
  * 血圧測定台で認証できなかったときの文言 (Refs #353)。**無言で 403 にも

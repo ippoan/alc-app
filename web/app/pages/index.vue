@@ -698,7 +698,7 @@ function onRoleTabClick(role: RoleTab) {
               />
             </template>
           </NormalMeasurement>
-          <!-- IT点呼 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る。
+          <!-- IT点呼 (Refs ippoan/alc-app#387)。運行者のメニューのハンバーガーから入る (どの端末にも出る)。
                IC カードからの開始 (ref) と打刻履歴 (slot) は通常点呼タブのものなので付けない -->
           <NormalMeasurement v-if="driverSubTab === 'it'" it-mode :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
           <TenkoKiosk v-if="driverSubTab === 'tenko'" :landscape="isAndroidLandscape" class="flex-1 min-h-0" />
