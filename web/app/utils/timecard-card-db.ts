@@ -9,12 +9,16 @@
  * 判る**必要がある。サーバへ問い合わせるとクラウドを一周することになり、
  * 「WS を待たない」という目的が崩れる。
  *
+ * **いまは倒れ先** (Refs ippoan/alc-app#387): オンラインなら、まずサーバーに持ち主を照会する
+ * (`useHubTimecardPunch` の doc。リロードの直後はこの写しが揃っておらず引けなかった)。
+ * この写しで引くのは、オフラインのときと照会が失敗したときだけ。
+ *
  * # なぜ `card_id` を URL に載せないのか
  *
  * カード 1 枚ずつを引く口は**カード ID を URL に載せる**ため、アクセスログに IDm が
  * 恒久的に残っていた。**その口そのものが消えた** (client / server とも削除済み、
- * Refs ippoan/rust-alc-api#644)。**台帳をまとめて 1 回引き、突き合わせはブラウザの
- * 中だけで行う。**
+ * Refs ippoan/rust-alc-api#644)。**台帳はまとめて 1 回引く。** 持ち主の照会
+ * (`lookupEmployeeByCard`) もカード ID を **body に載せる** (URL に載せない)。
  *
  * # なぜ IndexedDB なのか (メモリだけにしない)
  *
@@ -31,7 +35,11 @@
 
 /** 台帳 1 件。**これ以上のフィールドを足さないこと** (上の doc)。 */
 export interface TimecardCardEntry {
-  /** NFC の生値 (FeliCa IdM / NFC-A UID)。**ブラウザの外へ出さない** */
+  /**
+   * NFC の生値 (FeliCa IdM / NFC-A UID)。**ログ・診断には出さない。** サーバーへ送るのは
+   * 持ち主の照会 (`lookupEmployeeByCard` の body) だけ — この写しはオフラインと照会の
+   * 失敗のときの倒れ先 (`useHubTimecardPunch` の doc)
+   */
   cardId: string
   /** 解決先の社員 ID */
   employeeId: string

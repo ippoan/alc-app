@@ -58,8 +58,16 @@ function serverRow(over: Partial<LatestPunch> = {}): LatestPunch {
 }
 
 describe('IcPunchAlcoholPrompt — シリアル由来でも寿命は同じ', () => {
-  beforeEach(() => { onEventMock.mockClear() })
-  afterEach(() => { vi.useRealTimers() })
+  beforeEach(() => {
+    onEventMock.mockClear()
+    // 手元の写しで引く側 (同期で行が立つ) の配線を見る。オンラインだとサーバーへの照会が
+    // 先に入る (`useHubTimecardPunch` の doc。そちらは composable のテストが固定する)
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
 
   it('★ シリアル由来で出したボタンも 10 秒で消える', async () => {
     const wrapper = await mountSuspended(Harness)
