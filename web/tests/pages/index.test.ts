@@ -13,7 +13,7 @@ import DeviceUnregisteredBanner from '~/components/DeviceUnregisteredBanner.vue'
 import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import FirmwareOtaHost from '~/components/FirmwareOtaHost.vue'
-import DeviceFirmwareNotice from '~/components/DeviceFirmwareNotice.vue'
+import CoreS3DeviceFirmwareNotice from '~/components/CoreS3DeviceFirmwareNotice.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
@@ -173,25 +173,13 @@ mockNuxtImport('useStrayAlcohol', () => () => ({
 
 // NormalMeasurement (onEvent) と NfcStatus (isConnected/requestPort/...) の
 // 両方から呼ばれるので、両方の形を 1 つのモックにまとめる
-// CoreS3 の版の帯 (Refs ippoan/alc-app#425) が読む、接続と名乗り。既定は未接続
-const hubLink = {
-  isConnected: ref(false),
-  deviceInfo: ref<{ ver: string | null, board: string | null, flavor: string | null } | null>(null),
-}
 mockNuxtImport('useCoreS3Serial', () => () => ({
   onEvent: vi.fn(() => vi.fn()),
-  isConnected: hubLink.isConnected,
-  deviceInfo: hubLink.deviceInfo,
+  isConnected: ref(false),
   requestPort: vi.fn(async () => true),
   startupProbe: vi.fn(async () => false),
   isStartupProbing: ref(false),
 }))
-
-// 帯の「更新する」が呼ぶ口 (Refs ippoan/alc-app#425)。子は shallow stub なので、呼ぶのは index.vue だけ
-const serialOtaRunMock = vi.fn(async (_target: string, _opts?: { deviceId?: string, isBusy?: () => boolean }) => 'updated')
-mockNuxtImport('useSerialOta', () => () => ({ run: serialOtaRunMock }))
-const firmwareReportDeviceId = ref<string | null>(null)
-mockNuxtImport('useFirmwareReport', () => () => ({ deviceId: firmwareReportDeviceId }))
 
 mockNuxtImport('useNfcReader', () => () => ({
   isConnected: ref(false),
@@ -1776,65 +1764,33 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
   })
 
   describe('CoreS3 の版の帯 (Refs ippoan/alc-app#425)', () => {
-    afterEach(() => {
-      hubLink.isConnected.value = false
-      hubLink.deviceInfo.value = null
-      firmwareReportDeviceId.value = null
-      serialOtaRunMock.mockClear()
-    })
+    const noticeOf = () => wrapper!.findAllComponents(CoreS3DeviceFirmwareNotice)
 
-    const noticeOf = () => wrapper!.findComponent(DeviceFirmwareNotice)
-
-    it('★ 運行者の画面に 1 つ置き、CoreS3 の接続と名乗り (版・flavor) を渡す', async () => {
+    it('★ 運行者の画面に 1 つだけ置く (props は渡さない。接続・名乗り・始め方は部品が自分で持つ)', async () => {
       bpUi.state.value = 'show'
       wrapper = await mountIndex('/?role=driver')
-      expect(wrapper.findAllComponents(DeviceFirmwareNotice)).toHaveLength(1)
-      // 未接続・名乗り無し
-      expect(noticeOf().props()).toMatchObject({ target: 'cores3', version: null, flavor: null, connected: false })
-
-      hubLink.isConnected.value = true
-      hubLink.deviceInfo.value = { ver: '0.9.3', board: 'cores3', flavor: 'cores3-wifi' }
-      await nextTick()
-      expect(noticeOf().props()).toMatchObject({ target: 'cores3', version: '0.9.3', flavor: 'cores3-wifi', connected: true })
+      expect(noticeOf()).toHaveLength(1)
+      expect(noticeOf()[0]!.props()).toEqual({})
     })
 
-    it('★ start は、実行時の自分の機体の id と「機体を使用中か」を付けて cores3 の更新を 1 回走らせ、結果を返す', async () => {
-      bpUi.state.value = 'show'
-      wrapper = await mountIndex('/?role=driver')
-      const start = noticeOf().props('start') as () => Promise<string>
-
-      // id がまだ取れていない → deviceId は無い (照合で弾かれる)
-      await start()
-      expect(serialOtaRunMock).toHaveBeenCalledTimes(1)
-      expect(serialOtaRunMock.mock.calls[0]![0]).toBe('cores3')
-      expect(serialOtaRunMock.mock.calls[0]![1]!.deviceId).toBeUndefined()
-
-      // 押した時点の id を読む (mount の時点の値を掴まない)
-      firmwareReportDeviceId.value = 'hub-test-id'
-      expect(await start()).toBe('updated')
-      const opts = serialOtaRunMock.mock.calls[1]![1]!
-      expect(opts.deviceId).toBe('hub-test-id')
-      expect(opts.isBusy!()).toBe(false)
-    })
-
-    it('デモの表示 (タブ・URL) では出さない', async () => {
+    it('デモのタブでは出さず、ほかのタブへ移ると戻る', async () => {
       bpUi.state.value = 'show'
       wrapper = await mountIndex('/?role=driver')
       await clickMenuItem(wrapper, '自動点呼デモ')
-      expect(noticeOf().exists()).toBe(false)
+      expect(noticeOf()).toHaveLength(0)
       await clickMenuItem(wrapper, '遠隔点呼デモ')
-      expect(noticeOf().exists()).toBe(false)
+      expect(noticeOf()).toHaveLength(0)
       await clickMenuItem(wrapper, 'デバイス設定')
-      expect(noticeOf().exists()).toBe(true)
-      wrapper.unmount()
-
-      wrapper = await mountIndex('/?role=driver&demo=1')
-      expect(noticeOf().exists()).toBe(false)
+      expect(noticeOf()).toHaveLength(1)
     })
 
-    it('運行者以外の役割では出さない', async () => {
-      wrapper = await mountIndex('/?role=it_tenko')
-      expect(noticeOf().exists()).toBe(false)
+    it('★ 運行者以外の役割では mount しない (更新の composable を生成しない)', async () => {
+      for (const role of ['it_tenko', 'general']) {
+        wrapper = await mountIndex(`/?role=${role}`)
+        expect(noticeOf()).toHaveLength(0)
+        wrapper.unmount()
+      }
+      wrapper = null
     })
   })
 

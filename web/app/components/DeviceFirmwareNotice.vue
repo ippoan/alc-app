@@ -87,6 +87,8 @@ async function onStart(): Promise<void> {
   }
   finally {
     starting.value = false
+    // 結果に依らず 1 回取り直す (押すまでの間に配布が変わっていたら、帯を次の周期まで残さない)
+    void refreshLatest()
   }
 }
 </script>

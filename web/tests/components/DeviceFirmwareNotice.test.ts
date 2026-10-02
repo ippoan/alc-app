@@ -129,6 +129,38 @@ describe('DeviceFirmwareNotice', () => {
     w.unmount()
   })
 
+  it.each(['updated', 'up_to_date', 'busy', 'skipped', 'failed'] as SerialOtaResult[])('★ start が %s で返ったら、配布中の版を 1 回取り直す', async (outcome) => {
+    start.mockResolvedValue(outcome)
+    const w = await mount()
+    expect(fetchLatest).toHaveBeenCalledTimes(1)
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(fetchLatest).toHaveBeenCalledTimes(2)
+    expect(fetchLatest).toHaveBeenLastCalledWith('cores3')
+    w.unmount()
+  })
+
+  it('★ 押すまでの間に配布が変わっていて up_to_date だったら、取り直した版で帯が消える (次の周期を待たない)', async () => {
+    start.mockImplementation(async () => {
+      fetchLatest.mockResolvedValue({ cores3: '0.1.0' })
+      return 'up_to_date'
+    })
+    const w = await mount()
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(root(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('start が例外で終わっても取り直す', async () => {
+    start.mockRejectedValue(new Error('boom'))
+    const w = await mount()
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(fetchLatest).toHaveBeenCalledTimes(2)
+    w.unmount()
+  })
+
   it('押すまでは start を呼ばない (自動では更新しない)', async () => {
     const w = await mount()
     await vi.advanceTimersByTimeAsync(3 * HOUR_MS)
