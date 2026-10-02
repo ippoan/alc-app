@@ -472,6 +472,49 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
     app.unmount()
   })
 
+  // --- 管理者のトークンで送る経路の失敗 ---
+  // `createAuthFetch` (`@ippoan/auth-client`) が投げる Error は `.status` を持たず、
+  // message が `API エラー (<status>): <本文>` の形になるだけ (`errorLabel` は `initApi` が渡す)
+
+  it.each([404, 400])('★★ 管理者の経路の %i (status なし・message だけ) → 何も出さない (手元の写しに在っても)', async (status) => {
+    const c = captureConsole()
+    adminToken.value = 'admin-token'
+    resolveMock.mockReturnValue('emp-1')
+    lookupMock.mockRejectedValue(new Error(`API エラー (${status}): Not Found`))
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    await settle()
+
+    expect(hub.latest.value).toBeNull()
+    expect(resolveMock).not.toHaveBeenCalled()
+    expect(c.warn).toHaveBeenCalledTimes(1)
+    expect(c.text()).toContain('持ち主が見つからないカード')
+    app.unmount()
+  })
+
+  it.each([
+    ['500', () => new Error('API エラー (500): Internal Server Error'), 'http 500'],
+    // 本文の中の `(404)` は拾わない (先頭の 1 個だけを status と読む)
+    ['本文に (404) を含む 500', () => new Error('API エラー (500): not found (404): x'), 'http 500'],
+    ['message から読めない Error', () => new Error('リクエストがタイムアウトしました'), '通信の失敗'],
+    ['Error でない値', () => 'boom', '通信の失敗'],
+    ['null', () => null, '通信の失敗'],
+  ])('★ 管理者の経路の %s → 手元の写しで引く', async (_label, makeError, reason) => {
+    const c = captureConsole()
+    adminToken.value = 'admin-token'
+    lookupMock.mockRejectedValue(makeError())
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    await settle()
+
+    expect(hub.latest.value).toMatchObject({ id: 'serial:1', employeeId: 'emp-1', readOnThisDevice: true })
+    expect(c.warn).toHaveBeenCalledTimes(1)
+    expect(c.text()).toContain(`サーバーに照会できない (${reason}`)
+    app.unmount()
+  })
+
   it('照会が失敗し、手元の写しでも引けなければ何も出さない (警告は理由ごとに 1 行)', async () => {
     const c = captureConsole()
     resolveMock.mockReturnValue(null)

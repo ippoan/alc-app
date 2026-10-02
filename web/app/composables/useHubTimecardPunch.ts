@@ -109,6 +109,23 @@ function warnUnresolved(reason: string): void {
   console.warn(`[HubTimecardPunch] 手元の台帳で引けないカード (${reason}。サーバ経由の案内に任せる)`)
 }
 
+/**
+ * 照会の失敗から HTTP の status を読む (読めなければ `null` = 通信の失敗として扱う)。
+ *
+ * 端末の鍵で送る経路 (`api.ts` の `bearerRequest`) の Error は `.status` を持つが、
+ * **管理者のトークンで送る経路 (`@ippoan/auth-client` の `createAuthFetch`) の Error には
+ * `.status` が無く**、message が `API エラー (<status>): <本文>` の形になるだけ。そちらは
+ * message の**先頭の** `(<3 桁>): ` から読む (本文の中の `(404)` を拾わない)。
+ * `createAuthFetch` の文言の形に依存している — 形が変わると読めなくなり、404・400 でも
+ * 手元の写しへ倒れる。
+ */
+function failureStatus(e: unknown): number | null {
+  const status = (e as { status?: unknown } | null)?.status
+  if (typeof status === 'number') return status
+  const matched = e instanceof Error ? /^[^(]*\((\d{3})\): /.exec(e.message) : null
+  return matched ? Number(matched[1]) : null
+}
+
 export function useHubTimecardPunch(resolveName: (employeeId: string) => string | null) {
   const coreS3 = useCoreS3Serial()
   const cards = useTimecardCardIndex()
@@ -183,9 +200,9 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
       return { kind: 'found', employeeId: employee.id, name: employee.name }
     }
     catch (e) {
-      const status = (e as { status?: number } | null)?.status
+      const status = failureStatus(e)
       if (status === 404 || status === 400) return { kind: 'not-found' }
-      return { kind: 'unavailable', reason: status ? `http ${status}` : '通信の失敗' }
+      return { kind: 'unavailable', reason: status === null ? '通信の失敗' : `http ${status}` }
     }
   }
 
