@@ -35,6 +35,7 @@ mockNuxtImport('useManagerDeviceToken', () => () => ({
 type Mod = typeof import('~/composables/useAlarmWatch')
 let useAlarmWatch: Mod['useAlarmWatch']
 let remainingSeconds: ReturnType<Mod['useSeatDisconnectGrace']>['remainingSeconds']
+let expired: ReturnType<Mod['useSeatDisconnectGrace']>['expired']
 let GRACE_MS: number
 
 const T0 = Date.UTC(2026, 0, 1, 0, 0, 0)
@@ -60,6 +61,7 @@ describe('useAlarmWatch — 切断の猶予', () => {
     const mod = await import('~/composables/useAlarmWatch')
     useAlarmWatch = mod.useAlarmWatch
     remainingSeconds = mod.useSeatDisconnectGrace().remainingSeconds
+    expired = mod.useSeatDisconnectGrace().expired
     GRACE_MS = mod.SEAT_DISCONNECT_GRACE_MS
   })
 
@@ -224,5 +226,79 @@ describe('useAlarmWatch — 切断の猶予', () => {
     expect(calls).toEqual([`set(${T0 + 120_000})`])
     vi.advanceTimersByTime(2000)
     expect(remainingSeconds.value).toBe(118)
+  })
+
+  // 猶予が切れたままか (IT点呼 の受け画面が、開いている点呼を閉じて理由を出すのに読む)
+  describe('expired — 猶予が切れたままか', () => {
+    it('起動直後・繋がっている間・数えている間は false。2 分たったら true、繋がり直したら false', async () => {
+      expect(expired.value).toBe(false)
+      const app = await mountConnected()
+      expect(expired.value).toBe(false)
+
+      isConnected.value = false
+      await nextTick()
+      vi.advanceTimersByTime(119_000)
+      expect(expired.value).toBe(false)
+
+      vi.advanceTimersByTime(1000)
+      expect(expired.value).toBe(true)
+      expect(remainingSeconds.value).toBeNull()
+      // 切れたまま時間がたっても true のまま
+      vi.advanceTimersByTime(600_000)
+      expect(expired.value).toBe(true)
+
+      isConnected.value = true
+      await nextTick()
+      expect(expired.value).toBe(false)
+      app.unmount()
+    })
+
+    it('一度も繋いでいない席は、時間がたっても false', async () => {
+      const [, app] = withSetup(() => useAlarmWatch())
+      await nextTick()
+      vi.advanceTimersByTime(600_000)
+      expect(expired.value).toBe(false)
+      app.unmount()
+    })
+
+    it('猶予のあいだに繋がり直したら true にならない (元の 2 分を過ぎても)', async () => {
+      const app = await mountConnected()
+      isConnected.value = false
+      await nextTick()
+      vi.advanceTimersByTime(60_000)
+      isConnected.value = true
+      await nextTick()
+
+      vi.advanceTimersByTime(600_000)
+      expect(expired.value).toBe(false)
+      app.unmount()
+    })
+
+    it('設定を off にして自分で見張りをやめた席では true にしない (数えている最中でも・繋がったままでも)', async () => {
+      const app = await mountConnected()
+      isConnected.value = false
+      await nextTick()
+      vi.advanceTimersByTime(10_000)
+
+      enabled.value = false
+      await nextTick()
+      expect(expired.value).toBe(false)
+      vi.advanceTimersByTime(600_000)
+      expect(expired.value).toBe(false)
+      app.unmount()
+    })
+
+    it('切れたままの席で設定を off にしたら false に戻す (警告デバイスを使わない席の表示にする)', async () => {
+      const app = await mountConnected()
+      isConnected.value = false
+      await nextTick()
+      vi.advanceTimersByTime(120_000)
+      expect(expired.value).toBe(true)
+
+      enabled.value = false
+      await nextTick()
+      expect(expired.value).toBe(false)
+      app.unmount()
+    })
   })
 })

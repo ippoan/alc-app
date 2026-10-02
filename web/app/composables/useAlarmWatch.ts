@@ -29,6 +29,10 @@
  * トークンの側で、ここの 1 秒ごとの処理は表示の残り秒のためだけ。**起動直後・リロード直後の
  * 「まだ繋がっていない」では始めない** (一度繋がってから切れたときだけ)。設定を off にして
  * 見張りをやめたときは、猶予なしでその場で期限を切る。
+ *
+ * 猶予の 2 分が過ぎてから繋がり直すまでのあいだは `useSeatDisconnectGrace().expired` が true
+ * (IT点呼 の受け画面が、開いている点呼を閉じて理由を出すのに読む)。設定を off にして自分で
+ * 見張りをやめた席では true にしない (警告デバイスを使わない席と同じ表示のままにする)。
  */
 
 /** 警告デバイスが切れてから、運行管理者の鍵のトークンを使えなくするまでの猶予 (ms) */
@@ -37,6 +41,8 @@ export const SEAT_DISCONNECT_GRACE_MS = 120_000
 /** 猶予の残り秒。数えていないときは null (アプリ全体で 1 つ) */
 const disconnectRemainingSeconds = ref<number | null>(null)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+/** 猶予が切れたままか (2 分たっても繋がり直していない)。繋がり直したら false (アプリ全体で 1 つ) */
+const disconnectExpired = ref(false)
 
 function stopCountdown(): void {
   if (countdownTimer !== null) {
@@ -50,16 +56,28 @@ function startCountdown(deadlineMs: number): void {
   // 残り秒は期限と今の差分から出す (処理が遅れて飛んでも、回数ではなく時刻に合う)
   const tick = () => {
     const seconds = Math.ceil((deadlineMs - Date.now()) / 1000)
-    if (seconds <= 0) stopCountdown()
-    else disconnectRemainingSeconds.value = seconds
+    if (seconds <= 0) {
+      stopCountdown()
+      disconnectExpired.value = true
+    }
+    else {
+      disconnectRemainingSeconds.value = seconds
+    }
   }
   countdownTimer = setInterval(tick, 1000)
   tick()
 }
 
-/** 切断の猶予の残り秒 (表示用)。数えていないときは null */
+/**
+ * 切断の猶予の状態 (読むだけ)。
+ * - `remainingSeconds`: 猶予の残り秒。数えていないときは null
+ * - `expired`: 猶予が切れたままか。繋がり直すまで true
+ */
 export function useSeatDisconnectGrace() {
-  return { remainingSeconds: readonly(disconnectRemainingSeconds) }
+  return {
+    remainingSeconds: readonly(disconnectRemainingSeconds),
+    expired: readonly(disconnectExpired),
+  }
 }
 
 /**
@@ -93,6 +111,7 @@ export function useAlarmWatch(): void {
         // 繋がり直した: 猶予をやめる (期限を外してから取りに行く)
         seat.clearDisconnectDeadline()
         stopCountdown()
+        disconnectExpired.value = false
         void seat.prefetchManagerJwt()
       }
       else if (wasConnected) {
@@ -112,6 +131,7 @@ export function useAlarmWatch(): void {
     // 利用者が自分で見張りをやめた: 猶予なしでその場で期限を切る。見張りは上で止めたので、
     // 下の切断は見張りに届かない (ここで明示的に切る)
     stopCountdown()
+    disconnectExpired.value = false
     seat.setDisconnectDeadline(Date.now())
     void alarm.disconnect()
     // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
