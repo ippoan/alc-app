@@ -1072,7 +1072,7 @@ describe('useSerialOta (cores3)', () => {
     ['大きさを名乗らない古い版 (欄なし)', 'OTA CONFIRMED'],
     ['受信リングがチャンクより小さい (RX=1024)', 'OTA CONFIRMED RX=1024'],
     ['受け口の無い版 (ERR UNSUPPORTED)', 'ERR UNSUPPORTED (cores3)'],
-  ])('★ 探り: %s → unsupported。HB OFF も OTA SERIAL も送らず、錠を解いてから一覧へ skipped: unsupported', async (_name, line) => {
+  ])('★ 探り: %s → unsupported。HB OFF も OTA SERIAL も送らず、錠を解いてから一覧へ skipped: reflash_needed', async (_name, line) => {
     hubDev.probeLine = line
     const states: string[] = []
     const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
@@ -1084,7 +1084,8 @@ describe('useSerialOta (cores3)', () => {
     // 失敗の幕は出ない (取得の間の「0%」が消えるだけ)
     expect(states).toEqual(['downloading', 'idle'])
     expect(warnSpy).not.toHaveBeenCalled()
-    expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'unsupported' })
+    // BOARD が対象外のときの理由 `unsupported` (「対象外の機種」) とは別の語
+    expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'reflash_needed' })
     expect(reports()).toEqual(['downloading', 'skipped'])
     expect(events.indexOf('end')).toBeLessThan(events.indexOf('report:skipped'))
     expectUnlockedAndReleased()

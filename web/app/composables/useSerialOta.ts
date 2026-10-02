@@ -42,7 +42,8 @@
  *   受けた後に `chunk <= n` も確かめ、超えていれば 1 バイトも送らずに打ち切る (機体は 10 秒で元へ戻る)
  * - `RX=` が無い・小さい・`ERR UNSUPPORTED` → 結果 `unsupported`。失敗の幕は出さず、`HB OFF` も猶予も
  *   `OTA SERIAL` も送らない。帯が、配布ページからの 1 回の書き直しを案内する。
- *   CoreS3 は一覧へ `skipped` (理由 `unsupported`) を出す
+ *   CoreS3 は一覧へ `skipped` (理由 `reflash_needed`) を出す — BOARD が対象外のときの理由
+ *   `unsupported` (「対象外の機種」) とは別の語
  * - 時間切れ・「既に応答待ち」・ポートを失った → 結果 `busy` (押し直せば済む)
  * - **探りの副作用**: `OTA CONFIRM` は冪等だが、実行中のイメージが未確定のとき (前回の更新が確定まで
  *   行かず、機体が 10 分の戻し待ちの間で、かつその間に配布中の版がさらに変わった回) だけ、探りが
@@ -196,6 +197,11 @@ export const RESULT_DISPLAY_MS = 5_000
 
 /** 失敗行の接頭辞 (`OTA ERR <reason>`)。`ERR <先頭トークン>` の形ではないので明示する */
 const OTA_ERR = 'OTA ERR'
+/**
+ * 管理者の一覧へ出す理由の語: 機体の版が画面からの更新を受けられない (配布ページからの書き直しが要る)。
+ * 表示の文は `FirmwareManager.vue` の `SKIP_REASONS`
+ */
+const REFLASH_NEEDED = 'reflash_needed'
 /** 受け口を持たない版の機体が `OTA CONFIRM` に返す行の始まり (`ERR UNSUPPORTED (<機種>)`) */
 const ERR_UNSUPPORTED = 'ERR UNSUPPORTED'
 
@@ -364,13 +370,14 @@ export function useSerialOta() {
   /**
    * 書き込みを始めずに引き返す: 機体が「いまは受けられない」(`busy`)、または画面からの更新を
    * 受けられない版 (`unsupported`)。失敗の幕にしない。CoreS3 は錠を解いてから一覧へ `skipped` を
-   * 出す (報告は端末の token を取りに行くので、錠より後)。警告デバイスの錠は `run` の finally が解く
+   * 出す (報告は端末の token を取りに行くので、錠より後)。警告デバイスの錠は `run` の finally が解く。
+   * 一覧の理由の語は、`busy` はそのまま、`unsupported` は {@link REFLASH_NEEDED}
    */
   function decline(hub: boolean, result: 'busy' | 'unsupported'): SerialOtaResult {
     state.value = { kind: 'idle' }
     if (hub) {
       coreS3.ota.end()
-      void firmware.report('skipped', { reason: result })
+      void firmware.report('skipped', { reason: result === 'busy' ? result : REFLASH_NEEDED })
     }
     return result
   }
