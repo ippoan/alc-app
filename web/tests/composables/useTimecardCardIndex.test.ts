@@ -389,6 +389,43 @@ describe('useTimecardCardIndex', () => {
     expect(idx.resolve('0A1B2C3D')).toBeNull()
   })
 
+  it('★★ 取得時刻が未来 (端末の時計が後ろへ戻った) の台帳は引かず、間引かずに引き直して回復する', async () => {
+    listTimecardCardsMock.mockResolvedValue([card('0a1b2c3d', 'emp-1')])
+    const idx = useTimecardCardIndex()
+    await idx.refresh()
+    listTimecardCardsMock.mockClear()
+
+    // 時計が 1 時間戻った。手元の取得時刻は「今」より未来になる
+    nowSpy.mockReturnValue(realNow - 60 * MIN)
+
+    expect(idx.isFresh()).toBe(false)
+    expect(idx.resolve('0A1B2C3D')).toBeNull()
+    await settle()
+    // 経過が負でも間引かれず、背景の引き直しが走っている
+    expect(listTimecardCardsMock).toHaveBeenCalledTimes(1)
+    // 取れたので取得時刻が今になり、引ける
+    expect(idx.isFresh()).toBe(true)
+    expect(idx.resolve('0A1B2C3D')).toBe('emp-1')
+  })
+
+  it('★★ IndexedDB から戻した写しの取得時刻が未来でも引かず、restore の引き直しも間引かれない', async () => {
+    let resolveFetch: (v: unknown) => void = () => {}
+    listTimecardCardsMock.mockReturnValue(new Promise((r) => { resolveFetch = r }))
+    await saveTimecardCardIndex([{ cardId: '0a1b2c3d', employeeId: 'emp-1', fetchedAt: realNow + 60 * MIN }])
+
+    const idx = useTimecardCardIndex()
+    await idx.restore()
+
+    // サーバはまだ返っていない = 手元は未来の時刻の写しだけ
+    expect(listTimecardCardsMock).toHaveBeenCalledTimes(1)
+    expect(idx.isFresh()).toBe(false)
+    expect(idx.resolve('0A1B2C3D')).toBeNull()
+
+    resolveFetch([card('0a1b2c3d', 'emp-1')])
+    await settle()
+    expect(idx.resolve('0A1B2C3D')).toBe('emp-1')
+  })
+
   it('IndexedDB が読めなくても restore は落ちず、サーバから引き直す', async () => {
     delete (globalThis as { indexedDB?: unknown }).indexedDB
     listTimecardCardsMock.mockResolvedValue([])

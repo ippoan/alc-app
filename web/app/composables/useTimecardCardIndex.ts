@@ -60,7 +60,8 @@ const MISS_MIN_AGE_MS = 30 * 1000
 /**
  * この時間を過ぎた台帳では**引かない** (`resolve()` が `null` を返す)。定期同期の間隔の 2 倍。
  * 台帳をサーバから取れた時刻が分からないとき (一度も取れていない / 時刻を持たない写しを
- * IndexedDB から戻した) も同じ扱い (Refs ippoan/alc-app#387)。
+ * IndexedDB から戻した / **取得時刻が今より未来** = 端末の時計が後ろへ戻った) も同じ扱い
+ * (Refs ippoan/alc-app#387)。
  *
  * # なぜ上限が要るのか
  *
@@ -135,8 +136,11 @@ export function useTimecardCardIndex() {
    */
   async function refresh(minAgeMs = 0): Promise<void> {
     if (refreshing) return
-    // **取得時刻で間引く。** 0 を渡せば必ず引き直す
-    if (minAgeMs > 0 && Date.now() - fetchedAt < minAgeMs) return
+    // **取得時刻で間引く。** 0 を渡せば必ず引き直す。
+    // 経過が負 (端末の時計が後ろへ戻り、取得時刻が未来になった) なら**間引かない** —
+    // 間引くと時計が追いつくまで同期が 1 回も走らない。取れれば取得時刻が今になって回復する
+    const age = Date.now() - fetchedAt
+    if (minAgeMs > 0 && age >= 0 && age < minAgeMs) return
     refreshing = true
     try {
       const cards = await listTimecardCards()
@@ -192,10 +196,12 @@ export function useTimecardCardIndex() {
 
   /**
    * 台帳が引いてよい新しさか。サーバから取れた時刻が分からない (0) か、
-   * `STALE_LIMIT_MS` より古ければ `false`。
+   * `STALE_LIMIT_MS` より古ければ `false`。**取得時刻が未来 (経過が負) のときも `false`** —
+   * 時計が後ろへ戻った端末で、古い写しを新しいと誤認しないため。
    */
   function isFresh(): boolean {
-    return fetchedAt > 0 && Date.now() - fetchedAt <= STALE_LIMIT_MS
+    const age = Date.now() - fetchedAt
+    return fetchedAt > 0 && age >= 0 && age <= STALE_LIMIT_MS
   }
 
   /**
