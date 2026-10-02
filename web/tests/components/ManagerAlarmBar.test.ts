@@ -54,8 +54,15 @@ mockNuxtImport('useAlarmDeviceSetting', () => () => ({
   setEnabled: setEnabledMock,
 }))
 
+// 切断の猶予の残り秒 (数えるのは useAlarmWatch。バーは読むだけ)
+const graceState = { remainingSeconds: ref<number | null>(null) }
+mockNuxtImport('useSeatDisconnectGrace', () => () => ({
+  remainingSeconds: readonly(graceState.remainingSeconds),
+}))
+
 describe('ManagerAlarmBar', () => {
   beforeEach(() => {
+    graceState.remainingSeconds.value = null
     calls.length = 0
     vi.clearAllMocks()
     alarmState.isSupported = true
@@ -166,6 +173,65 @@ describe('ManagerAlarmBar', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).not.toContain('接続されていません')
     expect(wrapper.text()).toContain('着信を受けられません (signaling 未接続)')
+    wrapper.unmount()
+  })
+
+  it('切断の猶予のあいだは残り秒を出し、秒が進むと表示も進む (今までの「接続されていません」も残す)', async () => {
+    graceState.remainingSeconds.value = 120
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    const countdown = wrapper.find('[data-testid="alarm-disconnect-countdown"]')
+    expect(countdown.exists()).toBe(true)
+    expect(countdown.text()).toBe(
+      '警告デバイスの接続が切れました。あと 120 秒で、この席では点呼の確認と判定ができなくなります。USB をつなぎ直してください',
+    )
+    expect(wrapper.text()).toContain('警告デバイスが接続されていません')
+    expect(wrapper.find('button').text()).toBe('接続')
+
+    graceState.remainingSeconds.value = 59
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').text()).toContain('あと 59 秒で')
+    wrapper.unmount()
+  })
+
+  it('切断の猶予の文言に「トークン」「鍵」「認証」「VoiceS3R」を入れない', async () => {
+    graceState.remainingSeconds.value = 30
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    const text = wrapper.find('[data-testid="alarm-disconnect-countdown"]').text()
+    for (const word of ['トークン', '鍵', '認証', 'VoiceS3R']) expect(text).not.toContain(word)
+    wrapper.unmount()
+  })
+
+  it('猶予のあいだに繋がり直したら残り秒の行は消える (残り秒が残っていても、繋がっていれば出さない)', async () => {
+    graceState.remainingSeconds.value = 80
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').exists()).toBe(true)
+
+    // 接続の方が先に変わる (残り秒を null に戻すのは見張りの側で、1 拍遅れる)
+    alarmState.isConnected.value = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('接続が切れました')
+
+    graceState.remainingSeconds.value = null
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('猶予が終わった (残り秒が null に戻った) 後と、一度も繋いでいない席は今までの表示だけ', async () => {
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('警告デバイスが接続されていません')
+
+    graceState.remainingSeconds.value = 1
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').exists()).toBe(true)
+
+    graceState.remainingSeconds.value = null
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="alarm-disconnect-countdown"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('警告デバイスが接続されていません')
+    expect(wrapper.text()).not.toContain('接続が切れました')
     wrapper.unmount()
   })
 

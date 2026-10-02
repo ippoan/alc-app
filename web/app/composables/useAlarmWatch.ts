@@ -20,7 +20,47 @@
  * 同じ先取りが既にある — `useBpStationDeviceToken` / `useHubClaim`)。
  * トークンの cache が有効なあいだは通信しない。失敗しても何も起こさない
  * (`useManagerDeviceToken().prefetchManagerJwt`)。
+ *
+ * ## 切断の猶予 (Refs ippoan/alc-app#387)
+ *
+ * 繋がっていた警告デバイスが切れたら、`SEAT_DISCONNECT_GRACE_MS` 後を期限として運行管理者の鍵の
+ * トークンに入れ (`setDisconnectDeadline`)、それまでの残り秒を `useSeatDisconnectGrace()` に出す
+ * (`ManagerAlarmBar` が読む)。期限までに繋がり直せば期限を外し、何も起きない。期限を切るのは
+ * トークンの側で、ここの 1 秒ごとの処理は表示の残り秒のためだけ。**起動直後・リロード直後の
+ * 「まだ繋がっていない」では始めない** (一度繋がってから切れたときだけ)。設定を off にして
+ * 見張りをやめたときは、猶予なしでその場で期限を切る。
  */
+
+/** 警告デバイスが切れてから、運行管理者の鍵のトークンを使えなくするまでの猶予 (ms) */
+export const SEAT_DISCONNECT_GRACE_MS = 120_000
+
+/** 猶予の残り秒。数えていないときは null (アプリ全体で 1 つ) */
+const disconnectRemainingSeconds = ref<number | null>(null)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+function stopCountdown(): void {
+  if (countdownTimer !== null) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  disconnectRemainingSeconds.value = null
+}
+
+function startCountdown(deadlineMs: number): void {
+  // 残り秒は期限と今の差分から出す (処理が遅れて飛んでも、回数ではなく時刻に合う)
+  const tick = () => {
+    const seconds = Math.ceil((deadlineMs - Date.now()) / 1000)
+    if (seconds <= 0) stopCountdown()
+    else disconnectRemainingSeconds.value = seconds
+  }
+  countdownTimer = setInterval(tick, 1000)
+  tick()
+}
+
+/** 切断の猶予の残り秒 (表示用)。数えていないときは null */
+export function useSeatDisconnectGrace() {
+  return { remainingSeconds: readonly(disconnectRemainingSeconds) }
+}
 
 /**
  * 見張りを始めたか (アプリ全体で 1 つ)。トップ画面の再 mount で二重に始めないため
@@ -37,6 +77,7 @@ export function useAlarmWatch(): void {
   if (!alarm.isSupported) return
   const rooms = useActiveRooms()
   const { enabled } = useAlarmDeviceSetting()
+  const seat = useManagerDeviceToken()
 
   function start(): void {
     if (started) return
@@ -47,8 +88,19 @@ export function useAlarmWatch(): void {
     // トップ画面の unmount で止まらないよう、component から切り離した scope で見張る。
     // immediate: 始めた時点で既に繋がっていれば、そのとき 1 回
     const scope = effectScope(true)
-    scope.run(() => watch(alarm.isConnected, (connected) => {
-      if (connected) void useManagerDeviceToken().prefetchManagerJwt()
+    scope.run(() => watch(alarm.isConnected, (connected, wasConnected) => {
+      if (connected) {
+        // 繋がり直した: 猶予をやめる (期限を外してから取りに行く)
+        seat.clearDisconnectDeadline()
+        stopCountdown()
+        void seat.prefetchManagerJwt()
+      }
+      else if (wasConnected) {
+        // 繋がっていたものが切れた: 猶予を始める
+        const deadlineMs = Date.now() + SEAT_DISCONNECT_GRACE_MS
+        seat.setDisconnectDeadline(deadlineMs)
+        startCountdown(deadlineMs)
+      }
     }, { immediate: true }))
     stopPrefetchWatch = () => scope.stop()
   }
@@ -57,6 +109,10 @@ export function useAlarmWatch(): void {
     if (!started) return
     started = false
     stopPrefetchWatch()
+    // 利用者が自分で見張りをやめた: 猶予なしでその場で期限を切る。見張りは上で止めたので、
+    // 下の切断は見張りに届かない (ここで明示的に切る)
+    stopCountdown()
+    seat.setDisconnectDeadline(Date.now())
     void alarm.disconnect()
     // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
     rooms.stop()
