@@ -270,7 +270,8 @@ describe('NormalMeasurement — itMode なし (通常点呼は今までと 1 つ
 
     expect(completedBodies()).toHaveLength(1)
     const body = completedBodies()[0]!
-    expect(Object.keys(body)).toEqual(COMPLETED_BODY_KEYS)
+    // 今までの key の後ろに、本人確認の方法が 1 つ付く (IT点呼 に限らず送る)
+    expect(Object.keys(body)).toEqual([...COMPLETED_BODY_KEYS, 'identity_method'])
     expect('tenko_method' in body).toBe(false)
     expect(body).toMatchObject({
       status: 'completed',
@@ -456,7 +457,8 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
 
     expect(completedBodies()).toHaveLength(1)
     const body = completedBodies()[0]!
-    expect(Object.keys(body)).toEqual([...COMPLETED_BODY_KEYS, 'tenko_method'])
+    expect(Object.keys(body)).toEqual([...COMPLETED_BODY_KEYS, 'tenko_method', 'identity_method'])
+    expect(body.identity_method).toBe('license')
     expect(body.tenko_method).toBe('IT点呼')
     expect(body.record_as_tenko).toBe(true)
     wrapper.unmount()

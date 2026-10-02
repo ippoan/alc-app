@@ -845,7 +845,28 @@ describe('pages/index — IC カードの打刻からアルコールチェック
     await nextTick()
 
     expect(startForEmployeeMock).toHaveBeenCalledTimes(1)
-    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎')
+    // 一覧から来た打刻 (別の端末の打刻を含む) には「この端末で読んだ」の印が無い
+    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', false)
+  })
+
+  it('★ この端末に繋いだ機体が読んだ打刻は、その印を付けて測定を始める (Refs ippoan/alc-app#387)', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+    const punch = punchOf({ id: 'serial:1', readOnThisDevice: true })
+
+    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punch)
+    await nextTick()
+
+    expect(startForEmployeeMock).toHaveBeenCalledTimes(1)
+    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', true)
+  })
+
+  it('★ id が serial: で始まっていても、印が無い打刻は「この端末で読んだ」にしない (判定は印の 1 か所)', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+
+    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punchOf({ id: 'serial:1' }))
+    await nextTick()
+
+    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', false)
   })
 
   it('社員が解決できていない打刻では測定を始めない', async () => {

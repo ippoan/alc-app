@@ -677,6 +677,46 @@ describe('TenkoItAdminView — 通話', () => {
   })
 })
 
+describe('TenkoItAdminView — 運転者の本人確認の方法 (Refs ippoan/alc-app#387)', () => {
+  const identityRow = (w: Wrapper) => w.find('[data-testid="it-identity-method"]')
+
+  async function openWith(overrides: Record<string, unknown>) {
+    activeRoomsRef.value = ['it-session-1']
+    getTenkoSessionMock.mockImplementation(async (id: string) => makeSession(id, overrides))
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    return w
+  }
+
+  it.each([
+    ['license', '運転免許証'],
+    ['ic_card', '社員証'],
+    ['remote_punch', '社員証 (別の端末で打刻)'],
+    ['nfc_card', 'カード'],
+    ['manual', '手入力'],
+  ])('★ %s の記録は「本人確認 %s」の行を出す', async (value, label) => {
+    const w = await openWith({ identity_method: value })
+
+    expect(identityRow(w).exists()).toBe(true)
+    expect(identityRow(w).findAll('span').map(s => s.text())).toEqual(['本人確認', label])
+    w.unmount()
+  })
+
+  it.each([
+    ['値が無い (key ごと無い = 古い記録)', {}],
+    ['null', { identity_method: null }],
+    ['知らない値', { identity_method: 'face' }],
+    ['空文字', { identity_method: '' }],
+  ])('★ %s 記録では行ごと出さない', async (_label, overrides) => {
+    const w = await openWith(overrides)
+
+    expect(w.find('[data-testid="it-opened"]').text()).toContain('山田 太郎')
+    expect(identityRow(w).exists()).toBe(false)
+    expect(w.find('[data-testid="it-opened"]').text()).not.toContain('本人確認')
+    w.unmount()
+  })
+})
+
 describe('TenkoItAdminView — 判定', () => {
   it('通話して開いた判定パネルの既定は IT', async () => {
     activeRoomsRef.value = ['it-session-1']

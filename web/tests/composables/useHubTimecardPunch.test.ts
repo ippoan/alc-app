@@ -72,6 +72,8 @@ describe('useHubTimecardPunch', () => {
       name: '山田太郎',
       // felica_idm / nfca_uid は 'other' に畳まれる (IcPunchAlcoholPrompt が出す条件)
       cardKind: 'other',
+      // この端末に繋いだ機体が読んだ打刻の印 (Refs ippoan/alc-app#387)
+      readOnThisDevice: true,
     })
     app.unmount()
   })
@@ -162,6 +164,8 @@ describe('useHubTimecardPunch', () => {
     hub.setFromServer(serverPunch({ id: 'row-2', employeeId: 'emp-2', name: '佐藤花子' }))
 
     expect(hub.latest.value?.id).toBe('row-2')
+    // 一覧から来た行 (別の端末の打刻を含む) に「この端末で読んだ」の印は付かない
+    expect(hub.latest.value?.readOnThisDevice).toBeUndefined()
     app.unmount()
   })
 

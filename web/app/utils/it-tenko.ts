@@ -59,6 +59,49 @@ export type ManagerJudgmentMethod = (typeof MANAGER_JUDGMENT_METHOD)[keyof typeo
 export const IT_TENKO_METHOD = 'IT点呼'
 
 /**
+ * 運転者の今回の本人確認の方法 (Refs ippoan/alc-app#387)。端末が測定の保存 (PUT) に
+ * `identity_method` として送り、点呼の記録に残る。**backend はこの 5 つに完全一致しない値を
+ * 400 で断る (測定の保存ごと失敗する)** ので、値の文字列を書くのはここだけにする。
+ *
+ * - `license` = この端末で運転免許証を読んだ
+ * - `ic_card` = この端末に繋いだ機体で社員証を読んだ (その打刻の案内から始めた回)
+ * - `remote_punch` = 別の端末の打刻の案内から始めた (この端末ではカードを読んでいない)
+ * - `nfc_card` = この端末で免許証でないカードを読んだ
+ * - `manual` = 社員番号の手入力
+ */
+export const IDENTITY_METHOD = {
+  LICENSE: 'license',
+  IC_CARD: 'ic_card',
+  REMOTE_PUNCH: 'remote_punch',
+  NFC_CARD: 'nfc_card',
+  MANUAL: 'manual',
+} as const
+export type IdentityMethod = (typeof IDENTITY_METHOD)[keyof typeof IDENTITY_METHOD]
+
+/** 本人確認の方法の表示の文 (IT点呼 の受け画面) */
+const IDENTITY_METHOD_LABEL: Record<IdentityMethod, string> = {
+  license: '運転免許証',
+  ic_card: '社員証',
+  remote_punch: '社員証 (別の端末で打刻)',
+  nfc_card: 'カード',
+  manual: '手入力',
+}
+
+/** 本人確認の方法の表示の文。値が無い・知らない値は null (呼び手は行ごと出さない) */
+export function identityMethodLabel(value: string | null | undefined): string | null {
+  return value != null && Object.hasOwn(IDENTITY_METHOD_LABEL, value)
+    ? IDENTITY_METHOD_LABEL[value as IdentityMethod]
+    : null
+}
+
+/**
+ * 社員証の IC カードで本人確認した回 (`ic_card`) にも IT点呼 を選べるようにするか。
+ * **一時的な許容** (オーナーの決定 2026-10-02)。外すときは false にする — IT点呼 を
+ * 選べるのは運転免許証の回だけに戻る (`identity_method` の記録は残る)。
+ */
+export const IT_TENKO_ALLOW_IC_CARD: boolean = true
+
+/**
  * 判定パネルに最初に選んでおく確認の方法。着信から通話して開いたものは IT、
  * 一覧から通話なしで開いたものは対面
  */

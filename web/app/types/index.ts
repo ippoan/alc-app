@@ -1,5 +1,5 @@
 import type { CardKind } from '~/utils/card-kind'
-import type { ManagerJudgmentMethod } from '~/utils/it-tenko'
+import type { IdentityMethod, ManagerJudgmentMethod } from '~/utils/it-tenko'
 
 /** 顔認証結果 */
 export interface FaceAuthResult {
@@ -523,6 +523,11 @@ export interface TenkoSession {
    * (IT点呼 の記録は、これが付くまで未完了)。IT点呼 でない記録では常に null
    */
   manager_judgment_method?: ManagerJudgmentMethod | null
+  /**
+   * 運転者の本人確認の方法 (端末が測定の保存で送った値)。null / 未定義 = 記録なし
+   * (Refs ippoan/alc-app#387)
+   */
+  identity_method?: IdentityMethod | null
 }
 
 export interface StartTenkoSession {
@@ -894,6 +899,12 @@ export interface LatestPunch {
   cardKind: CardKind
   /** 打刻時刻 (ISO8601)。**古い打刻で操作を始めない**ための鮮度判定に使う */
   punchedAt: string
+  /**
+   * この端末に繋いだ機体 (USB) が読んだ打刻か (Refs ippoan/alc-app#387)。立てるのは
+   * `useHubTimecardPunch` のシリアル由来の 1 か所だけ。打刻の一覧から来た行 (別の端末の
+   * 打刻を含む) には付かない — **無いときは「この端末では読んでいない」として扱う**
+   */
+  readOnThisDevice?: boolean
 }
 
 // --- 車両分類 ---

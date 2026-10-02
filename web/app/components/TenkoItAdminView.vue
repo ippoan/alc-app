@@ -33,7 +33,7 @@
 import type { TenkoSession } from '~/types'
 import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployees, getTenkoSession, listTenkoSessions } from '~/utils/api'
 import { alcoholResultLabel } from '~/utils/alcohol'
-import { IT_TENKO_METHOD, defaultJudgmentMethod, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
+import { IT_TENKO_METHOD, defaultJudgmentMethod, identityMethodLabel, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 
 /** 開く対象。`roomId` が在れば通話して開く、null なら通話なしで開く */
@@ -237,6 +237,8 @@ function cancelIdInput() {
 /** いま開いている対象 */
 const opened = ref<Target | null>(null)
 const session = ref<TenkoSession | null>(null)
+/** 開いている点呼の運転者の本人確認の方法 (表示の文)。記録に無い・知らない値は null = 行を出さない */
+const identityLabel = computed(() => identityMethodLabel(session.value?.identity_method))
 const isCallActive = ref(false)
 /** カメラ・マイク・signaling を開いている途中 (このあいだは別の行を開かせない) */
 const connecting = ref(false)
@@ -505,7 +507,8 @@ onUnmounted(() => {
         :is-connected="webRtc.isConnected.value"
       />
 
-      <!-- 運転者情報。**測定時の顔写真は出さない** (本人確認は免許証で、本人は通話の映像で見る)。
+      <!-- 運転者情報。**測定時の顔写真は出さない** (本人確認はカードの読み取りで、本人は通話の映像で見る。
+           方法は下の「本人確認」の行)。
            顔写真はこのパネルが出す乗務員の登録写真だけ -->
       <TenkoDriverInfoPanel
         v-if="showDriverInfoPanel && session"
@@ -519,6 +522,10 @@ onUnmounted(() => {
         <div class="py-1 flex justify-between">
           <span class="text-xs text-gray-500">乗務員</span>
           <span class="font-semibold text-gray-800">{{ employeeName(session.employee_id) }}</span>
+        </div>
+        <div v-if="identityLabel" class="py-1 flex justify-between" data-testid="it-identity-method">
+          <span class="text-xs text-gray-500">本人確認</span>
+          <span class="text-gray-800">{{ identityLabel }}</span>
         </div>
         <div class="py-1 flex justify-between">
           <span class="text-xs text-gray-500">開始時刻</span>
