@@ -66,6 +66,10 @@ mockNuxtImport('useAlarmDevice', () => () => ({
   isConnected: alarmConnectedRef,
 }))
 
+// 席の鍵のトークンが、失敗の後に取れた回数 (実物は useManagerDeviceToken が数える module の ref)
+const recoveredCountRef = ref(0)
+mockNuxtImport('useManagerDeviceToken', () => () => ({ managerJwtRecoveredCount: recoveredCountRef }))
+
 // 警告デバイスが切れて 2 分たったままか (実物は useAlarmWatch が数える module の ref)
 const seatExpiredRef = ref(false)
 mockNuxtImport('useSeatDisconnectGrace', () => () => ({ remainingSeconds: ref(null), expired: seatExpiredRef }))
@@ -176,6 +180,7 @@ beforeEach(() => {
   cardReadRef.value = null
   seatExpiredRef.value = false
   alarmConnectedRef.value = false
+  recoveredCountRef.value = 0
   // 既定: この席には運行管理者 mgr-1 が登録済み
   localStorage.clear()
   localStorage.setItem(MANAGER_KEY, 'mgr-1')
@@ -309,6 +314,59 @@ describe('TenkoItAdminView — 一覧', () => {
     activeRoomsRef.value = ['it-session-1']
     await flush()
     expect(listTenkoSessionsMock).toHaveBeenCalledTimes(3)
+    w.unmount()
+  })
+
+  // 警告デバイスを繋ぐ前に画面を開いた・USB を抜いて繋ぎ直した後、文言が出たままにならないこと
+  it('★ 席の鍵の文言が出ている → 席の鍵が取れた → 読み直して文言が消え、一覧と乗務員名が出る', async () => {
+    listTenkoSessionsMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+    getEmployeesMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+    const w = await mountView()
+    expect(w.find('[data-testid="it-pending"]').text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(listTenkoSessionsMock).toHaveBeenCalledTimes(1)
+    expect(getEmployeesMock).toHaveBeenCalledTimes(1)
+
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-1')], total: 1, page: 1, per_page: 50 })
+    getEmployeesMock.mockResolvedValue(EMPLOYEES)
+    recoveredCountRef.value += 1
+    await flush()
+    await w.vm.$nextTick()
+
+    expect(listTenkoSessionsMock).toHaveBeenCalledTimes(2)
+    expect(getEmployeesMock).toHaveBeenCalledTimes(2)
+    expect(getEmployeesMock).toHaveBeenLastCalledWith('manager-device')
+    expect(w.text()).not.toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(pendingRows(w)).toHaveLength(1)
+    expect(pendingRows(w)[0]!.text()).toContain('山田 太郎')
+    w.unmount()
+  })
+
+  it('席の鍵が取れた回数が変わらなければ読み直さない (mount の時点の値では走らない)', async () => {
+    recoveredCountRef.value = 3
+    listTenkoSessionsMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+    const w = await mountView()
+    await flush()
+    expect(listTenkoSessionsMock).toHaveBeenCalledTimes(1)
+    expect(getEmployeesMock).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="it-pending"]').text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    w.unmount()
+  })
+
+  it('★ 席の鍵が取れても、席の運行管理者は引き直さない (出ている名前が変わらない)', async () => {
+    const w = await mountView()
+    expect(card(w).text()).toContain('運行 管理')
+    expect(getEmployeeByIdMock).toHaveBeenCalledTimes(1)
+
+    // 引き直していたら失敗して名前が消える
+    getEmployeeByIdMock.mockRejectedValue(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
+    recoveredCountRef.value += 1
+    await flush()
+    await w.vm.$nextTick()
+
+    expect(listTenkoSessionsMock).toHaveBeenCalledTimes(2)
+    expect(getEmployeeByIdMock).toHaveBeenCalledTimes(1)
+    expect(card(w).text()).toContain('運行 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-1')
     w.unmount()
   })
 

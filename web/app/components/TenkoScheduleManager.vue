@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TenkoSchedule, TenkoScheduleFilter, CreateTenkoSchedule, ApiEmployee, TenkoType } from '~/types'
-import { listSchedules, createSchedule, batchCreateSchedules, updateSchedule, deleteSchedule, getEmployees } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, listSchedules, createSchedule, batchCreateSchedules, updateSchedule, deleteSchedule, getEmployees } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const schedules = ref<TenkoSchedule[]>([])
@@ -184,6 +184,17 @@ function formatDate(iso: string) {
 }
 
 onMounted(() => { loadEmployees(); fetchData() })
+
+// 席の端末を確認できなかった後に、確認できた (警告デバイスを後から繋いだ・繋ぎ直した):
+// その失敗の表示が出たままなら一覧を読み直す。`fetchData` は表を「読み込み中」に差し替えて
+// `error` を消すので、ほかのエラー (保存・削除の失敗) が出ているとき・正常に出ているとき・
+// 入力や保存・削除の最中には割り込ませない
+const { managerJwtRecoveredCount } = useManagerDeviceToken()
+watch(managerJwtRecoveredCount, () => {
+  if (error.value !== MANAGER_DEVICE_AUTH_FAILED_MESSAGE) return
+  if (showForm.value || editingId.value !== null || isSaving.value || isUpdating.value || isDeleting.value) return
+  fetchData()
+})
 </script>
 
 <template>
