@@ -142,9 +142,10 @@ const OTA_ERR = 'OTA ERR'
  *
  * - `updated` = 書き込み・再起動・確定まで済んだ
  * - `up_to_date` = 機体の版が配布中の版と同じ
- * - `busy` = 別の更新が走っている・機体が使用中で預けた・機体やポートが「いまは受けられない」と断った
+ * - `busy` = 機体に書き込みを始められなかった (別の更新が走っている・機体が使用中で預けた・
+ *   機体やポートに断られた・配布中の版や機体の名乗りを読めなかった)。機体は元のまま動いている
  * - `skipped` = 対象の機体でない (実行できない target・未接続・id の不一致や未取得・BOARD / FLAVOR が表に無い)
- * - `failed` = 上のどれでもない失敗
+ * - `failed` = 失敗の幕 (「更新できませんでした」) が出た回。**幕が出ないまま終わった失敗は `failed` にしない**
  */
 export type SerialOtaResult = 'updated' | 'up_to_date' | 'busy' | 'skipped' | 'failed'
 
@@ -460,8 +461,9 @@ export function useSerialOta() {
       // 更新が要るかを調べている段階 (idle のまま) で失敗したときは画面に出さない
       if (state.value.kind === 'idle') {
         console.warn(`[SERIAL_OTA] skipped: ${reason}`)
-        // ポートがほかの要求の応答待ちで、最初の `DEVICE` を送らずに弾いた (機体には何も届いていない)
-        return isPortBusy(e) ? 'busy' : 'failed'
+        // 機体には何も書いていない (名乗りや配布中の版を読めなかった)。失敗の幕も出していないので
+        // `failed` にしない — 書き直しを案内するほどのことではなく、押し直せば済む
+        return 'busy'
       }
       settle({ kind: 'failed', reason })
       if (hub) {

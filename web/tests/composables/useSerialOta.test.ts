@@ -480,14 +480,15 @@ describe('useSerialOta', () => {
 
   it('更新が要るか調べる段階の失敗 (manifest の取得) は画面に出さない', async () => {
     fetchMock.mockImplementationOnce(async () => new Response('x', { status: 503 }))
-    expect(await runToEnd()).toBe('failed')
+    // 幕が出ないまま終わった失敗は failed にしない (機体には何も書いていない)
+    expect(await runToEnd()).toBe('busy')
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(warnSpy).toHaveBeenCalledWith('[SERIAL_OTA] skipped: HTTP 503')
   })
 
   it('manifest に version が無ければ書かない', async () => {
     manifest = { name: 'x' }
-    await runToEnd()
+    expect(await runToEnd()).toBe('busy')
     expect(chunkWrites()).toEqual([])
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(warnSpy).toHaveBeenCalledWith('[SERIAL_OTA] skipped: manifest has no version')
@@ -866,7 +867,7 @@ describe('useSerialOta (cores3)', () => {
 
   it('manifest の取得が時間切れ → 何も出さず戻る', async () => {
     fetchMock.mockImplementationOnce(async () => { throw new DOMException('The operation was aborted.', 'AbortError') })
-    expect(await runToEnd()).toBe('failed')
+    expect(await runToEnd()).toBe('busy')
     expect(fw.report).not.toHaveBeenCalled()
     expect(fw.hold).not.toHaveBeenCalled()
     expect(hub.ota.begin).not.toHaveBeenCalled()
