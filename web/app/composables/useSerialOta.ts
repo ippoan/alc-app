@@ -19,13 +19,39 @@
  *
  * # 契約 (端末側は alc-app-s3 の firmware。行は `OTA ` で始まるものだけを見る)
  *
- * 1. `OTA SERIAL <size> <flavor>` → `OTA READY <chunk>` / `OTA ERR <reason>`
- * 2. 生のバイト列を `<chunk>` ずつ。**`OTA ACK <累計>` を受けてから次を送る**
+ * 0. **受け口と受信リングの探り** `OTA CONFIRM` → `OTA CONFIRMED RX=<受信リングのバイト数>`。
+ *    `RX=` が無い (古い版)・{@link MIN_RX_RING_BYTES} 未満・`ERR UNSUPPORTED` (受け口の無い版) は
+ *    **書き込みを始めない** (下の「受信リングの探り」)
+ * 1. `OTA SERIAL <size> <flavor>` → `OTA READY <chunk> RX=<n>` / `OTA ERR <reason>`
+ * 2. 生のバイト列を `<chunk>` ずつ、**1 回の書き込みで**。**`OTA ACK <累計>` を受けてから次を送る**
  * 3. 最後のチャンクの後は `complete()` (検証) の結果 `OTA OK` / `OTA ERR verify`。
  *    `OTA OK` の約 500 ms 後に端末は再起動する
  * 4. 再接続後に `DEVICE` → `DEVICE <kind> VER=<ver> FLAVOR=<flavor>`。
  *    FLAVOR が期待どおりなら `OTA CONFIRM` → `OTA CONFIRMED`
  *    (10 分以内に確定しなければ端末は元のスロットへ戻る)
+ *
+ * # 受信リングの探り (全対象。Refs ippoan/alc-app#425)
+ *
+ * 機体の USB の受信リングがチャンクより小さいと、溢れた分は黙って捨てられ、書き込みは途中で
+ * `OTA ERR timeout` になる (実機で確認。小分けに送っても確実にも速くもならなかった)。そこで、
+ * **チャンクを丸ごと受けられると名乗った機体にだけ書く**。
+ *
+ * - 探りは、名乗りと版の判定 → イメージの取得 → 始める直前の「使用中」の聞き直し → 錠 (在る対象) の
+ *   **後**、`HB OFF` (CoreS3)・見張りの猶予 (警告デバイス)・`OTA SERIAL` の**前**に 1 回
+ * - `OTA CONFIRMED` の行の `RX=<n>` を読み、`n >= MIN_RX_RING_BYTES` のときだけ進む。`OTA READY <chunk>` を
+ *   受けた後に `chunk <= n` も確かめ、超えていれば 1 バイトも送らずに打ち切る (機体は 10 秒で元へ戻る)
+ * - `RX=` が無い・小さい・`ERR UNSUPPORTED` → 結果 `unsupported`。失敗の幕は出さず、`HB OFF` も猶予も
+ *   `OTA SERIAL` も送らない。帯が、配布ページからの 1 回の書き直しを案内する。
+ *   CoreS3 は一覧へ `skipped` (理由 `unsupported`) を出す
+ * - 時間切れ・「既に応答待ち」・ポートを失った → 結果 `busy` (押し直せば済む)
+ * - **探りの副作用**: `OTA CONFIRM` は冪等だが、実行中のイメージが未確定のとき (前回の更新が確定まで
+ *   行かず、機体が 10 分の戻し待ちの間で、かつその間に配布中の版がさらに変わった回) だけ、探りが
+ *   そのイメージを確定する。実害は無い — 直後の `OTA SERIAL` もスロットを開く前に同じ確定をするので
+ *   結果は同じで、探りに着くのは名乗りの FLAVOR が表に在ると確かめた後 (確定の条件を満たした後)。
+ *   版が配布中と同じ回は探りの前に `up_to_date` で戻るので、機体の戻し待ちに任せる
+ * - FLAVOR を名乗る版は必ず `OTA CONFIRM` を解釈する (名乗りと解釈は機体側の同じ版で入った) ので、
+ *   受け口の無い版の応答は `ERR UNSUPPORTED` だけ。失敗側の合図をこれより広く (`ERR ` 等) 取らない —
+ *   無関係な行 (`EVT PAIR_ERR …`) を拾って「書き直しが要る」と誤って案内しないため
  *
  * # 何を信じるか
  *
@@ -54,7 +80,7 @@
  * 2. 照合で対象外と分かったら、管理者の一覧へ `skipped` を報告するだけ (幕は出さない)
  * 3. 取得の前に待機の報告を保留 (`hold()`)。取得の後、**始める直前に「機体を使用中」を聞き直し**、
  *    使用中なら始めずに預け直す
- * 4. `ota.begin()` (錠) → `HB OFF` → `OTA SERIAL` → チャンク → `OTA OK` →
+ * 4. `ota.begin()` (錠) → 受信リングの探り → `HB OFF` → `OTA SERIAL` → チャンク → `OTA OK` →
  *    **再起動を待つ前に `ota.end()`**。錠を掛けたまま再接続すると、端末の token の取り直しの
  *    署名が reject され、以後の報告とキオスクの端末 token が落ちる。**錠の間の報告は await しない**
  *    (報告は token の取得と POST を伴い、機体の 10 秒の無受信に掛かりうる)
@@ -73,14 +99,8 @@
  *
  * 1. 名乗り → FLAVOR の照合 → 版が同じなら `up_to_date`。イメージの取得 → 始める直前の
  *    「使用中」の聞き直し。**ここまでは幕を出さない** (取得の失敗も `busy`)
- * 2. `ota.begin()` (錠) → **受け口の有無の探り** `OTA CONFIRM`。受け口の在る版は確定待ちが無くても
- *    `OTA CONFIRMED` を返す (冪等)。受け口の無い版は `ERR UNSUPPORTED` → 結果 `unsupported`
- *    (配布ページからの 1 回の書き直しを案内する)。どちらも来なければ `busy`。
- *    **探りの副作用**: 実行中のイメージが未確定のとき (前回の更新が確定まで行かず、機体が 10 分の
- *    戻し待ちの間で、かつその間に配布中の版がさらに変わった回) だけ、探りがそのイメージを確定する。
- *    実害は無い — 直後の `OTA SERIAL` もスロットを開く前に同じ確定をするので結果は同じで、探りに
- *    着くのは名乗りの FLAVOR が表に在ると確かめた後 (確定の条件「FLAVOR の一致」を満たした後)。
- *    版が配布中と同じ回は探りの前に `up_to_date` で戻るので、機体の戻し待ちに任せる
+ * 2. `ota.begin()` (錠) → **受信リングの探り** (上)。受け口の無い版 (`ERR UNSUPPORTED`) と、
+ *    受信リングが小さい版は結果 `unsupported`、どちらも来なければ `busy`
  * 3. **見張りを休ませる**: `ota.rest()` (`HB OK grace=120` を 1 行)。**`HB OFF` は使わない** —
  *    武装ごと消え、途中でタブを閉じると次の heartbeat まで鳴らなくなる。grace は 1 回の更新に
  *    1 行だけで、期限が来れば機体が自分で見張りに戻る。ここから幕を出す
@@ -96,7 +116,7 @@
  *
  * # 受容している制約 (直さない)
  *
- * - 錠の間 (`HB OFF` 〜 `OTA OK`) に出た `STAGE` / `RESULT` は捨てられる。再起動した場合は
+ * - 錠の間 (探り 〜 `OTA OK`) に出た `STAGE` / `RESULT` は捨てられる。再起動した場合は
  *   再接続時に直近の STAGE が送り直されるが、再起動しない失敗の経路では、次に段が変わるまで
  *   機体の画面が古い段のまま残りうる (更新は待機中にしか始めない)
  * - `HB OFF` の後にタブを閉じる / リロードすると、機体は 10 秒で `OTA ERR timeout` → 元の版のまま。
@@ -156,8 +176,14 @@ const RECONNECT_TIMEOUT_MS = 90_000
 const CONFIRM_TIMEOUT_MS = 10_000
 /** `HB OFF` → `OK HB OFF` (CoreS3 だけ) */
 const HB_OFF_TIMEOUT_MS = 5_000
-/** 受け口の有無の探り (`OTA CONFIRM`) の応答待ち (警告デバイスだけ) */
+/** 受信リングの探り (`OTA CONFIRM`) の応答待ち */
 const PROBE_TIMEOUT_MS = 5_000
+/**
+ * 機体の USB の受信リングがこれ以上のときだけ書く (= 機体が `OTA READY` で言うチャンク長)。
+ * 探りの時点ではチャンク長を知らないのでこの値で判定し、`OTA READY <chunk>` を受けた後に
+ * `chunk <= 受信リング` も確かめる
+ */
+export const MIN_RX_RING_BYTES = 4096
 /** 再起動後の `AUTH STATUS` の応答待ち (CoreS3 だけ) */
 const AUTH_STATUS_TIMEOUT_MS = 3_000
 /** 再起動後の `confirming` の報告を待つ上限 (CoreS3 だけ)。機体は確定を 10 分しか待たない */
@@ -170,7 +196,7 @@ export const RESULT_DISPLAY_MS = 5_000
 
 /** 失敗行の接頭辞 (`OTA ERR <reason>`)。`ERR <先頭トークン>` の形ではないので明示する */
 const OTA_ERR = 'OTA ERR'
-/** 受け口を持たない版の機体が返す行の始まり (`ERR UNSUPPORTED (<機種>)`) */
+/** 受け口を持たない版の機体が `OTA CONFIRM` に返す行の始まり (`ERR UNSUPPORTED (<機種>)`) */
 const ERR_UNSUPPORTED = 'ERR UNSUPPORTED'
 
 /**
@@ -182,8 +208,9 @@ const ERR_UNSUPPORTED = 'ERR UNSUPPORTED'
  * - `busy` = 機体に書き込みを始められなかった (別の更新が走っている・機体が使用中で預けた・
  *   機体やポートに断られた・配布中の版や機体の名乗りを読めなかった)。機体は元のまま動いている
  * - `skipped` = 対象の機体でない (実行できない target・未接続・id の不一致や未取得・BOARD / FLAVOR が表に無い)
- * - `unsupported` = 機体の版が、画面からの更新の受け口をまだ持たない (警告デバイスだけ)。
- *   機体は元のまま動いている。配布ページから 1 回書き直せば、以後は画面から更新できる
+ * - `unsupported` = 機体の版が、画面からの更新を受けられない (受け口が無い・USB の受信リングが
+ *   チャンクより小さい・大きさを名乗らない)。機体へは探りの 1 行しか送っておらず、元のまま動いている。
+ *   配布ページから 1 回書き直せば、以後は画面から更新できる
  * - `failed` = 失敗の幕 (「更新できませんでした」) が出た回。**幕が出ないまま終わった失敗は `failed` にしない**
  */
 export type SerialOtaResult = 'updated' | 'up_to_date' | 'busy' | 'skipped' | 'unsupported' | 'failed'
@@ -229,6 +256,15 @@ function failureWord(e: unknown): string {
  */
 function isPortBusy(e: unknown): boolean {
   return String(e).includes('既に応答待ちです')
+}
+
+/**
+ * 応答の行 (`OTA CONFIRMED RX=<n>`) から、機体の USB の受信リングの大きさを読む。
+ * 欄が無い行 (大きさを名乗らない古い版) は 0
+ */
+function rxRingBytes(line: string): number {
+  const m = /\sRX=(\d+)/.exec(line)
+  return m ? Number.parseInt(m[1]!, 10) : 0
 }
 
 export type SerialOtaState =
@@ -326,14 +362,17 @@ export function useSerialOta() {
   }
 
   /**
-   * 機体が「いまは受けられない」と答えた (CoreS3 だけ)。失敗の幕にせず、錠を解いてから
-   * 一覧へ `skipped` を出す (報告は端末の token を取りに行くので、錠より後)
+   * 書き込みを始めずに引き返す: 機体が「いまは受けられない」(`busy`)、または画面からの更新を
+   * 受けられない版 (`unsupported`)。失敗の幕にしない。CoreS3 は錠を解いてから一覧へ `skipped` を
+   * 出す (報告は端末の token を取りに行くので、錠より後)。警告デバイスの錠は `run` の finally が解く
    */
-  function skipBusy(): SerialOtaResult {
-    coreS3.ota.end()
+  function decline(hub: boolean, result: 'busy' | 'unsupported'): SerialOtaResult {
     state.value = { kind: 'idle' }
-    void firmware.report('skipped', { reason: 'busy' })
-    return 'busy'
+    if (hub) {
+      coreS3.ota.end()
+      void firmware.report('skipped', { reason: result })
+    }
+    return result
   }
 
   /**
@@ -378,7 +417,7 @@ export function useSerialOta() {
 
     // ここから終わりまで、待機の報告 (idle) で一覧の「更新中」を上書きしない
     if (hub) firmware.hold()
-    // 警告デバイスは、受け口の有無が分かるまで幕を出さない (下の探り)
+    // 警告デバイスは、受信リングの探りが通るまで幕を出さない (下)
     if (!alarm) state.value = { kind: 'downloading' }
     tell('downloading', progress)
     const image = new Uint8Array(await download(source.appUrl, res => res.arrayBuffer()))
@@ -394,31 +433,35 @@ export function useSerialOta() {
       return 'busy'
     }
 
+    // ここから `ota.end()` まで、CoreS3 / 警告デバイスへのほかの送信 (heartbeat・署名の要求) が止まる
+    if (hub) coreS3.ota.begin()
+    if (alarm) alarmDevice.ota.begin()
+
+    // 受信リングの探り (冒頭 doc)。チャンクを丸ごと受けられると名乗った機体にだけ書く
+    let rx: number
+    try {
+      rx = rxRingBytes(await port.request('OTA CONFIRM', 'OTA CONFIRMED', PROBE_TIMEOUT_MS, ERR_UNSUPPORTED))
+    }
+    catch (e) {
+      const reason = (e as Error).message
+      if (reason.includes(ERR_UNSUPPORTED)) return decline(hub, 'unsupported')
+      // 時間切れ・「既に応答待ち」・ポートを失った。機体には何も書いていない
+      console.warn(`[SERIAL_OTA] skipped: ${reason}`)
+      return decline(hub, 'busy')
+    }
+    if (rx < MIN_RX_RING_BYTES) return decline(hub, 'unsupported')
+
     if (hub) {
-      // ここから `ota.end()` まで、CoreS3 へのほかの送信が止まる
-      coreS3.ota.begin()
       try {
         await port.request('HB OFF', 'OK HB OFF', HB_OFF_TIMEOUT_MS)
       }
       catch (e) {
-        if (isPortBusy(e)) return skipBusy()
+        if (isPortBusy(e)) return decline(hub, 'busy')
         // `ERR …`・無応答は先へ進む (次の `OTA SERIAL` で分かる)
       }
     }
-
     if (alarm) {
-      // ここから `ota.end()` まで、警告デバイスへのほかの送信 (heartbeat・席の署名) が止まる
-      alarmDevice.ota.begin()
-      try {
-        // 受け口の有無の探り。受け口の在る版は、確定待ちが無くても `OTA CONFIRMED` を返す
-        await port.request('OTA CONFIRM', 'OTA CONFIRMED', PROBE_TIMEOUT_MS, ERR_UNSUPPORTED)
-      }
-      catch (e) {
-        if ((e as Error).message.includes(ERR_UNSUPPORTED)) return 'unsupported'
-        // 時間切れ・「既に応答待ち」・ポートを失った。幕を出していないので、呼び手 (run) が `busy` にする
-        throw e
-      }
-      // 受け口が在ると分かった。書き込みの間、機体の見張りを休ませる (1 回の更新につき 1 行だけ)
+      // 書き込みの間、機体の見張りを休ませる (1 回の更新につき 1 行だけ)。ここから幕を出す
       await alarmDevice.ota.rest()
       state.value = { kind: 'downloading' }
     }
@@ -429,7 +472,7 @@ export function useSerialOta() {
     }
     catch (e) {
       // 機体が測定の画面の間・別の OTA 中
-      if (hub && (e as Error).message.startsWith(`${OTA_ERR} busy`)) return skipBusy()
+      if (hub && (e as Error).message.startsWith(`${OTA_ERR} busy`)) return decline(hub, 'busy')
       throw e
     }
     state.value = { kind: 'writing', pct: 0 }
@@ -437,6 +480,9 @@ export function useSerialOta() {
     tell('writing', progress)
     const chunk = Number.parseInt(ready.slice('OTA READY'.length).trim(), 10)
     if (!(chunk > 0)) throw new OtaError(`bad chunk size (${ready})`, 'bad_chunk')
+    // 探りの後に言ってきたチャンクが受信リングに収まらなければ、1 バイトも送らない
+    // (機体は無受信の 10 秒で `OTA ERR timeout` を出し、元の版のまま行の受け付けへ戻る)
+    if (chunk > rx) throw new OtaError(`chunk ${chunk} exceeds rx ring ${rx}`, 'chunk_too_large')
 
     for (let sent = 0; sent < image.length;) {
       const end = Math.min(sent + chunk, image.length)

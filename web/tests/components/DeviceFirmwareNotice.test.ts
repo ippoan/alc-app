@@ -222,6 +222,16 @@ describe('DeviceFirmwareNotice', () => {
     w.unmount()
   })
 
+  it('CoreS3 でも unsupported は同じ文で、CoreS3 の書き直しのページを指す', async () => {
+    start.mockResolvedValue('unsupported')
+    const w = await mount()
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(resultLine(w).text()).toContain('この端末は、配布ページから 1 回書き直すと、画面から更新できるようになります')
+    expect(w.find('[data-testid="device-firmware-installer"]').attributes('href')).toBe(INSTALLER)
+    w.unmount()
+  })
+
   it('表に無い対象では、unsupported の案内にリンクを付けない (URL を作らない)', async () => {
     fetchLatest.mockResolvedValue({ x: '0.2.0' })
     start.mockResolvedValue('unsupported')

@@ -299,48 +299,15 @@ export async function writeLine(
 }
 
 /**
- * {@link writeBytes} が 1 回の `write` に載せる上限のバイト数 (Refs ippoan/alc-app#425)。
- *
- * 機体の USB シリアルの受信リングは 1024 バイトで、満杯のあいだに届いたバイトは
- * **黙って捨てられる** (ホストへの背圧も掛からない)。シリアル OTA の受け手は 4096 バイト
- * 揃って初めて `OTA ACK` を返すので、1 バイトでも落ちると揃わず `OTA ERR timeout` になる。
- * 機体側を直しても、いま現場に在る古いファームの機体はこの経路で更新できないままなので、
- * 画面側で 1 回の書き込みをリングの 1/4 に抑える。
- */
-export const BYTES_WRITE_SLICE = 256
-
-/**
- * {@link writeBytes} が小分けの間に空ける待ち (ms)。機体の読み手がリングを
- * 読み出す間を作る ({@link BYTES_WRITE_SLICE} と同じ理由)
- */
-export const BYTES_WRITE_INTERVAL_MS = 10
-
-/**
  * 生のバイト列を書く (シリアル OTA のイメージ、Refs ippoan/alc-app-s3#279)。
- * {@link writeLine} と同じく、失敗を例外ではなく false で返す。
- *
- * {@link BYTES_WRITE_SLICE} を超えるバイト列は、先頭から順に小分けにし、間に
- * {@link BYTES_WRITE_INTERVAL_MS} 空けて書く (中身と順序は変えない。最後の小分けの
- * 後は待たない)。途中の書き込みが失敗したら残りは書かずに false。
- *
- * `shouldContinue` が false を返したら、残りの小分けを書かずに終える (`request` が
- * 応答で決着した後に生バイトを送り続けないための口)。書き込みの失敗ではないので true
+ * {@link writeLine} と同じく、失敗を例外ではなく false で返す
  */
 export async function writeBytes(
   w: WritableStreamDefaultWriter<Uint8Array>,
   bytes: Uint8Array,
-  shouldContinue: () => boolean = () => true,
 ): Promise<boolean> {
   try {
-    if (bytes.length <= BYTES_WRITE_SLICE) {
-      await w.write(bytes)
-      return true
-    }
-    for (let offset = 0; offset < bytes.length; offset += BYTES_WRITE_SLICE) {
-      if (offset > 0) await new Promise(resolve => setTimeout(resolve, BYTES_WRITE_INTERVAL_MS))
-      if (!shouldContinue()) return true
-      await w.write(bytes.subarray(offset, offset + BYTES_WRITE_SLICE))
-    }
+    await w.write(bytes)
     return true
   }
   catch {
@@ -791,9 +758,7 @@ export function useSerialArbiter() {
    *
    * `payload` に `Uint8Array` を渡すと、行ではなく生のバイト列を ({@link writeBytes} で)
    * 書いて同じ仕組みで応答を待つ (シリアル OTA のチャンク → `OTA ACK`、
-   * Refs ippoan/alc-app-s3#279)。長いバイト列は小分けに間を置いて書かれ、応答待ちの登録は
-   * 書き込みの前なので、小分けの途中で届いた応答も拾う (決着したら残りは書かない。
-   * 時間切れは書き込みの開始から数える)。応答待ちのために別の reader は立てない
+   * Refs ippoan/alc-app-s3#279)。応答待ちのために別の reader は立てない
    * (1 ポートに reader は 1 つ)。失敗行の接頭辞が `ERR <先頭トークン>` の形でない
    * コマンド (`OTA …` は `OTA ERR <reason>`) は `errPrefix` で明示する。バイト列を送るときは
    * 先頭トークンが無いので必ず渡す (型で強制している)。
@@ -823,17 +788,12 @@ export function useSerialArbiter() {
       // resolve/reject は必ずこの 2 つ経由で呼ぶ。Promise は 2 度目以降の settle が
       // 無害な no-op になる (ネイティブの仕様) ので、「まだ待っているか」を呼び出し側で
       // 確かめる防御コードを書かずに済む — 二重の delete/timer 解除も安全に重ねられる。
-      // 決着したら、バイト列の残りの小分けを書かない (`OTA ERR` で行モードへ戻った機体に
-      // 生バイトが行として届くため)。writeBytes が小分けごとにこれを聞く
-      let settled = false
       function doResolve(l: string): void {
-        settled = true
         clearTimeout(timer)
         pendingRequests.delete(s)
         resolve(l)
       }
       function doReject(e: Error): void {
-        settled = true
         clearTimeout(timer)
         pendingRequests.delete(s)
         reject(e)
@@ -847,9 +807,7 @@ export function useSerialArbiter() {
         reject: doReject,
       })
 
-      const written = typeof payload === 'string'
-        ? writeLine(s.writer, payload)
-        : writeBytes(s.writer, payload, () => !settled)
+      const written = typeof payload === 'string' ? writeLine(s.writer, payload) : writeBytes(s.writer, payload)
       void written.then((ok) => {
         if (!ok) doReject(new Error(`request(${name}): write failed`))
       })
