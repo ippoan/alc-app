@@ -30,6 +30,14 @@ mockNuxtImport('useTimecardCardIndex', () => () => ({
   stopPeriodicRefresh: () => {},
 }))
 
+// オンラインの側: サーバーへの持ち主の照会 (`lookupEmployeeByCard`) と端末の鍵
+const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }))
+vi.mock('~/utils/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('~/utils/api')>()
+  return { ...actual, lookupEmployeeByCard: lookupMock }
+})
+mockNuxtImport('useDeviceToken', () => () => ({ getDeviceJwt: async () => 'device-jwt' }))
+
 const BUTTON = '[data-testid="ic-punch-alcohol"]'
 
 /** `index.vue` と同じ配線 */
@@ -102,6 +110,34 @@ describe('IcPunchAlcoholPrompt — シリアル由来でも寿命は同じ', () 
 
     // タップから 10 秒でちゃんと消える (5 秒地点から数え直さない)
     vi.advanceTimersByTime(5_500)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find(BUTTON).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★★ オンライン: EVT → サーバーに照会 → 印付きの行 → ボタンが出て、読み取りから 10 秒で消える', async () => {
+    // 本番の主経路。手元の写しではなく照会の応答で行が立つ
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    lookupMock.mockReset()
+    lookupMock.mockResolvedValue({ id: 'emp-1', name: '山田太郎' })
+    const wrapper = await mountSuspended(Harness)
+    vi.useFakeTimers()
+
+    emitEvent('TIMECARD', ['card_id=AAAA', 'card_kind=felica_idm'])
+    // 照会が返るまでは出ない
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find(BUTTON).exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(0)
+    await wrapper.vm.$nextTick()
+    expect(lookupMock).toHaveBeenCalledWith('AAAA', 'default')
+    expect((wrapper.vm as unknown as { latest: LatestPunch | null }).latest).toMatchObject({
+      employeeId: 'emp-1',
+      readOnThisDevice: true,
+    })
+    expect(wrapper.find(BUTTON).exists()).toBe(true)
+
+    vi.advanceTimersByTime(10_000)
     await wrapper.vm.$nextTick()
     expect(wrapper.find(BUTTON).exists()).toBe(false)
     wrapper.unmount()
