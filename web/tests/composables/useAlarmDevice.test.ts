@@ -1443,9 +1443,26 @@ describe('useAlarmDevice', () => {
       await expect(alarm.ota.rest()).resolves.toBeUndefined()
 
       const dev = await connectDevice()
+      alarm.ota.begin()
       dev.setWriteError(true)
       await expect(alarm.ota.rest()).resolves.toBeUndefined()
       dev.setWriteError(false)
+    })
+
+    it('★ ota.rest(): 錠の外からは呼べない (錠が立っていないとき・解いた後は何も書かない)', async () => {
+      const dev = await connectDevice()
+      const before = dev.writes.length
+
+      await alarm.ota.rest()
+      expect(dev.writes).toHaveLength(before)
+
+      alarm.ota.begin()
+      alarm.ota.end()
+      await vi.advanceTimersByTimeAsync(0)
+      const afterEnd = dev.writes.length
+      await alarm.ota.rest()
+      expect(dev.writes).toHaveLength(afterEnd)
+      expect(dev.writes.join('')).not.toContain('grace=120')
     })
 
     it('ota.end(): 繋がっていれば grace の無い HB OK を即 1 本送り、周期が再開し、request も戻る', async () => {

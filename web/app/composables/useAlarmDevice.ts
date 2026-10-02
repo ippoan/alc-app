@@ -56,7 +56,7 @@
  * 画面からの更新 (Refs ippoan/alc-app#425): 機体の名乗り (`DEVICE alarm VER=… FLAVOR=…`) の欄を
  * `deviceInfo` に持ち、書き込みだけが使う口 `ota` (錠) を出す。機体は `OTA SERIAL` の後、受けた
  * バイトを全部イメージとして読むので、錠の間は heartbeat も `STATUS` も grace も通常の `request`
- * (席の署名) も送らない。通るのは `ota.request` と `ota.rest` だけ。**使うのは `useSerialOta` だけ**
+ * (席の署名) も送らない。通るのは `ota.request` と `ota.rest` (錠の間だけ書ける) だけ。**使うのは `useSerialOta` だけ**
  *
  * 診断ログ (`[ALARM-DEV]`) は運行者端末の DevTools で読む用に出しっぱなし (Refs #197)。
  */
@@ -421,10 +421,11 @@ export function useAlarmDevice() {
   /**
    * 書き込みの間、機体の見張りを休ませる: `HB OK grace=120` を 1 行書く (機体は返信しない)。
    * **1 回の更新につき 1 回だけ呼ぶこと** — 猶予は機体側で 1 行ごとに置き換わる。
-   * 未接続なら何もしない。書けなくても握る (次の `OTA SERIAL` の応答で分かる)
+   * **錠の外からは呼べない**: 錠が立っていないとき (と未接続) は何も書かない — 走っている
+   * heartbeat の合間に猶予だけを広げる口にしない。書けなくても握る (次の `OTA SERIAL` の応答で分かる)
    */
   async function otaRest(): Promise<void> {
-    if (held) await writeLine(held, `HB OK grace=${OTA_GRACE_SEC}`)
+    if (held && otaLocked) await writeLine(held, `HB OK grace=${OTA_GRACE_SEC}`)
   }
 
   return {
