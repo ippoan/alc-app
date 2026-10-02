@@ -94,6 +94,16 @@ const backoffUntil = ref(0)
 const lastError = ref<string | null>(null)
 const lastFailureStage = ref<ManagerTokenFailureStage | null>(null)
 const lastFailureStatus = ref<number | null>(null)
+/**
+ * トークンが**失敗の後に取れた**回数 (Refs ippoan/alc-app#387)。席の鍵で読む画面が、取れなかった
+ * ときの表示を読み直す合図に watch する (`TenkoItAdminView` / `TenkoScheduleManager`)。
+ *
+ * 増えるのは「直前の結果が失敗 (警告デバイスが未接続だった回を含む) で、今回 取れた」ときだけ。
+ * 失敗を挟まない取り直し (期限切れ)・cache から返した回・失敗では増えない — 成功のたびに増やすと、
+ * 画面自身の要求や約 14 分ごとの取り直しでも読み直しが走ってしまう。
+ * 出すのは回数だけ (トークンの値・期限は出さない)。
+ */
+const managerJwtRecoveredCount = ref(0)
 
 /**
  * 失敗を 1 行だけコンソールに出す。**出すのは段と HTTP status だけ** —
@@ -127,6 +137,8 @@ export function useManagerDeviceToken() {
       return null
     }
 
+    // 直前の結果が失敗だったか (下で消す前に読む)
+    const recovering = lastFailureStage.value !== null
     lastError.value = null
     lastFailureStage.value = null
     lastFailureStatus.value = null
@@ -176,6 +188,8 @@ export function useManagerDeviceToken() {
       cachedExpMs = nowMs + ttl * 1000
       // 切断をまたいで返ってきたトークンが、切断による期限より長い期限を書き戻さないように
       clampToDisconnectDeadline()
+      // cache への代入より後 (開発用の印が先に立ってから、読み直す側へ知らせる)
+      if (recovering) managerJwtRecoveredCount.value += 1
       return cachedJwt.value
     }
     catch (e) {
@@ -210,13 +224,17 @@ export function useManagerDeviceToken() {
    * **例外は外へ出さない。** 繋がった直後は警告デバイスの準備が間に合わずに失敗することがある。
    * 失敗の抑止を残すと後続の本物の要求まで null になるので、取れなかったときは抑止の期限を
    * 先取りの前の値へ戻す。
+   *
+   * 返すのは取れたかどうかだけ (`useAlarmWatch` が、取れなかった接続で 1 回だけ試し直すのに読む)。
    */
-  async function prefetchManagerJwt(): Promise<void> {
+  async function prefetchManagerJwt(): Promise<boolean> {
     const before = backoffUntil.value
     try {
-      if (await getManagerJwt() === null) backoffUntil.value = before
+      if (await getManagerJwt() !== null) return true
+      backoffUntil.value = before
     }
     catch { /* 先取りは best effort */ }
+    return false
   }
 
   /**
@@ -249,5 +267,7 @@ export function useManagerDeviceToken() {
     lastFailureStatus: readonly(lastFailureStatus),
     /** 再試行を抑止している期限 (ms epoch)。0 なら抑止していない */
     backoffUntil: readonly(backoffUntil),
+    /** トークンが失敗の後に取れた回数 (回数だけ。読み直しの合図) */
+    managerJwtRecoveredCount: readonly(managerJwtRecoveredCount),
   }
 }

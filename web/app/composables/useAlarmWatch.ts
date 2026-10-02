@@ -21,6 +21,13 @@
  * トークンの cache が有効なあいだは通信しない。失敗しても何も起こさない
  * (`useManagerDeviceToken().prefetchManagerJwt`)。
  *
+ * 繋がった直後は警告デバイスの準備が間に合わず、先取りが失敗することがある。席にはほかに取り直す
+ * 引き金が無い (heartbeat はトークンに触らない) ので、**その接続につき 1 回だけ**
+ * `PREFETCH_RETRY_DELAY_MS` 後に先取りを呼び直す。2 回目も失敗したらそれ以上は試さない
+ * (定周期の取り直しにはしない)。待っているあいだに切れたとき・見張りをやめたときは取り消す。
+ * 繋がり直せば、また 1 回ぶん試せる。取れれば `managerJwtRecoveredCount` が増え、席の鍵で読む
+ * 画面が自分で読み直す。
+ *
  * ## 切断の猶予 (Refs ippoan/alc-app#387)
  *
  * 繋がっていた警告デバイスが切れたら、`SEAT_DISCONNECT_GRACE_MS` 後を期限として運行管理者の鍵の
@@ -37,6 +44,16 @@
 
 /** 警告デバイスが切れてから、運行管理者の鍵のトークンを使えなくするまでの猶予 (ms) */
 export const SEAT_DISCONNECT_GRACE_MS = 120_000
+
+/**
+ * 接続時の先取りが失敗してから、1 回だけ試し直すまでの待ち (ms)。
+ *
+ * 数え始めるのは**失敗が確定した時点** (接続の時点ではない) なので、1 回目の署名の待ち
+ * (`utils/alarm-sign.ts` の 10 秒) とは重ならない。値を 10 秒ちょうどにしないのは、警告デバイスが
+ * 署名に応えずに待ちが切れた直後 (応答が遅れて届きうる間合い) に次の署名を頼まないため。
+ * 利用者が「更新」を押すより先に直る程度の短さに留める。
+ */
+export const PREFETCH_RETRY_DELAY_MS = 15_000
 
 /** 猶予の残り秒。数えていないときは null (アプリ全体で 1 つ) */
 const disconnectRemainingSeconds = ref<number | null>(null)
@@ -88,6 +105,19 @@ export function useSeatDisconnectGrace() {
 let started = false
 /** 先取りの見張りを止める関数。start() が入れ、stop() が呼ぶ (stop は始めた後にしか進まない) */
 let stopPrefetchWatch!: () => void
+/** 先取りの試し直しの待ち。待っていなければ null */
+let prefetchRetryTimer: ReturnType<typeof setTimeout> | null = null
+/** 接続の世代。切断・見張りの停止で進め、古い接続の先取りの結果から試し直しを始めない */
+let connectionGeneration = 0
+
+/** 先取りの試し直しをやめる (待っている分を取り消し、まだ返っていない先取りの結果も捨てる) */
+function cancelPrefetchRetry(): void {
+  connectionGeneration += 1
+  if (prefetchRetryTimer !== null) {
+    clearTimeout(prefetchRetryTimer)
+    prefetchRetryTimer = null
+  }
+}
 
 export function useAlarmWatch(): void {
   const alarm = useAlarmDevice()
@@ -112,10 +142,20 @@ export function useAlarmWatch(): void {
         seat.clearDisconnectDeadline()
         stopCountdown()
         disconnectExpired.value = false
-        void seat.prefetchManagerJwt()
+        const generation = connectionGeneration
+        void seat.prefetchManagerJwt().then((obtained) => {
+          // 取れた / 返るまでに切れた・見張りをやめた: 試し直さない
+          if (obtained || generation !== connectionGeneration) return
+          prefetchRetryTimer = setTimeout(() => {
+            prefetchRetryTimer = null
+            // 1 回だけ。結果は見ない (失敗してもそれ以上は試さない)
+            void seat.prefetchManagerJwt()
+          }, PREFETCH_RETRY_DELAY_MS)
+        })
       }
       else if (wasConnected) {
-        // 繋がっていたものが切れた: 猶予を始める
+        // 繋がっていたものが切れた: 先取りの試し直しをやめ、猶予を始める
+        cancelPrefetchRetry()
         const deadlineMs = Date.now() + SEAT_DISCONNECT_GRACE_MS
         seat.setDisconnectDeadline(deadlineMs)
         startCountdown(deadlineMs)
@@ -128,6 +168,7 @@ export function useAlarmWatch(): void {
     if (!started) return
     started = false
     stopPrefetchWatch()
+    cancelPrefetchRetry()
     // 利用者が自分で見張りをやめた: 猶予なしでその場で期限を切る。見張りは上で止めたので、
     // 下の切断は見張りに届かない (ここで明示的に切る)
     stopCountdown()

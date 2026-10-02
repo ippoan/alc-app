@@ -62,6 +62,38 @@ describe('useAlarmWatch の先取り × 本物の useManagerDeviceToken', () => 
     app.unmount()
   })
 
+  // 席の鍵で読む画面は、この回数を watch して読み直す (TenkoItAdminView / TenkoScheduleManager)
+  it('★ 接続時の先取りが失敗 → 試し直しで取れる → 「失敗の後に取れた回数」が 1 増える', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const fetchMock = vi.fn()
+      // 接続時の先取り: 繋がった直後で nonce が取れない
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+      // 試し直し: nonce → token
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ nonce: 'nonce-1' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: 'manager.jwt', expires_in: 900 }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { useAlarmWatch, PREFETCH_RETRY_DELAY_MS } = await import('~/composables/useAlarmWatch')
+    const { useManagerDeviceToken } = await import('~/composables/useManagerDeviceToken')
+    const manager = useManagerDeviceToken()
+    const [, app] = withSetup(() => useAlarmWatch())
+    isConnected.value = true
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(manager.managerJwtRecoveredCount.value).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(PREFETCH_RETRY_DELAY_MS)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(manager.managerJwtRecoveredCount.value).toBe(1)
+
+    // 取れた後は cache から返る (通信もしないし、回数も増えない)
+    expect(await manager.getManagerJwt()).toBe('manager.jwt')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(manager.managerJwtRecoveredCount.value).toBe(1)
+    app.unmount()
+  })
+
   // 切断の猶予 (Refs ippoan/alc-app#387): 見張りが入れた期限で、本物のトークンが使えなくなる
   it('★ 警告デバイスが切れても 2 分はトークンが使え、2 分を過ぎたら null。開発用の印は落ちず、繋ぎ直せば取り直す', async () => {
     const T0 = Date.UTC(2026, 0, 1, 0, 0, 0)

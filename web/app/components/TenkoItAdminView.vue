@@ -55,6 +55,8 @@ const {
 const alarmDevice = useAlarmDevice()
 // 警告デバイスが切れて 2 分たったまま、繋がり直していないか (数えるのは useAlarmWatch)
 const { expired: seatExpired } = useSeatDisconnectGrace()
+// 席の鍵のトークンが、失敗の後に取れた回数 (読み直しの合図)
+const { managerJwtRecoveredCount } = useManagerDeviceToken()
 const webRtc = useWebRtc('admin')
 const camera = useCamera()
 
@@ -367,6 +369,14 @@ onMounted(() => {
 
 // 部屋が増減した = 新しい IT点呼 が始まった / 終わった
 watch(activeRooms, () => void loadPending())
+
+// 席の端末を確認できなかった後に、確認できた (警告デバイスを後から繋いだ・繋ぎ直した):
+// 出たままの失敗の表示を読み直す。席の運行管理者 (`loadManager`) は呼び直さない — 取得の前に
+// 名前を消すので、出ている名前が失敗で消え、点呼の最中に登録が外れうる
+watch(managerJwtRecoveredCount, () => {
+  void loadPending()
+  void loadEmployeeNames()
+})
 
 // 警告デバイス本体のボタン (着信で鳴っている間に押された) = 着信の先頭の IT点呼 に応答する。
 // この画面が開いているときだけ効く (mount より前の押下は拾わない)。対象は**着信として数えている

@@ -328,7 +328,8 @@ describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
       const fetchMock = stubHappyPath()
       const t = (await load())()
 
-      await expect(t.prefetchManagerJwt()).resolves.toBeUndefined()
+      // 取れたかどうかだけを返す (useAlarmWatch が試し直しの判断に読む)
+      await expect(t.prefetchManagerJwt()).resolves.toBe(true)
 
       expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(t.backoffUntil.value).toBe(0)
@@ -346,7 +347,7 @@ describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
       vi.stubGlobal('fetch', fetchMock)
       const t = (await load())()
 
-      await t.prefetchManagerJwt()
+      await expect(t.prefetchManagerJwt()).resolves.toBe(false)
 
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(t.backoffUntil.value).toBe(0)
@@ -390,13 +391,130 @@ describe('useManagerDeviceToken — dev端末の印 (#387)', () => {
       alarmMock.isConnected = null as unknown as typeof connected
       try {
         await expect(t.getManagerJwt()).rejects.toThrow()
-        await expect(t.prefetchManagerJwt()).resolves.toBeUndefined()
+        await expect(t.prefetchManagerJwt()).resolves.toBe(false)
       }
       finally {
         alarmMock.isConnected = connected
       }
       expect(fetchMock).not.toHaveBeenCalled()
     })
+  })
+})
+
+// 失敗の後に取れた回数 (Refs ippoan/alc-app#387)。席の鍵で読む画面が読み直しの合図に watch する。
+// 成功のたびには増えない (画面自身の要求や期限切れの取り直しで読み直しが走らないように)
+describe('useManagerDeviceToken — 失敗の後に取れた回数 (#387)', () => {
+  const ok = (body: Record<string, unknown>) => ({ ok: true, status: 200, json: async () => body })
+  const tokenOk = (expiresIn = 900) => ok({ access_token: TOKEN, expires_in: expiresIn })
+
+  it('取得の失敗 → 成功で 1 増える', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+      .mockResolvedValueOnce(ok({ nonce: NONCE }))
+      .mockResolvedValueOnce(tokenOk()))
+    const t = (await load())()
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+
+    // 先取りの失敗 (抑止は残らない)
+    expect(await t.prefetchManagerJwt()).toBe(false)
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(t.managerJwtRecoveredCount.value).toBe(1)
+  })
+
+  it('警告デバイスが未接続で null → 繋がってからの成功で 1 増える', async () => {
+    alarmMock.isConnected.value = false
+    stubHappyPath()
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+
+    alarmMock.isConnected.value = true
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(t.managerJwtRecoveredCount.value).toBe(1)
+  })
+
+  it('★ 失敗を挟まない成功では増えない (最初の成功・期限切れの取り直し・cache から返した回)', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ok({ nonce: NONCE }))
+      // 30 秒 = 手前マージン (60 秒) より短いので、次の呼び出しで取り直しになる
+      .mockResolvedValueOnce(tokenOk(30))
+      .mockResolvedValueOnce(ok({ nonce: NONCE }))
+      .mockResolvedValueOnce(tokenOk())
+    vi.stubGlobal('fetch', fetchMock)
+    const t = (await load())()
+
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+    // 期限切れの取り直し
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+    // cache から返した回
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+  })
+
+  it('失敗では増えない (抑止で通信しなかった回も)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(t.managerJwtRecoveredCount.value).toBe(0)
+  })
+
+  it('失敗 → 成功の後、続く成功 (cache) では増えない。もう一度 失敗 → 成功 すれば 2 になる', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const T0 = Date.UTC(2026, 0, 1, 0, 0, 0)
+      vi.setSystemTime(T0)
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+        .mockResolvedValueOnce(ok({ nonce: NONCE }))
+        .mockResolvedValueOnce(tokenOk())
+        .mockResolvedValueOnce(ok({ nonce: NONCE }))
+        .mockResolvedValueOnce(tokenOk()))
+      const t = (await load())()
+      await t.prefetchManagerJwt()
+      expect(await t.getManagerJwt()).toBe(TOKEN)
+      expect(await t.getManagerJwt()).toBe(TOKEN)
+      expect(t.managerJwtRecoveredCount.value).toBe(1)
+
+      // 期限が切れた頃に USB が抜けていて null → 繋ぎ直して取れた
+      vi.setSystemTime(T0 + 900_000)
+      alarmMock.isConnected.value = false
+      expect(await t.getManagerJwt()).toBeNull()
+      expect(t.managerJwtRecoveredCount.value).toBe(1)
+      alarmMock.isConnected.value = true
+      expect(await t.getManagerJwt()).toBe(TOKEN)
+      expect(t.managerJwtRecoveredCount.value).toBe(2)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('★ 増えた時点で、開発用の印はもう立っている (読み直す側が古い印で送らない)', async () => {
+    localStorage.clear()
+    const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+    const devJwt = `${seg({ alg: 'HS256' })}.${seg({ sub: 'm1', aud: 'device', dev_device: true })}.sig`
+    alarmMock.isConnected.value = false
+    stubHappyPath({ access_token: devJwt, expires_in: 900 })
+    const { watch } = await import('vue')
+    const { isDevDevice } = await import('~/utils/token-selection')
+    const t = (await load())()
+    await t.getManagerJwt()
+
+    const seen: boolean[] = []
+    const stop = watch(t.managerJwtRecoveredCount, () => seen.push(isDevDevice('manager-device')), { flush: 'sync' })
+    alarmMock.isConnected.value = true
+    await t.getManagerJwt()
+    stop()
+    expect(seen).toEqual([true])
   })
 })
 

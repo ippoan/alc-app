@@ -27,7 +27,11 @@ mockNuxtImport('useAlarmDeviceSetting', () => () => ({
 // 呼び順を 1 本の配列に記録する (繋がり直したときは「期限を外す → 取りに行く」の順)
 const calls: string[] = []
 mockNuxtImport('useManagerDeviceToken', () => () => ({
-  prefetchManagerJwt: async () => { calls.push('prefetch') },
+  // 取れたことにする (取れなかった接続の試し直しは useAlarmWatch.prefetch.test.ts が見る)
+  prefetchManagerJwt: async () => {
+    calls.push('prefetch')
+    return true
+  },
   setDisconnectDeadline: (deadlineMs: number) => { calls.push(`set(${deadlineMs})`) },
   clearDisconnectDeadline: () => { calls.push('clear') },
 }))
