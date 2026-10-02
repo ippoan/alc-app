@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  IT_TENKO_METHOD, IT_TENKO_ROOM_PREFIX, MANAGER_JUDGMENT_METHOD, SCREEN_SHARE_ROOM_PREFIX,
-  defaultJudgmentMethod, isItTenkoRoom, isScreenShareRoom, itTenkoRoomId, itTenkoRoomOf, itTenkoSessionId,
-  screenShareRoomId, splitRooms,
+  IDENTITY_METHOD, IT_TENKO_ALLOW_IC_CARD, IT_TENKO_METHOD, IT_TENKO_ROOM_PREFIX, MANAGER_JUDGMENT_METHOD,
+  SCREEN_SHARE_ROOM_PREFIX,
+  defaultJudgmentMethod, identityMethodLabel, isItTenkoRoom, isScreenShareRoom, itTenkoRoomId, itTenkoRoomOf,
+  itTenkoSessionId, screenShareRoomId, splitRooms,
 } from '~/utils/it-tenko'
 
 // IT点呼 の通話の部屋の id = `it-<点呼の記録の id>` (Refs ippoan/alc-app#387)。
@@ -99,6 +100,43 @@ describe('utils/it-tenko', () => {
 
     it('接頭辞だけの部屋 (it-) は IT点呼 の部屋ではないので remote 側', () => {
       expect(splitRooms(['it-'])).toEqual({ it: [], screen: [], remote: ['it-'] })
+    })
+  })
+
+  describe('本人確認の方法 (identity_method)', () => {
+    // ★ backend はこの 5 つに完全一致しない値を 400 で断る (測定の保存ごと失敗する)。綴りを固定する
+    it('★ 値は backend と同じ 5 つの綴り', () => {
+      expect(IDENTITY_METHOD).toEqual({
+        LICENSE: 'license',
+        IC_CARD: 'ic_card',
+        REMOTE_PUNCH: 'remote_punch',
+        NFC_CARD: 'nfc_card',
+        MANUAL: 'manual',
+      })
+    })
+
+    it.each([
+      ['license', '運転免許証'],
+      ['ic_card', '社員証'],
+      ['remote_punch', '社員証 (別の端末で打刻)'],
+      ['nfc_card', 'カード'],
+      ['manual', '手入力'],
+    ])('表示の文: %s → %s', (value, label) => {
+      expect(identityMethodLabel(value)).toBe(label)
+    })
+
+    it('値が無い・知らない値は null (行を出さない)', () => {
+      expect(identityMethodLabel(null)).toBeNull()
+      expect(identityMethodLabel(undefined)).toBeNull()
+      expect(identityMethodLabel('')).toBeNull()
+      expect(identityMethodLabel('face')).toBeNull()
+      // Object のプロトタイプに在る名前を値として拾わない
+      expect(identityMethodLabel('toString')).toBeNull()
+    })
+
+    // 一時的な許容 (オーナーの決定 2026-10-02)。外すときはここも false に直す
+    it('社員証の回にも IT点呼 を許す定数は、いまは true', () => {
+      expect(IT_TENKO_ALLOW_IC_CARD).toBe(true)
     })
   })
 

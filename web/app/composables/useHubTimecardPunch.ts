@@ -79,6 +79,8 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
       cardKind: cardKindOf(evtArg(args, 'card_kind')),
       // **かざした瞬間**。サーバの `created_at` より正確 (往復を含まない)
       punchedAt: new Date().toISOString(),
+      // この機体で読んだ打刻の印。サーバ由来の行 (`setFromServer`) には付かない
+      readOnThisDevice: true,
     }
     fromSerial = punch
     latest.value = punch

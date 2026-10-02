@@ -4,7 +4,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
-import { IT_TENKO_METHOD } from '~/utils/it-tenko'
+import { IDENTITY_METHOD, IT_TENKO_ALLOW_IC_CARD, IT_TENKO_METHOD, type IdentityMethod } from '~/utils/it-tenko'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
 
@@ -55,8 +55,11 @@ const IT_LICENSE_ONLY_MESSAGE = 'IT点呼は免許証で本人確認してくだ
 
 /** 何も押されないまま「このまま保存」と同じ動きをするまでの秒数 */
 const IT_CHOICE_TIMEOUT_S = 30
-/** 今回の本人確認が免許証だったか (IT点呼 は免許証が必須)。IC カードの直行と手入力では立てない */
-const verifiedByLicense = ref(false)
+/**
+ * 今回の本人確認の方法。入口 (免許証 / 免許証でないカード / 打刻の案内 / 手入力) が 1 つ入れ、
+ * `reset` で消す。読むのは IT点呼 を選べるかの判定と、測定の保存の `identity_method`
+ */
+const identityMethod = ref<IdentityMethod | null>(null)
 /** 選択の段を出しているか */
 const itChoiceOpen = ref(false)
 /** 選択の段の残り秒数 (画面に出す) */
@@ -75,6 +78,8 @@ const itActive = computed(() => itCall !== null && (props.itMode || itChosen.val
 
 /**
  * 選択の段を出してよいか。**1 つでも欠けたら出さず、今までどおり即保存する。**
+ * 本人確認は運転免許証か、(`IT_TENKO_ALLOW_IC_CARD` のあいだ) この端末に繋いだ機体で読んだ
+ * 社員証。別の端末の打刻から始めた回・免許証でないカード・手入力では出さない。
  * 測定の開始レコードが無い回 (`activeMeasurementId` が null) は保存が端末のキューへ回り、
  * IT点呼 を選んでも成立しないので出さない
  */
@@ -82,7 +87,8 @@ function canOfferItChoice(): boolean {
   return itCall !== null
     && props.itSelectable === true
     && !props.itMode
-    && verifiedByLicense.value
+    && (identityMethod.value === IDENTITY_METHOD.LICENSE
+      || (IT_TENKO_ALLOW_IC_CARD && identityMethod.value === IDENTITY_METHOD.IC_CARD))
     && isOnline.value
     && !isDemoMode.value
     && activeMeasurementId.value !== null
@@ -443,7 +449,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
   try {
     const emp = await getEmployeeByNfcId(nfcId)
     await prepareMeasurementFor(emp)
-    verifiedByLicense.value = cardType === 'driver_license'
+    identityMethod.value = cardType === 'driver_license' ? IDENTITY_METHOD.LICENSE : IDENTITY_METHOD.NFC_CARD
     // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
     if (source !== 'cores3') await tryPunch(nfcId)
     step.value = 'choice'
@@ -469,14 +475,19 @@ useKioskScreen().declareDeviceBusy(() => !isIdle.value)
  *
  * 呼び出し元が段を知らずに呼んでも巻き戻らないよう、`onNfcRead` と**同じガード**を
  * 置く (Refs ippoan/alc-app-s3#135)。始められたかを返す。
+ *
+ * `readOnThisDevice` = 元の打刻を**この端末に繋いだ機体が読んだ**か (Refs ippoan/alc-app#387)。
+ * 打刻の案内は別の端末の打刻でも出るので、渡されなければ「この端末では読んでいない」
+ * (`remote_punch`) として扱う — カードを読んでいない人の名義で IT点呼 まで進めない。
  */
-async function startForEmployee(id: string, name: string): Promise<boolean> {
+async function startForEmployee(id: string, name: string, readOnThisDevice = false): Promise<boolean> {
   // IT点呼 の本人確認は免許証だけ (IC カードの打刻からは始めない)
   if (props.itMode) return false
   if (step.value !== 'nfc') return false
   approvalError.value = null
   clearPunchState()
   await prepareMeasurementFor({ id, name })
+  identityMethod.value = readOnThisDevice ? IDENTITY_METHOD.IC_CARD : IDENTITY_METHOD.REMOTE_PUNCH
   // IC カードの打刻は免許証の確認を経ていないので、点呼 (始業/終業) には入れない。
   // 「〈名前〉さんのアルコールチェックへ」の文言どおり、種別なしの測定へ直行する
   // (Refs ippoan/rust-alc-api#644)
@@ -499,6 +510,7 @@ async function onManualSubmit() {
   try {
     const emp = await getEmployeeByCode(input)
     await prepareMeasurementFor(emp)
+    identityMethod.value = IDENTITY_METHOD.MANUAL
     // 手入力には card_id が無いので打刻しない (打刻は免許証のタッチだけ)
     punchSkipReason.value = 'manual'
     step.value = 'choice'
@@ -669,6 +681,8 @@ async function onMeasurementResult(result: MeasurementResult) {
       }
       // **通常点呼では key ごと足さない** (body を今までと同一に保つ)
       if (itActive.value) updateData.tenko_method = IT_TENKO_METHOD
+      // 本人確認の方法は IT点呼 に限らず送る。**値が無い回は key ごと足さない**
+      if (identityMethod.value) updateData.identity_method = identityMethod.value
       // carins の番号は console に出さない (simplify-reviewer の検査点、Refs ippoan/alc-app-s3#110)
       const loggableUpdateData: Record<string, unknown> = { ...updateData }
       delete loggableUpdateData.carins_cert_no
@@ -742,7 +756,7 @@ function reset() {
   closeItChoice(false)
   itChoiceSecondsLeft.value = 0
   itChosen.value = false
-  verifiedByLicense.value = false
+  identityMethod.value = null
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''

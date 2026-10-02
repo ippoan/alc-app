@@ -411,7 +411,7 @@ function reloadPage() {
  */
 const normalMeasurement = ref<{
   isIdle: boolean
-  startForEmployee: (id: string, name: string) => Promise<boolean>
+  startForEmployee: (id: string, name: string, readOnThisDevice?: boolean) => Promise<boolean>
 } | null>(null)
 /**
  * 社員 ID → 表示名。`TodayPunchHistory` が取った一覧を受け取る
@@ -432,7 +432,8 @@ const icPromptActive = ref(false)
 
 async function startAlcoholForPunch(punch: LatestPunch) {
   if (!punch.employeeId) return
-  await normalMeasurement.value?.startForEmployee(punch.employeeId, punch.name)
+  // 打刻の由来 (この端末に繋いだ機体で読んだか) は打刻の行が持っている値を渡すだけ
+  await normalMeasurement.value?.startForEmployee(punch.employeeId, punch.name, punch.readOnThisDevice === true)
 }
 
 function onRoleTabClick(role: RoleTab) {
