@@ -479,6 +479,8 @@ function onRoleTabClick(role: RoleTab) {
     <template v-if="activeRole === 'driver'">
       <!-- 端末未登録 (device JWT も管理者 JWT も無い) の案内 (Refs #206) -->
       <DeviceUnregisteredBanner />
+      <!-- CoreS3 の版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425)。デモのタブでは出さない -->
+      <CoreS3DeviceFirmwareNotice v-if="driverSubTab !== 'demo' && driverSubTab !== 'remote_demo'" />
 
       <!-- 通常点呼 / 自動点呼 サブタブ + ハンバーガーメニュー (縦画面時のみ) -->
       <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 mt-2 flex items-center gap-2">

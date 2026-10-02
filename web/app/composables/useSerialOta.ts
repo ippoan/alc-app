@@ -136,6 +136,19 @@ export const RESULT_DISPLAY_MS = 5_000
 /** 失敗行の接頭辞 (`OTA ERR <reason>`)。`ERR <先頭トークン>` の形ではないので明示する */
 const OTA_ERR = 'OTA ERR'
 
+/**
+ * {@link useSerialOta} の `run()` の結果 (Refs ippoan/alc-app#425)。画面の前の人が押した更新の
+ * 結果を帯 (`DeviceFirmwareNotice.vue`) が出し分けるための語で、幕 (`state`) とは別に返す。
+ *
+ * - `updated` = 書き込み・再起動・確定まで済んだ
+ * - `up_to_date` = 機体の版が配布中の版と同じ
+ * - `busy` = 機体に書き込みを始められなかった (別の更新が走っている・機体が使用中で預けた・
+ *   機体やポートに断られた・配布中の版や機体の名乗りを読めなかった)。機体は元のまま動いている
+ * - `skipped` = 対象の機体でない (実行できない target・未接続・id の不一致や未取得・BOARD / FLAVOR が表に無い)
+ * - `failed` = 失敗の幕 (「更新できませんでした」) が出た回。**幕が出ないまま終わった失敗は `failed` にしない**
+ */
+export type SerialOtaResult = 'updated' | 'up_to_date' | 'busy' | 'skipped' | 'failed'
+
 /** CoreS3 の更新に要る引数 (Vein Station は渡さない) */
 export interface SerialOtaRunOptions {
   /** 合図の `device_id`。実行時の自分の機体の id と一致するときだけ書く */
@@ -275,10 +288,11 @@ export function useSerialOta() {
    * 機体が「いまは受けられない」と答えた (CoreS3 だけ)。失敗の幕にせず、錠を解いてから
    * 一覧へ `skipped` を出す (報告は端末の token を取りに行くので、錠より後)
    */
-  function skipBusy(): void {
+  function skipBusy(): SerialOtaResult {
     coreS3.ota.end()
     state.value = { kind: 'idle' }
     void firmware.report('skipped', { reason: 'busy' })
+    return 'busy'
   }
 
   /**
@@ -291,7 +305,7 @@ export function useSerialOta() {
     port: OtaPort,
     opts: SerialOtaRunOptions,
     hubId: string | null,
-  ): Promise<void> {
+  ): Promise<SerialOtaResult> {
     const hub = hubId !== null
     /** 管理者の一覧へ遷移を出す (CoreS3 だけ)。**await しない** */
     const tell = (phase: FirmwarePhase, extra: FirmwareReportExtra): void => {
@@ -301,18 +315,23 @@ export function useSerialOta() {
     // 更新が要るかは画面に出さずに調べる (最新のキオスクで毎回画面が点滅しないように)
     const device = parseDeviceLine(await port.request('DEVICE', 'DEVICE ', DEVICE_TIMEOUT_MS))
     if (entry.boards && (device.board === null || !entry.boards.includes(device.board))) {
-      return tell('skipped', { reason: 'unsupported' })
+      tell('skipped', { reason: 'unsupported' })
+      return 'skipped'
     }
     // station 以外 (vein 等) がつながっているキオスクは対象外。
     // 以後の `OTA SERIAL` と再起動後の照合には、機体が名乗った FLAVOR を使う
     const flavor = device.flavor
     if (flavor === null || !Object.hasOwn(entry.flavors, flavor)) {
-      return tell('skipped', { reason: 'flavor_mismatch' })
+      tell('skipped', { reason: 'flavor_mismatch' })
+      return 'skipped'
     }
     const source = entry.flavors[flavor]!
     const manifest = await download(source.manifestUrl, res => res.json() as Promise<{ version?: unknown }>)
     if (typeof manifest.version !== 'string') throw new Error('manifest has no version')
-    if (manifest.version === device.ver) return tell('skipped', { reason: 'up_to_date' })
+    if (manifest.version === device.ver) {
+      tell('skipped', { reason: 'up_to_date' })
+      return 'up_to_date'
+    }
     const progress = { target_version: manifest.version }
 
     // ここから終わりまで、待機の報告 (idle) で一覧の「更新中」を上書きしない
@@ -329,7 +348,7 @@ export function useSerialOta() {
       // 結果の報告が無い経路なので、一覧の「更新中」(downloading) を待機へ戻しておく
       firmware.release()
       tell('idle', {})
-      return
+      return 'busy'
     }
 
     if (hub) {
@@ -411,39 +430,48 @@ export function useSerialOta() {
     await ask('OTA CONFIRM', 'OTA CONFIRMED', CONFIRM_TIMEOUT_MS, OTA_ERR)
     tell('done', progress)
     settle({ kind: 'done', ver: after.ver ?? '' })
+    return 'updated'
   }
 
   /**
-   * target の端末を更新する。実行できない target ({@link RUNNABLE_TARGETS} に無い)・
+   * target の端末を更新し、結果を返す。実行できない target ({@link RUNNABLE_TARGETS} に無い)・
    * 端末がつながっていない・別の OTA が走っている、のどれかなら何もしない。
    * CoreS3 は加えて、`opts.deviceId` が実行時の自分の機体の id と一致しなければ何もしない
    * (無い・自分の id がまだ取れていない、も同じ)。
+   *
+   * 戻り値 ({@link SerialOtaResult}) は「何が起きたか」を呼び手へ返すだけで、幕 (`state`)・報告・
+   * 預かりの動きは変えない。合図の受け (`enqueue` / `runQueued` の呼び手) は捨ててよい。
    */
-  async function run(target: string, opts: SerialOtaRunOptions = {}): Promise<void> {
+  async function run(target: string, opts: SerialOtaRunOptions = {}): Promise<SerialOtaResult> {
     const entry = runnableTarget(target)
-    if (!entry || running) return
+    if (!entry) return 'skipped'
+    if (running) return 'busy'
     const hub = target === HUB_TARGET
     const port = hub ? hubPort : vein
-    if (!port.isConnected.value) return
+    if (!port.isConnected.value) return 'skipped'
     // 宛先の照合 (冒頭 doc)。預けた後に機体が差し替えられた場合も、ここで弾く
     const hubId = hub ? firmware.deviceId.value : null
-    if (hub && (hubId === null || opts.deviceId !== hubId)) return
+    if (hub && (hubId === null || opts.deviceId !== hubId)) return 'skipped'
     running = true
     try {
-      await flash(target, entry, port, opts, hubId)
+      return await flash(target, entry, port, opts, hubId)
     }
     catch (e) {
       const reason = (e as Error).message
       // 更新が要るかを調べている段階 (idle のまま) で失敗したときは画面に出さない
-      if (state.value.kind === 'idle') console.warn(`[SERIAL_OTA] skipped: ${reason}`)
-      else {
-        settle({ kind: 'failed', reason })
-        if (hub) {
-          // 報告は端末の token を取りに行くので、錠を解いてから
-          coreS3.ota.end()
-          void firmware.report('failed', { reason: failureWord(e) })
-        }
+      if (state.value.kind === 'idle') {
+        console.warn(`[SERIAL_OTA] skipped: ${reason}`)
+        // 機体には何も書いていない (名乗りや配布中の版を読めなかった)。失敗の幕も出していないので
+        // `failed` にしない — 書き直しを案内するほどのことではなく、押し直せば済む
+        return 'busy'
       }
+      settle({ kind: 'failed', reason })
+      if (hub) {
+        // 報告は端末の token を取りに行くので、錠を解いてから
+        coreS3.ota.end()
+        void firmware.report('failed', { reason: failureWord(e) })
+      }
+      return 'failed'
     }
     finally {
       // この順を変えない。`end()` は錠が掛かっていなければ、`release()` は保留していなければ
@@ -467,6 +495,7 @@ export function useSerialOta() {
     if (queued === null) return
     const { target, opts } = queued
     queued = null
+    // 合図の受けは結果を使わない (幕と報告が伝える)
     await run(target, opts)
   }
 

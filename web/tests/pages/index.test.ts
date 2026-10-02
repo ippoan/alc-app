@@ -13,6 +13,7 @@ import DeviceUnregisteredBanner from '~/components/DeviceUnregisteredBanner.vue'
 import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import FirmwareOtaHost from '~/components/FirmwareOtaHost.vue'
+import CoreS3DeviceFirmwareNotice from '~/components/CoreS3DeviceFirmwareNotice.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
@@ -1760,6 +1761,37 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
     await clickMenuItem(wrapper, 'デバイス設定')
     expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
     expect(wrapper.find(NOTE).exists()).toBe(false)
+  })
+
+  describe('CoreS3 の版の帯 (Refs ippoan/alc-app#425)', () => {
+    const noticeOf = () => wrapper!.findAllComponents(CoreS3DeviceFirmwareNotice)
+
+    it('★ 運行者の画面に 1 つだけ置く (props は渡さない。接続・名乗り・始め方は部品が自分で持つ)', async () => {
+      bpUi.state.value = 'show'
+      wrapper = await mountIndex('/?role=driver')
+      expect(noticeOf()).toHaveLength(1)
+      expect(noticeOf()[0]!.props()).toEqual({})
+    })
+
+    it('デモのタブでは出さず、ほかのタブへ移ると戻る', async () => {
+      bpUi.state.value = 'show'
+      wrapper = await mountIndex('/?role=driver')
+      await clickMenuItem(wrapper, '自動点呼デモ')
+      expect(noticeOf()).toHaveLength(0)
+      await clickMenuItem(wrapper, '遠隔点呼デモ')
+      expect(noticeOf()).toHaveLength(0)
+      await clickMenuItem(wrapper, 'デバイス設定')
+      expect(noticeOf()).toHaveLength(1)
+    })
+
+    it('★ 運行者以外の役割では mount しない (更新の composable を生成しない)', async () => {
+      for (const role of ['it_tenko', 'general']) {
+        wrapper = await mountIndex(`/?role=${role}`)
+        expect(noticeOf()).toHaveLength(0)
+        wrapper.unmount()
+      }
+      wrapper = null
+    })
   })
 
   it('FirmwareOtaHost には「いまのタブがデモか」を渡す (デモの間は CoreS3 の更新を始めない。Refs ippoan/alc-app#403)', async () => {

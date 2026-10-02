@@ -11,6 +11,7 @@ describe('FIRMWARE_TARGETS', () => {
 
   it('timecard-station は flavor 1 件で、URL は今までと同じ 2 本 (BOARD は見ない)', () => {
     expect(FIRMWARE_TARGETS['timecard-station']).toEqual({
+      installerUrl: BASE,
       flavors: {
         'timecard-station': {
           manifestUrl: `${BASE}manifest-timecard-station.json`,
@@ -23,6 +24,7 @@ describe('FIRMWARE_TARGETS', () => {
   it('cores3 は flavor 3 件で、CoreS3 と CoreS3 SE の機体だけが対象', () => {
     expect(FIRMWARE_TARGETS.cores3).toEqual({
       boards: ['cores3', 'cores3se'],
+      installerUrl: BASE,
       flavors: {
         'cores3': { manifestUrl: `${BASE}manifest.json`, appUrl: `${BASE}firmware/alc-hub-cores3-app.bin` },
         'cores3-wifi': { manifestUrl: `${BASE}manifest-wifi.json`, appUrl: `${BASE}firmware/alc-hub-cores3-wifi-app.bin` },
@@ -39,5 +41,9 @@ describe('FIRMWARE_TARGETS', () => {
     for (const url of urls) expect(url.startsWith(BASE)).toBe(true)
     // 同じ URL を 2 つの flavor が指していない
     expect(new Set(urls).size).toBe(urls.length)
+  })
+
+  it('書き直しのページ (installerUrl) も配布ページの中 (Refs ippoan/alc-app#425)', () => {
+    for (const target of Object.values(FIRMWARE_TARGETS)) expect(target.installerUrl.startsWith(BASE)).toBe(true)
   })
 })

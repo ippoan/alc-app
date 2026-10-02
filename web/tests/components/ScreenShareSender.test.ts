@@ -26,6 +26,10 @@ mockNuxtImport('useScreenShare', () => () => ({
   toggleMute: vi.fn(),
 }))
 
+// 「機体を使用中」の申告 (Refs ippoan/alc-app#425)。渡された source をそのまま取っておく
+const declareDeviceBusyMock = vi.fn()
+mockNuxtImport('useKioskScreen', () => () => ({ declareDeviceBusy: declareDeviceBusyMock }))
+
 const notice = (w: Awaited<ReturnType<typeof mountSuspended>>) => w.find('[data-testid="screen-share-ended-by-admin"]')
 
 beforeEach(() => {
@@ -64,6 +68,20 @@ describe('ScreenShareSender — 運行管理者が終了したとき', () => {
     state.endedByAdmin.value = true
     const w = await mountSuspended(ScreenShareSender)
     expect(notice(w).exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('ScreenShareSender — 画面共有の最中は端末の更新を始めさせない (Refs ippoan/alc-app#425)', () => {
+  it('★ 共有している間だけ「機体を使用中」を申告する (申告は 1 つ)', async () => {
+    const w = await mountSuspended(ScreenShareSender)
+    expect(declareDeviceBusyMock).toHaveBeenCalledTimes(1)
+    const source = declareDeviceBusyMock.mock.calls[0]![0] as () => boolean
+    expect(source()).toBe(false)
+    state.isSharing.value = true
+    expect(source()).toBe(true)
+    state.isSharing.value = false
+    expect(source()).toBe(false)
     w.unmount()
   })
 })
