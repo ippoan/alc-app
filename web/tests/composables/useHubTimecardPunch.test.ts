@@ -50,6 +50,7 @@ mockNuxtImport('useAuth', () => () => ({ accessToken: adminToken }))
 mockNuxtImport('useDeviceToken', () => () => ({ getDeviceJwt: getDeviceJwtMock }))
 
 import { useHubTimecardPunch } from '~/composables/useHubTimecardPunch'
+import { readReloadContext, resetReloadContext } from '~/composables/useKioskScreen'
 
 // ハブの IC 打刻を USB シリアルから直接受けて画面を動かす (Refs ippoan/rust-alc-api#644)。
 // これまではクラウドを一周してからボタンが出ていた (WS が切れている間は出なかった)。
@@ -107,6 +108,7 @@ function resetMocks() {
   getDeviceJwtMock.mockReset()
   getDeviceJwtMock.mockResolvedValue('device-jwt')
   adminToken.value = null
+  resetReloadContext()
 }
 
 // オフライン = サーバーに照会せず、手元の写し (カード台帳 + 社員の一覧) で引く
@@ -127,6 +129,8 @@ describe('useHubTimecardPunch (オフライン: 手元の写しで引く)', () =
     expect(lookupMock).not.toHaveBeenCalled()
     expect(getDeviceJwtMock).not.toHaveBeenCalled()
     expect(hub.latest.value).toMatchObject({ id: 'serial:1', employeeId: 'emp-1', readOnThisDevice: true })
+    // 照会しない回は、自動リロードを止める申告も出さない
+    expect(readReloadContext().blocked).toBe(0)
     app.unmount()
   })
 
@@ -501,6 +505,19 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
     app.unmount()
   })
 
+  it('端末の鍵の値は警告・ログに出ない', async () => {
+    const c = captureConsole()
+    lookupMock.mockRejectedValue(httpError(403))
+    const [, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    await settle()
+
+    expect(getDeviceJwtMock).toHaveBeenCalledTimes(1)
+    expect(c.text()).not.toContain('device-jwt')
+    app.unmount()
+  })
+
   it('端末の鍵の取得が投げても手元の写しへ倒れる', async () => {
     captureConsole()
     getDeviceJwtMock.mockRejectedValue(new Error('serial closed'))
@@ -556,10 +573,11 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
     app.unmount()
   })
 
-  it('端末の鍵の取得待ちも 6 秒の上限に含む', async () => {
+  it('★★ 端末の鍵の取得待ちも 6 秒の上限に含む。上限の後に遅れて取れた鍵では照会しない', async () => {
     vi.useFakeTimers()
     captureConsole()
-    getDeviceJwtMock.mockReturnValue(new Promise(() => {}))
+    const key = deferred<string | null>()
+    getDeviceJwtMock.mockReturnValue(key.promise)
     const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
 
     emitEvent('TIMECARD', EVT)
@@ -567,6 +585,29 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
 
     expect(lookupMock).not.toHaveBeenCalled()
     expect(hub.latest.value).toMatchObject({ id: 'serial:1', readOnThisDevice: true })
+
+    key.resolve('device-jwt')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(lookupMock).not.toHaveBeenCalled()
+    expect(hub.latest.value).toMatchObject({ id: 'serial:1', employeeId: 'emp-1' })
+    app.unmount()
+  })
+
+  it('★ 鍵待ちのあいだに新しい読み取りが来たら、前の読み取りのぶんは照会しない', async () => {
+    const key = deferred<string | null>()
+    getDeviceJwtMock.mockReturnValue(key.promise)
+    lookupMock.mockResolvedValue(EMP_1)
+    const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    emitEvent('TIMECARD', EVT)
+    key.resolve('device-jwt')
+    await settle()
+
+    // 2 回の読み取りのうち、照会するのは新しいほうの 1 回だけ
+    expect(lookupMock).toHaveBeenCalledTimes(1)
+    expect(hub.latest.value).toMatchObject({ id: 'serial:1', employeeId: 'emp-1' })
     app.unmount()
   })
 
@@ -683,6 +724,8 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
     const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
 
     emitEvent('TIMECARD', EVT)
+    // 1 回目の照会が飛んでから、2 回目の読み取りが来る
+    await settle()
     emitEvent('TIMECARD', ['card_id=FFFF000011112222', 'card_kind=nfca_uid'])
     second.resolve(EMP_2)
     await settle()
@@ -701,9 +744,14 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
     const [hub, app] = withSetup(() => useHubTimecardPunch(resolveName))
 
     emitEvent('TIMECARD', EVT)
+    await settle()
+    expect(lookupMock).toHaveBeenCalledTimes(1)
+    expect(readReloadContext().blocked).toBe(1)
     setOnline(false)
     emitEvent('TIMECARD', EVT)
     expect(hub.latest.value).toMatchObject({ id: 'serial:1', employeeId: 'emp-1' })
+    // 世代が替わり、新しい読み取りは照会しない → 申告を下ろす
+    expect(readReloadContext().blocked).toBe(0)
 
     first.resolve(EMP_2)
     await settle()
@@ -740,5 +788,73 @@ describe('useHubTimecardPunch (オンライン: まずサーバーに照会す�
     expect(hub.latest.value).toBeNull()
     expect(resolveMock).not.toHaveBeenCalled()
     expect(c.warn).not.toHaveBeenCalled()
+  })
+
+  // --- 照会の応答待ちのあいだは、待機中の自動リロードを止める ---
+  // 待つあいだは案内の行がまだ無い。そこでリロードされると、この機体で読んだ回を失う
+
+  it.each([
+    ['200', () => lookupMock.mockResolvedValue(EMP_1)],
+    ['404', () => lookupMock.mockRejectedValue(httpError(404))],
+    ['失敗 (500)', () => lookupMock.mockRejectedValue(httpError(500))],
+    ['端末の鍵が無い', () => getDeviceJwtMock.mockResolvedValue(null)],
+  ])('★★ 照会中はリロードを止める申告が 1、%s で決着したら 0', async (_label, arrange) => {
+    captureConsole()
+    arrange()
+    const [, app] = withSetup(() => useHubTimecardPunch(resolveName))
+    expect(readReloadContext().blocked).toBe(0)
+
+    emitEvent('TIMECARD', EVT)
+    expect(readReloadContext().blocked).toBe(1)
+    await settle()
+
+    expect(readReloadContext().blocked).toBe(0)
+    app.unmount()
+  })
+
+  it('★ 6 秒の上限で決着したら申告を下ろす', async () => {
+    vi.useFakeTimers()
+    captureConsole()
+    lookupMock.mockReturnValue(new Promise(() => {}))
+    const [, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    await vi.advanceTimersByTimeAsync(5_999)
+    expect(readReloadContext().blocked).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(readReloadContext().blocked).toBe(0)
+    app.unmount()
+  })
+
+  it('★ 世代が替わっても (連続タッチ)、新しい照会が決着するまで申告は 1 のまま', async () => {
+    const first = deferred<typeof EMP_1>()
+    const second = deferred<typeof EMP_2>()
+    lookupMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const [, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    await settle()
+    emitEvent('TIMECARD', EVT)
+    // 1 回目の応答が届いても、2 回目がまだ待っている
+    first.resolve(EMP_1)
+    await settle()
+    expect(readReloadContext().blocked).toBe(1)
+
+    second.resolve(EMP_2)
+    await settle()
+    expect(readReloadContext().blocked).toBe(0)
+    app.unmount()
+  })
+
+  it('★ 照会中に unmount したら申告は残らない', async () => {
+    lookupMock.mockReturnValue(new Promise(() => {}))
+    const [, app] = withSetup(() => useHubTimecardPunch(resolveName))
+
+    emitEvent('TIMECARD', EVT)
+    expect(readReloadContext().blocked).toBe(1)
+    app.unmount()
+
+    expect(readReloadContext().blocked).toBe(0)
   })
 })

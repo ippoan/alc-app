@@ -120,6 +120,15 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
   let seq = 0
   /** 読み取りの世代。新しい読み取り・unmount で進め、古い照会の結果を捨てる */
   let generation = 0
+  /**
+   * サーバーへの照会 (端末の鍵の取得待ちを含む) の決着を待っているか。待つあいだは案内の行が
+   * まだ無く、ここで画面が新しい版へ自動でリロードされると、この機体で読んだ回を失う。
+   * だから**待つあいだはリロードを止める申告を出す** (`useKioskScreen` の doc)。
+   * どの決着でも下ろす: 見つかった / 見つからない / 失敗・上限で写しへ倒した / unmount。
+   * 新しい読み取りで世代が替わったときは、その読み取りが持ち直す (オフラインなら下ろす)
+   */
+  const lookingUp = ref(false)
+  useKioskScreen().declareReloadBlocked(lookingUp)
   let unsubscribe: (() => void) | null = null
 
   /** 印付きの行を新しく置く (`serial:<n>`)。 */
@@ -158,11 +167,17 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
    * 取れないと無認証の直 fetch に落ちるので、同じ規則 (`usesAdminToken` → キオスクの鍵) を
    * 先になぞって、送れるトークンが在るときだけ呼ぶ (鍵は cache されるので取得は 1 回)。
    * `useDeviceToken()` は `initApi` に渡す getter (`pages/index.vue`) と同じく使うときに呼ぶ。
+   *
+   * **`api.ts` の `request()` の `'default'` scope の選び方と揃えている。そちらを変えたらここも。**
+   *
+   * `stillWanted` は鍵が取れた時点で聞く — false (上限を過ぎた / 新しい読み取りが来た /
+   * unmount された) なら、遅れて取れた鍵では照会しない。そのときの戻りは誰にも使われない
    */
-  async function lookupOnServer(cardId: string): Promise<LookupOutcome> {
+  async function lookupOnServer(cardId: string, stillWanted: () => boolean): Promise<LookupOutcome> {
     try {
-      if (!usesAdminToken(accessToken.value, 'kiosk') && !(await useDeviceToken().getDeviceJwt())) {
-        return { kind: 'unavailable', reason: '端末の鍵が無い' }
+      if (!usesAdminToken(accessToken.value, 'kiosk')) {
+        if (!(await useDeviceToken().getDeviceJwt())) return { kind: 'unavailable', reason: '端末の鍵が無い' }
+        if (!stillWanted()) return { kind: 'unavailable', reason: '上限切れ' }
       }
       const employee = await lookupEmployeeByCard(cardId, 'default')
       return { kind: 'found', employeeId: employee.id, name: employee.name }
@@ -180,14 +195,22 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
    */
   async function showFromServer(read: CardRead, gen: number, latestIdAtRead: string | null): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
+    let timedOut = false
     const timeout = new Promise<LookupOutcome>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: 'unavailable', reason: '上限切れ' }), LOOKUP_TIMEOUT_MS)
+      timer = setTimeout(() => {
+        timedOut = true
+        resolve({ kind: 'unavailable', reason: '上限切れ' })
+      }, LOOKUP_TIMEOUT_MS)
     })
     // 上限で決着した後に遅れて届いた応答は、ここで誰にも読まれずに捨てられる
-    const outcome = await Promise.race([lookupOnServer(read.cardId), timeout])
+    const outcome = await Promise.race([
+      lookupOnServer(read.cardId, () => !timedOut && gen === generation),
+      timeout,
+    ])
     clearTimeout(timer)
-    // 新しい読み取りが来た / unmount された
+    // 新しい読み取りが来た / unmount された (`lookingUp` はそちらが持つ)
     if (gen !== generation) return
+    lookingUp.value = false
 
     if (outcome.kind === 'not-found') {
       console.warn('[HubTimecardPunch] サーバーの照会で持ち主が見つからないカード (案内を出さない)')
@@ -229,9 +252,12 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
     }
     // オフラインなら照会しない (`navigator.onLine` は疎通の保証ではないが、false なら確実に届かない)
     if (!navigator.onLine) {
+      // 前の読み取りの照会を待っていたなら、その結果はもう使わない
+      lookingUp.value = false
       showFromLocal(read)
       return
     }
+    lookingUp.value = true
     void showFromServer(read, gen, latest.value?.id ?? null)
   }
 
@@ -261,6 +287,7 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
   })
   onUnmounted(() => {
     generation += 1
+    lookingUp.value = false
     cards.stopPeriodicRefresh()
     unsubscribe?.()
     unsubscribe = null
