@@ -62,10 +62,17 @@ describe('utils/app-update-gate', () => {
       expect(isSafeToReload(onKiosk({ step: KIOSK_FIRST_STEP, busy: false }))).toBe(true)
     })
 
-    it('キオスクが載っていれば、申告の有無に関わらず段と busy だけで決める', () => {
-      // キオスク画面は自分で申告しない。万一混ざっても従来の判定が変わらないことを固定する
-      expect(isSafeToReload({ screen: { step: KIOSK_FIRST_STEP, busy: false }, safe: 0, blocked: 9 })).toBe(true)
+    it('キオスクが載っていれば、安全の申告の有無に関わらず段と busy で決める', () => {
+      // キオスク画面は自分で安全を申告しない。万一混ざっても判定が変わらないことを固定する
+      expect(isSafeToReload({ screen: { step: KIOSK_FIRST_STEP, busy: false }, safe: 9, blocked: 0 })).toBe(true)
       expect(isSafeToReload({ screen: { step: 'medical', busy: false }, safe: 9, blocked: 0 })).toBe(false)
+    })
+
+    it('キオスクが最初の画面で手が離せても、拒否が 1 件でもあれば飛ばさない (待機中の端末が画面共有をしている)', () => {
+      expect(isSafeToReload({ screen: { step: KIOSK_FIRST_STEP, busy: false }, safe: 0, blocked: 1 })).toBe(false)
+      expect(isSafeToReload({ screen: { step: KIOSK_FIRST_STEP, busy: false }, safe: 1, blocked: 2 })).toBe(false)
+      // 拒否が外れれば、今までどおり安全
+      expect(isSafeToReload({ screen: { step: KIOSK_FIRST_STEP, busy: false }, safe: 0, blocked: 0 })).toBe(true)
     })
 
     it.each([

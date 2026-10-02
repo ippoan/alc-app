@@ -16,6 +16,7 @@ mockNuxtImport('useWebRtc', () => useWebRtcMock)
 
 // Import AFTER mock setup
 import { SCREEN_SHARE_ENDED_NOTICE_MS, useScreenShare } from '~/composables/useScreenShare'
+import { readReloadContext, resetReloadContext } from '~/composables/useKioskScreen'
 
 // --- Helpers ---
 function createMockVideoTrack() {
@@ -444,6 +445,96 @@ describe('useScreenShare', () => {
       app.unmount()
       expect(ss.endedByAdmin.value).toBe(false)
       expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
+  // 共有を始めている途中と共有中は、新版への載せ替えのリロードを止める (Refs ippoan/alc-app#387)。
+  // 読むのは plugin と同じ口 (`readReloadContext`)
+  describe('新版への載せ替えを止める申告', () => {
+    const blocked = () => readReloadContext().blocked
+
+    beforeEach(() => {
+      resetReloadContext()
+    })
+
+    it('★ 何もしていなければ止めない', () => {
+      const [, app] = withSetup(() => useScreenShare())
+      expect(blocked()).toBe(0)
+      app.unmount()
+    })
+
+    it('★ ボタンを押してから共有が始まるまで (許可・マイク・接続の応答待ち) も、共有中も止める', async () => {
+      let allow!: (stream: MediaStream) => void
+      mockGetDisplayMedia.mockImplementation(() => new Promise((resolve) => { allow = resolve }))
+      let connected!: () => void
+      mockConnect.mockImplementation(() => new Promise<void>((resolve) => { connected = resolve }))
+
+      const [ss, app] = withSetup(() => useScreenShare())
+      const started = ss.startSharing('https://sig.example.com')
+      // 許可のダイアログが出ている
+      expect(ss.isSharing.value).toBe(false)
+      expect(blocked()).toBe(1)
+
+      allow(createMockStream([createMockVideoTrack()]))
+      await vi.waitFor(() => expect(mockConnect).toHaveBeenCalled())
+      // 接続の応答待ち
+      expect(ss.isSharing.value).toBe(false)
+      expect(blocked()).toBe(1)
+
+      connected()
+      await started
+      expect(ss.isSharing.value).toBe(true)
+      expect(blocked()).toBe(1)
+
+      ss.stopSharing()
+      expect(blocked()).toBe(0)
+      app.unmount()
+    })
+
+    it('★ 許可が得られずに抜けたら外れる', async () => {
+      mockGetDisplayMedia.mockRejectedValue(new Error('Permission denied'))
+      const [ss, app] = withSetup(() => useScreenShare())
+
+      const started = ss.startSharing('https://sig.example.com')
+      expect(blocked()).toBe(1)
+      await started
+      expect(ss.error.value).toBe('画面共有の許可が得られませんでした')
+      expect(blocked()).toBe(0)
+      app.unmount()
+    })
+
+    it('★ 接続の失敗で抜けたら外れる', async () => {
+      mockConnect.mockRejectedValue(new Error('connect failed'))
+      const [ss, app] = withSetup(() => useScreenShare())
+
+      const started = ss.startSharing('https://sig.example.com')
+      expect(blocked()).toBe(1)
+      await started
+      expect(ss.error.value).toBe('シグナリングサーバーへの接続に失敗しました')
+      expect(ss.isSharing.value).toBe(false)
+      expect(blocked()).toBe(0)
+      app.unmount()
+    })
+
+    it('★ 運行管理者の「画面共有を終了」で止まったら外れる', async () => {
+      const [ss, app] = withSetup(() => useScreenShare())
+      await ss.startSharing('https://sig.example.com')
+      expect(blocked()).toBe(1)
+
+      endShareCount.value = 1
+      await nextTick()
+      expect(ss.isSharing.value).toBe(false)
+      expect(blocked()).toBe(0)
+      app.unmount()
+    })
+
+    it('★ 共有中に画面が消えたら申告を残さない', async () => {
+      const [ss, app] = withSetup(() => useScreenShare())
+      await ss.startSharing('https://sig.example.com')
+      expect(blocked()).toBe(1)
+
+      app.unmount()
+      expect(blocked()).toBe(0)
     })
   })
 })

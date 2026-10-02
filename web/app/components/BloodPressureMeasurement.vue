@@ -33,6 +33,12 @@ const { latestBloodPressure } = useBleGateway()
 const step = ref<BpStep>('nfc')
 // ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。カード待ちでなければ機体を使用中
 useKioskScreen().declareDeviceBusy(() => step.value !== 'nfc')
+/** 段が `nfc` のままカードの照合を待っている件数 (応答が返るまで `step` は動かない) */
+const employeeLookups = ref(0)
+// 本番 flip 後の新版への載せ替えを、カード待ちのこの画面でも許す (Refs ippoan/alc-app#387)。
+// 測定台はタッチを待って開いたままになるので、申告しないと古い版を永久に掴み続ける。
+// カードの照合中は段が `nfc` でも下ろす (リロードするとタッチが無かったことになる)
+useKioskScreen().declareSafeToReload(() => step.value === 'nfc' && employeeLookups.value === 0)
 const employeeId = ref('')
 const employeeName = ref('')
 const error = ref<string | null>(null)
@@ -58,6 +64,7 @@ function applyFaceApproval(emp: { name: string; face_approval_status?: string })
 
 async function onNfcRead(nfcId: string) {
   error.value = null
+  employeeLookups.value += 1
   try {
     const emp = await getEmployeeByNfcId(nfcId)
     if (!applyFaceApproval(emp)) return
@@ -66,6 +73,8 @@ async function onNfcRead(nfcId: string) {
     step.value = 'face_auth'
   } catch {
     error.value = employeeNotFoundByNfc(nfcId)
+  } finally {
+    employeeLookups.value -= 1
   }
 }
 

@@ -7,6 +7,8 @@ export function useScreenShare() {
   const webRtc = useWebRtc('device')
 
   const isSharing = ref(false)
+  /** 「画面共有」を押してから、共有が始まる (`isSharing`) か失敗して抜けるまで */
+  const isStarting = ref(false)
   const roomId = ref<string | null>(null)
   const error = ref<string | null>(null)
 
@@ -24,6 +26,15 @@ export function useScreenShare() {
   }
 
   async function startSharing(signalingUrl: string) {
+    isStarting.value = true
+    try {
+      await beginSharing(signalingUrl)
+    } finally {
+      isStarting.value = false
+    }
+  }
+
+  async function beginSharing(signalingUrl: string) {
     error.value = null
     clearEndedNotice()
     try {
@@ -105,6 +116,10 @@ export function useScreenShare() {
     endedByAdmin.value = true
     endedTimer = setTimeout(clearEndedNotice, SCREEN_SHARE_ENDED_NOTICE_MS)
   })
+
+  // 共有を始めている途中と共有中は、新版への載せ替えのリロードを止める (Refs ippoan/alc-app#387)。
+  // 送る側はどのタブでも載っているので、待機中の画面が「安全」と申告していてもこれが優先する
+  useKioskScreen().declareReloadBlocked(() => isStarting.value || isSharing.value)
 
   onUnmounted(() => {
     clearEndedNotice()
