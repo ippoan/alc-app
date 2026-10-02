@@ -4,6 +4,10 @@ const signalingUrl = config.public.signalingUrl as string
 
 const { isSharing, roomId, error, isPeerConnected, isConnected, isMuted, endedByAdmin, remoteStream, startSharing, stopSharing, toggleMute } = useScreenShare()
 
+// 画面共有の最中は、端末 (CoreS3) の更新を始めさせない (Refs ippoan/alc-app#425)。
+// `useScreenShare()` は呼ぶごとに別の状態を持つので、持ち主のここで申告する
+useKioskScreen().declareDeviceBusy(() => isSharing.value)
+
 const { isAndroidLandscape } = useAndroidLandscape()
 const shortRoomId = computed(() => roomId.value ? roomId.value.slice(-8).toUpperCase() : null)
 

@@ -96,6 +96,21 @@ useAlarmWatch()
 // Android 横画面検出
 const { isAndroidLandscape } = useAndroidLandscape()
 
+// --- CoreS3 の版の帯 (Refs ippoan/alc-app#425) ---
+// 画面の前の人が「更新する」を押したときだけ始める。宛先は実行時の自分の機体の id で、
+// 機体を使っている画面 (点呼・測定・通話・画面共有) では始めない
+const firmwareNoticeHub = useCoreS3Serial()
+const firmwareNoticeReport = useFirmwareReport()
+const firmwareNoticeOta = useSerialOta()
+const { isDeviceBusy: isHubBusy } = useKioskScreen()
+const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
+function startHubFirmwareUpdate() {
+  return firmwareNoticeOta.run('cores3', {
+    deviceId: firmwareNoticeReport.deviceId.value ?? undefined,
+    isBusy: () => isHubBusy.value,
+  })
+}
+
 // --- 着信通知からの直行モード ---
 const incomingCallMode = ref(route.query.mode === 'incoming_call')
 const incomingCallRoom = ref<string | null>((route.query.room as string) || null)
@@ -479,6 +494,15 @@ function onRoleTabClick(role: RoleTab) {
     <template v-if="activeRole === 'driver'">
       <!-- 端末未登録 (device JWT も管理者 JWT も無い) の案内 (Refs #206) -->
       <DeviceUnregisteredBanner />
+      <!-- CoreS3 の版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425)。デモの表示では出さない -->
+      <DeviceFirmwareNotice
+        v-if="driverSubTab !== 'demo' && driverSubTab !== 'remote_demo' && !isDemoModeFromUrl"
+        target="cores3"
+        :version="firmwareNoticeHub.deviceInfo.value?.ver ?? null"
+        :flavor="firmwareNoticeHub.deviceInfo.value?.flavor ?? null"
+        :connected="firmwareNoticeHub.isConnected.value"
+        :start="startHubFirmwareUpdate"
+      />
 
       <!-- 通常点呼 / 自動点呼 サブタブ + ハンバーガーメニュー (縦画面時のみ) -->
       <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 mt-2 flex items-center gap-2">

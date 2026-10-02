@@ -35,10 +35,13 @@ mockNuxtImport('useDeviceToken', () => () => ({
 const echoOmron = async (line: string) => `OK OMRON BP=${line === 'OMRON BP ON' ? '1' : '0'}`
 
 const coreS3Connected = ref(false)
+// 繋がっている CoreS3 の名乗り (未接続・旧いファームは null)
+const coreS3DeviceInfo = ref<{ ver: string | null, board: string | null, flavor: string | null } | null>(null)
 const startupProbeMock = vi.fn(async () => false)
 const coreS3RequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
 mockNuxtImport('useCoreS3Serial', () => () => ({
   isConnected: coreS3Connected,
+  deviceInfo: coreS3DeviceInfo,
   startupProbe: startupProbeMock,
   request: coreS3RequestMock,
 }))
@@ -153,6 +156,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     hasKioskCredential.value = false
     hasDeviceJwt.value = false
     coreS3Connected.value = false
+    coreS3DeviceInfo.value = null
     reAuthenticateDeviceMock.mockClear()
     reAuthenticateDeviceMock.mockResolvedValue(true)
     startupProbeMock.mockClear()
@@ -194,6 +198,25 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       deviceTenantId.value = 'tenant-1'
       wrapper = await mountDeviceSettings()
       expect(wrapper.find('[data-testid="device-registration-status"]').text()).toContain('登録済み')
+    })
+  })
+
+  describe('CoreS3 の版 (Refs ippoan/alc-app#425)', () => {
+    const SELECTOR = '[data-testid="cores3-version"]'
+
+    it('★ 繋がっている CoreS3 が名乗った版を 1 行出す', async () => {
+      coreS3Connected.value = true
+      coreS3DeviceInfo.value = { ver: '0.9.3', board: 'cores3', flavor: 'cores3' }
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.find(SELECTOR).text()).toBe('CoreS3 の版: 0.9.3')
+    })
+
+    it('取れていなければ行ごと出さない (未接続 / 名乗らない機体 / VER が無い)', async () => {
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.find(SELECTOR).exists()).toBe(false)
+      coreS3DeviceInfo.value = { ver: null, board: 'cores3', flavor: 'cores3' }
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find(SELECTOR).exists()).toBe(false)
     })
   })
 

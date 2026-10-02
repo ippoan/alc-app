@@ -580,6 +580,10 @@ async function syncFc1200Date() {
               {{ deviceTenantId ? '登録済み' : '未登録' }}
             </span>
           </p>
+          <!-- 繋がっている CoreS3 が名乗った版 (Refs ippoan/alc-app#425)。取れていなければ出さない -->
+          <p v-if="coreS3.deviceInfo.value?.ver" data-testid="cores3-version">
+            CoreS3 の版: <span class="font-medium text-gray-700">{{ coreS3.deviceInfo.value.ver }}</span>
+          </p>
           <p v-if="activatedDeviceId" class="font-mono text-gray-400 break-all">device: {{ activatedDeviceId }}</p>
           <p v-if="isAndroidApp" class="flex items-center gap-2">
             <span>アプリ: <span class="font-medium text-gray-700">{{ appVersion ?? '取得中...' }}</span></span>

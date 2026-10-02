@@ -21,6 +21,8 @@ export interface FirmwareTarget {
   flavors: Readonly<Record<string, FirmwareImage>>
   /** この `BOARD=` の機体だけが対象。無ければ BOARD を見ない */
   boards?: readonly string[]
+  /** 配布ページの書き直しのページ (画面の更新が繰り返し失敗したときの案内先) */
+  installerUrl: string
 }
 
 /** 配布ページ (alc-app-s3 の GitHub Pages) */
@@ -34,6 +36,8 @@ function image(manifest: string, app: string): FirmwareImage {
 export const FIRMWARE_TARGETS: Readonly<Record<string, FirmwareTarget>> = {
   // Vein Station (タイムカード端末)
   'timecard-station': {
+    // station ビルド専用の書き直しのページは無いので、配布ページの入口を指す
+    installerUrl: PAGES_BASE,
     flavors: {
       'timecard-station': image('manifest-timecard-station.json', 'alc-hub-atoms3-timecard-station-app.bin'),
     },
@@ -41,6 +45,8 @@ export const FIRMWARE_TARGETS: Readonly<Record<string, FirmwareTarget>> = {
   // CoreS3 (統合ハブ)。CoreS3 SE も同じイメージで更新する
   'cores3': {
     boards: ['cores3', 'cores3se'],
+    // CoreS3 の書き直しのページは配布ページの入口 (index.html)
+    installerUrl: PAGES_BASE,
     flavors: {
       'cores3': image('manifest.json', 'alc-hub-cores3-app.bin'),
       'cores3-wifi': image('manifest-wifi.json', 'alc-hub-cores3-wifi-app.bin'),

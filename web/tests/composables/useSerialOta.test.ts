@@ -60,6 +60,7 @@ const MANIFEST_URL = 'https://ippoan.github.io/alc-app-s3/manifest-timecard-stat
 const APP_URL = 'https://ippoan.github.io/alc-app-s3/firmware/alc-hub-atoms3-timecard-station-app.bin'
 
 type Mod = typeof import('~/composables/useSerialOta')
+type SerialOtaResult = import('~/composables/useSerialOta').SerialOtaResult
 
 /** 偽の端末。返答の差し替え口を持つ */
 interface FakeDevice {
@@ -172,11 +173,11 @@ describe('useSerialOta', () => {
    * run を走らせ、終わるまで 1 秒ずつ時計を進める (再起動の 12 秒・再接続待ちの 90 秒を越える)。
    * 一気に進めると結果の表示時間 (RESULT_DISPLAY_MS) まで過ぎて idle に戻ってしまう
    */
-  async function runToEnd(target = 'timecard-station', opts?: { deviceId?: string }): Promise<void> {
+  async function runToEnd(target = 'timecard-station', opts?: { deviceId?: string }): Promise<SerialOtaResult> {
     let settled = false
     const p = ota.run(target, opts).finally(() => { settled = true })
     for (let i = 0; i < 200 && !settled; i++) await vi.advanceTimersByTimeAsync(1_000)
-    await p
+    return await p
   }
 
   const chunkWrites = (): string[] => dev.log.filter(l => l.startsWith('<'))
@@ -187,7 +188,7 @@ describe('useSerialOta', () => {
     const states: string[] = []
     const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
 
-    await runToEnd()
+    expect(await runToEnd()).toBe('updated')
     stop()
 
     expect(dev.log[0]).toBe('DEVICE')
@@ -257,7 +258,7 @@ describe('useSerialOta', () => {
     dev.ver = '0.2.0'
     const states: string[] = []
     const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
-    await runToEnd()
+    expect(await runToEnd()).toBe('up_to_date')
     stop()
 
     expect(dev.log).toEqual(['DEVICE'])
@@ -310,7 +311,7 @@ describe('useSerialOta', () => {
 
   it('(3) OTA SERIAL が OTA ERR で断られたら何も送らず failed', async () => {
     dev.readyLine = 'OTA ERR busy'
-    await runToEnd()
+    expect(await runToEnd()).toBe('failed')
     expect(chunkWrites()).toEqual([])
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'OTA ERR busy' })
 
@@ -328,7 +329,7 @@ describe('useSerialOta', () => {
 
   it('(3) 検証で OTA ERR verify なら failed (再起動を待たない)', async () => {
     dev.finalLine = 'OTA ERR verify'
-    await runToEnd()
+    expect(await runToEnd()).toBe('failed')
     expect(dev.log).not.toContain('OTA CONFIRM')
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'OTA ERR verify' })
   })
@@ -370,7 +371,7 @@ describe('useSerialOta', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(ota.state.value).toEqual({ kind: 'rebooting' })
     await vi.advanceTimersByTimeAsync(31_000)
-    await p
+    expect(await p).toBe('failed')
     expect(dev.log).not.toContain('OTA CONFIRM')
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'reconnect timeout' })
   })
@@ -379,7 +380,7 @@ describe('useSerialOta', () => {
 
   it('(5) allowlist に無い target は端末にも Pages にも触らない', async () => {
     for (const target of ['timecard', 'https://evil.example/x.bin', '__proto__', 'constructor', 'toString']) {
-      await runToEnd(target)
+      expect(await runToEnd(target)).toBe('skipped')
       ota.enqueue(target)
       await ota.runQueued()
     }
@@ -439,7 +440,7 @@ describe('useSerialOta', () => {
 
   it('機体が FLAVOR を名乗らなければ何もしない', async () => {
     dev.flavor = ''
-    await runToEnd()
+    expect(await runToEnd()).toBe('skipped')
     expect(dev.log).toEqual(['DEVICE'])
     expect(fetchMock).not.toHaveBeenCalled()
     expect(ota.state.value).toEqual({ kind: 'idle' })
@@ -456,7 +457,7 @@ describe('useSerialOta', () => {
 
   it('端末がつながっていなければ何もしない (捨てる)', async () => {
     link.isConnected.value = false
-    await runToEnd()
+    expect(await runToEnd()).toBe('skipped')
     expect(link.request).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -471,15 +472,15 @@ describe('useSerialOta', () => {
 
   it('実行中にもう 1 回呼ばれても 2 本目は走らない', async () => {
     const p1 = ota.run('timecard-station')
-    await ota.run('timecard-station')
+    expect(await ota.run('timecard-station')).toBe('busy')
     await vi.advanceTimersByTimeAsync(100_000)
-    await p1
+    expect(await p1).toBe('updated')
     expect(dev.log.filter(l => l.startsWith('OTA SERIAL'))).toHaveLength(1)
   })
 
   it('更新が要るか調べる段階の失敗 (manifest の取得) は画面に出さない', async () => {
     fetchMock.mockImplementationOnce(async () => new Response('x', { status: 503 }))
-    await runToEnd()
+    expect(await runToEnd()).toBe('failed')
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(warnSpy).toHaveBeenCalledWith('[SERIAL_OTA] skipped: HTTP 503')
   })
@@ -495,7 +496,7 @@ describe('useSerialOta', () => {
   it('イメージが取れなければ failed', async () => {
     fetchMock.mockImplementation(async (url: string) =>
       url === MANIFEST_URL ? new Response(JSON.stringify(manifest)) : new Response('x', { status: 404 }))
-    await runToEnd()
+    expect(await runToEnd()).toBe('failed')
     expect(dev.log).toEqual(['DEVICE'])
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'HTTP 404' })
   })
@@ -677,14 +678,14 @@ describe('useSerialOta (cores3)', () => {
   })
 
   /** 終わるまで 1 秒ずつ時計を進める */
-  async function finish(p: Promise<void>): Promise<void> {
+  async function finish<T>(p: Promise<T>): Promise<T> {
     let settled = false
     void p.finally(() => { settled = true })
     for (let i = 0; i < 300 && !settled; i++) await vi.advanceTimersByTimeAsync(1_000)
-    await p
+    return await p
   }
 
-  const runToEnd = (opts: { deviceId?: string, isBusy?: () => boolean } = OPTS): Promise<void> => finish(ota.run('cores3', opts))
+  const runToEnd = (opts: { deviceId?: string, isBusy?: () => boolean } = OPTS): Promise<SerialOtaResult> => finish(ota.run('cores3', opts))
 
   /** 機体へ送った行 (チャンクは 1 つにまとめない) */
   const sent = (): string[] => events.filter(e => e.startsWith('tx:')).map(e => e.slice(3))
@@ -719,7 +720,7 @@ describe('useSerialOta (cores3)', () => {
     ['自分の機体の id がまだ取れていない', { deviceId: 'kiosk-a' }, null],
   ] as Array<[string, { deviceId?: string }, string | null]>)('★ %s → 機体へ 1 行も送らず、取得も報告も保留もしない', async (_name, opts, own) => {
     fw.deviceId.value = own
-    await runToEnd(opts)
+    expect(await runToEnd(opts)).toBe('skipped')
     ota.enqueue('cores3', opts)
     await ota.runQueued()
     expectUntouched()
@@ -742,7 +743,7 @@ describe('useSerialOta (cores3)', () => {
   it('CoreS3 が繋がっていなければ何もしない', async () => {
     hub.isConnected.value = false
     events.length = 0
-    await runToEnd()
+    expect(await runToEnd()).toBe('skipped')
     expectUntouched()
   })
 
@@ -750,7 +751,7 @@ describe('useSerialOta (cores3)', () => {
 
   it('★ 成功: 錠・保留・報告・機体へ送る行の順番', async () => {
     const [manifestUrl, appUrl] = HUB_URLS.cores3!
-    await runToEnd()
+    expect(await runToEnd()).toBe('updated')
 
     expect(order()).toEqual([
       'tx:DEVICE',
@@ -831,15 +832,15 @@ describe('useSerialOta (cores3)', () => {
   // ---------- (2) 照合: 対象外は一覧へ skipped を出すだけ ----------
 
   it.each([
-    ['BOARD が表に無い', (d: FakeHub) => { d.board = 'atoms3' }, 'unsupported'],
-    ['BOARD を名乗らない', (d: FakeHub) => { d.board = null }, 'unsupported'],
-    ['FLAVOR が表に無い', (d: FakeHub) => { d.flavor = 'timecard-station' }, 'flavor_mismatch'],
-    ['版が同じ', (d: FakeHub) => { d.ver = '0.2.0' }, 'up_to_date'],
-  ] as Array<[string, (d: FakeHub) => void, string]>)('%s → skipped: %s (幕も錠も保留も無い)', async (_name, arrange, reason) => {
+    ['BOARD が表に無い', (d: FakeHub) => { d.board = 'atoms3' }, 'unsupported', 'skipped'],
+    ['BOARD を名乗らない', (d: FakeHub) => { d.board = null }, 'unsupported', 'skipped'],
+    ['FLAVOR が表に無い', (d: FakeHub) => { d.flavor = 'timecard-station' }, 'flavor_mismatch', 'skipped'],
+    ['版が同じ', (d: FakeHub) => { d.ver = '0.2.0' }, 'up_to_date', 'up_to_date'],
+  ] as Array<[string, (d: FakeHub) => void, string, SerialOtaResult]>)('%s → skipped: %s (幕も錠も保留も無い。run の結果は %s)', async (_name, arrange, reason, result) => {
     arrange(hubDev)
     const states: string[] = []
     const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
-    await runToEnd()
+    expect(await runToEnd()).toBe(result)
     stop()
 
     expect(fw.report.mock.calls).toEqual([['skipped', { reason }]])
@@ -851,7 +852,7 @@ describe('useSerialOta (cores3)', () => {
 
   it('最初の DEVICE がほかの要求と当たって弾かれたら、何も報告せず戻る (管理者が押し直す)', async () => {
     hubDev.busy.DEVICE = 1
-    await runToEnd()
+    expect(await runToEnd()).toBe('busy')
     expect(sent()).toEqual([])
     expect(fetchMock).not.toHaveBeenCalled()
     expect(fw.report).not.toHaveBeenCalled()
@@ -865,7 +866,7 @@ describe('useSerialOta (cores3)', () => {
 
   it('manifest の取得が時間切れ → 何も出さず戻る', async () => {
     fetchMock.mockImplementationOnce(async () => { throw new DOMException('The operation was aborted.', 'AbortError') })
-    await runToEnd()
+    expect(await runToEnd()).toBe('failed')
     expect(fw.report).not.toHaveBeenCalled()
     expect(fw.hold).not.toHaveBeenCalled()
     expect(hub.ota.begin).not.toHaveBeenCalled()
@@ -885,7 +886,7 @@ describe('useSerialOta (cores3)', () => {
       if (url === HUB_URLS.cores3![0]) return new Response(JSON.stringify({ version: '0.2.0' }))
       throw new DOMException('The operation timed out.', 'TimeoutError')
     })
-    await runToEnd()
+    expect(await runToEnd()).toBe('failed')
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'The operation timed out.' })
     expect(reports()).toEqual(['downloading', 'failed'])
     expect(fw.report).toHaveBeenLastCalledWith('failed', { reason: 'download' })
@@ -907,7 +908,7 @@ describe('useSerialOta (cores3)', () => {
   it('★ 取得の後に機体が使用中になっていたら、始めずに預け直し、空いたらもう一度走る', async () => {
     let busy = true
     const opts = { deviceId: 'kiosk-a', isBusy: () => busy }
-    await runToEnd(opts)
+    expect(await runToEnd(opts)).toBe('busy')
 
     expect(hub.ota.begin).not.toHaveBeenCalled()
     expect(sent()).toEqual(['DEVICE'])
@@ -941,7 +942,7 @@ describe('useSerialOta (cores3)', () => {
     hubDev.readyLine = 'OTA ERR busy'
     const states: string[] = []
     const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
-    await runToEnd()
+    expect(await runToEnd()).toBe('busy')
     stop()
 
     expect(states).toEqual(['downloading', 'idle'])
@@ -955,7 +956,7 @@ describe('useSerialOta (cores3)', () => {
 
   it('★ HB OFF がほかの要求と当たって弾かれた → skipped: busy (OTA SERIAL を送らない)', async () => {
     hubDev.busy['HB OFF'] = 1
-    await runToEnd()
+    expect(await runToEnd()).toBe('busy')
     expect(sent()).toEqual(['DEVICE'])
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(fw.report).toHaveBeenLastCalledWith('skipped', { reason: 'busy' })
@@ -1061,7 +1062,8 @@ describe('useSerialOta (cores3)', () => {
     await vi.advanceTimersByTimeAsync(57_000)
     // まだ諦めていない (2 秒おきに送り直している)
     expect(ota.state.value).toEqual({ kind: 'confirming' })
-    await finish(p)
+    // 機体は書き込み済みで、失敗の幕が出ている — 「いまは受けられない」ではなく失敗
+    expect(await finish(p)).toBe('failed')
 
     // 60 秒を 2 秒おき: 最初の 1 回 + 送り直し 30 回
     expect(hub.ota.request.mock.calls.length - before).toBeLessThanOrEqual(31)
@@ -1154,9 +1156,9 @@ describe('useSerialOta (cores3)', () => {
   it('実行中にもう 1 回呼ばれても 2 本目は走らない (Vein Station の合図も捨てる)', async () => {
     link.isConnected.value = true
     const p = ota.run('cores3', OPTS)
-    await ota.run('cores3', OPTS)
-    await ota.run('timecard-station')
-    await finish(p)
+    expect(await ota.run('cores3', OPTS)).toBe('busy')
+    expect(await ota.run('timecard-station')).toBe('busy')
+    expect(await finish(p)).toBe('updated')
     expect(sent().filter(l => l.startsWith('OTA SERIAL'))).toHaveLength(1)
     expect(link.request).not.toHaveBeenCalled()
   })
