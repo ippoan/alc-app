@@ -107,8 +107,8 @@ describe('api.ts — 予定の口は運行管理者席の鍵で通す (#337)', (
     expect(err).toBeInstanceOf(Error)
     // 利用者が読んで次の手が打てる文言であること (403 forbidden でも素の TypeError でもない)
     expect((err as Error).message).toBe(
-      '運行管理者席の端末で認証できませんでした。この席の警告デバイス (VoiceS3R) が USB でつながっていて、'
-      + '用途「運行管理者席」で鍵が登録されているか確認してください',
+      'この席の端末を確認できませんでした。警告デバイスが USB でつながっているか確認してください。'
+      + 'つながっていても直らないときは、管理者に連絡してください',
     )
     expect((err as Error).message).not.toContain('403')
     expect((err as Error).message).not.toContain('forbidden')
@@ -116,10 +116,14 @@ describe('api.ts — 予定の口は運行管理者席の鍵で通す (#337)', (
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('文言は原因の見当がつく形で出す (VoiceS3R / 用途「運行管理者席」)', () => {
-    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).toContain('運行管理者席の端末で認証できませんでした')
-    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).toContain('VoiceS3R')
-    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).toContain('運行管理者席')
+  it('文言は利用者が次の手を打てる形で、機種名や内部の語を含まない', () => {
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).toContain('警告デバイス')
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).toContain('USB')
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).toContain('管理者に連絡')
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).not.toContain('VoiceS3R')
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).not.toContain('用途')
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).not.toContain('鍵')
+    expect(MANAGER_DEVICE_AUTH_FAILED_MESSAGE).not.toContain('認証')
   })
 
   it('admin JWT があるときは従来どおり admin が優先 (admin タブは無変更)', async () => {
