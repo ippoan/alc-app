@@ -76,3 +76,21 @@ describe('TenkoRemoteAdminView — 一覧に出す部屋', () => {
     w.unmount()
   })
 })
+
+// 席の警告デバイスの更新を始めてよいかの材料 (Refs ippoan/alc-app#425)。リロードの申告とは別の集合
+describe('TenkoRemoteAdminView — 「機体を使用中」の申告', () => {
+  it('★ 待機中は申告せず、部屋を押して本人確認に入ったら申告する。unmount で下りる', async () => {
+    activeRoomsRef.value = ['session-1']
+    const w = await mountSuspended(TenkoRemoteAdminView)
+    await flush()
+    await w.vm.$nextTick()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+
+    await w.findAll('div').find(d => d.classes().includes('cursor-pointer') && d.text().includes('session-1'))!.trigger('click')
+    expect(isDeviceBusy.value).toBe(true)
+
+    w.unmount()
+    expect(isDeviceBusy.value).toBe(false)
+  })
+})

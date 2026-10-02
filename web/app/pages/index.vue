@@ -744,6 +744,8 @@ function onRoleTabClick(role: RoleTab) {
          RoleAuthGate の :key 再マウントや着信通知モードの分岐に巻き込まれない位置に 1 つだけ置く -->
     <!-- IT点呼 の役割タブでも出す (受け画面の席で、警告デバイスの接続ボタンと状態が見えるように) -->
     <ManagerAlarmBar v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
+    <!-- 警告デバイスの版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425) -->
+    <AlarmDeviceFirmwareNotice v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
       v-if="activeRole === 'manager' && incomingCallMode"
@@ -800,5 +802,8 @@ function onRoleTabClick(role: RoleTab) {
     <div v-if="activeRole === 'it_tenko'" class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
       <TenkoItAdminView />
     </div>
+
+    <!-- 「更新中」の幕。役割に依らず 1 つだけ (運行者の機体にも、席の警告デバイスにも出す) -->
+    <FirmwareOtaOverlay />
   </div>
 </template>

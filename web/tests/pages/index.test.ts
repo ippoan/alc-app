@@ -19,6 +19,8 @@ import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
 import ManagerAlarmBar from '~/components/ManagerAlarmBar.vue'
+import AlarmDeviceFirmwareNotice from '~/components/AlarmDeviceFirmwareNotice.vue'
+import FirmwareOtaOverlay from '~/components/FirmwareOtaOverlay.vue'
 import ManagerDashboard from '~/components/ManagerDashboard.vue'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import { clearDevDeviceMark, isDevDevice, noteDeviceToken, DEV_DEVICE_MARK_EVENT } from '~/utils/token-selection'
@@ -1316,6 +1318,33 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       await clickRole(wrapper, 'システム管理者')
       expect(wrapper.findComponent(ManagerAlarmBar).exists()).toBe(false)
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
+    })
+
+    it('★ 警告デバイスの版の帯は、運行管理者と IT点呼 の役割タブにだけ 1 つ出る (Refs ippoan/alc-app#425)', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      expect(wrapper.findComponent(AlarmDeviceFirmwareNotice).exists()).toBe(false)
+
+      await clickRole(wrapper, LABEL)
+      expect(wrapper.findAllComponents(AlarmDeviceFirmwareNotice)).toHaveLength(1)
+
+      await clickRole(wrapper, '運行管理者')
+      expect(wrapper.findAllComponents(AlarmDeviceFirmwareNotice)).toHaveLength(1)
+
+      await clickRole(wrapper, 'システム管理者')
+      expect(wrapper.findComponent(AlarmDeviceFirmwareNotice).exists()).toBe(false)
+    })
+
+    it('★ 「更新中」の幕は、どの役割タブでも 1 つだけ在る (運行者の機体にも席の警告デバイスにも出す。Refs ippoan/alc-app#425)', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      expect(wrapper.findAllComponents(FirmwareOtaOverlay)).toHaveLength(1)
+      // 合図の受けと報告は運行者の区画に残る
+      expect(wrapper.findAllComponents(FirmwareOtaHost)).toHaveLength(1)
+
+      for (const role of [LABEL, '運行管理者', 'システム管理者']) {
+        await clickRole(wrapper, role)
+        expect(wrapper.findAllComponents(FirmwareOtaOverlay)).toHaveLength(1)
+        expect(wrapper.findComponent(FirmwareOtaHost).exists()).toBe(false)
+      }
     })
 
     it.each([

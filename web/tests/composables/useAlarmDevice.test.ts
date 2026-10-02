@@ -424,18 +424,20 @@ describe('useAlarmDevice', () => {
   // ---------- 公開 API の形 ----------
 
   describe('公開 API', () => {
-    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン) + cardRead (読んだカード、どちらも #387) だけ', async () => {
+    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン) + cardRead (読んだカード、どちらも #387) + deviceInfo / ota (画面からの更新、#425) だけ', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
       expect(Object.keys(alarm).sort()).toEqual([
         'buttonPressCount',
         'cardRead',
         'connect',
+        'deviceInfo',
         'deviceState',
         'disconnect',
         'isConnected',
         'isSupported',
         'notifyIntentionalReload',
+        'ota',
         'request',
         'requestPort',
       ])
@@ -1264,6 +1266,233 @@ describe('useAlarmDevice', () => {
       const assertion = expect(p).rejects.toThrow()
       await vi.advanceTimersByTimeAsync(10_000)
       await assertion
+    })
+  })
+
+  // ---------- 機体の名乗り (Refs ippoan/alc-app#425) ----------
+
+  describe('deviceInfo (機体の名乗り)', () => {
+    async function connectWith(line: string) {
+      const dev = createMockPort()
+      dev.emit(line)
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      return dev
+    }
+
+    it('未接続は null', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+      expect(alarm.deviceInfo.value).toBeNull()
+    })
+
+    it('プローブ中の名乗りから VER / FLAVOR を拾う (BOARD は無い機種なので null)', async () => {
+      await connectWith('DEVICE alarm VER=0.1.0+abc FLAVOR=alarm\n')
+      expect(alarm.isConnected.value).toBe(true)
+      expect(alarm.deviceInfo.value).toEqual({ ver: '0.1.0+abc', board: null, flavor: 'alarm' })
+    })
+
+    it('FLAVOR を名乗らない古い版は flavor が null', async () => {
+      await connectWith('DEVICE alarm VER=0.1.0\n')
+      expect(alarm.deviceInfo.value).toEqual({ ver: '0.1.0', board: null, flavor: null })
+    })
+
+    it('★ 名乗りが行の途中に連結されていても、見つけた位置から後ろを読む', async () => {
+      await connectWith('I (123) boot: VER=9.9.9 xDEVICE alarm VER=0.2.0 FLAVOR=alarm\n')
+      expect(alarm.deviceInfo.value).toEqual({ ver: '0.2.0', board: null, flavor: 'alarm' })
+    })
+
+    it('切断で null に戻り、掴み直すと新しい名乗りになる', async () => {
+      const dev = await connectWith('DEVICE alarm VER=0.1.0 FLAVOR=alarm\n')
+      const next = createMockPort()
+      next.emit('DEVICE alarm VER=0.2.0 FLAVOR=alarm\n')
+      installSerialMock({ getPorts: vi.fn(async () => [next.port]) })
+      dev.push({ value: undefined, done: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.deviceInfo.value).toBeNull()
+
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(alarm.deviceInfo.value).toEqual({ ver: '0.2.0', board: null, flavor: 'alarm' })
+    })
+  })
+
+  // ---------- ファームの書き込み中の錠 (Refs ippoan/alc-app#425) ----------
+
+  /**
+   * 機体は `OTA SERIAL` の後、受けたバイトを全部イメージとして読む。錠 (`ota.begin()` 〜 `ota.end()`)
+   * の間、ここから機体へ届くのは `ota.request` と `ota.rest` だけ (CoreS3 の錠と同じ形)。
+   */
+  describe('ota (書き込み中の錠)', () => {
+    async function connectDevice() {
+      const dev = createMockPort()
+      dev.emit('DEVICE alarm VER=0.1.0 FLAVOR=alarm\n')
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      alarm.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      return dev
+    }
+
+    afterEach(() => {
+      // 錠はモジュールの変数。次のテストは load() で読み直すが、後始末の disconnect の前に解いておく
+      alarm.ota.end()
+    })
+
+    it('錠の間、heartbeat が止まる (3 秒を過ぎても何も出ない)', async () => {
+      const dev = await connectDevice()
+      const before = dev.writes.length
+
+      alarm.ota.begin()
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(dev.writes).toHaveLength(before)
+    })
+
+    it('錠の間、通常の request (席の署名) は送らずに CoreS3 と同じ文言で reject する', async () => {
+      const dev = await connectDevice()
+      const before = dev.writes.length
+
+      alarm.ota.begin()
+      await expect(alarm.request('AUTH SIGN abc123', 'AUTH SIG ', 10_000))
+        .rejects.toThrow('request(cores3): ファームの書き込み中です')
+      expect(dev.writes).toHaveLength(before)
+
+      // 応答待ちの枠を使っていない: ota.request はそのまま通る
+      const p = alarm.ota.request('OTA SERIAL 10 alarm', 'OTA READY', 1000, 'OTA ERR')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('OTA SERIAL 10 alarm\n')
+      dev.emit('OTA READY 4096\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('OTA READY 4096')
+    })
+
+    it('錠の間、意図した reload の grace を警告デバイスへ送らない', async () => {
+      const dev = await connectDevice()
+      const before = dev.writes.length
+
+      alarm.ota.begin()
+      alarm.notifyIntentionalReload()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes).toHaveLength(before)
+      expect(alarmLogs()).not.toContain('sent grace=45')
+    })
+
+    it('錠の間に掴み直しても STATUS も heartbeat も送らない (名乗り・接続・状態行は今までどおり)', async () => {
+      const dev = await connectDevice()
+      alarm.ota.begin()
+
+      const next = createMockPort()
+      next.emit('DEVICE alarm VER=0.2.0 FLAVOR=alarm\nEVT ALARM state=idle cause=none\n')
+      installSerialMock({ getPorts: vi.fn(async () => [next.port]) })
+      dev.push({ value: undefined, done: true })
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(alarm.isConnected.value).toBe(true)
+      expect(alarm.deviceInfo.value?.ver).toBe('0.2.0')
+      expect(alarm.deviceState.value).toEqual({ state: 'idle', cause: 'none' })
+      await vi.advanceTimersByTimeAsync(9000)
+      // 掴み直したポートへ届いたのは arbiter のプローブ (DEVICE + 後方互換の STATUS) の 1 組だけ。
+      // 錠が無ければ onOpen がもう 1 本の STATUS と HB OK を送る
+      expect(next.writes).toEqual(['DEVICE\n', 'STATUS\n'])
+
+      // 錠を解くと heartbeat が始まる
+      alarm.ota.end()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(next.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('ota.request は錠が無くても通り、失敗側の合図 (errPrefix) の行で reject する', async () => {
+      const dev = await connectDevice()
+
+      const p = alarm.ota.request('OTA CONFIRM', 'OTA CONFIRMED', 1000, 'ERR UNSUPPORTED')
+      const assertion = expect(p).rejects.toThrow('ERR UNSUPPORTED (alarm)')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('OTA CONFIRM\n')
+      dev.emit('ERR UNSUPPORTED (alarm)\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await assertion
+    })
+
+    it('ota.request はバイト列を改行を足さずに書き、応答を待つ', async () => {
+      const dev = await connectDevice()
+      alarm.ota.begin()
+
+      const p = alarm.ota.request(new TextEncoder().encode('abc'), 'OTA ACK', 1000, 'OTA ERR')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('abc')
+      dev.emit('OTA ACK 3\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('OTA ACK 3')
+    })
+
+    it('ota.rest(): 錠の間でも HB OK grace=120 を 1 行だけ書く (HB OFF は送らない)', async () => {
+      const dev = await connectDevice()
+      alarm.ota.begin()
+      const before = dev.writes.length
+
+      await alarm.ota.rest()
+      expect(dev.writes.slice(before)).toEqual(['HB OK grace=120\n'])
+      expect(mod.OTA_GRACE_SEC).toBe(120)
+      expect(dev.writes).not.toContain('HB OFF\n')
+    })
+
+    it('ota.rest(): 未接続なら何もしない / 書けなくても例外を出さない', async () => {
+      installSerialMock({ getPorts: vi.fn(async () => []) })
+      await load()
+      await expect(alarm.ota.rest()).resolves.toBeUndefined()
+
+      const dev = await connectDevice()
+      dev.setWriteError(true)
+      await expect(alarm.ota.rest()).resolves.toBeUndefined()
+      dev.setWriteError(false)
+    })
+
+    it('ota.end(): 繋がっていれば grace の無い HB OK を即 1 本送り、周期が再開し、request も戻る', async () => {
+      const dev = await connectDevice()
+      alarm.ota.begin()
+      await alarm.ota.rest()
+      const before = dev.writes.length
+
+      alarm.ota.end()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.slice(before)).toEqual(['HB OK\n'])
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.slice(before)).toEqual(['HB OK\n', 'HB OK\n'])
+
+      const p = alarm.request('AUTH SIGN abc123', 'AUTH SIG ', 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('AUTH SIG pk-1 sig-1\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('AUTH SIG pk-1 sig-1')
+    })
+
+    it('ota.end(): 未接続なら何も送らず、次の接続で heartbeat が始まる', async () => {
+      const dev = await connectDevice()
+      alarm.ota.begin()
+      const next = createMockPort()
+      next.emit('DEVICE alarm VER=0.2.0 FLAVOR=alarm\n')
+      installSerialMock({ getPorts: vi.fn(async () => [next.port]) })
+      dev.push({ value: undefined, done: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(alarm.isConnected.value).toBe(false)
+      const before = dev.writes.length
+
+      expect(() => alarm.ota.end()).not.toThrow()
+      expect(dev.writes).toHaveLength(before)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(alarm.isConnected.value).toBe(true)
+      expect(next.writes.at(-1)).toBe('HB OK\n')
+    })
+
+    it('ota.end(): 錠が掛かっていないときに呼んでも二重のタイマーが出来ない (3 秒で HB OK が 1 本だけ)', async () => {
+      const dev = await connectDevice()
+      alarm.ota.end()
+      alarm.ota.end()
+      const before = dev.writes.length
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(dev.writes.slice(before)).toEqual(['HB OK\n'])
     })
   })
 })

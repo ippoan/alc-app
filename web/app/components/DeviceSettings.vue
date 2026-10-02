@@ -675,6 +675,10 @@ async function syncFc1200Date() {
             <span v-if="alarmDeviceEnabled === null" class="block text-gray-400">未設定 — 「運行管理者」タブで問いかけが出ます</span>
           </span>
         </label>
+        <!-- 繋がっている警告デバイスの版 (取れていなければ出さない。Refs ippoan/alc-app#425) -->
+        <p v-if="alarmDevice.deviceInfo.value?.ver" class="text-xs text-gray-500" data-testid="alarm-device-version">
+          警告デバイスの版: {{ alarmDevice.deviceInfo.value.ver }}
+        </p>
 
         <!-- Omron 血圧計を使うか (HEM-6231T / HCR-1901T2。ニプロは対象外)。正本はサーバ
              (devices.bp_enabled、既定 OFF)。端末 (CoreS3 / VoiceS3R / 測定台の Atom S3) が

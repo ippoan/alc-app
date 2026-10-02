@@ -1,6 +1,6 @@
 // 機体の版が配布中の版と違うときの帯 (Refs ippoan/alc-app#425)。
 // 帯を出す条件・押下・結果の出し分け・配布中の版の取り直し (60 分) と切断を見る。
-// 「更新中」の幕は FirmwareOtaHost の持ち物なので、ここには無い
+// 「更新中」の幕は FirmwareOtaOverlay の持ち物なので、ここには無い
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
@@ -99,7 +99,7 @@ describe('DeviceFirmwareNotice', () => {
     w.unmount()
   })
 
-  it('★ 更新が走っている間 (state が idle でない) は出さない (幕は FirmwareOtaHost が出す)', async () => {
+  it('★ 更新が走っている間 (state が idle でない) は出さない (幕は FirmwareOtaOverlay が出す)', async () => {
     ota.state.value = { kind: 'writing', pct: 10 }
     const w = await mount()
     expect(root(w).exists()).toBe(false)
@@ -129,7 +129,7 @@ describe('DeviceFirmwareNotice', () => {
     w.unmount()
   })
 
-  it.each(['updated', 'up_to_date', 'busy', 'skipped', 'failed'] as SerialOtaResult[])('★ start が %s で返ったら、配布中の版を 1 回取り直す', async (outcome) => {
+  it.each(['updated', 'up_to_date', 'busy', 'skipped', 'unsupported', 'failed'] as SerialOtaResult[])('★ start が %s で返ったら、配布中の版を 1 回取り直す', async (outcome) => {
     start.mockResolvedValue(outcome)
     const w = await mount()
     expect(fetchLatest).toHaveBeenCalledTimes(1)
@@ -204,6 +204,35 @@ describe('DeviceFirmwareNotice', () => {
     w.unmount()
   })
 
+  it('★ 結果 unsupported → 「配布ページから 1 回書き直すと…」と、対象の書き直しのページへのリンク (URL は表から)', async () => {
+    fetchLatest.mockResolvedValue({ alarm: '0.2.0' })
+    start.mockResolvedValue('unsupported')
+    const w = await mount({ target: 'alarm', flavor: 'alarm' })
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(resultLine(w).text()).toContain('この端末は、配布ページから 1 回書き直すと、画面から更新できるようになります')
+    // 失敗の色にしない (機体は元のまま動いている)
+    expect(resultLine(w).classes()).not.toContain('text-red-700')
+    const link = w.find('[data-testid="device-firmware-installer"]')
+    expect(link.attributes('href')).toBe(`${INSTALLER}alarm.html`)
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toContain('noopener')
+    // 書き直すまで結果は変わらないが、ボタンは戻る
+    expect(startButton(w).attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('表に無い対象では、unsupported の案内にリンクを付けない (URL を作らない)', async () => {
+    fetchLatest.mockResolvedValue({ x: '0.2.0' })
+    start.mockResolvedValue('unsupported')
+    const w = await mount({ target: 'unknown', flavor: 'x' })
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(resultLine(w).text()).toContain('配布ページから 1 回書き直すと')
+    expect(w.find('a').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('start が例外で終わっても failed と同じ案内を出し、ボタンは戻る', async () => {
     start.mockRejectedValue(new Error('boom'))
     const w = await mount()
@@ -258,7 +287,7 @@ describe('DeviceFirmwareNotice', () => {
   })
 
   it('利用者が読む文に開発者向けの語を出さない', async () => {
-    for (const outcome of ['failed', 'busy'] as SerialOtaResult[]) {
+    for (const outcome of ['failed', 'busy', 'unsupported'] as SerialOtaResult[]) {
       start.mockResolvedValue(outcome)
       const w = await mount()
       await startButton(w).trigger('click')

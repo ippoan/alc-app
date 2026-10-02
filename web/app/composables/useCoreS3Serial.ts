@@ -50,7 +50,7 @@
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { HEARTBEAT_INTERVAL, RELOAD_GRACE_SEC } from '~/composables/useAlarmDevice'
 import { writeLine } from '~/composables/useSerialArbiter'
-import { parseDeviceLine } from '~/utils/device-line'
+import { findDeviceLine } from '~/utils/device-line'
 import type { DeviceLine } from '~/utils/device-line'
 import { appendDiag, readDiag } from '~/utils/serialDiagLog'
 
@@ -208,15 +208,6 @@ export function evtArg(args: string[], key: string): string {
   const prefix = `${key}=`
   const hit = args.find(arg => arg.startsWith(prefix))
   return hit === undefined ? '' : hit.slice(prefix.length)
-}
-
-/**
- * プローブ中に集まった行から機体の名乗りを拾う。`DEVICE ` は行頭とは限らない (直前のログ行が
- * 途中で切れて連結されうる。arbiter の機種判定と同じ見方) ので、見つけた位置から後ろを読む
- */
-function findDeviceLine(lines: string[]): DeviceLine | null {
-  const line = lines.find(l => l.includes('DEVICE '))
-  return line === undefined ? null : parseDeviceLine(line.slice(line.indexOf('DEVICE ')))
 }
 
 export function useCoreS3Serial() {

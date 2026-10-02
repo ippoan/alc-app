@@ -247,6 +247,8 @@ const identityLabel = computed(() => identityMethodLabel(session.value?.identity
 const isCallActive = ref(false)
 /** カメラ・マイク・signaling を開いている途中 (このあいだは別の行を開かせない) */
 const connecting = ref(false)
+// 点呼を開いている・開く途中・運行管理者の確認を待っている間は、席の警告デバイスの更新を始めさせない (Refs ippoan/alc-app#425)
+useKioskScreen().declareDeviceBusy(() => opened.value !== null || connecting.value || waiting.value !== null)
 const callError = ref<string | null>(null)
 const showDriverInfoPanel = ref(false)
 const localStream = shallowRef<MediaStream | null>(null)  // 映像+音声 (TenkoVideoCall用)
