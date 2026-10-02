@@ -40,6 +40,8 @@ const isCalling = computed(() => callingRooms.value.length > 0)
 /** 着信の案内。どの画面で通話すれば止まるかは部屋の種別で違う (鳴るのはどちらも同じ) */
 const callingText = computed(() => {
   const { it, remote } = splitRooms(callingRooms.value)
+  // 画面共有だけのとき。点呼の着信が混ざるときは点呼の案内を出す (画面共有は文に足さない)
+  if (it.length === 0 && remote.length === 0) return '画面共有の着信があります。画面共有を開いて見ると止まります'
   if (it.length === 0) return '着信あり — 遠隔点呼に入ると止まります'
   if (remote.length === 0) return 'IT点呼の着信あり — IT点呼 の画面で応答し、判定を保存すると止まります'
   return '遠隔点呼と IT点呼 の着信あり — それぞれの画面で応答すると止まります (IT点呼 は判定の保存まで)'

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ref } from 'vue'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { nextTick, ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { withSetup } from '../helpers/with-setup'
 
@@ -15,7 +15,7 @@ const { useWebRtcMock } = vi.hoisted(() => ({
 mockNuxtImport('useWebRtc', () => useWebRtcMock)
 
 // Import AFTER mock setup
-import { useScreenShare } from '~/composables/useScreenShare'
+import { SCREEN_SHARE_ENDED_NOTICE_MS, useScreenShare } from '~/composables/useScreenShare'
 
 // --- Helpers ---
 function createMockVideoTrack() {
@@ -49,6 +49,13 @@ vi.stubGlobal('crypto', { randomUUID: () => 'test-uuid-1234' })
 describe('useScreenShare', () => {
   let mockGetDisplayMedia: ReturnType<typeof vi.fn>
   let mockGetUserMedia: ReturnType<typeof vi.fn>
+  // useWebRtc が受けた「画面共有を終了」の合図の連番 / 相手 (見る側) が居るか
+  let endShareCount: ReturnType<typeof ref<number>>
+  let isPeerConnected: ReturnType<typeof ref<boolean>>
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -70,11 +77,14 @@ describe('useScreenShare', () => {
       },
     })
 
+    endShareCount = ref(0)
+    isPeerConnected = ref(false)
     useWebRtcMock.mockReturnValue({
       isConnected: ref(false),
-      isPeerConnected: ref(false),
+      isPeerConnected,
       remoteStream: ref(null),
       error: ref(null),
+      endShareCount,
       connect: mockConnect,
       startStreaming: mockStartStreaming,
       disconnect: mockDisconnect,
@@ -347,5 +357,93 @@ describe('useScreenShare', () => {
     // micStream is null because getUserMedia failed
     expect(ss.error.value).toBe('シグナリングサーバーへの接続に失敗しました')
     expect(ss.isSharing.value).toBe(false)
+  })
+
+  // --- 運行管理者の「画面共有を終了」 ---
+
+  describe('運行管理者からの終了の合図 (endShareCount)', () => {
+    const TIMERS = { toFake: ['setTimeout', 'clearTimeout'] as ('setTimeout' | 'clearTimeout')[] }
+
+    it('合図で共有を止め、endedByAdmin が数秒だけ立つ', async () => {
+      vi.useFakeTimers(TIMERS)
+      const videoTrack = createMockVideoTrack()
+      mockGetDisplayMedia.mockResolvedValue(createMockStream([videoTrack]))
+      const [ss, app] = withSetup(() => useScreenShare())
+      await ss.startSharing('https://sig.example.com')
+      expect(ss.isSharing.value).toBe(true)
+      expect(ss.endedByAdmin.value).toBe(false)
+
+      endShareCount.value = 1
+      await nextTick()
+      expect(ss.isSharing.value).toBe(false)
+      expect(ss.roomId.value).toBeNull()
+      expect(videoTrack.stop).toHaveBeenCalled()
+      expect(mockDisconnect).toHaveBeenCalled()
+      expect(ss.endedByAdmin.value).toBe(true)
+
+      vi.advanceTimersByTime(SCREEN_SHARE_ENDED_NOTICE_MS - 1)
+      expect(ss.endedByAdmin.value).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(ss.endedByAdmin.value).toBe(false)
+      app.unmount()
+    })
+
+    it('★ 見る側が抜けただけ (peer_left = isPeerConnected が false) では止まらない', async () => {
+      const [ss, app] = withSetup(() => useScreenShare())
+      await ss.startSharing('https://sig.example.com')
+      isPeerConnected.value = true
+      await nextTick()
+      isPeerConnected.value = false
+      await nextTick()
+
+      expect(ss.isSharing.value).toBe(true)
+      expect(ss.endedByAdmin.value).toBe(false)
+      expect(mockDisconnect).not.toHaveBeenCalled()
+      app.unmount()
+    })
+
+    it('合図が続けて来たら、消えるまでの時間は後の合図から数え直す', async () => {
+      vi.useFakeTimers(TIMERS)
+      const [ss, app] = withSetup(() => useScreenShare())
+
+      endShareCount.value = 1
+      await nextTick()
+      vi.advanceTimersByTime(SCREEN_SHARE_ENDED_NOTICE_MS - 1000)
+      endShareCount.value = 2
+      await nextTick()
+      vi.advanceTimersByTime(SCREEN_SHARE_ENDED_NOTICE_MS - 1)
+      expect(ss.endedByAdmin.value).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(ss.endedByAdmin.value).toBe(false)
+      app.unmount()
+    })
+
+    it('もう一度共有を始めたら、その場で消える', async () => {
+      vi.useFakeTimers(TIMERS)
+      const [ss, app] = withSetup(() => useScreenShare())
+      endShareCount.value = 1
+      await nextTick()
+      expect(ss.endedByAdmin.value).toBe(true)
+
+      await ss.startSharing('https://sig.example.com')
+      expect(ss.endedByAdmin.value).toBe(false)
+      expect(ss.isSharing.value).toBe(true)
+      // 前の合図の時間切れが、後から何かを消すことはない
+      vi.advanceTimersByTime(SCREEN_SHARE_ENDED_NOTICE_MS)
+      expect(ss.isSharing.value).toBe(true)
+      app.unmount()
+    })
+
+    it('出ている間に画面が消えたら、時間切れを待たずに片付ける', async () => {
+      vi.useFakeTimers(TIMERS)
+      const [ss, app] = withSetup(() => useScreenShare())
+      endShareCount.value = 1
+      await nextTick()
+      expect(ss.endedByAdmin.value).toBe(true)
+
+      app.unmount()
+      expect(ss.endedByAdmin.value).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    })
   })
 })

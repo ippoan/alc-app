@@ -35,6 +35,11 @@ export function useWebRtc(role: 'device' | 'admin') {
   const isPeerConnected = ref(false)
   const remoteStream = ref<MediaStream | null>(null)
   const error = ref<string | null>(null)
+  /**
+   * 相手 (運行管理者) から「画面共有を終了」の合図を受けた回数。専用の callback は持たず、
+   * 読む側 (`useScreenShare`) がこの連番を watch する (`useAlarmDevice` の `buttonPressCount` と同じ作法)
+   */
+  const endShareCount = ref(0)
 
   let ws: WebSocket | null = null
   let pc: RTCPeerConnection | null = null
@@ -240,6 +245,10 @@ export function useWebRtc(role: 'device' | 'admin') {
         log('server error:', data.message)
         error.value = data.message || 'シグナリングエラー'
         break
+      case 'end_share':
+        log('end_share')
+        endShareCount.value += 1
+        break
       default:
         log('unhandled message type:', data.type)
     }
@@ -347,6 +356,14 @@ export function useWebRtc(role: 'device' | 'admin') {
     }
   }
 
+  /**
+   * 見ている画面共有を、共有している側に終了させる (運行管理者の側だけが使う)。
+   * signaling が中継するのは admin から・画面共有の部屋だけで、それ以外は `error` が返る
+   */
+  function sendEndShare() {
+    sendSignaling({ type: 'end_share' })
+  }
+
   /** 切断 */
   function disconnect() {
     log('disconnect')
@@ -376,8 +393,10 @@ export function useWebRtc(role: 'device' | 'admin') {
     isPeerConnected: readonly(isPeerConnected),
     remoteStream: readonly(remoteStream),
     error: readonly(error),
+    endShareCount: readonly(endShareCount),
     connect,
     startStreaming,
+    sendEndShare,
     disconnect,
   }
 }

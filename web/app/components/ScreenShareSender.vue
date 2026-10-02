@@ -2,7 +2,7 @@
 const config = useRuntimeConfig()
 const signalingUrl = config.public.signalingUrl as string
 
-const { isSharing, roomId, error, isPeerConnected, isConnected, isMuted, remoteStream, startSharing, stopSharing, toggleMute } = useScreenShare()
+const { isSharing, roomId, error, isPeerConnected, isConnected, isMuted, endedByAdmin, remoteStream, startSharing, stopSharing, toggleMute } = useScreenShare()
 
 const { isAndroidLandscape } = useAndroidLandscape()
 const shortRoomId = computed(() => roomId.value ? roomId.value.slice(-8).toUpperCase() : null)
@@ -82,6 +82,14 @@ const statusLabel = computed(() => {
 
     <!-- 未共有: 小さいボタン -->
     <template v-else>
+      <!-- 運行管理者の「画面共有を終了」で止まった直後だけ出る (数秒で消える) -->
+      <div
+        v-if="endedByAdmin"
+        class="mb-2 rounded-lg shadow bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 max-w-52"
+        data-testid="screen-share-ended-by-admin"
+      >
+        管理者が画面共有を終了しました
+      </div>
       <div v-if="error" class="mb-2 rounded-lg shadow bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 max-w-52">
         {{ error }}
       </div>

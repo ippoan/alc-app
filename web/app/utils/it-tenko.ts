@@ -7,9 +7,26 @@
  *
  * **接頭辞の判定はここ 1 か所に集める。** 端末側 (`useItTenkoCall`) と運行管理者側が
  * 別々に文字列を組むと、片方だけ変えたときに着信が黙って届かなくなる。
+ * 画面共有の部屋の接頭辞もここに置く (共有する側 `useScreenShare` と見る側が同じ関数を使う)。
  */
 
 export const IT_TENKO_ROOM_PREFIX = 'it-'
+
+/**
+ * 画面共有の部屋の id の接頭辞。signaling の DO (`cf-alc-signaling/src/signaling-room.ts`) は
+ * 別 package なので同じ値を直に書いている — 変えるときは両方。
+ */
+export const SCREEN_SHARE_ROOM_PREFIX = 'screen-'
+
+/** 画面共有の部屋の id を作る (`id` は共有のたびに振る一意な値) */
+export function screenShareRoomId(id: string): string {
+  return SCREEN_SHARE_ROOM_PREFIX + id
+}
+
+/** 画面共有の部屋か */
+export function isScreenShareRoom(roomId: string): boolean {
+  return roomId.startsWith(SCREEN_SHARE_ROOM_PREFIX)
+}
 
 /** 点呼の記録の id から、IT点呼 の通話の部屋の id を作る */
 export function itTenkoRoomId(sessionId: string): string {
@@ -50,14 +67,19 @@ export function defaultJudgmentMethod(viaCall: boolean): ManagerJudgmentMethod {
 }
 
 /**
- * signaling の部屋の一覧を IT点呼 の部屋とそれ以外に分ける (順序は保つ)。
- * IT点呼 の受け画面は `it`、遠隔点呼モニターは `remote` を使う
+ * signaling の部屋の一覧を IT点呼 の部屋・画面共有の部屋・それ以外に分ける (順序は保つ)。
+ * IT点呼 の受け画面は `it`、画面共有を見る部品は `screen`、遠隔点呼モニターは `remote` を使う
  */
-export function splitRooms(rooms: readonly string[]): { it: string[], remote: string[] } {
+export function splitRooms(rooms: readonly string[]): { it: string[], screen: string[], remote: string[] } {
   const it: string[] = []
+  const screen: string[] = []
   const remote: string[] = []
-  for (const room of rooms) (isItTenkoRoom(room) ? it : remote).push(room)
-  return { it, remote }
+  for (const room of rooms) {
+    if (isItTenkoRoom(room)) it.push(room)
+    else if (isScreenShareRoom(room)) screen.push(room)
+    else remote.push(room)
+  }
+  return { it, screen, remote }
 }
 
 /** その点呼の記録の IT点呼 の部屋が一覧に在ればその部屋の id、無ければ null (未完了の一覧の「通話中」) */

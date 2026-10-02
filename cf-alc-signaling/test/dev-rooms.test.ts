@@ -487,3 +487,70 @@ describe("client が dev を名乗る値を付けても、検証結果が優先�
     expect(await activeRooms("dev-token")).toContain(roomId);
   });
 });
+
+describe("画面共有の終了 (end_share)", () => {
+  const END = JSON.stringify({ type: "end_share" });
+  const UNKNOWN = { type: "error", message: "Unknown message type: end_share" };
+
+  it("admin が screen- の部屋で送ると device に届く (admin には何も返らない)", async () => {
+    const roomId = newRoom("screen-end");
+    const device = (await joinRoom(roomId, "device")).q!;
+    const admin = (await joinRoom(roomId, "admin")).q!;
+    await sleep(50);
+
+    admin.ws.send(END);
+    await sleep(50);
+    expect(device.all).toContainEqual({ type: "end_share" });
+    expect(admin.all).not.toContainEqual(UNKNOWN);
+  });
+
+  it("device から送っても admin に届かず、知らない type と同じ error が返る", async () => {
+    const roomId = newRoom("screen-from-device");
+    const device = (await joinRoom(roomId, "device")).q!;
+    const admin = (await joinRoom(roomId, "admin")).q!;
+    await sleep(50);
+
+    device.ws.send(END);
+    await sleep(50);
+    expect(admin.all).not.toContainEqual({ type: "end_share" });
+    expect(device.all).toContainEqual(UNKNOWN);
+  });
+
+  it("screen- でない部屋 (点呼の通話) では admin が送っても届かず、error が返る", async () => {
+    for (const label of ["it-end", "remote-end"]) {
+      const roomId = newRoom(label);
+      const device = (await joinRoom(roomId, "device")).q!;
+      const admin = (await joinRoom(roomId, "admin")).q!;
+      await sleep(50);
+
+      admin.ws.send(END);
+      await sleep(50);
+      expect(device.all).not.toContainEqual({ type: "end_share" });
+      expect(admin.all).toContainEqual(UNKNOWN);
+    }
+  });
+
+  it("device がまだ居ない screen- の部屋では、admin が送っても error が返るだけ", async () => {
+    const roomId = newRoom("screen-no-device");
+    const admin = (await joinRoom(roomId, "admin")).q!;
+
+    admin.ws.send(END);
+    await sleep(50);
+    expect(admin.all).toEqual([UNKNOWN]);
+  });
+
+  it("切られた admin が送っても device に届かない", async () => {
+    const roomId = newRoom("screen-kicked");
+    const admin = (await joinRoom(roomId, "admin")).q!;
+    // close の完了を待たずに送る (切られた印は device の参加の時点で付いている)
+    const device = (await joinRoom(roomId, "device", { token: "dev-token" })).q!;
+    try {
+      admin.ws.send(END);
+    } catch {
+      /* 既に閉じていれば送れない (届かないことに変わりはない) */
+    }
+    await sleep(100);
+    expect(device.all).toEqual([]);
+    expect(admin.all).toEqual([]);
+  });
+});

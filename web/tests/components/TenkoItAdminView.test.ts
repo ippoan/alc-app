@@ -58,7 +58,13 @@ mockNuxtImport('useActiveRooms', () => () => ({
 const buttonPressCountRef = ref(0)
 // 警告デバイスが NFC で読んだカード (実物はシリアルの行から作る module の ref)
 const cardReadRef = ref<{ seq: number, lookupId: string } | null>(null)
-mockNuxtImport('useAlarmDevice', () => () => ({ buttonPressCount: buttonPressCountRef, cardRead: cardReadRef }))
+// 警告デバイスが繋がっているか (画面共有の部品を出すのは繋がっている席だけ)
+const alarmConnectedRef = ref(false)
+mockNuxtImport('useAlarmDevice', () => () => ({
+  buttonPressCount: buttonPressCountRef,
+  cardRead: cardReadRef,
+  isConnected: alarmConnectedRef,
+}))
 
 // 警告デバイスが切れて 2 分たったままか (実物は useAlarmWatch が数える module の ref)
 const seatExpiredRef = ref(false)
@@ -125,6 +131,12 @@ async function mountView() {
       stubs: {
         TenkoVideoCall: { template: '<div data-testid="video-call" />' },
         TenkoDriverInfoPanel: { props: ['scope'], template: '<div data-testid="driver-info" :data-scope="scope" />' },
+        // 画面共有を見る部品 (中身は ScreenShareAdminView.test.ts)。ここは出すか・渡す値・排他だけを見る
+        ScreenShareAdminView: {
+          props: ['disabled'],
+          emits: ['update:viewing'],
+          template: '<div data-testid="screen-share-view" :data-disabled="String(disabled)" />',
+        },
       },
     },
   })
@@ -163,6 +175,7 @@ beforeEach(() => {
   callingRoomsRef.value = []
   cardReadRef.value = null
   seatExpiredRef.value = false
+  alarmConnectedRef.value = false
   // 既定: この席には運行管理者 mgr-1 が登録済み
   localStorage.clear()
   localStorage.setItem(MANAGER_KEY, 'mgr-1')
@@ -1368,6 +1381,214 @@ describe('TenkoItAdminView — 警告デバイスが切れて 2 分たった席'
     const w = await mountView()
     await setExpired(w, true)
     for (const word of ['トークン', '鍵', '認証', 'VoiceS3R']) expect(seatExpired(w).text()).not.toContain(word)
+    w.unmount()
+  })
+})
+
+describe('TenkoItAdminView — 画面共有', () => {
+  const screenShare = (w: Wrapper) => w.find('[data-testid="it-screen-share"]')
+  const screenView = (w: Wrapper) => w.find('[data-testid="screen-share-view"]')
+  const viewingBlock = (w: Wrapper) => w.find('[data-testid="it-screen-viewing-block"]')
+  const opened = (w: Wrapper) => w.find('[data-testid="it-opened"]')
+
+  /** 部品が「見始めた / やめた」を知らせてくる */
+  async function setViewing(w: Wrapper, viewing: boolean) {
+    w.findComponent('[data-testid="screen-share-view"]').vm.$emit('update:viewing', viewing)
+    await w.vm.$nextTick()
+  }
+
+  async function press(w: Wrapper) {
+    buttonPressCountRef.value += 1
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  beforeEach(() => {
+    alarmConnectedRef.value = true
+  })
+
+  it('★ 警告デバイスが繋がっている席で、画面共有の部屋が在るときだけ部品が出る', async () => {
+    activeRoomsRef.value = ['it-session-1', 'session-9']
+    const w = await mountView()
+    expect(screenShare(w).exists()).toBe(false)
+
+    activeRoomsRef.value = ['it-session-1', 'session-9', 'screen-abc']
+    await w.vm.$nextTick()
+    expect(screenShare(w).exists()).toBe(true)
+    expect(screenView(w).attributes('data-disabled')).toBe('false')
+    // IT点呼 の着信の一覧には出ない
+    expect(incoming(w).text()).not.toContain('screen-abc')
+
+    activeRoomsRef.value = ['it-session-1', 'session-9']
+    await w.vm.$nextTick()
+    expect(screenShare(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('★ 警告デバイスが繋がっていない端末では、画面共有の部屋が在っても部品を出さない', async () => {
+    alarmConnectedRef.value = false
+    activeRoomsRef.value = ['screen-abc']
+    const w = await mountView()
+    expect(screenShare(w).exists()).toBe(false)
+
+    alarmConnectedRef.value = true
+    await w.vm.$nextTick()
+    expect(screenShare(w).exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('★ 点呼を開いている間 (通話中・通話なし) は disabled を渡す。閉じたら戻る', async () => {
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-5')], total: 1, page: 1, per_page: 50 })
+    const w = await mountView()
+
+    await click(incoming(w).find('button'), w)
+    expect(opened(w).exists()).toBe(true)
+    expect(screenView(w).attributes('data-disabled')).toBe('true')
+
+    await click(opened(w).findAll('button').find(b => b.text() === '通話終了')!, w)
+    expect(screenView(w).attributes('data-disabled')).toBe('false')
+
+    await click(pendingRows(w)[0]!.find('button'), w)
+    expect(opened(w).text()).toContain('通話なしで確定する IT点呼')
+    expect(screenView(w).attributes('data-disabled')).toBe('true')
+    w.unmount()
+  })
+
+  it('繋いでいる途中も disabled を渡す', async () => {
+    let resolveConnect!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((resolve) => { resolveConnect = resolve }))
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    const w = await mountView()
+
+    await click(incoming(w).find('button'), w)
+    expect(opened(w).exists()).toBe(false)
+    expect(screenView(w).attributes('data-disabled')).toBe('true')
+
+    resolveConnect()
+    await flush()
+    w.unmount()
+  })
+
+  it('社員番号のモーダルが出ている間も disabled を渡す', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    const w = await mountView()
+
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(screenView(w).attributes('data-disabled')).toBe('true')
+
+    await click(idModal(w).findAll('button').find(b => b.text() === 'キャンセル')!, w)
+    expect(screenView(w).attributes('data-disabled')).toBe('false')
+    w.unmount()
+  })
+
+  it('★ 画面共有を見ている間は、着信・未完了の行・本体のボタンのどれでも点呼を開かず、文言を出す', async () => {
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    callingRoomsRef.value = ['it-session-1']
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-5')], total: 1, page: 1, per_page: 50 })
+    const w = await mountView()
+    expect(viewingBlock(w).exists()).toBe(false)
+
+    await setViewing(w, true)
+    expect(viewingBlock(w).exists()).toBe(false)
+
+    await click(incoming(w).find('button'), w)
+    expect(viewingBlock(w).text()).toBe('画面共有を見ている間は点呼を開けません。先に視聴をやめてください')
+    await click(pendingRows(w)[0]!.find('button'), w)
+    await press(w)
+
+    expect(opened(w).exists()).toBe(false)
+    expect(cameraStartMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(setJoinedMock).not.toHaveBeenCalled()
+    expect(getTenkoSessionMock).not.toHaveBeenCalled()
+    expect(viewingBlock(w).exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('見ている間は、席が未登録でも社員番号のモーダルを出さない', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    const w = await mountView()
+    await setViewing(w, true)
+
+    await click(incoming(w).find('button'), w)
+
+    expect(idModal(w).exists()).toBe(false)
+    expect(viewingBlock(w).exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('★ 視聴をやめたら文言が消え、今までどおり点呼を開ける', async () => {
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    const w = await mountView()
+    await setViewing(w, true)
+    await click(incoming(w).find('button'), w)
+    expect(viewingBlock(w).exists()).toBe(true)
+
+    await setViewing(w, false)
+    expect(viewingBlock(w).exists()).toBe(false)
+
+    await click(incoming(w).find('button'), w)
+    expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    expect(opened(w).exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('見ている最中は、警告デバイスが切れても部品を消さない (部品が視聴を閉じてから消える)', async () => {
+    activeRoomsRef.value = ['screen-abc']
+    const w = await mountView()
+    await setViewing(w, true)
+
+    alarmConnectedRef.value = false
+    await w.vm.$nextTick()
+    expect(screenShare(w).exists()).toBe(true)
+
+    await setViewing(w, false)
+    expect(screenShare(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('★ 席の期限切れが先に効く: 切れている間は、見ている最中でも画面共有の文言は出ない', async () => {
+    seatExpiredRef.value = true
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    const w = await mountView()
+    // 切れている間も画面共有の部品は出ている (見ることはできる)
+    expect(screenShare(w).exists()).toBe(true)
+    await setViewing(w, true)
+
+    await click(incoming(w).find('button'), w)
+
+    expect(w.find('[data-testid="it-seat-expired"]').exists()).toBe(true)
+    expect(viewingBlock(w).exists()).toBe(false)
+    expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('本体のボタンは画面共有の着信には反応しない (IT点呼 の着信だけ)', async () => {
+    activeRoomsRef.value = ['screen-abc']
+    callingRoomsRef.value = ['screen-abc']
+    const w = await mountView()
+
+    await press(w)
+
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(opened(w).exists()).toBe(false)
+    expect(viewingBlock(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('文言に「トークン」「鍵」「認証」「試験」「開発」を入れない', async () => {
+    activeRoomsRef.value = ['it-session-1', 'screen-abc']
+    const w = await mountView()
+    await setViewing(w, true)
+    await click(incoming(w).find('button'), w)
+
+    for (const word of ['トークン', '鍵', '認証', '試験', '開発']) {
+      expect(viewingBlock(w).text()).not.toContain(word)
+    }
     w.unmount()
   })
 })
