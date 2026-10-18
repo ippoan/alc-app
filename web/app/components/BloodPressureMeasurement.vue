@@ -23,12 +23,17 @@ import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
  *   (`devices.bp_enabled`) は**永久に false** で、直参照だと測定台が 1 台も測れない。
  *   `checking` (まだ署名を取りに行っていない) は**「使わない設定」に倒さず待つ** —
  *   倒すと起動直後に必ず詰まる。
+ * - Vein Station (指静脈読み取り端末) がつながっているときだけ、カード待ちの段に
+ *   指静脈の登録 (`VeinRegistration`) への入口を出す (Refs ippoan/vein-match#20)。
+ *   血圧計の有無とは関係しないので、血圧計が見つからない端末でも出す。
  */
 
-type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done'
+type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein'
 
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
+const veinSerial = useVeinSerial()
+onMounted(() => veinSerial.connect())
 
 const step = ref<BpStep>('nfc')
 // ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。カード待ちでなければ機体を使用中
@@ -141,8 +146,11 @@ function reset() {
 
 <template>
   <div class="w-full max-w-md mx-auto p-4 flex flex-col gap-4">
+    <!-- 指静脈の登録 (入口は下のボタン) -->
+    <VeinRegistration v-if="step === 'vein'" @close="step = 'nfc'" />
+
     <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
-    <div v-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
+    <div v-else-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
       <h2 class="text-lg font-semibold text-gray-700 mb-2">血圧測定</h2>
       <div class="flex items-center justify-center gap-3 py-2 text-sm text-gray-500">
         <span class="inline-block w-5 h-5 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
@@ -225,5 +233,13 @@ function reset() {
         </button>
       </div>
     </template>
+
+    <button
+      v-if="step === 'nfc' && veinSerial.isConnected.value"
+      class="w-full px-4 py-3 bg-white border border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
+      @click="step = 'vein'; error = null"
+    >
+      指静脈を登録する
+    </button>
   </div>
 </template>
