@@ -49,14 +49,20 @@ mockNuxtImport('useBpUiEnabled', () => () => ({
 const latestBloodPressure = ref<{ systolic: number, diastolic: number, pulse?: number, measuredAt: Date } | null>(null)
 mockNuxtImport('useBleGateway', () => () => ({ latestBloodPressure }))
 
+// Vein Station がつながっているときだけ、カード待ちに指静脈登録の入口を出す (Refs ippoan/vein-match#20)
+const veinIsConnected = ref(false)
+const veinConnect = vi.fn(async () => true)
+mockNuxtImport('useVeinSerial', () => () => ({ isConnected: veinIsConnected, connect: veinConnect }))
+
 const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />', emits: ['read'] }
 const FaceAuthStub = { name: 'FaceAuth', template: '<div class="face-stub" />', emits: ['result'] }
 const BleStatusStub = { name: 'BleStatus', template: '<div class="ble-stub" />', emits: ['next', 'skip'] }
+const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="vein-stub" />', emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub } },
   })
 }
 
@@ -77,6 +83,7 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
     bpUiState.value = 'show'
     latestBloodPressure.value = null
+    veinIsConnected.value = false
     employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }
     getEmployeeByNfcIdMock.mockReset()
     getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
@@ -363,5 +370,39 @@ describe('BloodPressureMeasurement — 新版への載せ替えの申告 (Refs i
     await flush(wrapper)
     expect(safe()).toBe(1)
     wrapper.unmount()
+  })
+
+  describe('指静脈の登録 (Refs ippoan/vein-match#20)', () => {
+    const veinEntry = (w: Awaited<ReturnType<typeof mountBp>>) =>
+      w.findAll('button').find(b => b.text().includes('指静脈を登録する'))
+
+    it('マウント時に Vein Station へ接続しにいく。つながっていなければ入口を出さない', async () => {
+      const wrapper = await mountBp()
+      expect(veinConnect).toHaveBeenCalled()
+      expect(veinEntry(wrapper)).toBeUndefined()
+    })
+
+    it('つながっていればカード待ちに入口を出し、押すと登録画面 → 戻るでカード待ち', async () => {
+      veinIsConnected.value = true
+      resetReloadContext()
+      const wrapper = await mountBp()
+      expect(readReloadContext().safe).toBe(1)
+      await veinEntry(wrapper)!.trigger('click')
+      expect(wrapper.findComponent(VeinRegistrationStub).exists()).toBe(true)
+      expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+      expect(veinEntry(wrapper)).toBeUndefined()
+      // 登録中はリロードしてよいと申告しない (カード待ちの段だけが安全)
+      expect(readReloadContext().safe).toBe(0)
+      await wrapper.findComponent(VeinRegistrationStub).vm.$emit('close')
+      expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('血圧計が見つからない端末でも入口を出す', async () => {
+      veinIsConnected.value = true
+      bpUiState.value = 'unused'
+      const wrapper = await mountBp()
+      expect(veinEntry(wrapper)).toBeDefined()
+    })
   })
 })
