@@ -7,21 +7,21 @@ import { deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 // 「未登録」の判定は useKioskAccess に一本化した (Refs #234, #238)。この banner は
 // hasKioskAccess / isCheckingKioskAccess / reasons を見る。
 // #135: 診断行のため useDeviceToken の lastFailureStage / lastFailureStatus もモックする。
-// #135 続報: 案内の出し分けのため lastFailureDetail / coreS3BackoffUntil もモックする。
+// #135 続報: 案内の出し分けのため lastFailureDetail / failureBackoffUntil もモックする。
 const hasKioskAccess = ref(false)
 const isCheckingKioskAccess = ref(false)
 const reasons = ref({ isAuthenticated: false, isDeviceActivated: false, hasDeviceJwt: false })
-const lastFailureStage = ref<'no-core-s3' | 'nonce' | 'coreS3-sign' | 'token-exchange' | null>(null)
+const lastFailureStage = ref<'no-core-s3' | 'nonce' | 'coreS3-sign' | 'vein-sign' | 'token-exchange' | null>(null)
 const lastFailureStatus = ref<number | null>(null)
 const lastFailureDetail = ref<string | null>(null)
-const coreS3BackoffUntil = ref(0)
+const failureBackoffUntil = ref(0)
 
 mockNuxtImport('useKioskAccess', () => () => ({ hasKioskAccess, isCheckingKioskAccess, reasons }))
 mockNuxtImport('useDeviceToken', () => () => ({
   lastFailureStage,
   lastFailureStatus,
   lastFailureDetail,
-  coreS3BackoffUntil,
+  failureBackoffUntil,
 }))
 
 describe('DeviceUnregisteredBanner', () => {
@@ -32,7 +32,7 @@ describe('DeviceUnregisteredBanner', () => {
     lastFailureStage.value = null
     lastFailureStatus.value = null
     lastFailureDetail.value = null
-    coreS3BackoffUntil.value = 0
+    failureBackoffUntil.value = 0
   })
 
   it('hasKioskAccess が false なら赤枠で原因と次の操作を出す', async () => {
@@ -77,6 +77,27 @@ describe('DeviceUnregisteredBanner', () => {
       wrapper.unmount()
     })
 
+    // Vein Station の鍵 (Refs ippoan/alc-app#436)
+    it('Vein Station に鍵が無いときは用途「運行者端末」での登録を案内する', async () => {
+      lastFailureStage.value = 'vein-sign'
+      lastFailureDetail.value = 'no key'
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('この Vein Station には鍵が登録されていません')
+      expect(guidance.text()).toContain('用途「運行者端末 (kiosk)」')
+      expect(wrapper.find('[data-testid="device-unregistered-diagnostics"]').text()).toContain('失敗 (Vein Station の署名)')
+      wrapper.unmount()
+    })
+
+    it('Vein Station の署名がその他の理由で失敗したときは USB 挿し直し・再起動を案内する', async () => {
+      lastFailureStage.value = 'vein-sign'
+      lastFailureDetail.value = null
+      const wrapper = await mountSuspended(DeviceUnregisteredBanner)
+      const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
+      expect(guidance.text()).toContain('Vein Station が署名に応じません')
+      wrapper.unmount()
+    })
+
     it('nonce の取得に失敗したときはネットワークを案内する', async () => {
       lastFailureStage.value = 'nonce'
       const wrapper = await mountSuspended(DeviceUnregisteredBanner)
@@ -97,7 +118,7 @@ describe('DeviceUnregisteredBanner', () => {
     it('待ちの最中も直前の原因の案内が消えない (残り秒を添えるだけ)', async () => {
       lastFailureStage.value = 'nonce'
       lastFailureDetail.value = null
-      coreS3BackoffUntil.value = Date.now() + 30_000
+      failureBackoffUntil.value = Date.now() + 30_000
       const wrapper = await mountSuspended(DeviceUnregisteredBanner)
       const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
       expect(guidance.text()).toContain('サーバに繋がりません')
@@ -107,7 +128,7 @@ describe('DeviceUnregisteredBanner', () => {
 
     it('抑止期限が過ぎていれば残り秒を添えない', async () => {
       lastFailureStage.value = 'token-exchange'
-      coreS3BackoffUntil.value = Date.now() - 1_000
+      failureBackoffUntil.value = Date.now() - 1_000
       const wrapper = await mountSuspended(DeviceUnregisteredBanner)
       const guidance = wrapper.find('[data-testid="device-unregistered-guidance"]')
       expect(guidance.text()).not.toContain('再試行します')

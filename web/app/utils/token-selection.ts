@@ -189,3 +189,21 @@ export async function devSignalingToken(
   if (!token) throw new Error(DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE)
   return token
 }
+
+// キオスクの送信が「端末の鍵が取れなければ送らない」状態か (Refs ippoan/alc-app#436)。
+// Vein Station が繋がっている間だけ true (useDeviceToken が接続に追従して書く)
+let kioskDeviceKeyRequired = false
+
+/**
+ * キオスクの鍵が取れなかったとき、無認証 (X-Tenant-ID 直 fetch) へ落とさない状態にする /
+ * 戻す (Refs ippoan/alc-app#436)。Vein Station が繋がっている間は**その鍵だけ**で送る
+ * (ユーザー決定) — 取れなかった送信を tenant だけの経路で黙って本番に記録しないため。
+ */
+export function setKioskDeviceKeyRequired(required: boolean): void {
+  kioskDeviceKeyRequired = required
+}
+
+/** キオスクの鍵が取れなければ送らない状態か (同期)。`api.ts` の request() が読む */
+export function isKioskDeviceKeyRequired(): boolean {
+  return kioskDeviceKeyRequired
+}

@@ -25,13 +25,14 @@ import { deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import type { DeviceTokenFailureStage } from '~/composables/useDeviceToken'
 
 const { hasKioskAccess, isCheckingKioskAccess, reasons } = useKioskAccess()
-const { lastFailureStage, lastFailureStatus, lastFailureDetail, coreS3BackoffUntil } = useDeviceToken()
+const { lastFailureStage, lastFailureStatus, lastFailureDetail, failureBackoffUntil } = useDeviceToken()
 
 /** 段の日本語 (電話で読み上げる想定なので短くする) */
 const STAGE_LABELS: Record<DeviceTokenFailureStage, string> = {
   'no-core-s3': 'CoreS3 未接続',
   'nonce': '準備',
   'coreS3-sign': 'CoreS3 の署名',
+  'vein-sign': 'Vein Station の署名',
   'token-exchange': '交換',
 }
 
@@ -62,6 +63,10 @@ function guidanceForStage(stage: DeviceTokenFailureStage | null, detail: string 
       return detail === NO_KEY_DETAIL
         ? 'この端末には鍵が登録されていません。管理者が登録画面で鍵を登録してください'
         : '端末が署名に応じません。USB を挿し直すか、端末を再起動してください'
+    case 'vein-sign':
+      return detail === NO_KEY_DETAIL
+        ? 'この Vein Station には鍵が登録されていません。管理者が登録画面で用途「運行者端末 (kiosk)」の鍵を登録してください'
+        : 'Vein Station が署名に応じません。USB を挿し直すか、端末を再起動してください'
     case 'nonce':
       return 'サーバに繋がりません。ネットワークを確認してください'
     case 'token-exchange':
@@ -88,7 +93,7 @@ onUnmounted(() => {
 const actionGuidance = computed(() => {
   const base = guidanceForStage(lastFailureStage.value, lastFailureDetail.value)
   if (!lastFailureStage.value) return base
-  const remainMs = coreS3BackoffUntil.value - nowMs.value
+  const remainMs = failureBackoffUntil.value - nowMs.value
   if (remainMs <= 0) return base
   return `${base} あと ${Math.ceil(remainMs / 1000)} 秒で再試行します`
 })

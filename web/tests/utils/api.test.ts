@@ -1,7 +1,7 @@
 // api.ts — mock + live coverage tests
 import { describe, it, expect, beforeEach, beforeAll, vi, afterEach } from 'vitest'
 import {
-  initApi,
+  initApi, KIOSK_DEVICE_AUTH_FAILED_MESSAGE,
   // Measurements
   saveMeasurement, startMeasurement, updateMeasurement, getMeasurements, getMeasurement,
   // Employees
@@ -2495,6 +2495,37 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     const url = mockFetch.mock.calls[0][0] as string
     expect(url).toBe(`${API_BASE}/api/employees`)
     expect(url).not.toContain('/api/proxy/')
+  })
+
+  // Vein Station が繋がっている間は、鍵で取れなかった送信を無認証へ落とさない (Refs ippoan/alc-app#436)
+  describe('キオスクの鍵が必須の間 (Vein Station 接続中)', () => {
+    beforeEach(async () => {
+      const { setKioskDeviceKeyRequired } = await import('~/utils/token-selection')
+      setKioskDeviceKeyRequired(true)
+    })
+    afterEach(async () => {
+      const { setKioskDeviceKeyRequired } = await import('~/utils/token-selection')
+      setKioskDeviceKeyRequired(false)
+    })
+
+    it('device JWT null → 直 fetch に落とさず投げる', async () => {
+      initApi(API_BASE, undefined, () => 'tid', undefined, () => Promise.resolve(null))
+      await expect(getEmployees()).rejects.toThrow(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+
+    it('upload も device JWT null なら直 fetch に落とさず投げる (proxyRawFetch)', async () => {
+      initApi(API_BASE, undefined, () => 'tid', undefined, () => Promise.resolve(null))
+      await expect(uploadFacePhoto(new Blob(['x']))).rejects.toThrow(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+
+    it('device JWT が取れれば今までどおり /api/proxy 経由', async () => {
+      initApi(API_BASE, undefined, () => 'tid', undefined, () => Promise.resolve('vein-jwt'))
+      mockFetch.mockResolvedValueOnce(okJson([]))
+      await getEmployees()
+      expect(mockFetch.mock.calls[0][0]).toBe('/api/proxy/employees')
+    })
   })
 
   it('admin/device/tenant すべて無 → 直 fetch + auth ヘッダー無 (authFetch fallback)', async () => {
