@@ -31,7 +31,7 @@ import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
 } from '~/utils/fetch-timeout'
-import { isDevDevice, selectSendToken, usesAdminToken, type DeviceTokenKind } from '~/utils/token-selection'
+import { isDevDevice, isKioskDeviceKeyRequired, selectSendToken, usesAdminToken, type DeviceTokenKind } from '~/utils/token-selection'
 
 let apiBase = ''
 let getAccessToken: (() => string | null) | null = null
@@ -207,6 +207,15 @@ export const BP_STATION_DEVICE_AUTH_FAILED_MESSAGE
     + '用途「測定台」で鍵が登録されているか確認してください'
 
 /**
+ * Vein Station が繋がっているのに、その鍵で認証できなかったときの文言 (Refs ippoan/alc-app#436)。
+ * **無認証 fetch に落とさない** — 用途「運行者端末 (kiosk)」の登録がまだの鍵も、
+ * auth-worker が 401 を返すのでこのメッセージになる。
+ */
+export const KIOSK_DEVICE_AUTH_FAILED_MESSAGE
+  = 'Vein Station で認証できませんでした。Vein Station が USB でつながっていて、'
+    + '用途「運行者端末 (kiosk)」で鍵が登録されているか確認してください'
+
+/**
  * その scope の送信が**もともと使うはずだった端末の鍵**の種類 (Refs ippoan/alc-app#387)。
  * `request()` の分岐の条件と同じ — getter が入っていない scope はキオスクの鍵へ進むので、
  * 見る印もキオスクのもの。
@@ -280,6 +289,9 @@ async function request<T>(
     if (getKioskDeviceJwt) {
       const jwt = await getKioskDeviceJwt()
       if (jwt) return await proxyRequest<T>(path, jwt, opts)
+      // Vein Station が繋がっているのに鍵で取れなかった (未登録・鍵なし・応答なし):
+      // **無認証 fetch へ落とさない** — tenant だけの経路で黙って記録しないため (#436)
+      if (isKioskDeviceKeyRequired()) throw new Error(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
     }
     // 認証情報なし: 従来の X-Tenant-ID 直 fetch に fallback (段階移行で非破壊)。
     return await authFetch<T>(path, opts)
@@ -357,6 +369,8 @@ async function proxyRawFetch(path: string, init: RequestInit = {}, timeoutMs?: n
     headers.set('Authorization', `Bearer ${jwt}`)
     return fetchWithTimeout(toProxyPath(path), { ...init, headers }, timeoutMs)
   }
+  // Vein Station が繋がっているのに鍵で取れなかった: 無認証へ落とさない (request() と同じ、#436)
+  if (isKioskDeviceKeyRequired()) throw new Error(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
   // 認証情報なし: 直叩き fallback
   if (!apiBase) throw new Error('API 未初期化')
   const headers = new Headers(init.headers)

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 // useDeviceToken はモジュールスコープに credential ref + JWT cache を持つ
@@ -39,6 +40,15 @@ mockNuxtImport('useCoreS3Serial', () => () => coreS3Mock)
 const alarmDeviceRequestMock = vi.hoisted(() => vi.fn())
 mockNuxtImport('useAlarmDevice', () => () => ({ isConnected: { value: false }, request: alarmDeviceRequestMock }))
 
+// Vein Station (Refs ippoan/alc-app#436)。isConnected は watch されるので本物の ref にする
+// (factory は useDeviceToken() の呼び出し時に評価されるので、ここで定義した値を参照できる)
+const veinMock = {
+  isConnected: ref(false),
+  request: vi.fn(),
+  onClose: vi.fn(),
+}
+mockNuxtImport('useVeinSerial', () => () => veinMock)
+
 const authMock = vi.hoisted(() => ({ deviceTenantId: { value: null as string | null } }))
 mockNuxtImport('useAuth', () => () => authMock)
 
@@ -59,6 +69,9 @@ beforeEach(() => {
   coreS3Mock.startupProbe.mockReset()
   coreS3Mock.startupProbe.mockImplementation(async () => false)
   authMock.deviceTenantId.value = null
+  veinMock.isConnected.value = false
+  veinMock.request.mockReset()
+  veinMock.onClose.mockReset()
   signAlarmDeviceNonceMock.mockReset()
   // #135 で失敗・成功のたびに 1 行出るようになったので、既定では捨てる
   // (中身を見るテストは各自で spy を取り直す)
@@ -1813,5 +1826,192 @@ describe('useDeviceToken — dev端末の印 (#387)', () => {
     storeKioskCredential(ID, SECRET)
     expect(await getDeviceJwt()).toBe(PLAIN_JWT)
     expect(isDevDevice('kiosk')).toBe(false)
+  })
+})
+
+describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
+  /** URL の末尾で振り分ける fetch mock (alarm-nonce / alarm-token / device/token) */
+  function stubFetch(opts: { tokenStatus?: number, jwt?: string } = {}) {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith('/device/alarm-nonce')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+      if (url.endsWith('/device/alarm-token')) {
+        const status = opts.tokenStatus ?? 200
+        return Promise.resolve({
+          ok: status === 200,
+          status,
+          json: () => Promise.resolve(status === 200 ? { access_token: opts.jwt ?? 'vein-jwt', expires_in: 900 } : { error: 'invalid_alarm_token' }),
+        })
+      }
+      if (url.endsWith('/device/token')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 'cred-jwt', expires_in: 3600 }) })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function tokenBody(fetchMock: ReturnType<typeof stubFetch>): Record<string, unknown> {
+    const call = fetchMock.mock.calls.find(([u]) => (u as string).endsWith('/device/alarm-token'))!
+    return JSON.parse((call as unknown as [string, RequestInit])[1].body as string)
+  }
+
+  it('接続中なら AUTH SIGN を Vein Station に送って取り、bp_bonded を送らず、ボンド状態にも書かない', async () => {
+    veinMock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    const fetchMock = stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, lastFailureStage } = useDeviceToken()
+
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', veinMock.request)
+    expect(tokenBody(fetchMock)).toEqual({ nonce: 'n1', pubkey: 'pub-v', sig: 'sig-v' })
+    expect(lastFailureStage.value).toBeNull()
+    const { hasProbedBpBond } = await loadSignedBpBond()
+    expect(hasProbedBpBond.value).toBe(false)
+  })
+
+  it('未接続なら今までどおり (CoreS3 → credential)。Vein Station には送らない', async () => {
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, storeKioskCredential, lastFailureStage } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+
+    expect(await getDeviceJwt()).toBe('cred-jwt')
+    expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
+    expect(lastFailureStage.value).toBe('no-core-s3')
+    const { isKioskDeviceKeyRequired } = await import('~/utils/token-selection')
+    expect(isKioskDeviceKeyRequired()).toBe(false)
+  })
+
+  it('CoreS3 も繋がっていても Vein Station の鍵を使う (CoreS3 には頼まない)', async () => {
+    veinMock.isConnected.value = true
+    coreS3Mock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch()
+
+    const useDeviceToken = await load()
+    expect(await useDeviceToken().getDeviceJwt()).toBe('vein-jwt')
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', veinMock.request)
+    expect(coreS3Mock.request).not.toHaveBeenCalled()
+  })
+
+  it('接続前に他の鍵で取ったキャッシュは、接続後には使わず Vein Station で取り直す', async () => {
+    stubFetch()
+    const useDeviceToken = await load()
+    const { getDeviceJwt, storeKioskCredential } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+    expect(await getDeviceJwt()).toBe('cred-jwt')
+
+    veinMock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+    // Vein 由来のキャッシュは再利用する
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('接続中に鍵が無い (ERR AUTH: no key) なら CoreS3・credential へ落とさず null。段は vein-sign で抑止する', async () => {
+    veinMock.isConnected.value = true
+    coreS3Mock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockRejectedValue(new Error('ERR AUTH: no key'))
+    const fetchMock = stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, storeKioskCredential, lastFailureStage, lastFailureDetail, failureBackoffUntil, coreS3BackoffUntil } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+
+    expect(await getDeviceJwt()).toBeNull()
+    expect(lastFailureStage.value).toBe('vein-sign')
+    expect(lastFailureDetail.value).toBe('no key')
+    expect(fetchMock.mock.calls.some(([u]) => (u as string).endsWith('/device/token'))).toBe(false)
+    expect(coreS3Mock.request).not.toHaveBeenCalled()
+    // 抑止は Vein Station の側だけ。CoreS3 の抑止は立てない
+    expect(failureBackoffUntil.value).toBeGreaterThan(Date.now())
+    expect(coreS3BackoffUntil.value).toBe(0)
+    const { hasProbedBpBond } = await loadSignedBpBond()
+    expect(hasProbedBpBond.value).toBe(false)
+
+    // 抑止中は試さない (他の鍵へも落とさない)
+    expect(await getDeviceJwt()).toBeNull()
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(1)
+    // 無認証へ落とさない印が立っている (api.ts が読む)
+    const { isKioskDeviceKeyRequired } = await import('~/utils/token-selection')
+    expect(isKioskDeviceKeyRequired()).toBe(true)
+  })
+
+  it('接続中に鍵が未登録 (alarm-token 401) でも他へ落とさない。段は token-exchange', async () => {
+    veinMock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch({ tokenStatus: 401 })
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, storeKioskCredential, lastFailureStage, lastFailureStatus } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+
+    expect(await getDeviceJwt()).toBeNull()
+    expect(lastFailureStage.value).toBe('token-exchange')
+    expect(lastFailureStatus.value).toBe(401)
+  })
+
+  it('指静脈の読み取りと重なって断られた回 (既に応答待ちです) は抑止せず、次の呼び出しで取り直す', async () => {
+    veinMock.isConnected.value = true
+    signAlarmDeviceNonceMock
+      .mockRejectedValueOnce(new Error('request(timecard): 既に応答待ちです'))
+      .mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, lastFailureStage, failureBackoffUntil } = useDeviceToken()
+
+    expect(await getDeviceJwt()).toBeNull()
+    expect(lastFailureStage.value).toBe('vein-sign')
+    expect(failureBackoffUntil.value).toBe(0)
+
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+    expect(lastFailureStage.value).toBeNull()
+  })
+
+  it('抜線したら Vein Station 由来のキャッシュを捨て、無認証へ落とさない印も下ろす', async () => {
+    veinMock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+    expect(veinMock.onClose).toHaveBeenCalledTimes(1)
+
+    veinMock.isConnected.value = false
+    const closeCb = veinMock.onClose.mock.calls[0]![0] as () => void
+    closeCb()
+    expect(hasDeviceJwt.value).toBe(false)
+    const { isKioskDeviceKeyRequired } = await import('~/utils/token-selection')
+    expect(isKioskDeviceKeyRequired()).toBe(false)
+  })
+
+  it('CoreS3 の失敗では、帯の「あと N 秒」は CoreS3 の抑止期限を見る', async () => {
+    coreS3Mock.isConnected.value = true
+    signAlarmDeviceNonceMock.mockRejectedValue(new Error('ERR AUTH: no key'))
+    stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, failureBackoffUntil, coreS3BackoffUntil } = useDeviceToken()
+    expect(await getDeviceJwt()).toBeNull()
+    expect(coreS3BackoffUntil.value).toBeGreaterThan(Date.now())
+    expect(failureBackoffUntil.value).toBe(coreS3BackoffUntil.value)
+  })
+
+  it('Vein Station 以外の鍵で取ったキャッシュは、Vein Station の抜線では捨てない', async () => {
+    stubFetch()
+    const useDeviceToken = await load()
+    const { getDeviceJwt, storeKioskCredential, hasDeviceJwt } = useDeviceToken()
+    storeKioskCredential(ID, SECRET)
+    expect(await getDeviceJwt()).toBe('cred-jwt')
+
+    const closeCb = veinMock.onClose.mock.calls[0]![0] as () => void
+    closeCb()
+    expect(hasDeviceJwt.value).toBe(true)
   })
 })

@@ -180,6 +180,18 @@ describe('useVeinSerial', () => {
       await vi.advanceTimersByTimeAsync(30000)
       expect(dev.port.open).toHaveBeenCalledTimes(1)
     })
+
+    // 抜線で JWT キャッシュを捨てるための口 (Refs ippoan/alc-app#436)
+    it('onClose に登録した cb はポートを失ったときに呼ばれる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const cb = vi.fn()
+      vein.onClose(cb)
+      expect(cb).not.toHaveBeenCalled()
+
+      await vein.disconnect()
+      expect(cb).toHaveBeenCalledTimes(1)
+    })
   })
 
   // ---------- capture ----------

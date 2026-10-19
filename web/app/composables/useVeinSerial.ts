@@ -43,6 +43,9 @@ const isConnected = ref(false)
 /** claim を待っている connect() */
 const waiters = new Set<() => void>()
 
+/** ポートを失った / 返したときに呼ぶ利用側 (useDeviceToken が JWT キャッシュを捨てる、Refs ippoan/alc-app#436) */
+const closeHandlers = new Set<() => void>()
+
 /**
  * `ERR VEIN <reason>` / `ERR VEIN: unsupported` から reason だけを取り出す。
  * `useSerialArbiter.request()` の reject は `ERR VEIN ...` 以降を丸ごと Error.message に
@@ -76,7 +79,13 @@ export function useVeinSerial() {
 
     onClose() {
       isConnected.value = false
+      for (const cb of [...closeHandlers]) cb()
     },
+  }
+
+  /** ポートを失った / 返した (useCoreS3Serial / useAtomS3Serial の onClose と同じ形) */
+  function onClose(cb: () => void): void {
+    closeHandlers.add(cb)
   }
 
   /** 呼ぶ前に connect() が接続済みを弾いているので、ここは必ず未接続から始まる */
@@ -173,5 +182,6 @@ export function useVeinSerial() {
     capture,
     say,
     request,
+    onClose,
   }
 }

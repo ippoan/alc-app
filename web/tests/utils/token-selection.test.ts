@@ -7,6 +7,8 @@ import {
   clearDevDeviceMark, isDevDevice, isDevDeviceToken, noteDeviceToken, selectSendToken, usesAdminToken,
   DEV_DEVICE_MARK_EVENT, DEV_SIGNALING_TOKEN_UNAVAILABLE_MESSAGE, devSignalingToken,
   type DeviceTokenKind,
+  isKioskDeviceKeyRequired,
+  setKioskDeviceKeyRequired,
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 
@@ -395,5 +397,15 @@ describe('DEV_DEVICE_MARK_EVENT — 印が変わったときだけ window に知
 
     vi.unstubAllGlobals()
     expect(onMark).not.toHaveBeenCalled()
+  })
+})
+
+describe('setKioskDeviceKeyRequired / isKioskDeviceKeyRequired (Refs ippoan/alc-app#436)', () => {
+  it('既定は false。立てると true、下ろすと false', () => {
+    expect(isKioskDeviceKeyRequired()).toBe(false)
+    setKioskDeviceKeyRequired(true)
+    expect(isKioskDeviceKeyRequired()).toBe(true)
+    setKioskDeviceKeyRequired(false)
+    expect(isKioskDeviceKeyRequired()).toBe(false)
   })
 })

@@ -42,6 +42,8 @@ const vein = vi.hoisted(() => ({
   connect: vi.fn(),
   say: vi.fn(),
   capture: vi.fn(),
+  // useDeviceToken が抜線でキャッシュを捨てるために登録する (Refs ippoan/alc-app#436)
+  onClose: vi.fn(),
 }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 

@@ -80,12 +80,31 @@
  * `coreS3-sign` 段の失敗から取り出して `lastFailureDetail` に残す — 画面側 (banner) が
  * 「鍵が無い」を他の失敗と出し分けられるようにするため。**署名・nonce・トークン・device_id は
  * 絶対に保持しない** (理由の語だけ)。firmware が想定外に長い文字列を返しても画面が壊れないよう
- * `MAX_FAILURE_DETAIL_LEN` で切り詰める。coreS3-sign 以外の段では null。
+ * `MAX_FAILURE_DETAIL_LEN` で切り詰める。署名の段 (coreS3-sign / vein-sign) 以外では null。
+ *
+ * ## Vein Station の鍵 (Refs ippoan/alc-app#436)
+ *
+ * Vein Station (指静脈読み取り端末、`DEVICE timecard`) が USB で繋がっていれば、**その鍵だけ**で
+ * 署名する (ユーザー決定)。順は「cache → Vein Station 署名 (繋がっていれば、これだけ) →
+ * CoreS3 署名 → credential」。CoreS3 と同じ 1 本の関数 (`trySignerJwt`) を、署名の相手
+ * (`KioskSigner`) を差し替えて呼ぶ。
+ *
+ * - 繋がっているのに取れなかった (未登録 401/403・`ERR AUTH: no key`・タイムアウト) ときは
+ *   **CoreS3・credential・無認証のどれにも落とさない** — 別の鍵で黙って本番に記録しないため。
+ *   無認証への落ち方は `api.ts` が `isKioskDeviceKeyRequired()` を見て止める。
+ *   段は `vein-sign` (署名) / `nonce` / `token-exchange` で、帯 (DeviceUnregisteredBanner) に出る
+ * - 署名は `AUTH SIGN` だけを使う (`SIGNBP` は送らない)。Vein Station の `BP=0` は
+ *   「血圧計なしと確認済み」ではないので、`bp_bonded` を送らず、ボンド状態 (`setSignedBpBond`) にも
+ *   書かない
+ * - 抑止 (backoff) は署名の相手ごとに別 (`veinBackoffUntil`)。指静脈の読み取りと重なって
+ *   arbiter が「既に応答待ちです」で断った回は一時的な失敗として抑止しない (次の呼び出しで再試行)
+ * - 抜線 (`useVeinSerial().onClose`) で Vein Station 由来のキャッシュを捨てる。storage には書かない
  */
 import { ref, computed, readonly, watch } from 'vue'
+import type { Ref } from 'vue'
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
-import { noteDeviceToken } from '~/utils/token-selection'
+import { noteDeviceToken, setKioskDeviceKeyRequired } from '~/utils/token-selection'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
 const KIOSK_DEVICE_SECRET_KEY = 'alc_kiosk_device_secret'
@@ -111,9 +130,32 @@ const STARTUP_TIMEOUT_MS = 3000
  * - `no-core-s3`: CoreS3 が USB でつながっていない (署名を頼む相手が居ない)
  * - `nonce`: auth-worker `/device/alarm-nonce` の取得
  * - `coreS3-sign`: CoreS3 への署名要求 (`AUTH SIGN`)
+ * - `vein-sign`: Vein Station への署名要求 (`AUTH SIGN`、Refs ippoan/alc-app#436)
  * - `token-exchange`: auth-worker `/device/alarm-token` の交換
  */
-export type DeviceTokenFailureStage = 'no-core-s3' | 'nonce' | 'coreS3-sign' | 'token-exchange'
+export type DeviceTokenFailureStage = 'no-core-s3' | 'nonce' | 'coreS3-sign' | 'vein-sign' | 'token-exchange'
+
+/** 署名の相手 (Refs ippoan/alc-app#436)。CoreS3 と Vein Station で同じ `trySignerJwt` を使う */
+interface KioskSigner {
+  /** どの相手か (キャッシュの出どころ・直近の失敗の相手) */
+  source: 'coreS3' | 'vein'
+  /** 署名の段の名前 (診断用) */
+  signStage: 'coreS3-sign' | 'vein-sign'
+  /** この相手の抑止期限 (ms epoch)。相手ごとに別に持つ */
+  backoffUntil: Ref<number>
+  /** 署名を頼める状態か (未接続なら探索まで含めて確かめる)。false なら trySignerJwt は null */
+  ensureConnected: (nowMs: number) => Promise<boolean>
+  /** nonce に署名する。parse に失敗したら null、firmware の ERR は reject */
+  sign: (nonce: string) => Promise<{ pubkey: string, sig: string, bpBonded?: boolean } | null>
+  /** 血圧計のボンド状態 (setSignedBpBond) を書くか。CoreS3 だけ */
+  writesBpBond: boolean
+}
+
+/** キャッシュ中の JWT の出どころ。Vein Station 接続中は Vein 由来のものしか使わない (#436) */
+type JwtSource = 'coreS3' | 'vein' | 'credential'
+
+/** arbiter が同時 2 件目を断ったときの文言 (useSerialArbiter.request)。一時的な失敗として扱う */
+const SERIAL_BUSY_MARK = '既に応答待ちです'
 
 /** キオスク用ボンド状態つき署名 (`AUTH SIGNBP`) の parse 結果 (#322-2)。 */
 interface KioskBondedSignature {
@@ -141,6 +183,7 @@ const kioskDeviceSecret = ref<string | null>(
 // ref にしてあるのは hasDeviceJwt (#234-2、兄弟 #p135-c234-3 が使う) から参照できるようにするため。
 const cachedJwt = ref<string | null>(null)
 let cachedExpMs = 0
+let cachedSource: JwtSource | null = null
 // このトークンが dev端末のものかを、送るトークンの選択 (`~/utils/token-selection`) が**同期で**
 // 読めるようにする (Refs ippoan/alc-app#387)。cache の書き換え・破棄のすべてに追従する。
 // 取得の経路・タイミングは変えない (見ているだけ)
@@ -151,14 +194,18 @@ let jwtInFlight: Promise<string | null> | null = null
 // CoreS3 署名経路の直近の失敗時刻から CORE_S3_BACKOFF_MS 経つまでは試さない (ms epoch)。
 // 0 なら抑止していない。抑止の秒数も挙動も #135 では変えていない (診断で見えるようにしただけ)
 const coreS3BackoffUntil = ref(0)
+// Vein Station 署名経路の抑止期限 (#436)。CoreS3 とは別に持つ
+const veinBackoffUntil = ref(0)
+// 直近の失敗がどちらの署名の相手か (#436)。帯の「あと N 秒」がどちらの抑止を見るかを決める
+const lastFailureSigner = ref<'coreS3' | 'vein' | null>(null)
 // CoreS3 署名経路の直近の失敗理由 (画面表示用)。成功 / 未試行なら null
 const lastError = ref<string | null>(null)
 // 直近の失敗がどの段か (#135)。成功 / 未試行なら null
 const lastFailureStage = ref<DeviceTokenFailureStage | null>(null)
 // 直近の失敗の HTTP status (#135)。HTTP を伴わない失敗 / 成功 / 未試行なら null
 const lastFailureStatus = ref<number | null>(null)
-// 直近の coreS3-sign 失敗の理由の語 (#135 続報。例: 'no key', 'bad nonce')。
-// coreS3-sign 以外の段の失敗 / 成功 / 未試行なら null。**署名・nonce・トークン・device_id は含まない**
+// 直近の署名の段 (coreS3-sign / vein-sign) の失敗の理由の語 (#135 続報。例: 'no key', 'bad nonce')。
+// 署名以外の段の失敗 / 成功 / 未試行なら null。**署名・nonce・トークン・device_id は含まない**
 const lastFailureDetail = ref<string | null>(null)
 
 /**
@@ -174,10 +221,10 @@ const ERR_AUTH_PREFIX = 'ERR AUTH: '
  * `coreS3-sign` 段の失敗理由から `ERR AUTH: ` に続く語だけを取り出す (#135 続報)。
  * firmware の応答行そのもの (署名や nonce を含みうる) ではなく、prefix が一致した場合の
  * 残り部分だけを扱う。長さは `MAX_FAILURE_DETAIL_LEN` で切り詰める (想定外の文字列対策)。
- * `coreS3-sign` 以外の段、または prefix が一致しない失敗は null (その他の理由として扱う)。
+ * 署名の段 (`coreS3-sign` / `vein-sign`) 以外、または prefix が一致しない失敗は null (その他の理由として扱う)。
  */
 function extractFailureDetail(stage: DeviceTokenFailureStage, message: string): string | null {
-  if (stage !== 'coreS3-sign') return null
+  if (stage !== 'coreS3-sign' && stage !== 'vein-sign') return null
   if (!message.startsWith(ERR_AUTH_PREFIX)) return null
   const detail = message.slice(ERR_AUTH_PREFIX.length).trim()
   if (!detail) return null
@@ -252,7 +299,7 @@ async function signKioskBondedNonce(
  * (未知コマンドとして reject) や parse 失敗なら**今までどおり** `AUTH SIGN`
  * (utils/alarm-sign.ts の共有署名関数) に
  * フォールバックする。フォールバック時は `bpBonded` を持たない (= ボンド状態は「不明」)。
- * `AUTH SIGN` 側の失敗 (no key 等) はここでは捕まえず、そのまま呼び出し側 (tryCoreS3Jwt) へ
+ * `AUTH SIGN` 側の失敗 (no key 等) はここでは捕まえず、そのまま呼び出し側 (trySignerJwt) へ
  * 伝える — 診断 (#135 lastFailureDetail 等) の挙動を変えないため。
  */
 async function signKioskNonce(
@@ -288,6 +335,7 @@ export function useDeviceToken() {
   const hasDeviceJwt = computed(() => !!cachedJwt.value && cachedExpMs > Date.now())
 
   const coreS3 = useCoreS3Serial()
+  const vein = useVeinSerial()
   // CoreS3 を抜線したら短命 JWT も即座に捨てる (親の決定)。useHubClaim と同じ
   // listenerInstalled 流儀で、useDeviceToken() を複数回呼んでも二重登録しない。
   if (!closeListenerInstalled) {
@@ -296,6 +344,51 @@ export function useDeviceToken() {
       cachedJwt.value = null
       cachedExpMs = 0
     })
+    // Vein Station を抜線したら、その鍵で取った JWT も即座に捨てる (#436)
+    vein.onClose(() => {
+      if (cachedSource !== 'vein') return
+      cachedJwt.value = null
+      cachedExpMs = 0
+    })
+    // 繋がっている間は、キオスクの鍵が取れない送信を無認証へ落とさない (api.ts が同期で読む)
+    watch(vein.isConnected, connected => setKioskDeviceKeyRequired(connected), { immediate: true, flush: 'sync' })
+  }
+
+  /** CoreS3 (統合ハブ)。署名は SIGNBP → SIGN の 2 段構えで、ボンド状態も書く */
+  const coreS3Signer: KioskSigner = {
+    source: 'coreS3',
+    signStage: 'coreS3-sign',
+    backoffUntil: coreS3BackoffUntil,
+    async ensureConnected(nowMs) {
+      if (coreS3.isConnected.value) return true
+      // 結果の真偽ではなく接続を見直す — 探索で繋がった後に抜かれていれば署名は頼めない
+      await coreS3.startupProbe()
+      if (coreS3.isConnected.value) return true
+      // 署名を頼む相手が居ない。抑止も lastError も立てない (従来どおり) が、段だけは残す
+      lastFailureStage.value = 'no-core-s3'
+      lastFailureStatus.value = null
+      lastFailureDetail.value = null
+      // 署名を頼む相手が居ない = ボンド状態は「不明」(「未ボンド」ではない)。
+      // 探索まではしたので「試した」= 判定してよい (#336)
+      setSignedBpBond(null)
+      warnCoreS3Failure('no-core-s3', null, '-', null, Date.now() - nowMs, 0)
+      return false
+    },
+    sign: nonce => signKioskNonce(nonce, coreS3.request),
+    writesBpBond: true,
+  }
+
+  /**
+   * Vein Station (#436)。mintDeviceJwt が接続中のときだけ呼ぶので探索はしない。
+   * 署名は `AUTH SIGN` だけ (SIGNBP の BP=0 は「血圧計なし」の確認ではないため送らない)
+   */
+  const veinSigner: KioskSigner = {
+    source: 'vein',
+    signStage: 'vein-sign',
+    backoffUntil: veinBackoffUntil,
+    ensureConnected: async () => vein.isConnected.value,
+    sign: nonce => signAlarmDeviceNonce(nonce, vein.request),
+    writesBpBond: false,
   }
 
   /** pairing で得た device credential を保存する (device JWT cache は破棄)。 */
@@ -329,7 +422,9 @@ export function useDeviceToken() {
    */
   async function getDeviceJwt(): Promise<string | null> {
     const nowMs = Date.now()
-    if (cachedJwt.value && cachedExpMs - REFRESH_BEFORE_MS > nowMs) return cachedJwt.value
+    // Vein Station 接続中は、その鍵で取った JWT 以外を使わない (#436。接続前に CoreS3 等で取った分は捨て置く)
+    const usable = !vein.isConnected.value || cachedSource === 'vein'
+    if (cachedJwt.value && usable && cachedExpMs - REFRESH_BEFORE_MS > nowMs) return cachedJwt.value
 
     if (!jwtInFlight) {
       jwtInFlight = mintDeviceJwt().finally(() => { jwtInFlight = null })
@@ -356,44 +451,35 @@ export function useDeviceToken() {
     return startupJwtPromise
   }
 
-  /** cache 以外の 2 経路を順に試す (CoreS3 の署名 → credential)。 */
+  /**
+   * cache 以外の経路を順に試す。Vein Station が繋がっていれば**その署名だけ** (#436、
+   * 失敗しても他へ落とさない)。繋がっていなければ CoreS3 の署名 → credential。
+   */
   async function mintDeviceJwt(): Promise<string | null> {
     const nowMs = Date.now()
-    return (await tryCoreS3Jwt(nowMs)) ?? (await tryCredentialJwt(nowMs))
+    if (vein.isConnected.value) return await trySignerJwt(veinSigner, nowMs)
+    return (await trySignerJwt(coreS3Signer, nowMs)) ?? (await tryCredentialJwt(nowMs))
   }
 
   /**
-   * CoreS3 が USB で繋がっていれば、その ed25519 鍵の署名で auth-worker
-   * (#552) から短命 JWT を取りに行く。未接続なら起動時の探索 (`startupProbe`、
+   * 署名の相手 (CoreS3 / Vein Station) が繋がっていれば、その ed25519 鍵の署名で auth-worker
+   * (#552) から短命 JWT を取りに行く。CoreS3 が未接続なら起動時の探索 (`startupProbe`、
    * 起動から最大 3 秒で 1 回だけ) を待ち、それでも未接続なら null (以後は待たずに即 null)。
    * 抑止期間中 / いずれかの失敗
    * (401 `{error:"invalid_alarm_token"}` / 429 / タイムアウト / 通信エラー、
    * いずれも HTTP status だけで判定する) なら null を返し、CORE_S3_BACKOFF_MS の
-   * 間この経路を抑止する (再接続での解除はしない)。失敗理由は `lastError` に残し、
+   * 間その相手の経路を抑止する (再接続での解除はしない)。ただしシリアルが別の応答待ちで
+   * 断られた回は一時的なので抑止しない (#436)。失敗理由は `lastError` に残し、
    * 成功したら null に戻す。
    */
-  async function tryCoreS3Jwt(nowMs: number): Promise<string | null> {
-    if (nowMs < coreS3BackoffUntil.value) {
+  async function trySignerJwt(signer: KioskSigner, nowMs: number): Promise<string | null> {
+    if (nowMs < signer.backoffUntil.value) {
       // 抑止中は試さない (従来どおり)。空振りした事実と残り秒だけ出す —
       // 直近の失敗の段・理由の語 (lastFailureStage / lastFailureDetail) は次の試行まで保持する
-      warnCoreS3Failure('backoff', lastFailureStatus.value, '-', lastFailureDetail.value, 0, Math.ceil((coreS3BackoffUntil.value - nowMs) / 1000))
+      warnCoreS3Failure('backoff', lastFailureStatus.value, '-', lastFailureDetail.value, 0, Math.ceil((signer.backoffUntil.value - nowMs) / 1000))
       return null
     }
-    if (!coreS3.isConnected.value) {
-      // 結果の真偽ではなく接続を見直す — 探索で繋がった後に抜かれていれば署名は頼めない
-      await coreS3.startupProbe()
-      if (!coreS3.isConnected.value) {
-        // 署名を頼む相手が居ない。抑止も lastError も立てない (従来どおり) が、段だけは残す
-        lastFailureStage.value = 'no-core-s3'
-        lastFailureStatus.value = null
-        lastFailureDetail.value = null
-        // 署名を頼む相手が居ない = ボンド状態は「不明」(「未ボンド」ではない)。
-        // 探索まではしたので「試した」= 判定してよい (#336)
-        setSignedBpBond(null)
-        warnCoreS3Failure('no-core-s3', null, '-', null, Date.now() - nowMs, 0)
-        return null
-      }
-    }
+    if (!(await signer.ensureConnected(nowMs))) return null
 
     lastError.value = null
     lastFailureStage.value = null
@@ -413,8 +499,8 @@ export function useDeviceToken() {
       const nonceData = (await nonceRes.json()) as { nonce?: string }
       if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
 
-      stage = 'coreS3-sign'
-      const signed = await signKioskNonce(nonceData.nonce, coreS3.request)
+      stage = signer.signStage
+      const signed = await signer.sign(nonceData.nonce)
       if (!signed) throw new Error('AUTH SIG の parse に失敗')
 
       stage = 'token-exchange'
@@ -464,11 +550,12 @@ export function useDeviceToken() {
       }
 
       const ttl = typeof tokenData.expires_in === 'number' ? tokenData.expires_in : CORE_S3_DEFAULT_TTL_SECONDS
+      cachedSource = signer.source
       cachedJwt.value = tokenData.access_token
       cachedExpMs = nowMs + ttl * 1000
       // いま発行された JWT に乗っているボンド状態 (#336)。`AUTH SIGN` へ落ちた回は
-      // `bpBonded` を持たない = 「不明」なので null にする
-      setSignedBpBond(signed.bpBonded ?? null)
+      // `bpBonded` を持たない = 「不明」なので null にする。Vein Station は書かない (#436)
+      if (signer.writesBpBond) setSignedBpBond(signed.bpBonded ?? null)
       console.info(`[useDeviceToken] 端末の署名に成功 stage=ok elapsed=${Date.now() - nowMs}ms`)
       return cachedJwt.value
     }
@@ -477,10 +564,13 @@ export function useDeviceToken() {
       lastFailureStage.value = stage
       lastFailureStatus.value = status
       lastFailureDetail.value = extractFailureDetail(stage, lastError.value)
+      lastFailureSigner.value = signer.source
       // 署名が JWT まで届かなかった回は、サーバにボンド状態が渡っていない = 「不明」(#336)
-      setSignedBpBond(null)
-      coreS3BackoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
-      warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, CORE_S3_BACKOFF_MS / 1000)
+      if (signer.writesBpBond) setSignedBpBond(null)
+      // シリアルが別の応答待ち (指静脈の読み取り中など) で断られた回は一時的 — 抑止しない (#436)
+      const busy = lastError.value.includes(SERIAL_BUSY_MARK)
+      if (!busy) signer.backoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
+      warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, busy ? 0 : CORE_S3_BACKOFF_MS / 1000)
       return null
     }
   }
@@ -491,14 +581,14 @@ export function useDeviceToken() {
    * だから画面の「もう一度試す」からここを呼べるようにし、抑止 (backoff) を解いて
    * **CoreS3 の再探索から**署名をやり直す。
    *
-   * `getDeviceJwt()` ではなく `tryCoreS3Jwt()` を直に呼ぶ — cache が生きていると
+   * `getDeviceJwt()` ではなく CoreS3 の `trySignerJwt()` を直に呼ぶ — cache が生きていると
    * `getDeviceJwt()` は署名をやり直さず、ボンド状態が「不明」のまま戻らないため。
    * credential 経路には触れない (CoreS3 が居なければ従来どおり何も変わらない)。
    */
   async function refreshSignedBpBonded(): Promise<boolean | null> {
     const { signedBpBonded } = useSignedBpBond()
     coreS3BackoffUntil.value = 0
-    await tryCoreS3Jwt(Date.now())
+    await trySignerJwt(coreS3Signer, Date.now())
     return signedBpBonded.value
   }
 
@@ -518,6 +608,7 @@ export function useDeviceToken() {
       const data = (await res.json()) as { access_token?: string; expires_in?: number }
       if (!data.access_token) return null
       const ttl = typeof data.expires_in === 'number' ? data.expires_in : DEFAULT_TTL_SECONDS
+      cachedSource = 'credential'
       cachedJwt.value = data.access_token
       cachedExpMs = nowMs + ttl * 1000
       return cachedJwt.value
@@ -604,10 +695,15 @@ export function useDeviceToken() {
     lastFailureStage: readonly(lastFailureStage),
     /** 直近の失敗の HTTP status (#135)。HTTP を伴わない失敗 / 成功 / 未試行なら null */
     lastFailureStatus: readonly(lastFailureStatus),
-    /** 直近の coreS3-sign 失敗の理由の語 (#135 続報。例: 'no key')。それ以外の段 / 成功 / 未試行なら null */
+    /** 直近の署名の段 (coreS3-sign / vein-sign) の失敗の理由の語 (#135 続報。例: 'no key')。それ以外の段 / 成功 / 未試行なら null */
     lastFailureDetail: readonly(lastFailureDetail),
     /** CoreS3 署名経路を抑止している期限 (ms epoch)。0 なら抑止していない (#135) */
     coreS3BackoffUntil: readonly(coreS3BackoffUntil),
+    /**
+     * 直近の失敗の相手 (CoreS3 / Vein Station) の抑止期限 (ms epoch、#436)。帯の「あと N 秒」用。
+     * 失敗がまだ無ければ CoreS3 の値
+     */
+    failureBackoffUntil: computed(() => (lastFailureSigner.value === 'vein' ? veinBackoffUntil.value : coreS3BackoffUntil.value)),
     /**
      * ボンド状態を取り直す (#336)。抑止を解き、CoreS3 の再探索から署名をやり直す。
      * **値そのものは返さない** — 読むのは `useSignedBpBond()` の 1 か所だけ (#353)。
