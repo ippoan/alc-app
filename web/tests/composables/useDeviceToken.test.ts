@@ -246,6 +246,50 @@ describe('useDeviceToken (#434 step 3c)', () => {
       const useDeviceToken = await load()
       expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k')).toBeNull()
     })
+
+    it('devDevice: true は body に dev_device: true を入れる', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ device_id: 'd1', device_secret: 's1' }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const useDeviceToken = await load()
+      await useDeviceToken().pairKioskDevice('admin-jwt', 'kiosk-1', { devDevice: true })
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        label: 'kiosk-1', role: 'device-kiosk', dev_device: true,
+      })
+    })
+
+    it('devDevice: false は body に dev_device を載せない', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ device_id: 'd1', device_secret: 's1' }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const useDeviceToken = await load()
+      await useDeviceToken().pairKioskDevice('admin-jwt', 'kiosk-1', { devDevice: false })
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ label: 'kiosk-1', role: 'device-kiosk' })
+    })
+
+    it('devDevice: true で 403 は dev_forbidden', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, json: () => Promise.resolve({}) }))
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k', { devDevice: true })).toBe('dev_forbidden')
+    })
+
+    it('devDevice を付けない 403 は null (開発用の断りとは扱わない)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, json: () => Promise.resolve({}) }))
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k')).toBeNull()
+    })
+
+    it('devDevice: true でも 403 以外の失敗は null', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: () => Promise.resolve({}) }))
+      const useDeviceToken = await load()
+      expect(await useDeviceToken().pairKioskDevice('admin-jwt', 'k', { devDevice: true })).toBeNull()
+    })
   })
 
   describe('setupAsKiosk (self-pair)', () => {
@@ -271,6 +315,27 @@ describe('useDeviceToken (#434 step 3c)', () => {
       expect(await setupAsKiosk('admin-jwt', 'kiosk-1')).toBe(false)
       expect(hasKioskCredential.value).toBe(false)
       expect(localStorage.getItem('alc_kiosk_device_id')).toBeNull()
+    })
+
+    it('devDevice: true を /device/pair へ渡す', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ device_id: 'd1', device_secret: 's1' }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const useDeviceToken = await load()
+
+      expect(await useDeviceToken().setupAsKiosk('admin-jwt', 'kiosk-1', { devDevice: true })).toBe(true)
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).dev_device).toBe(true)
+    })
+
+    it('開発用を断られたら dev_forbidden で credential を保存しない', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, json: () => Promise.resolve({}) }))
+      const useDeviceToken = await load()
+      const { setupAsKiosk, hasKioskCredential } = useDeviceToken()
+
+      expect(await setupAsKiosk('admin-jwt', 'kiosk-1', { devDevice: true })).toBe('dev_forbidden')
+      expect(hasKioskCredential.value).toBe(false)
     })
   })
 

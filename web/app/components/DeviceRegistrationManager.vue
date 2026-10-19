@@ -21,6 +21,9 @@ const { hasKioskCredential, setupAsKiosk } = useDeviceToken()
 const kioskName = ref('')
 const kioskSetupBusy = ref(false)
 const kioskSetupMsg = ref('')
+// キオスクの鍵に dev_device を付けるか (Refs ippoan/alc-app#387)。開発者にだけ出す。
+// 下の registrationMode (アプリの更新の受け取り方) とは別物なので state を分ける。
+const kioskRecordsDev = ref(false)
 async function setupThisAsKiosk() {
   const token = accessToken.value
   if (!token) {
@@ -29,11 +32,18 @@ async function setupThisAsKiosk() {
   }
   kioskSetupBusy.value = true
   kioskSetupMsg.value = ''
-  const ok = await setupAsKiosk(token, kioskName.value.trim() || 'kiosk')
+  const devDevice = isDeveloper.value && kioskRecordsDev.value
+  const result = await setupAsKiosk(token, kioskName.value.trim() || 'kiosk', { devDevice })
   kioskSetupBusy.value = false
-  kioskSetupMsg.value = ok
-    ? 'この端末をキオスクに設定しました。ログアウトすると device 認証で動作します。'
-    : 'キオスク設定に失敗しました'
+  if (result === 'dev_forbidden') {
+    kioskSetupMsg.value = '開発用のキオスクは開発者の Google ログインでだけ作れます'
+  } else if (result) {
+    kioskSetupMsg.value = devDevice
+      ? 'この端末を開発用のキオスクに設定しました (記録は本番の記録に入りません)。ログアウトすると device 認証で動作します。'
+      : 'この端末をキオスクに設定しました。ログアウトすると device 認証で動作します。'
+  } else {
+    kioskSetupMsg.value = 'キオスク設定に失敗しました'
+  }
 }
 
 const devices = ref<Device[]>([])
@@ -675,6 +685,10 @@ onMounted(() => refresh())
           {{ kioskSetupBusy ? '設定中…' : 'キオスクにする' }}
         </button>
       </div>
+      <label v-if="isDeveloper" class="flex items-center gap-2 text-xs text-gray-700 mt-2">
+        <input v-model="kioskRecordsDev" type="checkbox" data-testid="kiosk-records-dev">
+        記録を開発用にする (本番の記録に入りません)
+      </label>
       <p v-if="kioskSetupMsg" class="text-xs mt-2 text-gray-700">{{ kioskSetupMsg }}</p>
     </div>
 
