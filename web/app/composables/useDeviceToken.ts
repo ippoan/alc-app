@@ -534,19 +534,27 @@ export function useDeviceToken() {
    *
    * @param adminToken 管理者の access token (rust-alc-api / auth-worker 共有 JWT_SECRET)
    * @param label      運用識別ラベル (端末名等)
-   * @returns 失敗時は null
+   * @param opts.devDevice true のときだけ body に `dev_device: true` を入れ、開発用の鍵を作る
+   *   (Refs ippoan/alc-app#387)。auth-worker は欄があるだけで開発者の Google ログインを要求する
+   *   (false でも 403) ので、false / 省略では欄ごと載せない
+   * @returns 失敗時は null。`devDevice` を付けて 403 だったときは `'dev_forbidden'`
    */
   async function pairKioskDevice(
     adminToken: string,
     label: string,
-  ): Promise<{ device_id: string; device_secret: string } | null> {
+    opts?: { devDevice?: boolean },
+  ): Promise<{ device_id: string; device_secret: string } | 'dev_forbidden' | null> {
     if (!adminToken) return null
+    const devDevice = opts?.devDevice === true
     try {
       const res = await fetch(`${authWorkerUrl}/device/pair`, withTimeout({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-        body: JSON.stringify({ label, role: 'device-kiosk' }),
+        body: JSON.stringify(devDevice
+          ? { label, role: 'device-kiosk', dev_device: true }
+          : { label, role: 'device-kiosk' }),
       }, AUTH_WORKER_FETCH_TIMEOUT_MS))
+      if (devDevice && res.status === 403) return 'dev_forbidden'
       if (!res.ok) return null
       const data = (await res.json()) as { device_id?: string; device_secret?: string }
       if (!data.device_id || !data.device_secret) return null
@@ -562,10 +570,17 @@ export function useDeviceToken() {
    * そのまま端末に保存する (self-pair)。以降この端末は (管理者ログアウト後) device JWT
    * 経由で通信する。通常の管理者セッションは self-pair しないので分離は保たれる。
    *
-   * @returns 成功時 true (credential 発行・保存済み)、失敗時 false
+   * @param opts.devDevice true なら開発用の鍵を作る ({@link pairKioskDevice} と同じ)
+   * @returns 成功時 true (credential 発行・保存済み)、失敗時 false。
+   *   `devDevice` を付けて開発用を断られたときは `'dev_forbidden'`
    */
-  async function setupAsKiosk(adminToken: string, label: string): Promise<boolean> {
-    const cred = await pairKioskDevice(adminToken, label)
+  async function setupAsKiosk(
+    adminToken: string,
+    label: string,
+    opts?: { devDevice?: boolean },
+  ): Promise<boolean | 'dev_forbidden'> {
+    const cred = await pairKioskDevice(adminToken, label, opts)
+    if (cred === 'dev_forbidden') return cred
     if (!cred) return false
     storeKioskCredential(cred.device_id, cred.device_secret)
     return true
