@@ -162,6 +162,8 @@ const DEV_RECORDS_TAB: SubTabDef = { key: 'dev_records', label: '開発用の記
 const devKioskMark = ref(isDevDevice('kiosk'))
 function refreshDevKioskMark() {
   devKioskMark.value = isDevDevice('kiosk')
+  // 機体を抜いて印が下りたとき、「開発用の記録」の画面にいたら通常点呼へ戻す
+  if (!devKioskMark.value && driverSubTab.value === 'dev_records') driverSubTab.value = 'normal'
 }
 /** 画面から印を外したあと: 項目を消し、行き場の無くなった画面を通常点呼へ戻す */
 function onDevMarkCleared() {
