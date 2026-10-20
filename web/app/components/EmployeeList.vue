@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ApiEmployee } from '~/types'
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, uploadFacePhoto, updateEmployeeFace, approveFace, rejectFace, getTenkoCallDrivers, type TenkoCallDriver } from '~/utils/api'
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, uploadFacePhoto, updateEmployeeFace, approveFace, rejectFace, getTenkoCallDrivers, getPendingVeinTemplates, approveVeinTemplate, deleteVeinTemplate, type TenkoCallDriver } from '~/utils/api'
+import { failureStatus } from '~/utils/employee-lookup-messages'
 import { getRawFaceDescriptor, getAllDescriptorsWithTimestamp } from '~/utils/face-db'
 import { FACE_MODEL_VERSION } from '~/composables/useFaceDetection'
 
@@ -206,6 +207,37 @@ async function handleReject(id: string) {
   }
 }
 
+// 指静脈の承認 (Refs ippoan/alc-app#436)。登録は管理者が承認するまで照合に使われない。
+// 承認待ちの一覧は管理者のログインでしか取れない (端末の鍵や他の役割では 403) ので、管理者のときだけ呼ぶ
+const { user } = useAuth()
+const isAdmin = computed(() => user.value?.role === 'admin')
+// employee_id → 一覧で見た版 (updated_at)。承認はこの版を指定する
+const pendingVein = ref(new Map<string, string>())
+
+async function handleVeinDecision(id: string, decide: () => Promise<void>) {
+  approvingId.value = id
+  error.value = null
+  let message: string | null = null
+  try {
+    await decide()
+  } catch (e) {
+    message = failureStatus(e) === 409
+      ? '登録が更新されました。もう一度確認してください'
+      : e instanceof Error ? e.message : '指静脈の承認エラー'
+  }
+  await fetchData()
+  if (message) error.value = message
+  approvingId.value = null
+}
+
+function handleVeinApprove(id: string) {
+  return handleVeinDecision(id, () => approveVeinTemplate(id, pendingVein.value.get(id)!))
+}
+
+function handleVeinReject(id: string) {
+  return handleVeinDecision(id, () => deleteVeinTemplate(id))
+}
+
 // employee_code でマッチ
 const tenkoDriverMap = computed(() => {
   const map = new Map<string, TenkoCallDriver>()
@@ -224,12 +256,15 @@ async function fetchData() {
   isLoading.value = true
   error.value = null
   try {
-    const [emps, drivers] = await Promise.all([
+    const [emps, drivers, veins] = await Promise.all([
       getEmployees(),
       getTenkoCallDrivers().catch(() => [] as TenkoCallDriver[]),
+      // 取れなくても乗務員の一覧は出す (承認待ちが出ないだけ)
+      isAdmin.value ? getPendingVeinTemplates().catch(() => []) : [],
     ])
     employees.value = emps
     tenkoDrivers.value = drivers
+    pendingVein.value = new Map(veins.map(v => [v.employee_id, v.updated_at]))
   } catch (e) {
     error.value = e instanceof Error ? e.message : '取得エラー'
   } finally {
@@ -303,6 +338,7 @@ onMounted(() => fetchData())
         <span>登録数: <strong class="text-gray-800">{{ employees.length }}</strong> 名</span>
         <span>顔承認済: <strong class="text-green-700">{{ faceRegisteredCount }}</strong></span>
         <span v-if="facePendingCount > 0" class="text-yellow-700">承認待ち: <strong>{{ facePendingCount }}</strong></span>
+        <span v-if="pendingVein.size > 0" class="text-yellow-700">指静脈の承認待ち: <strong>{{ pendingVein.size }}</strong></span>
         <span v-if="localOnlyCount > 0" class="text-yellow-700">ローカルのみ: <strong>{{ localOnlyCount }}</strong></span>
         <span>NFC紐付: <strong class="text-blue-700">{{ nfcLinkedCount }}</strong></span>
         <div class="ml-auto flex gap-2">
@@ -549,6 +585,22 @@ onMounted(() => fetchData())
                     >
                       却下
                     </button>
+                    <template v-if="pendingVein.has(emp.id)">
+                      <button
+                        :disabled="approvingId === emp.id"
+                        class="px-2 py-1 text-green-700 hover:bg-green-50 rounded text-xs font-medium"
+                        @click="handleVeinApprove(emp.id)"
+                      >
+                        指静脈を承認
+                      </button>
+                      <button
+                        :disabled="approvingId === emp.id"
+                        class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs"
+                        @click="handleVeinReject(emp.id)"
+                      >
+                        指静脈を却下
+                      </button>
+                    </template>
                     <button
                       class="px-2 py-1 text-green-600 hover:bg-green-50 rounded text-xs"
                       @click="startFaceReg(emp)"

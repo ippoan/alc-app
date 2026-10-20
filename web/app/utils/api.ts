@@ -31,6 +31,7 @@ import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
 } from '~/utils/fetch-timeout'
+import { failureStatus } from '~/utils/employee-lookup-messages'
 import { isDevDevice, isKioskDeviceKeyRequired, selectSendToken, usesAdminToken, type DeviceTokenKind } from '~/utils/token-selection'
 
 let apiBase = ''
@@ -652,6 +653,41 @@ export interface ApiVeinTemplate {
  */
 export async function getVeinTemplates(): Promise<{ logic_version: string; templates: ApiVeinTemplate[] }> {
   return request<{ logic_version: string; templates: ApiVeinTemplate[] }>('/api/vein/templates')
+}
+
+/** 管理者の承認を待っている指静脈の登録 (1 件分)。`updated_at` は承認するときの版 */
+export interface ApiPendingVeinTemplate {
+  employee_id: string
+  updated_at: string
+}
+
+/**
+ * 承認待ちの指静脈の登録を全件取る (管理者だけ、Refs ippoan/alc-app#436)。
+ * 登録は管理者が承認するまで照合に使われない。口がまだ無い backend (404) は 0 件として扱う。
+ */
+export async function getPendingVeinTemplates(): Promise<ApiPendingVeinTemplate[]> {
+  try {
+    return await request<ApiPendingVeinTemplate[]>('/api/vein/templates/pending')
+  } catch (e) {
+    if (failureStatus(e) === 404) return []
+    throw e
+  }
+}
+
+/**
+ * 指静脈の登録を承認する (管理者だけ、Refs ippoan/alc-app#436)。`updatedAt` は一覧で見た版で、
+ * そのあいだに登録し直されていたら 409 になる (見ていない版を承認しないため)。
+ */
+export async function approveVeinTemplate(employeeId: string, updatedAt: string): Promise<void> {
+  await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ updated_at: updatedAt }),
+  })
+}
+
+/** 指静脈の登録を消す (管理者の却下、Refs ippoan/alc-app#436) */
+export async function deleteVeinTemplate(employeeId: string): Promise<void> {
+  await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, { method: 'DELETE' })
 }
 
 /**

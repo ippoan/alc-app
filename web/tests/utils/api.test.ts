@@ -70,6 +70,9 @@ import {
   putVeinTemplate,
   identifyVein,
   getVeinTemplates,
+  getPendingVeinTemplates,
+  approveVeinTemplate,
+  deleteVeinTemplate,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -2913,5 +2916,52 @@ describe.skipIf(isLive)('apiErrorMessage (Refs ippoan/rust-alc-api#678)', () => 
   it('JSON でも message が文字列でなければ null', () => {
     expect(apiErrorMessage(new Error('API エラー (422): {"error":"invalid_chara"}'))).toBeNull()
     expect(apiErrorMessage(new Error('API エラー (422): {"message":42}'))).toBeNull()
+  })
+})
+
+// --- 指静脈の登録の承認 (管理者だけ、Refs ippoan/alc-app#436)。worker の口はまだ本番に無いので mock だけ ---
+describe.skipIf(isLive)('指静脈の承認 (Refs ippoan/alc-app#436)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+    initApi(API_BASE, () => 'admin-jwt')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('承認待ちの一覧を GET で取る', async () => {
+    const pending = [{ employee_id: TEST_EMPLOYEE_ID, updated_at: '2026-10-20T00:00:00Z' }]
+    mockFetch.mockResolvedValueOnce(okJson(pending))
+    await expect(getPendingVeinTemplates()).resolves.toEqual(pending)
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/vein\/templates\/pending$/)
+  })
+
+  it('口がまだ無い (404) ときは承認待ち 0 件', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(404))
+    await expect(getPendingVeinTemplates()).resolves.toEqual([])
+  })
+
+  it('404 以外の失敗はそのまま投げる', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(403, 'forbidden'))
+    await expect(getPendingVeinTemplates()).rejects.toThrow('API エラー (403)')
+  })
+
+  it('承認は一覧で見た版 (updated_at) を body に載せて POST する', async () => {
+    mockFetch.mockResolvedValueOnce(ok204())
+    await approveVeinTemplate('emp/1', '2026-10-20T00:00:00Z')
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/vein\/templates\/emp%2F1\/approve$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ updated_at: '2026-10-20T00:00:00Z' })
+  })
+
+  it('却下は登録を DELETE で消す', async () => {
+    mockFetch.mockResolvedValueOnce(ok204())
+    await deleteVeinTemplate('emp/1')
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/vein\/templates\/emp%2F1$/)
+    expect(init.method).toBe('DELETE')
   })
 })
