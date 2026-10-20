@@ -7,6 +7,7 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
 import { BP_STATION_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import { readReloadContext, resetReloadContext, useKioskScreen } from '~/composables/useKioskScreen'
+import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 // 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
 // カードをかざす → 顔認証 → 血圧を測る → 完了 だけを行い、**点呼の記録は作らない**。
@@ -50,10 +51,26 @@ mockNuxtImport('useBpUiEnabled', () => () => ({
 const latestBloodPressure = ref<{ systolic: number, diastolic: number, pulse?: number, measuredAt: Date } | null>(null)
 mockNuxtImport('useBleGateway', () => () => ({ latestBloodPressure }))
 
-// Vein Station がつながっているときだけ、カード待ちに指静脈登録の入口を出す (Refs ippoan/vein-match#20)
+// Vein Station がつながっているときだけ、カード待ちに指静脈登録の入口を出す (Refs ippoan/vein-match#20)。
+// 乗務員の特定も指静脈が主 (Refs ippoan/alc-app#436)
 const veinIsConnected = ref(false)
 const veinConnect = vi.fn(async () => true)
-mockNuxtImport('useVeinSerial', () => () => ({ isConnected: veinIsConnected, connect: veinConnect }))
+const vein = vi.hoisted(() => ({
+  isSupported: true,
+  say: vi.fn(),
+  capture: vi.fn(),
+}))
+mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
+
+// 照合の振り分け (オンライン/オフライン) は vein-identify.test.ts の領分。ここでは結果だけを差し替える
+const veinIdentify = vi.hoisted(() => ({
+  identifyVeinEmployee: vi.fn(),
+  syncVeinTemplates: vi.fn(),
+}))
+vi.mock('~/utils/vein-identify', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/vein-identify')>()),
+  ...veinIdentify,
+}))
 
 const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />', emits: ['read'] }
 const FaceAuthStub = { name: 'FaceAuth', template: '<div class="face-stub" />', emits: ['result'] }
@@ -415,5 +432,191 @@ describe('BloodPressureMeasurement — 新版への載せ替えの申告 (Refs i
       const wrapper = await mountBp()
       expect(veinEntry(wrapper)).toBeDefined()
     })
+  })
+})
+
+// 乗務員の特定は指静脈が主、カードは予備 (Refs ippoan/alc-app#436)。手順は TenkoKiosk の指静脈と同じ
+describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Refs ippoan/alc-app#436)', () => {
+  const veinButton = (w: Awaited<ReturnType<typeof mountBp>>) => w.find('[data-testid="vein-identify"]')
+  const veinErrorText = (w: Awaited<ReturnType<typeof mountBp>>) => w.find('[data-testid="vein-error"]').text()
+
+  beforeEach(() => {
+    resetReloadContext()
+    bpUiState.value = 'show'
+    latestBloodPressure.value = null
+    veinIsConnected.value = true
+    vein.isSupported = true
+    vein.say.mockReset()
+    vein.say.mockResolvedValue(undefined)
+    vein.capture.mockReset()
+    vein.capture.mockResolvedValue('chara-hex')
+    veinIdentify.identifyVeinEmployee.mockReset()
+    veinIdentify.identifyVeinEmployee.mockResolvedValue({
+      kind: 'hit',
+      employee: { id: 'emp-vein-1', name: 'テスト花子', face_approval_status: 'approved' },
+    })
+    veinIdentify.syncVeinTemplates.mockReset()
+    veinIdentify.syncVeinTemplates.mockResolvedValue(true)
+    getEmployeeByNfcIdMock.mockReset()
+  })
+
+  it('つながっていれば指の欄をカードより上に出す', async () => {
+    const wrapper = await mountBp()
+    const html = wrapper.html()
+    expect(veinButton(wrapper).text()).toBe('指を置いて照合')
+    expect(wrapper.text()).toContain('カードで進む')
+    // 並び: 指 → カード → 登録の入口
+    expect(html.indexOf('vein-identify')).toBeLessThan(html.indexOf('nfc-stub'))
+    expect(html.indexOf('nfc-stub')).toBeLessThan(html.indexOf('指静脈を登録する'))
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['つながっていない', () => { veinIsConnected.value = false }],
+    ['WebSerial が無い', () => { vein.isSupported = false }],
+  ])('%s端末では指の欄を出さず、カードだけ', async (_label, arrange) => {
+    arrange()
+    const wrapper = await mountBp()
+    expect(veinButton(wrapper).exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('カードで進む')
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('当たれば顔認証へ進み、名前が出る。案内 → 読み取りの順で送る', async () => {
+    const wrapper = await mountBp()
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    expect(vein.say).toHaveBeenCalledWith('PLACE')
+    expect(vein.say.mock.invocationCallOrder[0]).toBeLessThan(vein.capture.mock.invocationCallOrder[0]!)
+    expect(veinIdentify.identifyVeinEmployee).toHaveBeenCalledWith('chara-hex')
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.text()).toContain('テスト花子')
+    expect(vein.say).not.toHaveBeenCalledWith('FAILED')
+    wrapper.unmount()
+  })
+
+  it('外れたら「下のカードで進む」を案内し、カード待ちに残る', async () => {
+    veinIdentify.identifyVeinEmployee.mockResolvedValue({ kind: 'miss' })
+    const wrapper = await mountBp()
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度置くか、下のカードで進んでください')
+    // 開発者向けの語 (社員番号の入口はこの画面に無い) を出さない
+    expect(wrapper.text()).not.toContain('社員番号')
+    expect(vein.say).toHaveBeenCalledWith('FAILED')
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(veinButton(wrapper).attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('照合が失敗したらその理由をそのまま出す', async () => {
+    veinIdentify.identifyVeinEmployee.mockResolvedValue({ kind: 'error', message: '照合データがありません' })
+    const wrapper = await mountBp()
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(veinErrorText(wrapper)).toBe('照合データがありません')
+    expect(vein.say).toHaveBeenCalledWith('FAILED')
+    wrapper.unmount()
+  })
+
+  it('読み取れなかったら理由を添え、照合はしない。FAILED の案内が失敗しても画面は止まらない', async () => {
+    vein.capture.mockRejectedValue(new Error('NO_FINGER'))
+    vein.say.mockImplementation(async (cmd: string) => {
+      if (cmd === 'FAILED') throw new Error('port closed')
+    })
+    const wrapper = await mountBp()
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(veinErrorText(wrapper)).toBe('指静脈を読み取れませんでした (NO_FINGER)')
+    expect(veinIdentify.identifyVeinEmployee).not.toHaveBeenCalled()
+    expect(veinButton(wrapper).attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('ファーム更新中は案内の時点で断られ、その理由を出す', async () => {
+    vein.say.mockRejectedValueOnce(new Error('ファームウェアを更新しています'))
+    const wrapper = await mountBp()
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(veinErrorText(wrapper)).toBe('指静脈を読み取れませんでした (ファームウェアを更新しています)')
+    expect(vein.capture).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('顔の審査で弾かれたらカードと同じく上に理由を出し、カード待ちに残る', async () => {
+    veinIdentify.identifyVeinEmployee.mockResolvedValue({
+      kind: 'hit',
+      employee: { id: 'emp-vein-2', name: 'テスト五郎', face_approval_status: 'rejected' },
+    })
+    const wrapper = await mountBp()
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(wrapper.text()).toContain('却下')
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vein-error"]').exists()).toBe(false)
+    expect(readReloadContext().safe).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('★ 読んでいる間は機体を使用中・リロード不可。多重に押しても 1 回だけ。顔認証へ進むまで外れない', async () => {
+    let captured!: (chara: string) => void
+    vein.capture.mockImplementation(() => new Promise((resolve) => { captured = resolve }))
+    let identified!: (o: unknown) => void
+    veinIdentify.identifyVeinEmployee.mockImplementation(() => new Promise((resolve) => { identified = resolve }))
+    const wrapper = await mountBp()
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+    expect(readReloadContext().safe).toBe(1)
+
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(veinButton(wrapper).text()).toBe('指を置いてください…')
+    expect(veinButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(isDeviceBusy.value).toBe(true)
+    expect(readReloadContext().safe).toBe(0)
+
+    // disabled を越えて届いても 2 回目は走らない
+    await (wrapper.vm as unknown as { $: { setupState: { onVeinIdentify: () => Promise<void> } } }).$.setupState.onVeinIdentify()
+    expect(vein.capture).toHaveBeenCalledTimes(1)
+
+    captured('chara-hex')
+    await flush(wrapper)
+    // 照合の応答待ち: まだカード待ちの段だが使用中のまま
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(isDeviceBusy.value).toBe(true)
+    expect(readReloadContext().safe).toBe(0)
+
+    identified({ kind: 'hit', employee: { id: 'emp-vein-1', name: 'テスト花子', face_approval_status: 'approved' } })
+    await flush(wrapper)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(isDeviceBusy.value).toBe(true)
+    expect(readReloadContext().safe).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('マウント時に照合データを取り、次の人を待つ段に戻ったら古ければ取り直す', async () => {
+    latestBloodPressure.value = null
+    startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+    updateMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+    const wrapper = await mountBp()
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(1)
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith()
+
+    await veinButton(wrapper).trigger('click')
+    await flush(wrapper)
+    await wrapper.findComponent(FaceAuthStub).vm.$emit('result', { verified: true, similarity: 0.9 })
+    await wrapper.vm.$nextTick()
+    latestBloodPressure.value = { systolic: 120, diastolic: 80, measuredAt: new Date('2026-10-20T01:00:00.000Z') }
+    await flush(wrapper)
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(1)
+
+    await wrapper.findAll('button').find(b => b.text() === '次の人へ')!.trigger('click')
+    await flush(wrapper)
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(2)
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
+    wrapper.unmount()
   })
 })
