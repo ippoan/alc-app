@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { getEmployeeByNfcId } from '~/utils/api'
-import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
+import { getEmployeeByCode, getEmployeeByNfcId } from '~/utils/api'
+import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 
 /**
  * 血圧測定タブの指静脈登録 (Refs ippoan/vein-match#20)。
  *
- * **カードをかざす → 指を 2 回読ませる → 登録** だけを行う。乗務員の特定は
- * 血圧測定と同じく NFC だけ (測定台の端末は乗務員の一覧を引けない)。読み取りと保存の
- * 手順は顔登録画面と同じ `useVeinEnroll` の 1 か所。
+ * **カードをかざす (または社員番号を打つ) → 指を 2 回読ませる → 登録** だけを行う。
+ * 乗務員の特定は NFC か画面のキーパッドの社員番号 (測定台の端末は乗務員の一覧を引けない)。
+ * 番号では他人の指を登録できてしまうので、登録は管理者が承認するまで照合に使われない
+ * (承認は乗務員一覧、Refs ippoan/alc-app#436)。読み取りと保存の手順は顔登録画面と同じ
+ * `useVeinEnroll` の 1 か所。
  *
  * 入口は BloodPressureMeasurement が Vein Station の接続中だけ出す。
  */
@@ -19,21 +21,35 @@ const employeeId = ref('')
 const employeeName = ref('')
 const lookupError = ref<string | null>(null)
 
-async function onNfcRead(nfcId: string) {
+async function lookup(find: () => Promise<{ id: string; name: string }>, notFound: string) {
   lookupError.value = null
   try {
-    const emp = await getEmployeeByNfcId(nfcId)
+    const emp = await find()
     employeeId.value = emp.id
     employeeName.value = emp.name
   } catch (e) {
-    lookupError.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
+    lookupError.value = employeeLookupFailureMessage(e, notFound)
   }
+}
+
+function onNfcRead(nfcId: string) {
+  return lookup(() => getEmployeeByNfcId(nfcId), employeeNotFoundByNfc(nfcId))
+}
+
+// 社員番号のキーパッド。端末のキーボードを出さないよう input 要素にせず、表示だけにする
+const code = ref('')
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
+
+function submitCode() {
+  const c = code.value
+  return lookup(() => getEmployeeByCode(c, 'bp-station'), employeeNotFoundByCode(c))
 }
 
 function next() {
   employeeId.value = ''
   employeeName.value = ''
   lookupError.value = null
+  code.value = ''
   vein.reset()
 }
 </script>
@@ -42,9 +58,43 @@ function next() {
   <div class="bg-white rounded-2xl p-4 shadow-sm">
     <h2 class="text-lg font-semibold text-gray-700 mb-4">指静脈の登録</h2>
 
-    <!-- 1: カードをかざす -->
+    <!-- 1: カードをかざす / 社員番号を打つ -->
     <template v-if="!employeeId">
       <NfcStatus @read="onNfcRead" />
+      <div class="mt-4">
+        <p class="text-sm text-gray-500 mb-2">カードが無いときは社員番号を入力</p>
+        <div data-testid="code-display" class="h-12 mb-2 px-4 flex items-center justify-center border border-gray-300 rounded-xl text-2xl font-mono tracking-widest text-gray-800">
+          {{ code }}
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <button
+            v-for="k in KEYS"
+            :key="k"
+            :data-key="k"
+            class="py-3 bg-gray-100 rounded-xl text-xl font-medium text-gray-800 hover:bg-gray-200"
+            @click="code += k"
+          >
+            {{ k }}
+          </button>
+          <button data-key="clear" class="py-3 bg-gray-100 rounded-xl text-sm text-gray-600 hover:bg-gray-200" @click="code = ''">
+            全部消す
+          </button>
+          <button data-key="0" class="py-3 bg-gray-100 rounded-xl text-xl font-medium text-gray-800 hover:bg-gray-200" @click="code += '0'">
+            0
+          </button>
+          <button data-key="back" class="py-3 bg-gray-100 rounded-xl text-sm text-gray-600 hover:bg-gray-200" @click="code = code.slice(0, -1)">
+            1 文字消す
+          </button>
+        </div>
+        <button
+          data-key="submit"
+          class="w-full mt-2 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+          :disabled="!code"
+          @click="submitCode"
+        >
+          決定
+        </button>
+      </div>
       <p v-if="lookupError" class="mt-3 text-sm text-red-600">{{ lookupError }}</p>
     </template>
 
@@ -52,6 +102,7 @@ function next() {
     <div v-else-if="vein.registered.value" class="text-center">
       <p class="text-sm text-gray-500 mb-2">{{ employeeName }}さん</p>
       <p class="text-green-700 font-medium">指静脈を登録しました</p>
+      <p class="mt-1 text-sm text-gray-500">管理者の承認後に使えます</p>
       <button
         class="w-full mt-6 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
         @click="next"

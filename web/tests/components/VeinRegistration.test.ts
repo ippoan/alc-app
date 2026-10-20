@@ -5,7 +5,7 @@ import { flushPromises } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import VeinRegistration from '~/components/VeinRegistration.vue'
 import { BP_STATION_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
-import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByCode, employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 
 /**
  * 血圧測定タブの指静脈登録 (Refs ippoan/vein-match#20)。
@@ -26,14 +26,16 @@ mockNuxtImport('useVeinSerial', () => () => ({
   say: veinSay,
 }))
 
-const { putVeinTemplateMock, getEmployeeByNfcIdMock } = vi.hoisted(() => ({
+const { putVeinTemplateMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock } = vi.hoisted(() => ({
   putVeinTemplateMock: vi.fn(),
   getEmployeeByNfcIdMock: vi.fn(),
+  getEmployeeByCodeMock: vi.fn(),
 }))
 
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   getEmployeeByNfcId: getEmployeeByNfcIdMock,
+  getEmployeeByCode: getEmployeeByCodeMock,
   putVeinTemplate: putVeinTemplateMock,
 }))
 
@@ -53,6 +55,14 @@ async function tapCard(wrapper: VueWrapper, nfcId = 'test-card-0001') {
   await flushPromises()
 }
 
+async function press(wrapper: VueWrapper, ...keys: string[]) {
+  for (const k of keys) await wrapper.find(`[data-key="${k}"]`).trigger('click')
+}
+
+function display(wrapper: VueWrapper) {
+  return wrapper.find('[data-testid="code-display"]').text()
+}
+
 function button(wrapper: VueWrapper, text: string) {
   const b = wrapper.findAll('button').find(x => x.text().includes(text))
   if (!b) throw new Error(`${text} のボタンが見つかりません`)
@@ -67,6 +77,7 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
     veinConnect.mockReset().mockResolvedValue(true)
     putVeinTemplateMock.mockReset().mockResolvedValue({ employee_id: 'emp-test-1', updated_at: '2026-10-18T00:00:00Z' })
     getEmployeeByNfcIdMock.mockReset().mockResolvedValue({ id: 'emp-test-1', name: 'テスト太郎' })
+    getEmployeeByCodeMock.mockReset().mockResolvedValue({ id: 'emp-test-2', name: 'テスト花子' })
   })
 
   it('マウント時に接続し、最初はカード待ち', async () => {
@@ -101,6 +112,7 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
     expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-1', ['HEX-FIRST', 'HEX-SECOND'])
     expect(veinSay.mock.calls.map(c => c[0])).toEqual(['PLACE', 'AGAIN', 'ENROLLED'])
     expect(wrapper.text()).toContain('指静脈を登録しました')
+    expect(wrapper.text()).toContain('管理者の承認後に使えます')
     await button(wrapper, '次の人へ').trigger('click')
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
   })
@@ -149,5 +161,61 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
     const wrapper = await mountVein()
     await button(wrapper, '血圧測定に戻る').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  describe('社員番号のキーパッド (Refs ippoan/alc-app#436)', () => {
+    it('カードの枠と並べて出し、入力欄は input 要素にしない (端末のキーボードを出さない)', async () => {
+      const wrapper = await mountVein()
+      expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+      expect(wrapper.find('[data-testid="code-display"]').exists()).toBe(true)
+      expect(wrapper.find('input').exists()).toBe(false)
+      expect(button(wrapper, '決定').attributes('disabled')).toBeDefined()
+    })
+
+    it('数字を打つ・1 文字消す・全部消す', async () => {
+      const wrapper = await mountVein()
+      await press(wrapper, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
+      expect(display(wrapper)).toBe('1234567890')
+      await press(wrapper, 'back')
+      expect(display(wrapper)).toBe('123456789')
+      await press(wrapper, 'clear')
+      expect(display(wrapper)).toBe('')
+    })
+
+    it('決定で測定台の鍵の口から社員番号を引き、登録へ進む', async () => {
+      const wrapper = await mountVein()
+      await press(wrapper, '0', '4', '2', 'submit')
+      await flushPromises()
+      expect(getEmployeeByCodeMock).toHaveBeenCalledWith('042', 'bp-station')
+      expect(wrapper.text()).toContain('テスト花子さん')
+      await button(wrapper, '指静脈を登録').trigger('click')
+      await flushPromises()
+      expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-2', ['AABBCC', 'AABBCC'])
+    })
+
+    it('見つからない (404) ときは番号の未登録を出し、入力は残す', async () => {
+      getEmployeeByCodeMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (404): employee_not_found'), { status: 404 }))
+      const wrapper = await mountVein()
+      await press(wrapper, '9', '9', 'submit')
+      await flushPromises()
+      expect(wrapper.find('.text-red-600').text()).toBe(employeeNotFoundByCode('99'))
+      expect(display(wrapper)).toBe('99')
+    })
+
+    it('測定台の鍵が取れなかった失敗は「未登録」にせず、その文言をそのまま出す', async () => {
+      getEmployeeByCodeMock.mockRejectedValueOnce(new Error(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE))
+      const wrapper = await mountVein()
+      await press(wrapper, '1', 'submit')
+      await flushPromises()
+      expect(wrapper.find('.text-red-600').text()).toBe(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+    })
+
+    it('別の人にする で入力も消える', async () => {
+      const wrapper = await mountVein()
+      await press(wrapper, '7', 'submit')
+      await flushPromises()
+      await button(wrapper, '別の人にする').trigger('click')
+      expect(display(wrapper)).toBe('')
+    })
   })
 })
