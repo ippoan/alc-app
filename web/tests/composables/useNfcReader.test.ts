@@ -220,6 +220,9 @@ describe('useNfcReader', () => {
     // CoreS3 にも測定台にも一切触らない
     expect(coreMock.onEvent).not.toHaveBeenCalled()
     expect(atomMock.onEvent).not.toHaveBeenCalled()
+    // Vein Station の useVeinSerial 自体を作らない
+    expect(veinMock.onEvent).not.toHaveBeenCalled()
+    expect(veinMock.connect).not.toHaveBeenCalled()
   })
 
   it('EVT の受け口は 1 度しか繋がない (解除できないため)', async () => {
@@ -482,6 +485,21 @@ describe('useNfcReader', () => {
     expect(wsMock.connect).toHaveBeenCalledTimes(1)
   })
 
+  it('connect(): Vein Station も掴みに行く (arbiter に timecard の claimant を登録する, Refs ippoan/alc-app#436)', async () => {
+    const reader = await load()
+    reader.connect()
+
+    expect(veinMock.connect).toHaveBeenCalledTimes(1)
+  })
+
+  it('connect(): CoreS3 が直結済みでも Vein Station は掴みに行く', async () => {
+    coreState.isConnected.value = true
+    const reader = await load()
+    reader.connect()
+
+    expect(veinMock.connect).toHaveBeenCalledTimes(1)
+  })
+
   it('connect(): 直結済みならブリッジは繋がない', async () => {
     coreState.isConnected.value = true
     const reader = await load()
@@ -568,6 +586,8 @@ describe('useNfcReader', () => {
 
     // CoreS3 のポートは BLE ゲートウェイと共有しているので手放さない
     expect(coreMock.disconnect).not.toHaveBeenCalled()
+    // Vein Station は指静脈と端末の鍵の署名でも共有しているので手放さない
+    expect(veinMock.disconnect).not.toHaveBeenCalled()
 
     wsMock.connect.mockClear()
     coreState.isConnected.value = true

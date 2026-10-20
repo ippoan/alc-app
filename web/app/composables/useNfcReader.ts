@@ -223,6 +223,9 @@ export function useNfcReader() {
     wantConnected = true
     // claim は 3 秒で諦めるが登録は残る。後から掴めば isConnected が立つ
     void core.connect()
+    // Vein Station も登録しないと、arbiter が DEVICE timecard のポートを素通りする
+    // (Refs ippoan/alc-app#436)。指静脈と端末の鍵でも共有しているので disconnect では手放さない
+    void vein.connect()
     if (!core.isConnected.value) ws.connect()
   }
 
