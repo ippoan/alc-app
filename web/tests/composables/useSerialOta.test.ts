@@ -7,7 +7,8 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
  *
  * 端末 (station) は useVeinSerial の `ota` / `isConnected` の裏にいる偽物で模す。
  * 行の応答は契約どおり (`OTA READY 4096` / `OTA ACK <累計>` / `OTA OK` / `OTA CONFIRMED`)、
- * `OTA OK` の後は 500 ms で切れて 12 秒後につながり直す。
+ * `OTA OK` の後は 500 ms で切れて 12 秒後につながり直す (既定)。切れないまま起動して
+ * `EVT OTA_SERIAL_PENDING` を出す形 (`staysConnected`) も持つ。
  *
  * CoreS3 は useCoreS3Serial の `ota` / `isConnected` と useFirmwareReport の裏にいる偽物で模す
  * (下の describe)。
@@ -15,6 +16,7 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 const link = vi.hoisted(() => ({
   isConnected: null as unknown as { value: boolean },
+  onEvent: null as unknown as ReturnType<typeof vi.fn>,
   ota: {
     begin: null as unknown as ReturnType<typeof vi.fn>,
     end: null as unknown as ReturnType<typeof vi.fn>,
@@ -25,6 +27,7 @@ mockNuxtImport('useVeinSerial', () => () => link)
 
 const hub = vi.hoisted(() => ({
   isConnected: null as unknown as { value: boolean },
+  onEvent: null as unknown as ReturnType<typeof vi.fn>,
   ota: {
     begin: null as unknown as ReturnType<typeof vi.fn>,
     end: null as unknown as ReturnType<typeof vi.fn>,
@@ -41,6 +44,7 @@ const alarm = vi.hoisted(() => ({
     end: null as unknown as ReturnType<typeof vi.fn>,
     request: null as unknown as ReturnType<typeof vi.fn>,
     rest: null as unknown as ReturnType<typeof vi.fn>,
+    onEvent: null as unknown as ReturnType<typeof vi.fn>,
   },
 }))
 mockNuxtImport('useAlarmDevice', () => () => alarm)
@@ -56,9 +60,34 @@ mockNuxtImport('useFirmwareReport', () => () => fw)
 /** 呼ばれた順 (錠・保留・報告・機体へ送った行・取得・接続の変化) を 1 本に記録する */
 let events: string[]
 
+type EvtHandler = (name: string, args: string[]) => void
+type EvtPort = 'vein' | 'hub' | 'alarm'
+/** ポートごとの `EVT` 行の購読者 (`onEvent` で入り、返り値で抜ける) */
+let evtSubs: Record<EvtPort, Set<EvtHandler>>
+
+function subscriber(port: EvtPort): ReturnType<typeof vi.fn> {
+  return vi.fn((cb: EvtHandler) => {
+    evtSubs[port].add(cb)
+    return () => { evtSubs[port].delete(cb) }
+  })
+}
+
+/** 機体が `EVT <NAME> <args...>` を 1 行出した (serial-line-dispatch と同じ割り方で配る) */
+function emitEvt(port: EvtPort, line: string): void {
+  const [name, ...args] = line.slice('EVT '.length).split(' ')
+  for (const cb of [...evtSubs[port]]) cb(name!, args)
+}
+
+/** 確定待ちの新しい版で起動した機体が出す行 (alc-app-s3 hub-drivers の ota.rs) */
+const PENDING_EVT = 'EVT OTA_SERIAL_PENDING slot=1 timeout_ms=600000'
+
 /** CoreS3・警告デバイス・報告の偽物を作り直す (既定は「CoreS3 も警告デバイスも繋がっていない」) */
 function resetHubMocks(): void {
   events = []
+  evtSubs = { vein: new Set(), hub: new Set(), alarm: new Set() }
+  link.onEvent = subscriber('vein')
+  hub.onEvent = subscriber('hub')
+  alarm.ota.onEvent = subscriber('alarm')
   link.ota.begin = vi.fn()
   link.ota.end = vi.fn()
   alarm.isConnected = ref(false)
@@ -106,6 +135,14 @@ interface FakeDevice {
   /** 再起動のふるまい: 切れる / つながり直す */
   disconnects: boolean
   reconnects: boolean
+  /**
+   * 画面から見て USB が切れないまま再起動する (`disconnects` より先に見る)。2026-10-20 の実機
+   * (Vein Station) の記録: 再起動待ちの 90 秒間 claimant は一度も外れず、その間に機体の
+   * `EVT TIMECARD` (カードの照会) が届いた。3 秒後に起動し、`EVT TIMECARD` を出し、
+   * `emitsPending` なら続けて `EVT OTA_SERIAL_PENDING` を出す
+   */
+  staysConnected: boolean
+  emitsPending: boolean
   received: number
   /** 端末へ届いた書き込み (行、またはバイト列の長さ) */
   log: string[]
@@ -144,6 +181,16 @@ function fakeRequest(payload: string | Uint8Array, matchPrefix: string, timeoutM
 }
 
 function reboot(): void {
+  if (dev.staysConnected) {
+    setTimeout(() => {
+      dev.ver = dev.verAfterReboot
+      dev.flavor = dev.flavorAfterReboot ?? dev.flavor
+      dev.rebooted = true
+      emitEvt('vein', 'EVT TIMECARD card_id=0123456789abcdef card_kind=felica_idm')
+      if (dev.emitsPending) emitEvt('vein', PENDING_EVT)
+    }, 3_000)
+    return
+  }
   if (!dev.disconnects) return
   setTimeout(() => { link.isConnected.value = false }, 500)
   if (!dev.reconnects) return
@@ -177,6 +224,8 @@ describe('useSerialOta', () => {
       finalLine: 'OTA OK',
       disconnects: true,
       reconnects: true,
+      staysConnected: false,
+      emitsPending: true,
       received: 0,
       log: [],
     }
@@ -240,6 +289,8 @@ describe('useSerialOta', () => {
 
     expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
     expect(states).toEqual(expect.arrayContaining(['downloading', 'writing', 'rebooting', 'confirming', 'done']))
+    // 再起動の合図の購読は残さない
+    expect(evtSubs.vein.size).toBe(0)
 
     // 数秒出してから idle に戻る
     await vi.advanceTimersByTimeAsync(mod.RESULT_DISPLAY_MS)
@@ -258,14 +309,53 @@ describe('useSerialOta', () => {
     expect([...pcts].sort((a, b) => a - b)).toEqual(pcts)
   })
 
-  it('再起動後に VER を名乗らなくても FLAVOR が合えば確定する (VER は確定の条件にしない)', async () => {
-    dev.verAfterReboot = null
-    await runToEnd()
-    expect(dev.log.at(-1)).toBe('OTA CONFIRM')
-    expect(ota.state.value).toEqual({ kind: 'done', ver: '' })
+  it('★ USB が切れないまま再起動しても、機体の EVT OTA_SERIAL_PENDING で先へ進み、版が変わっていれば確定する', async () => {
+    dev.staysConnected = true
+    const connections: boolean[] = []
+    const stop = watch(() => link.isConnected.value, c => connections.push(c), { flush: 'sync' })
+    expect(await runToEnd()).toBe('updated')
+    stop()
+
+    expect(connections).toEqual([])
+    expect(dev.log.slice(-2)).toEqual(['DEVICE', 'OTA CONFIRM'])
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
+    expect(evtSubs.vein.size).toBe(0)
   })
 
-  it('manifest とイメージが食い違っても (再起動後の VER が manifest と違っても) FLAVOR で確定する', async () => {
+  it('★ USB が切れず EVT OTA_SERIAL_PENDING も来なければ (実機の記録の形)、ほかの EVT では進まず 90 秒で failed (確定しない)', async () => {
+    dev.staysConnected = true
+    dev.emitsPending = false
+    expect(await runToEnd()).toBe('failed')
+    // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ。再起動後の DEVICE も聞いていない
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
+    expect(dev.log.filter(l => l === 'DEVICE')).toHaveLength(1)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason: 'reconnect timeout' })
+    expect(evtSubs.vein.size).toBe(0)
+  })
+
+  it('★ 再起動の合図の後の VER が書き込み前の機体の版と同じなら、OTA CONFIRM を送らず failed: not_rebooted', async () => {
+    dev.staysConnected = true
+    dev.verAfterReboot = '0.1.0'
+    expect(await runToEnd()).toBe('failed')
+    expect(dev.log.at(-1)).toBe('DEVICE')
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason: 'not rebooted (0.1.0)' })
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith('[SERIAL_OTA] failed: target=timecard-station stage=confirming word=not_rebooted reason=not rebooted (0.1.0)')
+  })
+
+  it.each([
+    ['再起動後に VER を名乗らない', (d: FakeDevice) => { d.verAfterReboot = null }, 'no version (before=0.1.0 after=null)'],
+    ['書き込み前に VER を名乗っていない', (d: FakeDevice) => { d.ver = null }, 'no version (before=null after=0.2.0)'],
+  ] as Array<[string, (d: FakeDevice) => void, string]>)('★ %s → 版を比べられないので OTA CONFIRM を送らず failed: no_version', async (_name, arrange, reason) => {
+    arrange(dev)
+    expect(await runToEnd()).toBe('failed')
+    expect(dev.log.at(-1)).toBe('DEVICE')
+    expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
+    expect(ota.state.value).toEqual({ kind: 'failed', reason })
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(`[SERIAL_OTA] failed: target=timecard-station stage=confirming word=no_version reason=${reason}`)
+  })
+
+  it('manifest とイメージが食い違っても (再起動後の VER が manifest と違っても)、書き込み前の版と違えば確定する', async () => {
     dev.verAfterReboot = '0.1.9'
     await runToEnd()
     expect(dev.log.at(-1)).toBe('OTA CONFIRM')
@@ -447,7 +537,8 @@ describe('useSerialOta', () => {
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'flavor mismatch after reboot (timecard-vein)' })
   })
 
-  it('(4) 再起動しても切れなければ (90 秒) 確定せず failed', async () => {
+  it('(4) 切れず再起動の合図も来なければ (90 秒) 確定せず failed', async () => {
+    // 再起動しない機体 (USB は切れず、EVT OTA_SERIAL_PENDING も出さない)
     dev.disconnects = false
     await runToEnd()
     // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
@@ -723,6 +814,8 @@ interface FakeHub {
   confirmLine: string
   authLine: string | null
   reconnects: boolean
+  /** USB が切れないまま再起動し、3 秒後に `EVT OTA_SERIAL_PENDING` を出す (Vein Station の `staysConnected` と同じ) */
+  staysConnected: boolean
   /** 行ごとの「既に応答待ち」で弾く残り回数 (弾いた行は機体へ届かない) */
   busy: Record<string, number>
   received: number
@@ -759,10 +852,20 @@ function hubRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs
   if (payload === 'HB OFF') return answer(hubDev.hbOffLine)
   if (payload === 'AUTH STATUS') return answer(hubDev.authLine ?? (hubDev.id === '' ? 'AUTH UNPAIRED' : `AUTH PAIRED tenant-a ${hubDev.id}`))
   if (payload.startsWith('OTA SERIAL ')) return answer(hubDev.readyLine)
-  return answer(events.includes('reconnected') ? hubDev.confirmLine : hubDev.probeLine)
+  return answer(events.includes('reconnected') || events.includes('booted') ? hubDev.confirmLine : hubDev.probeLine)
 }
 
 function hubReboot(): void {
+  if (hubDev.staysConnected) {
+    setTimeout(() => {
+      hubDev.ver = hubDev.verAfterReboot
+      hubDev.flavor = hubDev.flavorAfterReboot
+      hubDev.id = hubDev.idAfterReboot ?? ''
+      events.push('booted')
+      emitEvt('hub', PENDING_EVT)
+    }, 3_000)
+    return
+  }
   setTimeout(() => { hub.isConnected.value = false }, 500)
   if (!hubDev.reconnects) return
   setTimeout(() => {
@@ -801,6 +904,7 @@ describe('useSerialOta (cores3)', () => {
       confirmLine: 'OTA CONFIRMED RX=65536',
       authLine: null,
       reconnects: true,
+      staysConnected: false,
       busy: {},
       received: 0,
     }
@@ -947,6 +1051,16 @@ describe('useSerialOta (cores3)', () => {
     expect(fw.hold).toHaveBeenCalledTimes(1)
     expect(fw.release).toHaveBeenCalledTimes(1)
     expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
+  })
+
+  it('★ USB が切れないまま再起動しても、EVT OTA_SERIAL_PENDING で先へ進み、照合と確定まで済む', async () => {
+    hubDev.staysConnected = true
+    expect(await runToEnd()).toBe('updated')
+
+    expect(events).not.toContain('disconnected')
+    expect(sent().slice(-3)).toEqual(['AUTH STATUS', 'DEVICE', 'OTA CONFIRM'])
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
+    expect(evtSubs.hub.size).toBe(0)
   })
 
   it('報告は遷移だけ: どれも target_version を持ち、writing に pct を載せない', async () => {
@@ -1219,6 +1333,7 @@ describe('useSerialOta (cores3)', () => {
     ['検証の OTA ERR verify', (d: FakeHub) => { d.finalLine = 'OTA ERR verify' }, 'verify', 'OTA ERR verify'],
     ['再接続の時間切れ', (d: FakeHub) => { d.reconnects = false }, 'reconnect_timeout', 'reconnect timeout'],
     ['再起動後の FLAVOR 違い', (d: FakeHub) => { d.flavorAfterReboot = 'cores3-dev' }, 'flavor_mismatch', 'flavor mismatch after reboot (cores3-dev)'],
+    ['再起動後の版が書き込み前と同じ', (d: FakeHub) => { d.verAfterReboot = '0.1.0' }, 'not_rebooted', 'not rebooted (0.1.0)'],
     ['OTA CONFIRM の OTA ERR', (d: FakeHub) => { d.confirmLine = 'OTA ERR confirm' }, 'confirm', 'OTA ERR confirm'],
     ['語の無い OTA ERR', (d: FakeHub) => { d.confirmLine = 'OTA ERR' }, 'no_response', 'OTA ERR'],
   ] as Array<[string, (d: FakeHub) => void, string, string]>)('%s → failed の幕と報告 (%s)。錠も保留も残さない', async (_name, arrange, word, reason) => {
@@ -1410,6 +1525,8 @@ interface FakeAlarm {
   /** 再起動後の `OTA CONFIRM` への応答 */
   confirmLine: string
   reconnects: boolean
+  /** USB が切れないまま再起動し、3 秒後に `EVT OTA_SERIAL_PENDING` を出す (Vein Station の `staysConnected` と同じ) */
+  staysConnected: boolean
   /** 行ごとの「既に応答待ち」で弾く残り回数 (弾いた行は機体へ届かない) */
   busy: Record<string, number>
   rebooted: boolean
@@ -1449,6 +1566,15 @@ function alarmRequest(payload: string | Uint8Array, matchPrefix: string, timeout
 }
 
 function alarmReboot(): void {
+  if (alarmDev.staysConnected) {
+    setTimeout(() => {
+      alarmDev.ver = alarmDev.verAfterReboot
+      alarmDev.flavor = alarmDev.flavorAfterReboot
+      alarmDev.rebooted = true
+      emitEvt('alarm', PENDING_EVT)
+    }, 3_000)
+    return
+  }
   setTimeout(() => { alarm.isConnected.value = false }, 500)
   if (!alarmDev.reconnects) return
   setTimeout(() => {
@@ -1483,6 +1609,7 @@ describe('useSerialOta (alarm)', () => {
       finalLine: 'OTA OK',
       confirmLine: 'OTA CONFIRMED',
       reconnects: true,
+      staysConnected: false,
       busy: {},
       rebooted: false,
       received: 0,
@@ -1581,6 +1708,16 @@ describe('useSerialOta (alarm)', () => {
     expectWatchKept(1)
   })
 
+  it('★ USB が切れないまま再起動しても、EVT OTA_SERIAL_PENDING で先へ進んで確定する', async () => {
+    alarmDev.staysConnected = true
+    expect(await runToEnd()).toBe('updated')
+
+    expect(events).not.toContain('disconnected')
+    expect(sent().slice(-2)).toEqual(['DEVICE', 'OTA CONFIRM'])
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
+    expect(evtSubs.alarm.size).toBe(0)
+  })
+
   it('CoreS3 にも Vein Station にも報告にも触らない (宛先の照合も無い)', async () => {
     await runToEnd()
     expect(hub.ota.request).not.toHaveBeenCalled()
@@ -1601,7 +1738,7 @@ describe('useSerialOta (alarm)', () => {
     ])
   })
 
-  it('確定の条件は FLAVOR だけ: 再起動後の版が配布中と違っても確定する', async () => {
+  it('再起動後の版が配布中と違っても、書き込み前の版と違えば確定する', async () => {
     alarmDev.verAfterReboot = '0.1.9'
     expect(await runToEnd()).toBe('updated')
     expect(sent().at(-1)).toBe('OTA CONFIRM')
@@ -1720,6 +1857,7 @@ describe('useSerialOta (alarm)', () => {
     ['検証の OTA ERR verify', (d: FakeAlarm) => { d.finalLine = 'OTA ERR verify' }, 'OTA ERR verify'],
     ['再接続の時間切れ', (d: FakeAlarm) => { d.reconnects = false }, 'reconnect timeout'],
     ['再起動後の FLAVOR が違う', (d: FakeAlarm) => { d.flavorAfterReboot = 'timecard-station' }, 'flavor mismatch after reboot (timecard-station)'],
+    ['再起動後の版が書き込み前と同じ', (d: FakeAlarm) => { d.verAfterReboot = '0.1.0' }, 'not rebooted (0.1.0)'],
     ['再起動後の確定が OTA ERR', (d: FakeAlarm) => { d.confirmLine = 'OTA ERR confirm' }, 'OTA ERR confirm'],
   ] as Array<[string, (d: FakeAlarm) => void, string]>)('%s → failed の幕。錠は解け、見張りの猶予は 1 回だけ', async (_name, mutate, reason) => {
     mutate(alarmDev)

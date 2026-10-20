@@ -1340,6 +1340,26 @@ describe('useAlarmDevice', () => {
       alarm.ota.end()
     })
 
+    it('ota.onEvent は機体の EVT 行だけを名前と引数に割って渡し、返り値で抜ける (再起動の合図を待つ口)', async () => {
+      const dev = await connectDevice()
+      const got: Array<[string, string[]]> = []
+      const off = alarm.ota.onEvent((name, args) => { got.push([name, args]) })
+
+      for (const line of ['OTA CONFIRMED RX=8192', 'EVT OTA_SERIAL_PENDING slot=1 timeout_ms=600000', 'EVT ALARM state=idle cause=none']) {
+        dev.emit(`${line}\n`)
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(got).toEqual([
+        ['OTA_SERIAL_PENDING', ['slot=1', 'timeout_ms=600000']],
+        ['ALARM', ['state=idle', 'cause=none']],
+      ])
+
+      off()
+      dev.emit('EVT OTA_SERIAL_PENDING slot=1 timeout_ms=600000\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(got).toHaveLength(2)
+    })
+
     it('錠の間、heartbeat が止まる (3 秒を過ぎても何も出ない)', async () => {
       const dev = await connectDevice()
       const before = dev.writes.length
