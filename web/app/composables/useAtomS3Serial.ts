@@ -29,6 +29,7 @@
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { writeLine, BP_STATION_DEVICE_KIND } from '~/composables/useSerialArbiter'
+import { createLineDispatch } from '~/utils/serial-line-dispatch'
 
 /**
  * arbiter に登録する名前。`DEVICE bp-station` の kind と一致させる — arbiter は
@@ -44,8 +45,6 @@ const CLAIM_TIMEOUT = 3000
 // シングルトン: 1 台の PC につながる測定台は 1 台
 const isConnected = ref(false)
 
-const jsonHandlers = new Set<(msg: unknown) => void>()
-const eventHandlers = new Set<(name: string, args: string[]) => void>()
 const openHandlers = new Set<() => void>()
 const closeHandlers = new Set<() => void>()
 /** claim を待っている connect() */
@@ -55,40 +54,16 @@ const waiters = new Set<() => void>()
 let held: WritableStreamDefaultWriter<Uint8Array> | null = null
 
 /**
- * `EVT <NAME> <args...>` を名前と引数に割って配る (useCoreS3Serial の dispatchEvent と同形)。
+ * JSON (BLE ゲートウェイ) と `EVT` (NFC など) を配る。どちらでもない行は捨てる。
  *
- * **絞り込みはしない。** CoreS3 側で `EVT` を選り分けているのは `get_log` に載せる
+ * **EVT の絞り込みはしない。** CoreS3 側で `EVT` を選り分けているのは `get_log` に載せる
  * 診断ログ (`DIAG_EVENT_PREFIXES` → `appendDiag`) の方だけで、`onEvent` への配布は
  * 全部通す (免許証・カードの値を診断ログに残さないための許可リストなので、配布に
  * 持ち込むと `NFC_LICENSE` が画面へ届かなくなる)。測定台は診断ログを持たないので、
  * ここには配布しか無い。
  */
-function dispatchEvent(line: string): void {
-  // 'EVT ' の 4 文字を落とし、最初の空白までが名前
-  const sep = line.indexOf(' ', 4)
-  const name = sep === -1 ? line.slice(4) : line.slice(4, sep)
-  const args = sep === -1 ? [] : line.slice(sep + 1).split(' ')
-  for (const cb of [...eventHandlers]) cb(name, args)
-}
-
-/**
- * JSON (BLE ゲートウェイ) と `EVT` (NFC など) を配る。JSON の中身は検査しない
- * (他機と語彙を共有しているため)。どちらでもない行は捨てる
- */
-function handleLine(line: string): void {
-  if (line.startsWith('EVT ')) {
-    dispatchEvent(line)
-    return
-  }
-  if (!line.startsWith('{')) return
-  try {
-    const msg = JSON.parse(line) as unknown
-    for (const cb of [...jsonHandlers]) cb(msg)
-  }
-  catch {
-    console.warn('[ATOM-S3] Invalid JSON:', line)
-  }
-}
+const lineDispatch = createLineDispatch('ATOM-S3')
+const handleLine = lineDispatch.dispatchLine
 
 export function useAtomS3Serial() {
   // ポートの探索と調停は arbiter に任せる (navigator.serial を自前で叩かない)
@@ -118,16 +93,7 @@ export function useAtomS3Serial() {
 
   // --- 公開 API (useCoreS3Serial のうち useBleGateway が使う分だけ) ---
 
-  /** JSON として読めた行を受け取る */
-  function onJson(cb: (msg: unknown) => void): void {
-    jsonHandlers.add(cb)
-  }
-
-  /** `EVT <NAME> <args...>` を受け取る。返り値を呼ぶと解除できる (useCoreS3Serial と同形) */
-  function onEvent(cb: (name: string, args: string[]) => void): () => void {
-    eventHandlers.add(cb)
-    return () => { eventHandlers.delete(cb) }
-  }
+  const { onJson, onEvent } = lineDispatch
 
   /** ポートを預かった (接続した)。登録時点で既に接続済みならその場で 1 回呼ぶ */
   function onOpen(cb: () => void): void {

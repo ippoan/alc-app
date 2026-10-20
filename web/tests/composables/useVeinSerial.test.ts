@@ -194,6 +194,79 @@ describe('useVeinSerial', () => {
     })
   })
 
+  // ---------- EVT / JSON の配布 (Refs ippoan/alc-app#436) ----------
+  // Port A の NFC ユニットと RS232 の FC-1200 の行を、CoreS3 と同じ形で配る
+
+  describe('onEvent / onJson', () => {
+    it('EVT は名前と引数に割って、JSON は読んで配る', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const events: Array<[string, string[]]> = []
+      const jsons: unknown[] = []
+      vein.onEvent((name, args) => events.push([name, args]))
+      vein.onJson(msg => jsons.push(msg))
+
+      dev.emit('EVT NFC_LICENSE issue=20230401 expiry=20280401\n')
+      dev.emit('EVT FC1200 BLOW_WAITING\n')
+      dev.emit('{"type":"alcohol","value":0.1,"result":"normal"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(events).toEqual([
+        ['NFC_LICENSE', ['issue=20230401', 'expiry=20280401']],
+        ['FC1200', ['BLOW_WAITING']],
+      ])
+      expect(jsons).toEqual([{ type: 'alcohol', value: 0.1, result: 'normal' }])
+    })
+
+    it('プローブ中に来ていた EVT も接続時に配る', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const events: string[] = []
+      vein.onEvent(name => events.push(name))
+
+      dev.emit('EVT FC1200 WARMING 120 5\nDEVICE timecard VER=0.1.0\n')
+      expect(await connect()).toBe(true)
+
+      expect(events).toEqual(['FC1200'])
+    })
+
+    it('capture / say の応答は配らない (EVT でも JSON でもない)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const seen: unknown[] = []
+      vein.onEvent((name, args) => seen.push([name, args]))
+      vein.onJson(msg => seen.push(msg))
+
+      const p = vein.capture()
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('VEIN CHARA 0a1b\nOK VEIN SAY PLACE\nERR VEIN TIMEOUT\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBe('0a1b')
+
+      expect(seen).toEqual([])
+    })
+
+    it('onEvent の返り値で購読を解除できる / 壊れた JSON は捨てる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const events: string[] = []
+      const jsons: unknown[] = []
+      const off = vein.onEvent(name => events.push(name))
+      vein.onJson(msg => jsons.push(msg))
+
+      off()
+      dev.emit('EVT NFC_READY\n{"type":\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(events).toEqual([])
+      expect(jsons).toEqual([])
+      expect(warn).toHaveBeenCalledWith('[VEIN] Invalid JSON:', '{"type":')
+      warn.mockRestore()
+    })
+  })
+
   // ---------- capture ----------
 
   describe('capture', () => {
