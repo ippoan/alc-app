@@ -283,6 +283,85 @@ describe('composables/useBlowVideoRecording', () => {
     })
   })
 
+  describe('takeMeasuringPhoto (測定中に入った瞬間の写真)', () => {
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+    it('measuring で 1 回だけ撮り、取り出すと控えは空になる', async () => {
+      const photo = new Blob(['jpg'])
+      cameraSnapshot.mockResolvedValue(photo)
+      const { onAlcStateChange, takeMeasuringPhoto } = useBlowVideoRecording()
+      onAlcStateChange('blow_waiting')
+      expect(cameraSnapshot).not.toHaveBeenCalled()
+      onAlcStateChange('measuring')
+      await flush()
+
+      expect(cameraSnapshot).toHaveBeenCalledTimes(1)
+      expect(takeMeasuringPhoto()).toBe(photo)
+      expect(takeMeasuringPhoto()).toBeNull()
+    })
+
+    it('同じ測定で measuring が 2 回来ても撮り直さない', async () => {
+      cameraSnapshot.mockResolvedValue(new Blob(['jpg']))
+      const { onAlcStateChange } = useBlowVideoRecording()
+      onAlcStateChange('measuring')
+      onAlcStateChange('measuring')
+      await flush()
+
+      expect(cameraSnapshot).toHaveBeenCalledTimes(1)
+    })
+
+    it('reset で控えが消え、次の測定ではまた撮る', async () => {
+      cameraSnapshot.mockResolvedValue(new Blob(['jpg']))
+      const { onAlcStateChange, takeMeasuringPhoto, reset } = useBlowVideoRecording()
+      onAlcStateChange('measuring')
+      await flush()
+      reset()
+      expect(takeMeasuringPhoto()).toBeNull()
+
+      onAlcStateChange('measuring')
+      await flush()
+      expect(cameraSnapshot).toHaveBeenCalledTimes(2)
+      expect(takeMeasuringPhoto()).not.toBeNull()
+    })
+
+    it('撮影中に reset されたら、遅れて届いた写真を控えない', async () => {
+      let resolveShot!: (b: Blob | null) => void
+      cameraSnapshot.mockReturnValue(new Promise(r => { resolveShot = r }))
+      const { onAlcStateChange, takeMeasuringPhoto, reset } = useBlowVideoRecording()
+      onAlcStateChange('measuring')
+      reset()
+      resolveShot(new Blob(['late']))
+      await flush()
+
+      expect(takeMeasuringPhoto()).toBeNull()
+    })
+
+    it('撮れなければ null (理由を warn に出す)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      cameraSnapshot.mockResolvedValue(null)
+      const { onAlcStateChange, takeMeasuringPhoto } = useBlowVideoRecording()
+      onAlcStateChange('measuring')
+      await flush()
+
+      expect(takeMeasuringPhoto()).toBeNull()
+      expect(warn).toHaveBeenCalledWith('[BlowVideo] measuring photo: camera returned no image')
+      warn.mockRestore()
+    })
+
+    it('撮影が例外でも null (理由を warn に出す)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const err = new Error('canvas')
+      cameraSnapshot.mockRejectedValue(err)
+      const { onAlcStateChange, takeMeasuringPhoto } = useBlowVideoRecording()
+      onAlcStateChange('measuring')
+      await flush()
+
+      expect(takeMeasuringPhoto()).toBeNull()
+      expect(warn).toHaveBeenCalledWith('[BlowVideo] measuring photo failed:', err)
+      warn.mockRestore()
+    })
+  })
+
   describe('reset', () => {
     it('録画の状態を捨ててカメラを止める', async () => {
       const { saveVideo } = await import('~/utils/video-store')

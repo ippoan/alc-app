@@ -408,6 +408,7 @@ const {
   stopCamera: stopMeasuringCamera,
   onAlcStateChange,
   snapshot: takeBlowSnapshot,
+  takeMeasuringPhoto,
   finishRecording: finishVideoRecording,
   uploadRecording: uploadVideoRecording,
   reset: resetVideoRecording,
@@ -680,8 +681,10 @@ watch(step, async (s, prev) => {
 
 // FC-1200 測定結果 → BLE 医療データ / 手動入力データをマージ → API に保存
 async function onMeasurementResult(result: MeasurementResult) {
-  // 吹き終わりの写真。録画を止めるとカメラが落ちるので、その前に撮る (撮れなければ null)
-  const blowPhoto = await takeBlowSnapshot().catch(() => null)
+  // 吹き込みの写真。FC-1200 が測定中 (measuring) に入った瞬間に撮った控えを使う
+  // (顔がまだ機器の前にある)。控えが無ければここで撮る — 録画を止めるとカメラが落ちるので
+  // その前に。upload は保存の中で行う (中断された測定の写真をサーバーに残さないため)
+  const blowPhoto = takeMeasuringPhoto() ?? await takeBlowSnapshot().catch(() => null)
   result.tenkoType = tenkoType.value
   result.carinsCertNo = carinsCertNo.value
   result.carinsVehicleId = carinsVehicleId.value
