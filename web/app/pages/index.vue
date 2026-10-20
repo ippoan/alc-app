@@ -400,11 +400,10 @@ function reloadPage() {
 /**
  * IC カードの打刻から アルコールチェックへ進む導線 (Refs ippoan/rust-alc-api#644)。
  *
- * IC カードはハブ端末 (CoreS3) にかざされ、打刻はサーバ側で記録される —
- * タブレットの NFC (`NormalMeasurement` の `onNfcRead`) は通らないので、
- * そのままでは「操作を選んでください」の段に入れない。**打刻の合図で引き直した
- * 最新の行**を `TodayPunchHistory` から受け取り、IC カードなら
- * `IcPunchAlcoholPrompt` がその人ぶんのボタンを出す。
+ * - **この端末に USB でつないだ機体が読んだカード** → `useHubTimecardPunch` が持ち主を引き、
+ *   `startIc` で即測定へ進める (免許証と同じ。Refs ippoan/alc-app#436)
+ * - **別の端末の打刻** → 打刻の合図で引き直した最新の行を `TodayPunchHistory` から受け取り、
+ *   `IcPunchAlcoholPrompt` がその人ぶんのボタンを出す
  *
  * **判定も測定の開始も `NormalMeasurement` の状態機械の外に置く** —
  * `onNfcRead` の「測定中のタップで段が巻き戻らない」ガード
@@ -413,7 +412,7 @@ function reloadPage() {
  */
 const normalMeasurement = ref<{
   isIdle: boolean
-  startForEmployee: (id: string, name: string, readOnThisDevice?: boolean) => Promise<boolean>
+  startForEmployee: (id: string, name: string, readOnThisDevice?: boolean, punchCardId?: string | null) => Promise<boolean>
 } | null>(null)
 /**
  * 社員 ID → 表示名。`TodayPunchHistory` が取った一覧を受け取る
@@ -421,11 +420,12 @@ const normalMeasurement = ref<{
  */
 const employeeNames = ref<Record<string, string>>({})
 /**
- * IC 打刻の最新行。**シリアル由来を優先し、サーバ由来はそこへ合流させる**
- * (Refs ippoan/rust-alc-api#644、`useHubTimecardPunch` の doc)。
+ * IC 打刻。機体で読んだカードは即測定へ (通常点呼のタブが待機中でなければ始めない)。
+ * `latestPunch` はボタンに出す別の端末の打刻 (Refs ippoan/rust-alc-api#644、`useHubTimecardPunch` の doc)。
  */
 const { latest: latestPunch, setFromServer: setLatestPunchFromServer } = useHubTimecardPunch(
   id => employeeNames.value[id] ?? null,
+  async (id, name, punchCardId) => (await normalMeasurement.value?.startForEmployee(id, name, true, punchCardId)) ?? false,
 )
 /** 通常点呼が待機中か (まだ mount されていなければ false = ボタンを出さない) */
 const measurementIdle = computed(() => normalMeasurement.value?.isIdle === true)
@@ -434,8 +434,8 @@ const icPromptActive = ref(false)
 
 async function startAlcoholForPunch(punch: LatestPunch) {
   if (!punch.employeeId) return
-  // 打刻の由来 (この端末に繋いだ機体で読んだか) は打刻の行が持っている値を渡すだけ
-  await normalMeasurement.value?.startForEmployee(punch.employeeId, punch.name, punch.readOnThisDevice === true)
+  // ボタンに出るのは別の端末の打刻だけ (この端末では読んでいない = remote_punch)
+  await normalMeasurement.value?.startForEmployee(punch.employeeId, punch.name)
 }
 
 function onRoleTabClick(role: RoleTab) {

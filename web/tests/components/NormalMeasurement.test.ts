@@ -101,6 +101,11 @@ mockNuxtImport('useStrayAlcohol', () => () => ({
 // PC の段を CoreS3 に送る口 (Refs #238)。ここでは呼ばれたかだけを見る
 const syncStepMock = vi.fn()
 const sendResultMock = vi.fn()
+// Vein Station の名乗り (FLAVOR)。免許証の打刻を画面が書くかの判定に使う (Refs ippoan/alc-app#436)。
+// 他の口は実物のまま
+const veinInfo = vi.hoisted(() => ({ value: null as { ver: string | null, board: string | null, flavor: string | null } | null }))
+mockNuxtImport('useVeinSerial', original => () => ({ ...original(), deviceInfo: veinInfo }))
+
 mockNuxtImport('useCoreS3Stage', () => () => ({
   syncStep: syncStepMock,
   sendResult: sendResultMock,
@@ -1236,9 +1241,48 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
   function exposed(wrapper: Awaited<ReturnType<typeof mountNfcStep>>) {
     return wrapper.vm as unknown as {
       isIdle: boolean
-      startForEmployee: (id: string, name: string) => Promise<boolean>
+      startForEmployee: (id: string, name: string, readOnThisDevice?: boolean, punchCardId?: string | null) => Promise<boolean>
     }
   }
+
+  // 画面が打刻を書く構成の IC カード (Refs ippoan/alc-app#436)。打刻と測定を 1 対 1 で結ぶ
+  it('★★ 打刻するカードを渡されたら、測定の開始の後に測定の id を載せて打刻する', async () => {
+    const wrapper = await mountNfcStep()
+
+    const started = await exposed(wrapper).startForEmployee('emp-9', '佐藤花子', true, 'CARD-1')
+    await wrapper.vm.$nextTick()
+
+    expect(started).toBe(true)
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    expect(punchTimecardMock).toHaveBeenCalledWith('CARD-1', 'measurement-1')
+    expect(wrapper.text()).toContain('体温')
+    wrapper.unmount()
+  })
+
+  it('★ 打刻するカードを渡されても、オフラインなら打刻を見送って測定へ進む', async () => {
+    isOnlineRef.value = false
+    const wrapper = await mountNfcStep()
+
+    const started = await exposed(wrapper).startForEmployee('emp-9', '佐藤花子', true, 'CARD-1')
+    await wrapper.vm.$nextTick()
+
+    expect(started).toBe(true)
+    expect(punchTimecardMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('体温')
+    wrapper.unmount()
+  })
+
+  it('★ 打刻が失敗しても測定へ進む (best-effort)', async () => {
+    punchTimecardMock.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }))
+    const wrapper = await mountNfcStep()
+
+    const started = await exposed(wrapper).startForEmployee('emp-9', '佐藤花子', true, 'CARD-1')
+    await wrapper.vm.$nextTick()
+
+    expect(started).toBe(true)
+    expect(wrapper.text()).toContain('体温')
+    wrapper.unmount()
+  })
 
   // IC カードの打刻は免許証の確認を経ていないので、点呼 (始業/終業) には入れない。
   // 選択画面 (choice) を飛ばし、種別なし ('normal') の測定として体温の段へ直行する
@@ -1251,7 +1295,7 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
     await wrapper.vm.$nextTick()
 
     expect(started).toBe(true)
-    // IC カードの打刻はサーバ側で済んでいる — **二重打刻になるので打たない**
+    // 打刻するカードを渡されなければ打たない (機体が送る構成・別の端末の打刻。二重打刻になる)
     expect(punchTimecardMock).not.toHaveBeenCalled()
     // 社員は打刻の行から分かっているので照合もしない
     expect(getEmployeeByNfcIdMock).not.toHaveBeenCalled()
@@ -1501,6 +1545,23 @@ describe('NormalMeasurement — 読み取り経路による打刻の出し分け
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
     expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010', 'measurement-1')
     expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['LAN 版の打刻端末 (FLAVOR=timecard) は打刻しない (機体が送る)', 'timecard', 0],
+    ['Vein Station 版 (FLAVOR=timecard-vein) は打刻する', 'timecard-vein', 1],
+  ] as const)("★ source: 'vein-station' — %s", async (_label, flavor, punches) => {
+    veinInfo.value = { ver: '0.1.0', board: null, flavor }
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    punchTimecardMock.mockClear()
+
+    await touchFrom(wrapper, '2601012901010', 'vein-station')
+
+    expect(punchTimecardMock).toHaveBeenCalledTimes(punches)
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    veinInfo.value = null
     wrapper.unmount()
   })
 

@@ -18,7 +18,8 @@
  *   - Vein Station (`DEVICE timecard`) の Port A に NFC ユニットを挿す構成もある。
  *     これも CoreS3 と同じ `EVT NFC_LICENSE` を出すので同じ受け口に足す
  *     (Refs ippoan/alc-app#436)。掴むのは useDeviceToken なので、ここは繋ぐだけ。
- *     IC カード (`EVT TIMECARD`) は社員の引き当てが要るので、まだ配らない
+ *     IC カード (`EVT TIMECARD`) はここでは配らない — 社員の引き当てと打刻の要否の判定が
+ *     要るので、useHubTimecardPunch が `useUsbHub().nfc` から直接受ける
  *     (handleDeviceEvent が名前で見ないだけで落ちる)
  *
  * それでも経路の切り替わり際に同じ免許証が二重に届きうるので、同じ employee_id を

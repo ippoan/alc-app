@@ -192,6 +192,20 @@ describe('useVeinSerial', () => {
       await vein.disconnect()
       expect(cb).toHaveBeenCalledTimes(1)
     })
+
+    // 機体が自分で打刻を送るかを FLAVOR で決める (Refs ippoan/alc-app#436)
+    it('名乗りの FLAVOR を deviceInfo に持ち、ポートを失ったら null に戻す', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      expect(vein.deviceInfo.value).toBeNull()
+      dev.emit('DEVICE timecard VER=0.1.0 FLAVOR=timecard-vein\n')
+      expect(await connect()).toBe(true)
+      expect(vein.deviceInfo.value).toEqual({ ver: '0.1.0', board: null, flavor: 'timecard-vein' })
+
+      await vein.disconnect()
+      expect(vein.deviceInfo.value).toBeNull()
+    })
   })
 
   // ---------- EVT / JSON の配布 (Refs ippoan/alc-app#436) ----------

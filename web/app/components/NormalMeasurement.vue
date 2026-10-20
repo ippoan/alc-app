@@ -4,6 +4,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
+import { deviceSendsPunch } from '~/utils/device-line'
 import { IDENTITY_METHOD, IT_TENKO_ALLOW_IC_CARD, IT_TENKO_METHOD, type IdentityMethod } from '~/utils/it-tenko'
 
 const { isDemoMode: isDemoModeFromUrl } = useDemoMode()
@@ -248,6 +249,9 @@ function punchFailureMessage(e: unknown): string {
   return err?.status ? `打刻に失敗しました (${err.status})` : '打刻に失敗しました'
 }
 
+// 免許証の打刻を画面が書くかの判定に、Vein Station の名乗り (FLAVOR) を見る (`deviceSendsPunch`)
+const veinSerial = useVeinSerial()
+
 /**
  * 打刻する (best-effort: 失敗しても投げない)。**点呼を打刻の失敗で止めない**。
  * オフラインでは打たない — 打刻のキューイングはこの段では持たない
@@ -468,18 +472,17 @@ async function prepareMeasurementFor(emp: { id: string, name: string }) {
  *
  * # なぜ `source` で打刻を出し分けるのか
  *
- * **`'cores3'` = ハブ端末が読んだ。その時点でサーバ側に打刻が既に入っている** —
- * CoreS3 は読めたタッチを全部 uplink へ積む (alc-app-s3 `timecard::punch_record`)。
- * ここで重ねて打つと**同じ 1 タップが 2 行**になる (免許証のチップ付き + チップ無し)。
- * IC カードの導線が `startMeasurementFor` で「`tryPunch` は絶対に呼ばない」としているのと
- * 同じ理由で、免許証のタッチもハブ経由なら打たない。
+ * **機体が自分で打刻を送る構成 (CoreS3・LAN 版の打刻端末) では、その時点でサーバ側に
+ * 打刻が既に入っている** — ここで重ねて打つと**同じ 1 タップが 2 行**になる
+ * (免許証のチップ付き + チップ無し)。
  *
- * **`'bridge'` = NFC ブリッジ (9876) が読んだ。その先に CoreS3 は居ない** ので、
- * **ここで打たないと打刻が丸ごと消える**。WebSerial の無い環境 (Android WebView) は
- * こちらしか無く、**Android 版が入ったときの唯一の打刻口**になる。
+ * **それ以外 (Vein Station 版・NFC ブリッジ (9876)・血圧測定台) は、ここで打たないと
+ * 打刻が丸ごと消える**。WebSerial の無い環境 (Android WebView) はブリッジしか無く、
+ * **Android 版が入ったときの唯一の打刻口**になる。
  *
- * **`source` が無いときは打つ。** 判断材料が無いなら「打刻が消える」より
- * 「2 行になる」方が軽い (消えた打刻は後から作れないが、重複は消せる)。
+ * 判定は `deviceSendsPunch` の 1 か所 (IC カードの `useHubTimecardPunch` と共有)。
+ * **`source` が無い・機体の FLAVOR が分からないときは打つ。** 判断材料が無いなら
+ * 「打刻が消える」より「2 行になる」方が軽い (消えた打刻は後から作れないが、重複は消せる)。
  */
 async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSource, cardType?: NfcReadEvent['card_type']) {
   // **測定中のタップで段が巻き戻らないようにする。このガードを外さない**
@@ -504,7 +507,7 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
     await prepareMeasurementFor(emp)
     identityMethod.value = cardType === 'driver_license' ? IDENTITY_METHOD.LICENSE : IDENTITY_METHOD.NFC_CARD
     // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
-    if (source !== 'cores3') await tryPunch(nfcId)
+    if (!deviceSendsPunch(source, veinSerial.deviceInfo.value?.flavor)) await tryPunch(nfcId)
     step.value = 'choice'
   } catch {
     const msg = employeeNotFoundByNfc(nfcId)
@@ -536,10 +539,13 @@ useKioskScreen().declareSafeToReload(reloadSafe)
 /**
  * **社員を指定して**測定へ入る (Refs ippoan/rust-alc-api#644)。
  *
- * IC カードはハブ端末 (CoreS3) にかざされ、打刻はサーバ側で既に記録されている —
- * `onNfcRead` は通らず、社員も打刻の行から分かっている。そこで
- * 「照合」と「打刻」を抜いた残り (測定レコードの作成 → 顔データ同期 → 体温) だけを
- * ここから始める。**`tryPunch` は絶対に呼ばない** (同じタップで打刻が 2 行入る)。
+ * IC カードは USB の機体にかざされ、社員は呼び出し元 (`useHubTimecardPunch` の照会・
+ * 打刻の行) が引いてある — `onNfcRead` は通らない。そこで「照合」を抜いた残り
+ * (測定レコードの作成 → 顔データ同期 → 体温) をここから始める。
+ *
+ * `punchCardId` = 画面が打刻を書く構成のときだけ渡されるカード (Refs ippoan/alc-app#436)。
+ * 渡されたら測定の開始の後に `tryPunch` で打刻し、測定の id を載せる (打刻と点呼が 1 対 1)。
+ * **機体が自分で送る構成では渡されない** (ここで打つと同じタップで打刻が 2 行入る)。
  *
  * 呼び出し元が段を知らずに呼んでも巻き戻らないよう、`onNfcRead` と**同じガード**を
  * 置く (Refs ippoan/alc-app-s3#135)。始められたかを返す。
@@ -548,7 +554,7 @@ useKioskScreen().declareSafeToReload(reloadSafe)
  * 打刻の案内は別の端末の打刻でも出るので、渡されなければ「この端末では読んでいない」
  * (`remote_punch`) として扱う — カードを読んでいない人の名義で IT点呼 まで進めない。
  */
-async function startForEmployee(id: string, name: string, readOnThisDevice = false): Promise<boolean> {
+async function startForEmployee(id: string, name: string, readOnThisDevice = false, punchCardId: string | null = null): Promise<boolean> {
   // IT点呼 の本人確認は免許証だけ (IC カードの打刻からは始めない)
   if (props.itMode) return false
   if (step.value !== 'nfc') return false
@@ -557,6 +563,8 @@ async function startForEmployee(id: string, name: string, readOnThisDevice = fal
   identityLookups.value += 1
   try {
     await prepareMeasurementFor({ id, name })
+    // 打刻は best-effort (失敗しても測定へ進む)。測定の開始の後なので測定の id が載る
+    if (punchCardId !== null) await tryPunch(punchCardId)
   } finally {
     identityLookups.value -= 1
   }

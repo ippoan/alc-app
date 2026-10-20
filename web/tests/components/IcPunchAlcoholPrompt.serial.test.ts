@@ -3,27 +3,30 @@ import { defineComponent, h, ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import IcPunchAlcoholPrompt from '~/components/IcPunchAlcoholPrompt.vue'
 import type { LatestPunch } from '~/types'
+import type { UsbHubKind } from '~/composables/useUsbHub'
 
-// シリアル由来 (`#298`) とサーバ由来の**両方**でボタンの寿命が同じであることを、
-// `index.vue` と同じ配線 (`useHubTimecardPunch` → `IcPunchAlcoholPrompt`) で確かめる
-// (Refs ippoan/rust-alc-api#644)。
+// `index.vue` と同じ配線 (`useHubTimecardPunch` → `IcPunchAlcoholPrompt`) で、
+// **この端末の機体で読んだカードはボタンに出ず (すぐ測定へ進む)、ボタンは別の端末の打刻だけ**
+// であることを確かめる (Refs ippoan/rust-alc-api#644, ippoan/alc-app#436)。
 //
-// **片方だけ消える形にしない**のが目的。component 単体のテストでは
-// `punch` を props で渡すので、シリアル由来の経路がその仕掛けを通っているかが見えない。
+// component 単体のテストでは `punch` を props で渡すので、機体で読んだ同じタップの
+// サーバ由来の行がボタンに出ないこと (`fromSerial` の印) が配線を通って見えない。
 
 const { onEventMock, emitEvent } = vi.hoisted(() => {
-  const handlers: Array<(name: string, args: string[]) => void> = []
+  const handlers: Array<(name: string, args: string[], source: UsbHubKind) => void> = []
   return {
-    onEventMock: vi.fn((cb: (name: string, args: string[]) => void) => {
+    onEventMock: vi.fn((cb: (name: string, args: string[], source: UsbHubKind) => void) => {
       handlers.push(cb)
       return vi.fn()
     }),
-    emitEvent: (name: string, args: string[]) => handlers.forEach(h2 => h2(name, args)),
+    emitEvent: (name: string, args: string[]) => handlers.forEach(h2 => h2(name, args, 'cores3')),
   }
 })
-mockNuxtImport('useCoreS3Serial', () => () => ({ onEvent: onEventMock }))
+mockNuxtImport('useUsbHub', () => () => ({ nfc: { onEvent: onEventMock } }))
+mockNuxtImport('useVeinSerial', () => () => ({ deviceInfo: { value: null } }))
 mockNuxtImport('useTimecardCardIndex', () => () => ({
   resolve: () => 'emp-1',
+  isFresh: () => true,
   restore: async () => {},
   refresh: async () => {},
   startPeriodicRefresh: () => {},
@@ -40,10 +43,12 @@ mockNuxtImport('useDeviceToken', () => () => ({ getDeviceJwt: async () => 'devic
 
 const BUTTON = '[data-testid="ic-punch-alcohol"]'
 
+const startIcMock = vi.fn(async () => true)
+
 /** `index.vue` と同じ配線 */
 const Harness = defineComponent({
   setup() {
-    const { latest, setFromServer } = useHubTimecardPunch(() => '山田太郎')
+    const { latest, setFromServer } = useHubTimecardPunch(() => '山田太郎', startIcMock)
     const idle = ref(true)
     return { latest, setFromServer, idle }
   },
@@ -65,10 +70,11 @@ function serverRow(over: Partial<LatestPunch> = {}): LatestPunch {
   }
 }
 
-describe('IcPunchAlcoholPrompt — シリアル由来でも寿命は同じ', () => {
+describe('IcPunchAlcoholPrompt — 機体で読んだカードはボタンに出さない', () => {
   beforeEach(() => {
     onEventMock.mockClear()
-    // 手元の写しで引く側 (同期で行が立つ) の配線を見る。オンラインだとサーバーへの照会が
+    startIcMock.mockClear()
+    // 手元の写しで引く側 (同期で測定を始める) の配線を見る。オンラインだとサーバーへの照会が
     // 先に入る (`useHubTimecardPunch` の doc。そちらは composable のテストが固定する)
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
   })
@@ -77,25 +83,18 @@ describe('IcPunchAlcoholPrompt — シリアル由来でも寿命は同じ', () 
     vi.restoreAllMocks()
   })
 
-  it('★ シリアル由来で出したボタンも 10 秒で消える', async () => {
+  it('★ 機体で読んだカードはボタンを出さず、すぐ測定を始める', async () => {
     const wrapper = await mountSuspended(Harness)
-    vi.useFakeTimers()
 
     emitEvent('TIMECARD', ['card_id=AAAA', 'card_kind=felica_idm'])
     await wrapper.vm.$nextTick()
-    expect(wrapper.find(BUTTON).exists()).toBe(true)
 
-    vi.advanceTimersByTime(9_000)
-    await wrapper.vm.$nextTick()
-    expect(wrapper.find(BUTTON).exists()).toBe(true)
-
-    vi.advanceTimersByTime(1_000)
-    await wrapper.vm.$nextTick()
+    expect(startIcMock).toHaveBeenCalledWith('emp-1', '山田太郎', null)
     expect(wrapper.find(BUTTON).exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('★★ 同じタップのサーバ由来が後から届いても寿命が延びない', async () => {
+  it('★★ 機体が送った同じタップのサーバ由来の行が後から届いても、ボタンに出ない', async () => {
     const wrapper = await mountSuspended(Harness)
     vi.useFakeTimers()
 
@@ -106,17 +105,12 @@ describe('IcPunchAlcoholPrompt — シリアル由来でも寿命は同じ', () 
     vi.advanceTimersByTime(5_000)
     ;(wrapper.vm as unknown as HarnessVm).setFromServer(serverRow())
     await wrapper.vm.$nextTick()
-    expect(wrapper.find(BUTTON).exists()).toBe(true)
-
-    // タップから 10 秒でちゃんと消える (5 秒地点から数え直さない)
-    vi.advanceTimersByTime(5_500)
-    await wrapper.vm.$nextTick()
     expect(wrapper.find(BUTTON).exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('★★ オンライン: EVT → サーバーに照会 → 印付きの行 → ボタンが出て、読み取りから 10 秒で消える', async () => {
-    // 本番の主経路。手元の写しではなく照会の応答で行が立つ
+  it('★★ オンライン: EVT → サーバーに照会 → 測定を始める (ボタンは出ない)', async () => {
+    // 本番の主経路。手元の写しではなく照会の応答で始める
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
     lookupMock.mockReset()
     lookupMock.mockResolvedValue({ id: 'emp-1', name: '山田太郎' })
@@ -124,47 +118,18 @@ describe('IcPunchAlcoholPrompt — シリアル由来でも寿命は同じ', () 
     vi.useFakeTimers()
 
     emitEvent('TIMECARD', ['card_id=AAAA', 'card_kind=felica_idm'])
-    // 照会が返るまでは出ない
     await wrapper.vm.$nextTick()
-    expect(wrapper.find(BUTTON).exists()).toBe(false)
+    expect(startIcMock).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(0)
     await wrapper.vm.$nextTick()
     expect(lookupMock).toHaveBeenCalledWith('AAAA', 'default')
-    expect((wrapper.vm as unknown as { latest: LatestPunch | null }).latest).toMatchObject({
-      employeeId: 'emp-1',
-      readOnThisDevice: true,
-    })
-    expect(wrapper.find(BUTTON).exists()).toBe(true)
-
-    vi.advanceTimersByTime(10_000)
-    await wrapper.vm.$nextTick()
+    expect(startIcMock).toHaveBeenCalledWith('emp-1', '山田太郎', null)
     expect(wrapper.find(BUTTON).exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('★ 消えた後にポーリングで同じ行が届いても復活しない', async () => {
-    const wrapper = await mountSuspended(Harness)
-    vi.useFakeTimers()
-
-    emitEvent('TIMECARD', ['card_id=AAAA', 'card_kind=felica_idm'])
-    await wrapper.vm.$nextTick()
-    const punchedAt = new Date().toISOString()
-
-    vi.advanceTimersByTime(11_000)
-    await wrapper.vm.$nextTick()
-    expect(wrapper.find(BUTTON).exists()).toBe(false)
-
-    // 30 秒ポーリングで届く。**同じタップの時刻**なので、通っても寿命は尽きている
-    vi.advanceTimersByTime(20_000)
-    ;(wrapper.vm as unknown as HarnessVm).setFromServer(serverRow({ id: 'row-9', punchedAt }))
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.find(BUTTON).exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('サーバ由来だけで出たボタンも 10 秒で消える (シリアルが無い台)', async () => {
+  it('★ 別の端末の打刻 (サーバ由来だけ) はボタンが出て、10 秒で消える', async () => {
     const wrapper = await mountSuspended(Harness)
     vi.useFakeTimers()
 
