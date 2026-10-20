@@ -183,6 +183,16 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   isStartupProbing: ref(false),
 }))
 
+// IC カードで測定を始める口 (`useHubTimecardPunch` の 2 つ目の引数) を捕まえる。実物はそのまま動かす
+// (Refs ippoan/alc-app#436)
+const hubPunch = vi.hoisted(() => ({
+  startIc: null as null | ((employeeId: string, name: string, punchCardId: string | null) => Promise<boolean>),
+}))
+mockNuxtImport('useHubTimecardPunch', original => (...args: Parameters<typeof original>) => {
+  hubPunch.startIc = args[1]
+  return original(...args)
+})
+
 mockNuxtImport('useNfcReader', () => () => ({
   isConnected: ref(false),
   error: ref<string | null>(null),
@@ -848,28 +858,8 @@ describe('pages/index — IC カードの打刻からアルコールチェック
     await nextTick()
 
     expect(startForEmployeeMock).toHaveBeenCalledTimes(1)
-    // 一覧から来た打刻 (別の端末の打刻を含む) には「この端末で読んだ」の印が無い
-    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', false)
-  })
-
-  it('★ この端末に繋いだ機体が読んだ打刻は、その印を付けて測定を始める (Refs ippoan/alc-app#387)', async () => {
-    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
-    const punch = punchOf({ id: 'serial:1', readOnThisDevice: true })
-
-    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punch)
-    await nextTick()
-
-    expect(startForEmployeeMock).toHaveBeenCalledTimes(1)
-    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', true)
-  })
-
-  it('★ id が serial: で始まっていても、印が無い打刻は「この端末で読んだ」にしない (判定は印の 1 か所)', async () => {
-    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
-
-    wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punchOf({ id: 'serial:1' }))
-    await nextTick()
-
-    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', false)
+    // ボタンに出るのは別の端末の打刻だけ (この端末では読んでいない = 3 つ目を渡さない)
+    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎')
   })
 
   it('社員が解決できていない打刻では測定を始めない', async () => {
@@ -880,6 +870,24 @@ describe('pages/index — IC カードの打刻からアルコールチェック
     wrapper.findComponent(IcPunchAlcoholPrompt).vm.$emit('start', punch)
     await nextTick()
 
+    expect(startForEmployeeMock).not.toHaveBeenCalled()
+  })
+
+  it('★★ 機体で読んだ IC カードは、この端末で読んだ印と打刻するカードを付けて測定を始める (Refs ippoan/alc-app#436)', async () => {
+    wrapper = await mountIndex('/?role=driver', NormalMeasurementExposeStub)
+
+    expect(await hubPunch.startIc!('emp-1', '山田太郎', 'CARD-1')).toBe(true)
+    expect(startForEmployeeMock).toHaveBeenCalledWith('emp-1', '山田太郎', true, 'CARD-1')
+
+    startForEmployeeMock.mockResolvedValueOnce(false)
+    expect(await hubPunch.startIc!('emp-1', '山田太郎', null)).toBe(false)
+    expect(startForEmployeeMock).toHaveBeenLastCalledWith('emp-1', '山田太郎', true, null)
+  })
+
+  it('★ 通常点呼のタブが無いとき (点呼) は、IC カードで測定を始められない (false)', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=tenko', NormalMeasurementExposeStub)
+
+    expect(await hubPunch.startIc!('emp-1', '山田太郎', 'CARD-1')).toBe(false)
     expect(startForEmployeeMock).not.toHaveBeenCalled()
   })
 

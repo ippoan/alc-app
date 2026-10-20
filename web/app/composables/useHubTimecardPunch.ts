@@ -1,77 +1,64 @@
 import type { LatestPunch } from '~/types'
-import { cardKindOf } from '~/utils/card-kind'
-import { lookupEmployeeByCard } from '~/utils/api'
+import type { UsbHubKind } from '~/composables/useUsbHub'
+import { lookupEmployeeByCard, punchTimecard } from '~/utils/api'
+import { deviceSendsPunch } from '~/utils/device-line'
 import { usesAdminToken } from '~/utils/token-selection'
 import { evtArg } from '~/composables/useCoreS3Serial'
 
 /**
- * ハブ端末 (CoreS3) の IC 打刻を、**USB シリアルから直接**受けて画面を動かす
- * (Refs ippoan/rust-alc-api#644)。
- *
- * # 何を解くのか
- *
- * これまで IC 打刻の案内ボタンは、**クラウドを一周してから**出ていた:
- *
- * ```
- * CoreS3 が読む → WS で cf-alc-recorder → rust-alc-api → DB
- *   → /watch-timecard の合図 → タブレットが一覧を引き直す → ボタン
- * ```
- *
- * **目の前のケーブルで届いている事実を、クラウドを回ってから受け取っていた。**
- * WS が切れている間 (実測で 1 回あたり約 5 分 15 秒) はボタンが出ず、
- * 正常時でも往復ぶん遅れる。
+ * USB でつないだ機体 (CoreS3・Vein Station・血圧測定台の ATOM S3) が読んだ IC カードを、
+ * **USB シリアルから直接**受けて、免許証と同じく**そのまま測定へ進める**
+ * (Refs ippoan/rust-alc-api#644, ippoan/alc-app#436)。
  *
  * firmware は読み取りの瞬間に
- * `EVT TIMECARD card_id=<生値> card_kind=<felica_idm|nfca_uid>` を USB へ流すので、
- * **それを直接受けて出す。**
+ * `EVT TIMECARD card_id=<生値> card_kind=<felica_idm|nfca_uid|license>` を USB へ流す。
+ * 受け口は `useUsbHub().nfc` (どの機体から来た行かが分かる)。
+ * **`card_kind=license` は捨てる** — 免許証は `EVT NFC_LICENSE` の流れ (`NormalMeasurement` の
+ * `onNfcRead`) が既に処理する (Vein Station は免許証でも TIMECARD を出すので、拾うと二重になる)。
  *
- * # 記録は増やさない
+ * # 打刻を書くのは「機体が自分で送らないとき」だけ
  *
- * **`punchTimecard()` を呼ばない。** 打刻を書くのは CoreS3 の WS uplink 1 本だけ、
- * という形 (Refs `#293`) を崩さない。ここがやるのは**画面を出すことだけ**
- * (下の照会も読み取りだけ)。
+ * 機体が自分で打刻を送る構成 (CoreS3・LAN 版の打刻端末) では、ここで書くと同じタップが 2 行に
+ * なる。送らない構成 (Vein Station 版など) では、**ここで書かないと打刻が消える**。
+ * 判定は `deviceSendsPunch` (`~/utils/device-line`) の 1 か所。
  *
- * # 同じタップで 2 回出さない
+ * 画面が書く構成で持ち主が引けたら、測定を始める口 (`startIc`) に card_id を渡し、
+ * `NormalMeasurement` が測定の id を載せて打刻する (打刻と点呼が 1 対 1 で結ばれる)。
+ * 測定を始められなかった (測定中・IT点呼・別のタブ) ときと、持ち主が引けないカードは、
+ * ここが打刻だけを書く (オフラインなら見送る。今の免許証と同じくキューは無い)。
  *
- * 同じタップについて、① シリアル由来 (いま) と ② サーバ由来 (あとで一覧を
- * 引き直したぶん) の 2 つが届く。`IcPunchAlcoholPrompt` は `id` が変わると
- * ボタンを出し直すので、**利用者がもう押した後にもう一度出てしまう**。
- * `setFromServer` で、**同じ社員・近い時刻なら捨てる**。
+ * # 案内のボタンは出さない
+ *
+ * 機体で読んだカードは即測定へ進むので、`latest` (IcPunchAlcoholPrompt のボタン) には載せない。
+ * ボタンは**別の端末の打刻** (`setFromServer` = 打刻の一覧から来た行) のときだけ。
+ * ただし機体が自分で送った同じタップも一覧から遅れて届くので、**同じ社員・近い時刻の
+ * サーバ由来の行は捨てる** (`fromSerial` の印で見分ける)。
  *
  * # 持ち主は、まずサーバーに照会して引く (Refs ippoan/alc-app#387)
  *
  * オンラインなら `lookupEmployeeByCard` (読み取りだけ。打刻は書かない) で「このカードは
  * 誰のものか」を照会する。手元の写し (`useTimecardCardIndex` のカード台帳 + 社員の一覧) は
- * リロードの直後に揃っていないので、それだけに頼ると直後のタッチが引けなかった。機体
- * (CoreS3) 自身の LAN / Wi-Fi はいずれ無くなり、USB → 画面 → サーバーの道だけが残る。
+ * リロードの直後に揃っていないので、それだけに頼ると直後のタッチが引けなかった。
  *
- * - **見つかった (200)** → 応答の社員で印 (`readOnThisDevice`) 付きの行を出す。カード台帳で
- *   見つかったか社員の「NFC ID」で見つかったかは区別しない
- * - **見つからない (404・400)** → 何も出さない。**手元の写しへは倒さない** (サーバーの答えを採る)
+ * - **見つかった (200)** → 応答の社員で測定を始める
+ * - **見つからない (404・400)** → 測定は始めない。**手元の写しへは倒さない** (サーバーの答えを採る)
  * - **それ以外の失敗・上限 ({@link LOOKUP_TIMEOUT_MS}) 切れ・端末の鍵が無い・オフライン**
- *   → 手元の写しで引く (印付き)。写しの鮮度の上限は `useTimecardCardIndex` が持つ
+ *   → 手元の写しで引く。写しの鮮度の上限は `useTimecardCardIndex` が持つ
  *
- * 行の時刻は**読み取りを受けた時刻** (照会の決着時刻にしない = ボタンの寿命は延びない)。
  * 新しい読み取りが来たら、前の照会の結果は捨てる (unmount の後に届いた結果も)。
  *
  * # card_id の行き先
  *
- * **照会の body にだけ載せる** (`lookupEmployeeByCard`)。ログ・診断・警告には出さない
- * (社員の ID・氏名も)。
- *
- * # 引けなかったときは従来どおりに倒す
- *
- * サーバーにも手元の写しにも無いカード・写しが古すぎるとき・氏名が引けないときは
- * **ボタンを出さない**。サーバ由来のボタンが従来どおり出るので、**遅くなるだけで壊れない**。
- * 黙って倒れると気づけない (Refs ippoan/alc-app#387) ので、理由だけを 1 行 warn に残す。
+ * **照会と打刻の body にだけ載せる**。ログ・診断・警告には出さない (社員の ID・氏名も)。
+ * 引けなかったときは、黙って倒れると気づけない (Refs ippoan/alc-app#387) ので理由だけを 1 行 warn に残す。
  */
 
 /**
- * シリアル由来とサーバ由来を「同じタップ」と見なす時間差。
+ * この端末の機体で読んだタップとサーバ由来の行を「同じタップ」と見なす時間差。
  *
  * **ボタンの寿命 (`IcPunchAlcoholPrompt` の `FRESH_WINDOW_MS` = 10 秒) より
  * 長くしてある。** WS が切れているとサーバ由来の行は数分遅れて届くので、
- * 短くすると**同じタップが「別のタップ」として通り、ボタンが出し直される**。
+ * 短くすると**同じタップが「別の端末の打刻」として通り、ボタンに出てしまう**。
  *
  * 窓の外で届いたぶんは通すが、その行の `punchedAt` はタップ時刻なので
  * `FRESH_WINDOW_MS` を既に過ぎており、**ボタンは出ない** (寿命は延びない)。
@@ -81,19 +68,23 @@ const MERGE_WINDOW_MS = 60_000
 /**
  * サーバーへの照会を待つ上限。**端末の鍵の取得待ちを含む。**
  *
- * 案内のボタンの寿命は読み取りから 10 秒 (`IcPunchAlcoholPrompt` の `FRESH_WINDOW_MS`)。
- * リロードの直後は端末の鍵の取得に数秒掛かるので 6 秒まで待ち、残りの 4 秒で押せるように
- * する。決着しなければ手元の写しへ倒す (`request()` 自体の上限 30 秒は長すぎて使えない)。
+ * カードをかざした人は画面が測定へ進むのを待っている。リロードの直後は端末の鍵の取得に
+ * 数秒掛かるので 6 秒まで待ち、決着しなければ手元の写しへ倒す (`request()` 自体の上限
+ * 30 秒は長すぎて使えない)。
  */
 const LOOKUP_TIMEOUT_MS = 6_000
 
 /** USB で受けた 1 回の読み取り。 */
 interface CardRead {
   cardId: string
-  cardKind: LatestPunch['cardKind']
   /** 読み取りを受けた時刻 (ISO8601) */
   readAt: string
+  /** 機体が自分で打刻を送る構成か (`deviceSendsPunch`)。false なら画面が書く */
+  deviceSends: boolean
 }
+
+/** 持ち主が引けたカードで測定を始める口。`punchCardId` を渡したら測定に載せて打刻する。始められたかを返す */
+export type StartIcMeasurement = (employeeId: string, name: string, punchCardId: string | null) => Promise<boolean>
 
 /** サーバーへの照会の結果。`reason` は警告に出す語 (番号・社員の ID・氏名を含めない)。 */
 type LookupOutcome
@@ -106,7 +97,7 @@ type LookupOutcome
  * (理由の語だけ)。
  */
 function warnUnresolved(reason: string): void {
-  console.warn(`[HubTimecardPunch] 手元の台帳で引けないカード (${reason}。サーバ経由の案内に任せる)`)
+  console.warn(`[HubTimecardPunch] 手元の台帳で引けないカード (${reason})`)
 }
 
 /**
@@ -126,21 +117,25 @@ function failureStatus(e: unknown): number | null {
   return matched ? Number(matched[1]) : null
 }
 
-export function useHubTimecardPunch(resolveName: (employeeId: string) => string | null) {
-  // IC カードの打刻は CoreS3 のみ (Vein Station・測定台の ATOM S3 には無い機能なので useUsbHub に寄せない。Refs ippoan/alc-app#436)
-  const coreS3 = useCoreS3Serial()
+export function useHubTimecardPunch(
+  resolveName: (employeeId: string) => string | null,
+  startIc: StartIcMeasurement,
+) {
+  // USB でつないだ NFC を読める機体ならどれでも受ける (Refs ippoan/alc-app#436)
+  const nfc = useUsbHub().nfc
+  const vein = useVeinSerial()
   const cards = useTimecardCardIndex()
   const { accessToken } = useAuth()
 
+  /** 案内のボタンに出す行。**サーバ由来 (別の端末の打刻) だけ** */
   const latest = ref<LatestPunch | null>(null)
-  /** 直近にシリアル由来で出したぶん (サーバ由来の同じタップを捨てる判定に使う) */
-  let fromSerial: LatestPunch | null = null
-  let seq = 0
+  /** 直近にこの端末の機体で読んだタップ (サーバ由来の同じタップを捨てる判定に使う) */
+  let fromSerial: { employeeId: string, punchedAt: string } | null = null
   /** 読み取りの世代。新しい読み取り・unmount で進め、古い照会の結果を捨てる */
   let generation = 0
   /**
-   * サーバーへの照会 (端末の鍵の取得待ちを含む) の決着を待っているか。待つあいだは案内の行が
-   * まだ無く、ここで画面が新しい版へ自動でリロードされると、この機体で読んだ回を失う。
+   * サーバーへの照会 (端末の鍵の取得待ちを含む) の決着を待っているか。待つあいだに画面が
+   * 新しい版へ自動でリロードされると、この機体で読んだ回を失う。
    * だから**待つあいだはリロードを止める申告を出す** (`useKioskScreen` の doc)。
    * どの決着でも下ろす: 見つかった / 見つからない / 失敗・上限で写しへ倒した / unmount。
    * 新しい読み取りで世代が替わったときは、その読み取りが持ち直す (オフラインなら下ろす)
@@ -149,35 +144,47 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
   useKioskScreen().declareReloadBlocked(lookingUp)
   let unsubscribe: (() => void) | null = null
 
-  /** 印付きの行を新しく置く (`serial:<n>`)。 */
-  function showSerial(read: CardRead, employeeId: string, name: string): void {
-    const punch: LatestPunch = {
-      id: `serial:${++seq}`,
-      employeeId,
-      name,
-      cardKind: read.cardKind,
-      // **かざした瞬間**。サーバの `created_at` より正確 (往復を含まない)
-      punchedAt: read.readAt,
-      // この機体で読んだ打刻の印。サーバ由来の行 (`setFromServer`) には付かない
-      readOnThisDevice: true,
+  /**
+   * 打刻だけを書く (測定と結ばない)。オフラインなら見送る (今の免許証と同じくキューは無い)。
+   * 失敗は投げない — 理由だけを warn に残す (番号は出さない)
+   */
+  async function punchOnly(cardId: string): Promise<void> {
+    if (!navigator.onLine) return
+    try {
+      await punchTimecard(cardId)
     }
-    fromSerial = punch
-    latest.value = punch
+    catch (e) {
+      const status = failureStatus(e)
+      console.warn(`[HubTimecardPunch] 打刻に失敗 (${status === null ? '通信の失敗' : `http ${status}`})`)
+    }
+  }
+
+  /** 持ち主が引けた: 測定を始める。画面が書く構成では打刻も (始められなければ打刻だけ) */
+  async function startFor(read: CardRead, employeeId: string, name: string): Promise<void> {
+    fromSerial = { employeeId, punchedAt: read.readAt }
+    const punchCardId = read.deviceSends ? null : read.cardId
+    const started = await startIc(employeeId, name, punchCardId)
+    if (!started && punchCardId !== null) await punchOnly(punchCardId)
+  }
+
+  /** 持ち主が引けない: 画面が書く構成なら打刻だけ書く (機体が送る構成でも未登録のカードは打刻に残る) */
+  async function punchUnresolved(read: CardRead): Promise<void> {
+    if (!read.deviceSends) await punchOnly(read.cardId)
   }
 
   /** 手元の写し (カード台帳 + 社員の一覧) で引く。オフライン・照会の失敗のときの倒れ先 */
-  function showFromLocal(read: CardRead): void {
+  async function resolveFromLocal(read: CardRead): Promise<void> {
     const employeeId = cards.resolve(read.cardId)
     if (!employeeId) {
       warnUnresolved(cards.isFresh() ? '台帳に無い' : '台帳が古い')
-      return
+      return punchUnresolved(read)
     }
     const name = resolveName(employeeId)
     if (!name) {
       warnUnresolved('名前が無い')
-      return
+      return punchUnresolved(read)
     }
-    showSerial(read, employeeId, name)
+    return startFor(read, employeeId, name)
   }
 
   /**
@@ -207,11 +214,8 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
     }
   }
 
-  /**
-   * 照会の決着を待って行を出す。`latestIdAtRead` は読み取りを受けた時点の最新行の id
-   * (待つあいだに届いたサーバ由来の行を見分けるため)。
-   */
-  async function showFromServer(read: CardRead, gen: number, latestIdAtRead: string | null): Promise<void> {
+  /** 照会の決着を待って、測定を始める / 打刻だけ書く */
+  async function resolveFromServer(read: CardRead, gen: number): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
     let timedOut = false
     const timeout = new Promise<LookupOutcome>((resolve) => {
@@ -231,58 +235,43 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
     lookingUp.value = false
 
     if (outcome.kind === 'not-found') {
-      console.warn('[HubTimecardPunch] サーバーの照会で持ち主が見つからないカード (案内を出さない)')
-      return
+      console.warn('[HubTimecardPunch] サーバーの照会で持ち主が見つからないカード (測定は始めない)')
+      return punchUnresolved(read)
     }
     if (outcome.kind === 'unavailable') {
       console.warn(`[HubTimecardPunch] サーバーに照会できない (${outcome.reason}。手元の写しで引く)`)
-      showFromLocal(read)
-      return
+      return resolveFromLocal(read)
     }
-    // 待つあいだに同じタップのサーバ由来の行 (印なし) が先に届いていたら、**その行に印だけを
-    // 足す**。`id` を変えないので、ボタンの出し直しも寿命の測り直しも起きない。
-    // 読み取りの前から在った行には足さない (前のタップの行で、ボタンの寿命が切れている)
-    const current = latest.value
-    if (
-      current
-      && current.id !== latestIdAtRead
-      && !current.readOnThisDevice
-      && current.employeeId === outcome.employeeId
-      && Math.abs(Date.parse(current.punchedAt) - Date.parse(read.readAt)) < MERGE_WINDOW_MS
-    ) {
-      const marked: LatestPunch = { ...current, readOnThisDevice: true }
-      fromSerial = marked
-      latest.value = marked
-      return
-    }
-    showSerial(read, outcome.employeeId, outcome.name)
+    return startFor(read, outcome.employeeId, outcome.name)
   }
 
-  function onEvent(name: string, args: string[]): void {
+  function onEvent(name: string, args: string[], source: UsbHubKind): void {
     if (name !== 'TIMECARD') return
+    // 免許証は `EVT NFC_LICENSE` の流れが処理する (二重にしない)
+    if (evtArg(args, 'card_kind') === 'license') return
     const cardId = evtArg(args, 'card_id')
     if (!cardId) return
     const gen = ++generation
     const read: CardRead = {
       cardId,
-      cardKind: cardKindOf(evtArg(args, 'card_kind')),
       readAt: new Date().toISOString(),
+      deviceSends: deviceSendsPunch(source, vein.deviceInfo.value?.flavor),
     }
     // オフラインなら照会しない (`navigator.onLine` は疎通の保証ではないが、false なら確実に届かない)
     if (!navigator.onLine) {
       // 前の読み取りの照会を待っていたなら、その結果はもう使わない
       lookingUp.value = false
-      showFromLocal(read)
+      void resolveFromLocal(read)
       return
     }
     lookingUp.value = true
-    void showFromServer(read, gen, latest.value?.id ?? null)
+    void resolveFromServer(read, gen)
   }
 
   /**
    * サーバ由来 (`TodayPunchHistory` が一覧を引き直したぶん) の最新行を受ける。
-   * **同じタップなら捨てる** — 捨てないと押した後のボタンが出し直される。
-   * 照会の応答を待つあいだに届いた行は保留しない (そのまま出す。印は照会が決着してから足す)。
+   * **この端末の機体で読んだ同じタップなら捨てる** — 機体が自分で送った打刻が遅れて届いたもので、
+   * その人は既に測定へ進んでいる。ボタンに出すのは別の端末の打刻だけ。
    */
   function setFromServer(punch: LatestPunch | null): void {
     if (
@@ -301,7 +290,7 @@ export function useHubTimecardPunch(resolveName: (employeeId: string) => string 
     // 経過時間での定期同期。**取り消されたカードを手元から消す唯一の経路**
     // (`useTimecardCardIndex` の doc 参照)
     cards.startPeriodicRefresh()
-    unsubscribe = coreS3.onEvent(onEvent)
+    unsubscribe = nfc.onEvent(onEvent)
   })
   onUnmounted(() => {
     generation += 1

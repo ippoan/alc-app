@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findDeviceLine, parseDeviceLine } from '~/utils/device-line'
+import { deviceSendsPunch, findDeviceLine, parseDeviceLine } from '~/utils/device-line'
 
 // 端末の名乗りの行 (`DEVICE <kind> VER=… BOARD=… FLAVOR=…`) の parse (Refs ippoan/alc-app#403)。
 // 欄は順序も有無も機種とファームの版で変わるので、欄ごとに拾う。
@@ -54,5 +54,24 @@ describe('findDeviceLine', () => {
   it('名乗りの行が無ければ null', () => {
     expect(findDeviceLine([])).toBeNull()
     expect(findDeviceLine(['STATUS alarm state=idle cause=none VER=0.1.0'])).toBeNull()
+  })
+})
+
+// 機体が自分で打刻を送るか (Refs ippoan/alc-app#436)。分からないときは画面が書く側に倒す
+describe('deviceSendsPunch', () => {
+  it.each([
+    ['cores3', null, true],
+    ['cores3', 'cores3-wifi', true],
+    ['vein-station', 'timecard', true],
+    ['vein-station', 'timecard-station', false],
+    ['vein-station', 'timecard-vein', false],
+    ['vein-station', null, false],
+    ['vein-station', undefined, false],
+    ['vein-station', 'timecard-next', false],
+    ['bp-station', 'timecard', false],
+    ['bridge', null, false],
+    [undefined, null, false],
+  ] as const)('%s / FLAVOR=%s → %s', (kind, flavor, expected) => {
+    expect(deviceSendsPunch(kind, flavor)).toBe(expected)
   })
 })

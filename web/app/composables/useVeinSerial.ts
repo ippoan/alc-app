@@ -23,6 +23,8 @@
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
+import { findDeviceLine } from '~/utils/device-line'
+import type { DeviceLine } from '~/utils/device-line'
 
 /**
  * arbiter に登録する名前。`DEVICE timecard` の kind と一致させる — 語彙の正本は arbiter 側
@@ -41,6 +43,13 @@ const SAY_TIMEOUT_MS = 5000
 
 // シングルトン: 1 台の PC につながる Vein Station は 1 台
 const isConnected = ref(false)
+
+/**
+ * 繋がっている機体の名乗り (`DEVICE timecard VER=… FLAVOR=…` の欄)。未接続は null。
+ * FLAVOR で「機体が自分で打刻を送るか」を決める (`deviceSendsPunch`、Refs ippoan/alc-app#436)。
+ * useCoreS3Serial の `deviceInfo` と同じ形
+ */
+const deviceInfo = ref<DeviceLine | null>(null)
 
 /** claim を待っている connect() */
 const waiters = new Set<() => void>()
@@ -80,6 +89,8 @@ export function useVeinSerial() {
 
   const claimant: SerialClaimant = {
     onOpen(_port, _reader, _writer, lines) {
+      // 利用側が配られた行の cb から読めるように、配る前に入れる (useCoreS3Serial と同じ)
+      deviceInfo.value = findDeviceLine(lines)
       isConnected.value = true
       // プローブ中に来ていた行も配る (useAtomS3Serial と同じ)
       for (const line of lines) lineDispatch.dispatchLine(line)
@@ -89,6 +100,7 @@ export function useVeinSerial() {
     onLine: lineDispatch.dispatchLine,
 
     onClose() {
+      deviceInfo.value = null
       isConnected.value = false
       for (const cb of [...closeHandlers]) cb()
     },
@@ -188,6 +200,7 @@ export function useVeinSerial() {
   return {
     isSupported,
     isConnected: readonly(isConnected),
+    deviceInfo: readonly(deviceInfo),
     connect,
     disconnect,
     capture,

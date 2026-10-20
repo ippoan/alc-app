@@ -898,10 +898,9 @@ export interface TimePunchesResponse {
  * 打刻一覧の**最新の 1 行**を「次の操作」へ渡すための最小形
  * (Refs ippoan/rust-alc-api#644)。
  *
- * IC カードはハブ端末 (CoreS3) にかざされ、サーバ側で打刻が記録される —
- * タブレットの NFC (`onNfcRead`) は通らない。タブレットに届くのは
- * `useTimecardWatch` の合図だけなので、**誰がかざしたか**は一覧を引き直して
- * 最新行から知る。`card_kind` の畳み込みは `~/utils/card-kind` の 1 箇所で
+ * **別の端末**で打たれた IC カードの打刻は、タブレットに `useTimecardWatch` の合図しか
+ * 届かないので、**誰がかざしたか**は一覧を引き直して最新行から知る (この端末の機体で
+ * 読んだカードは `useHubTimecardPunch` が直接測定へ進めるので、この形を通らない)。`card_kind` の畳み込みは `~/utils/card-kind` の 1 箇所で
  * 済ませてから渡す (2 実装目を作らない)。
  */
 export interface LatestPunch {
@@ -915,12 +914,6 @@ export interface LatestPunch {
   cardKind: CardKind
   /** 打刻時刻 (ISO8601)。**古い打刻で操作を始めない**ための鮮度判定に使う */
   punchedAt: string
-  /**
-   * この端末に繋いだ機体 (USB) が読んだ打刻か (Refs ippoan/alc-app#387)。立てるのは
-   * `useHubTimecardPunch` のシリアル由来の 1 か所だけ。打刻の一覧から来た行 (別の端末の
-   * 打刻を含む) には付かない — **無いときは「この端末では読んでいない」として扱う**
-   */
-  readOnThisDevice?: boolean
 }
 
 // --- 車両分類 ---
