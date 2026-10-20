@@ -402,6 +402,9 @@ const bleGwTestResult = ref<string | null>(null)
 
 onMounted(() => {
   if (isSupported) refreshPorts()
+  // 血圧計の中継先 (omronTarget) に Vein Station を選べるよう、この画面でもつなぐ。
+  // 他の画面と同じく unmount で disconnect しない (Refs ippoan/alc-app#436)
+  void vein.connect()
 })
 
 function formatVidPid(info: SerialPortInfo): string {
