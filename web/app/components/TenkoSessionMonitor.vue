@@ -235,11 +235,11 @@ function isActive(s: TenkoSession) {
   return !['completed', 'cancelled', 'interrupted'].includes(s.status)
 }
 
-function alcoholLabel(r: string | null) {
+function alcoholLabel(r: string | null, v: number | null) {
   if (!r) return '-'
   // pass / fail は遠隔点呼だけの値で helper に無いのでここに残す
   const extra: Record<string, string> = { pass: '正常', fail: '検出' }
-  return extra[r] ?? alcoholResultLabel(r)
+  return extra[r] ?? alcoholResultLabel(r, v ?? 0)
 }
 
 /**
@@ -385,8 +385,8 @@ onMounted(() => { loadEmployees(); fetchData() })
               <td class="px-4 py-3 text-center">
                 <span v-if="s.alcohol_result"
                   class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-                  :class="alcoholResultClass(s.alcohol_result === 'pass' ? 'normal' : s.alcohol_result)">
-                  {{ alcoholLabel(s.alcohol_result) }}
+                  :class="alcoholResultClass(s.alcohol_result === 'pass' ? 'normal' : s.alcohol_result, s.alcohol_value ?? 0)">
+                  {{ alcoholLabel(s.alcohol_result, s.alcohol_value) }}
                 </span>
                 <span v-else class="text-gray-400 text-xs">-</span>
               </td>
@@ -487,7 +487,7 @@ onMounted(() => { loadEmployees(); fetchData() })
           <div v-if="selectedSession.alcohol_result" class="bg-gray-50 rounded-lg p-3">
             <h4 class="font-medium text-gray-700 mb-1">アルコール検査</h4>
             <div class="grid grid-cols-2 gap-2">
-              <div><span class="text-gray-500">結果:</span> {{ alcoholLabel(selectedSession.alcohol_result) }}</div>
+              <div><span class="text-gray-500">結果:</span> {{ alcoholLabel(selectedSession.alcohol_result, selectedSession.alcohol_value) }}</div>
               <div><span class="text-gray-500">値:</span> {{ selectedSession.alcohol_value != null ? selectedSession.alcohol_value.toFixed(3) + ' mg/L' : '-' }}</div>
               <div><span class="text-gray-500">検査日時:</span> {{ formatDate(selectedSession.alcohol_tested_at) }}</div>
             </div>

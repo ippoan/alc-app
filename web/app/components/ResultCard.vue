@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MeasurementResult } from '~/types'
-import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
+import { alcoholResultClass, alcoholResultLabel, alcoholTone } from '~/utils/alcohol'
 
 const props = defineProps<{
   result: MeasurementResult
@@ -25,17 +25,17 @@ onUnmounted(() => {
   }
 })
 
-const resultColor = computed(() => {
-  switch (props.result.resultType) {
-    case 'normal': return 'bg-green-50 border-green-300'
-    case 'over': return 'bg-red-50 border-red-300'
-    case 'error': return 'bg-yellow-50 border-yellow-300'
-  }
-})
+// Tailwind が拾えるよう、クラス名はリテラルで持つ。色調は alcoholTone で決める
+const TONE_CARD = {
+  green: 'bg-green-50 border-green-300',
+  yellow: 'bg-yellow-50 border-yellow-300',
+  red: 'bg-red-50 border-red-300',
+} as const
+const resultColor = computed(() => TONE_CARD[alcoholTone(props.result.resultType, props.result.alcoholValue)])
 
-const resultLabel = computed(() => alcoholResultLabel(props.result.resultType))
+const resultLabel = computed(() => alcoholResultLabel(props.result.resultType, props.result.alcoholValue))
 
-const resultLabelColor = computed(() => alcoholResultClass(props.result.resultType))
+const resultLabelColor = computed(() => alcoholResultClass(props.result.resultType, props.result.alcoholValue))
 
 const alcoholDisplay = computed(() => {
   return `${props.result.alcoholValue.toFixed(2)} mg/L`

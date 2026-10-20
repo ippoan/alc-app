@@ -4,7 +4,7 @@ import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
 import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
-import { alcoholResultLabel } from '~/utils/alcohol'
+import { alcoholResultLabel, alcoholTone } from '~/utils/alcohol'
 
 const props = defineProps<{
   initialRoomId?: string | null
@@ -123,16 +123,17 @@ function statusColor(s: string) {
   return 'bg-yellow-100 text-yellow-800'
 }
 
-function alcoholLabel(r: string | null) {
+function alcoholLabel(r: string | null, v: number | null) {
   if (!r) return '-'
   // pass / fail は遠隔点呼だけの値で helper に無いのでここに残す
   const extra: Record<string, string> = { pass: '正常', fail: '検出' }
-  return extra[r] ?? alcoholResultLabel(r)
+  return extra[r] ?? alcoholResultLabel(r, v ?? 0)
 }
 
-function alcoholColor(r: string | null) {
+function alcoholColor(r: string | null, v: number | null) {
   if (!r) return ''
-  if (r === 'pass' || r === 'normal') return 'text-green-700'
+  // 緑かそれ以外か。判定は alcoholTone に集約 (pass は normal として読む)
+  if (alcoholTone(r === 'pass' ? 'normal' : r, v ?? 0) === 'green') return 'text-green-700'
   return 'text-red-700 font-semibold'
 }
 
@@ -475,7 +476,7 @@ onUnmounted(() => {
         <div class="px-3 py-1 flex justify-between items-center">
           <span class="text-xs text-gray-500">アルコール</span>
           <div class="text-right">
-            <span class="text-sm font-semibold" :class="alcoholColor(liveSession.alcohol_result)">{{ alcoholLabel(liveSession.alcohol_result) }}</span>
+            <span class="text-sm font-semibold" :class="alcoholColor(liveSession.alcohol_result, liveSession.alcohol_value)">{{ alcoholLabel(liveSession.alcohol_result, liveSession.alcohol_value) }}</span>
             <span v-if="liveSession.alcohol_value != null" class="text-xs text-gray-500 ml-1">{{ liveSession.alcohol_value }} mg/L</span>
           </div>
         </div>

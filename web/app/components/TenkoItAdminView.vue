@@ -563,7 +563,7 @@ onUnmounted(() => {
         <div class="py-1 flex justify-between">
           <span class="text-xs text-gray-500">アルコール</span>
           <span class="text-gray-800">
-            {{ session.alcohol_result ? alcoholResultLabel(session.alcohol_result) : '-' }}
+            {{ session.alcohol_result ? alcoholResultLabel(session.alcohol_result, session.alcohol_value ?? 0) : '-' }}
             <span v-if="session.alcohol_value != null" class="text-xs text-gray-500 ml-1">{{ session.alcohol_value }} mg/L</span>
           </span>
         </div>

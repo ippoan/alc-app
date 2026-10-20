@@ -41,21 +41,38 @@ export function toAlcoholReading(raw: AlcoholPayload | null): AlcoholReading | n
   }
 }
 
-/** アルコール判定 (FC-1200 の result) の表示名。未知の値はそのまま出す。 */
-export function alcoholResultLabel(result: string): string {
-  if (result === 'normal') return '正常'
+/** アルコール判定の色調。表示名・バッジ色・カードの枠色はすべてこの 1 本から決める。 */
+export type AlcoholTone = 'green' | 'yellow' | 'red'
+
+/**
+ * アルコール判定 (FC-1200 の result) と測定値から色調を決める判定の唯一の入口。
+ * 正常 (normal) でも値が 0 より上なら赤 (検知)。サーバの検知メールの定義
+ * (alc-measurements-worker の `should_alert` = 値 > 0) と揃える (Refs ippoan/alc-app#436)。
+ * 吹込不良 (error) だけ黄に分けるのは、一覧で超過と見分けられるようにするため
+ * (ユーザー判断)。超過 (over) と未知の値は赤。
+ */
+export function alcoholTone(result: string, value: number): AlcoholTone {
+  if (result === 'normal') return value > 0 ? 'red' : 'green'
+  if (result === 'error') return 'yellow'
+  return 'red'
+}
+
+// Tailwind が拾えるよう、クラス名はリテラルで持つ (テンプレートで組み立てない)
+const TONE_BADGE: Record<AlcoholTone, string> = {
+  green: 'bg-green-100 text-green-800',
+  yellow: 'bg-yellow-100 text-yellow-800',
+  red: 'bg-red-100 text-red-800',
+}
+
+/** アルコール判定の表示名。未知の値はそのまま出す。normal でも値が 0 より上なら「検知」。 */
+export function alcoholResultLabel(result: string, value: number): string {
+  if (result === 'normal') return value > 0 ? '検知' : '正常'
   if (result === 'over') return '超過'
   if (result === 'error') return '測定エラー'
   return result
 }
 
-/**
- * アルコール判定のバッジ色 (`bg-*-100 text-*-800`)。正常は緑、吹込不良 (error) は黄、
- * 超過 (over) と未知の値は赤。error だけ黄に分けるのは、一覧で超過と見分けられる
- * ようにするため (ユーザー判断)。
- */
-export function alcoholResultClass(result: string): string {
-  if (result === 'normal') return 'bg-green-100 text-green-800'
-  if (result === 'error') return 'bg-yellow-100 text-yellow-800'
-  return 'bg-red-100 text-red-800'
+/** アルコール判定のバッジ色 (`bg-*-100 text-*-800`)。色調は `alcoholTone` で決める。 */
+export function alcoholResultClass(result: string, value: number): string {
+  return TONE_BADGE[alcoholTone(result, value)]
 }

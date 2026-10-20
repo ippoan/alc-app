@@ -87,6 +87,15 @@ export function useBlowVideoRecording() {
   }
 
   /**
+   * 録画に使っているカメラから静止画を 1 枚撮る (吹き終わりの写真)。
+   * **`finishRecording` より前に呼ぶこと** — あれがカメラを落とす。撮れなければ null。
+   * 同期版 `takeSnapshot` は常に null を返すので `takeSnapshotAsync` を使う。
+   */
+  function snapshot(): Promise<Blob | null> {
+    return camera.takeSnapshotAsync()
+  }
+
+  /**
    * 測定結果が出たところで録画を止め、ローカル (IndexedDB) に保存してカメラを落とす。
    *
    * **段を進める前に呼ぶこと** — キオスクは段が切り替わると録画中の component が
@@ -138,6 +147,7 @@ export function useBlowVideoRecording() {
     startCamera,
     stopCamera,
     onAlcStateChange,
+    snapshot,
     finishRecording,
     uploadRecording,
     reset,

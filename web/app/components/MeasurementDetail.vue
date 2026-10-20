@@ -108,9 +108,9 @@ function statusColor(m: ApiMeasurement) {
             <span
               v-if="measurement.result_type"
               class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-              :class="alcoholResultClass(measurement.result_type)"
+              :class="alcoholResultClass(measurement.result_type, measurement.alcohol_value ?? 0)"
             >
-              {{ alcoholResultLabel(measurement.result_type) }}
+              {{ alcoholResultLabel(measurement.result_type, measurement.alcohol_value ?? 0) }}
             </span>
             <span v-else class="text-gray-400 text-xs">-</span>
           </div>

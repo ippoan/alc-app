@@ -225,8 +225,8 @@ onMounted(() => {
                         <td class="px-2 py-1.5 text-gray-700">{{ employeeName(item.result.employeeId) }}</td>
                         <td class="px-2 py-1.5 text-right text-gray-700 tabular-nums">{{ item.result.alcoholValue.toFixed(3) }}</td>
                         <td class="px-2 py-1.5 text-center">
-                          <span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium" :class="alcoholResultClass(item.result.resultType)">
-                            {{ alcoholResultLabel(item.result.resultType) }}
+                          <span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium" :class="alcoholResultClass(item.result.resultType, item.result.alcoholValue)">
+                            {{ alcoholResultLabel(item.result.resultType, item.result.alcoholValue) }}
                           </span>
                         </td>
                         <td class="px-2 py-1.5 text-center">
@@ -358,9 +358,9 @@ onMounted(() => {
                     <td class="px-2 py-1.5 text-center">
                       <span
                         class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                        :class="alcoholResultClass(item.result.resultType)"
+                        :class="alcoholResultClass(item.result.resultType, item.result.alcoholValue)"
                       >
-                        {{ alcoholResultLabel(item.result.resultType) }}
+                        {{ alcoholResultLabel(item.result.resultType, item.result.alcoholValue) }}
                       </span>
                     </td>
                     <td class="px-2 py-1.5 text-right text-gray-700 tabular-nums">

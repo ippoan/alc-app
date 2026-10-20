@@ -475,7 +475,7 @@ async function stopFc1200Test() {
 // 測定完了 or エラーで自動終了
 watch(fc1200.result, (val) => {
   if (val && fc1200Measuring.value) {
-    fc1200TestResult.value = `測定完了: ${val.alcoholValue} mg/L (${alcoholResultLabel(val.resultType)})`
+    fc1200TestResult.value = `測定完了: ${val.alcoholValue} mg/L (${alcoholResultLabel(val.resultType, val.alcoholValue)})`
     fc1200Measuring.value = false
     fc1200Testing.value = false
     fc1200.disconnect()

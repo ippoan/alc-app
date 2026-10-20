@@ -4,7 +4,7 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
 import { useKioskScreen } from '~/composables/useKioskScreen'
 import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
-import { updateMeasurement, startMeasurement } from '~/utils/api'
+import { updateMeasurement, startMeasurement, uploadFacePhoto } from '~/utils/api'
 
 // --- API のモック (NFC → 乗務員照合だけを動かす) ---
 
@@ -23,6 +23,7 @@ vi.mock('~/utils/api', () => ({
   startMeasurement: vi.fn(async () => ({ id: 'measurement-1' })),
   updateMeasurement: vi.fn(async () => ({})),
   uploadBlowVideo: vi.fn(async () => 'https://example.com/blow.webm'),
+  uploadFacePhoto: vi.fn(async () => 'https://example.com/blow.jpg'),
   lookupCarInspection: (certNo?: string, carId?: string) => lookupCarInspectionMock(certNo, carId),
 }))
 
@@ -60,12 +61,16 @@ mockNuxtImport('useFaceSync', () => () => ({
   sync: faceSyncMock,
 }))
 
+// 吹き終わりの写真。既定は撮れない (null) — 写真を見るテストが差し替える
+const takeSnapshotAsyncMock = vi.fn(async () => null as Blob | null)
+
 mockNuxtImport('useCamera', () => () => ({
   stream: ref(null),
   videoRef: ref(null),
   isActive: ref(false),
   start: vi.fn(async () => {}),
   stop: vi.fn(),
+  takeSnapshotAsync: takeSnapshotAsyncMock,
 }))
 
 mockNuxtImport('useVideoRecorder', () => () => ({
@@ -522,6 +527,75 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
     )
     expect((completedCall![1] as Record<string, unknown>).tenko_type).toBe(expected)
     wrapper.unmount()
+  })
+
+  describe('吹き終わりの写真', () => {
+    const PHOTO = new Blob(['jpg'], { type: 'image/jpeg' })
+
+    async function runToResult() {
+      getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+      const wrapper = await mountWithStubs()
+      await touch(wrapper, '2601012901010')
+      await chooseType(wrapper, 'choice-alcohol')
+      wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+      await wrapper.vm.$nextTick()
+      wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', {
+        employeeId: 'emp-1',
+        alcoholValue: 0.12,
+        resultType: 'normal',
+        deviceUseCount: 1,
+        measuredAt: new Date('2026-01-01'),
+      })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      await wrapper.vm.$nextTick()
+      return wrapper
+    }
+
+    function completedBody() {
+      const call = vi.mocked(updateMeasurement).mock.calls.find(
+        c => (c[1] as Record<string, unknown>).status === 'completed',
+      )
+      return call![1] as Record<string, unknown>
+    }
+
+    beforeEach(() => {
+      isOnlineRef.value = true
+      takeSnapshotAsyncMock.mockReset()
+      takeSnapshotAsyncMock.mockResolvedValue(PHOTO)
+      vi.mocked(uploadFacePhoto).mockReset()
+      vi.mocked(uploadFacePhoto).mockResolvedValue('https://example.com/blow.jpg')
+    })
+
+    it('撮れた写真を保存し、その URL を完了の PUT の face_photo_url に載せる', async () => {
+      const wrapper = await runToResult()
+      expect(uploadFacePhoto).toHaveBeenCalledWith(PHOTO)
+      expect(completedBody().face_photo_url).toBe('https://example.com/blow.jpg')
+      wrapper.unmount()
+    })
+
+    it('写真が撮れなくても測定は保存する (face_photo_url は無し)', async () => {
+      takeSnapshotAsyncMock.mockResolvedValue(null)
+      const wrapper = await runToResult()
+      expect(uploadFacePhoto).not.toHaveBeenCalled()
+      expect(completedBody().face_photo_url).toBeUndefined()
+      wrapper.unmount()
+    })
+
+    it('撮影が例外でも測定は保存する', async () => {
+      takeSnapshotAsyncMock.mockRejectedValue(new Error('canvas'))
+      const wrapper = await runToResult()
+      expect(uploadFacePhoto).not.toHaveBeenCalled()
+      expect(completedBody().status).toBe('completed')
+      wrapper.unmount()
+    })
+
+    it('写真の保存に失敗しても測定は保存する (face_photo_url は無し)', async () => {
+      vi.mocked(uploadFacePhoto).mockRejectedValue(new Error('アップロード失敗 (500)'))
+      const wrapper = await runToResult()
+      expect(completedBody().status).toBe('completed')
+      expect(completedBody().face_photo_url).toBeUndefined()
+      wrapper.unmount()
+    })
   })
 
   it('測定途中 (BLE 体温) の PUT には record_as_tenko も tenko_type も入らない', async () => {

@@ -139,9 +139,9 @@ onMounted(() => {
               <td class="px-4 py-3 text-center">
                 <span
                   class="inline-block px-2 py-1 rounded-full text-xs font-medium"
-                  :class="alcoholResultClass(item.result.resultType)"
+                  :class="alcoholResultClass(item.result.resultType, item.result.alcoholValue)"
                 >
-                  {{ alcoholResultLabel(item.result.resultType) }}
+                  {{ alcoholResultLabel(item.result.resultType, item.result.alcoholValue) }}
                 </span>
               </td>
               <td class="px-4 py-3 text-center">
