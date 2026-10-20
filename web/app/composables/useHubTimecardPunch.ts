@@ -3,6 +3,7 @@ import type { UsbHubKind } from '~/composables/useUsbHub'
 import { lookupEmployeeByCard, punchTimecard } from '~/utils/api'
 import { deviceSendsPunch } from '~/utils/device-line'
 import { usesAdminToken } from '~/utils/token-selection'
+import { failureStatus } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
 
 /**
@@ -98,23 +99,6 @@ type LookupOutcome
  */
 function warnUnresolved(reason: string): void {
   console.warn(`[HubTimecardPunch] 手元の台帳で引けないカード (${reason})`)
-}
-
-/**
- * 照会の失敗から HTTP の status を読む (読めなければ `null` = 通信の失敗として扱う)。
- *
- * 端末の鍵で送る経路 (`api.ts` の `bearerRequest`) の Error は `.status` を持つが、
- * **管理者のトークンで送る経路 (`@ippoan/auth-client` の `createAuthFetch`) の Error には
- * `.status` が無く**、message が `API エラー (<status>): <本文>` の形になるだけ。そちらは
- * message の**先頭の** `(<3 桁>): ` から読む (本文の中の `(404)` を拾わない)。
- * `createAuthFetch` の文言の形に依存している — 形が変わると読めなくなり、404・400 でも
- * 手元の写しへ倒れる。
- */
-function failureStatus(e: unknown): number | null {
-  const status = (e as { status?: unknown } | null)?.status
-  if (typeof status === 'number') return status
-  const matched = e instanceof Error ? /^[^(]*\((\d{3})\): /.exec(e.message) : null
-  return matched ? Number(matched[1]) : null
 }
 
 export function useHubTimecardPunch(

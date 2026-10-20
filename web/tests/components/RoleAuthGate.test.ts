@@ -58,6 +58,25 @@ async function submitCode(wrapper: Awaited<ReturnType<typeof mountSuspended>>, c
   await wrapper.vm.$nextTick()
 }
 
+const AUTH_FAILED = '端末の鍵が取れませんでした (テスト用の文言)'
+
+describe('RoleAuthGate — 乗務員の照会が失敗したとき (Refs #436)', () => {
+  it('席の鍵が取れなかった失敗は「見つかりません」にせず、その文言をそのまま出す', async () => {
+    getEmployeeByCodeMock.mockRejectedValueOnce(new Error(AUTH_FAILED))
+    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
+    await submitCode(wrapper, '0001')
+    expect(wrapper.text()).toContain(AUTH_FAILED)
+    expect(wrapper.text()).not.toContain('見つかりません')
+  })
+
+  it('404 は「見つかりません」', async () => {
+    getEmployeeByCodeMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (404): x'), { status: 404 }))
+    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
+    await submitCode(wrapper, '0001')
+    expect(wrapper.text()).toContain('見つかりません')
+  })
+})
+
 describe('RoleAuthGate — 管理者の入口は顔認証が必須 (Refs ippoan/alc-app-s3#135)', () => {
   beforeEach(() => {
     faceSyncMock.mockClear()

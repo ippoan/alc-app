@@ -2,7 +2,7 @@
 import type { ApiEmployee } from '~/types'
 import { initApi, getEmployees, getEmployeeByNfcId, uploadFacePhoto, updateEmployeeFace } from '~/utils/api'
 import { getFaceDescriptor } from '~/utils/face-db'
-import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { FACE_MODEL_VERSION } from '~/composables/useFaceDetection'
 
 const config = useRuntimeConfig()
@@ -39,8 +39,8 @@ async function onNfcRead(nfcId: string) {
   try {
     const emp = await getEmployeeByNfcId(nfcId)
     selectedEmployee.value = emp
-  } catch {
-    lookupError.value = employeeNotFoundByNfc(nfcId)
+  } catch (e) {
+    lookupError.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   }
 }
 

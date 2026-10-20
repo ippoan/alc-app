@@ -273,7 +273,7 @@ describe('NormalMeasurement — 新版への載せ替えの申告 (Refs ippoan/a
       await input.setValue('')
       expect(safe()).toBe(0)
 
-      lookups[0]!.reject(new Error('not found'))
+      lookups[0]!.reject(Object.assign(new Error('API エラー (404): employee_not_found'), { status: 404 }))
       await settle(wrapper)
       expect(wrapper.text()).toContain('999')
       expect(safe()).toBe(1)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getEmployeeByNfcId } from '~/utils/api'
-import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 
 /**
  * 血圧測定タブの指静脈登録 (Refs ippoan/vein-match#20)。
@@ -25,8 +25,8 @@ async function onNfcRead(nfcId: string) {
     const emp = await getEmployeeByNfcId(nfcId)
     employeeId.value = emp.id
     employeeName.value = emp.name
-  } catch {
-    lookupError.value = employeeNotFoundByNfc(nfcId)
+  } catch (e) {
+    lookupError.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   }
 }
 

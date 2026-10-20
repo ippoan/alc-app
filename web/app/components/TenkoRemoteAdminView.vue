@@ -2,7 +2,7 @@
 import type { FaceAuthResult, TenkoSession, DriverInfo } from '~/types'
 import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
-import { employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { alcoholResultLabel, alcoholTone } from '~/utils/alcohol'
 
@@ -186,8 +186,8 @@ async function onModalIdSubmit() {
     modalEmployeeName.value = emp.name
     setManagerId(emp.id)
     modalStep.value = 'face_auth'
-  } catch {
-    modalIdError.value = employeeNotFoundByCode(input)
+  } catch (e) {
+    modalIdError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
   }
 }
 

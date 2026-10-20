@@ -4,7 +4,7 @@ import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
-import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
@@ -264,8 +264,8 @@ async function onNfcRead(nfcId: string) {
     const emp = await getEmployeeByNfcId(nfcId)
     if (!applyFaceApproval(emp)) return
     await identifyEmployee(emp.id, emp.name)
-  } catch {
-    error.value = employeeNotFoundByNfc(nfcId)
+  } catch (e) {
+    error.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   }
 }
 
@@ -277,8 +277,8 @@ async function onManualSubmit() {
     const emp = await getEmployeeByCode(input)
     if (!applyFaceApproval(emp)) return
     await identifyEmployee(emp.id, emp.name)
-  } catch {
-    manualError.value = employeeNotFoundByCode(input)
+  } catch (e) {
+    manualError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
   }
 }
 
