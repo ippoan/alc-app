@@ -574,8 +574,10 @@ export function useDeviceToken() {
       lastFailureSigner.value = signer.source
       // 署名が JWT まで届かなかった回は、サーバにボンド状態が渡っていない = 「不明」(#336)
       if (signer.writesBpBond) setSignedBpBond(null)
-      // シリアルが別の応答待ち (指静脈の読み取り中など) で断られた回は一時的 — 抑止しない (#436)
-      const busy = lastError.value.includes(SERIAL_BUSY_MARK)
+      // シリアルが別の応答待ち (指静脈の読み取り中など)・ファームの書き込み中 (錠) で断られた回は
+      // 一時的 — 抑止しない (#436。更新の直後に署名が 60 秒止まらないように)。
+      // `OTA_LOCKED_MESSAGE` は auto-import のまま使う (明示 import は useAlarmDevice を mock する試験の読み込み順を崩す)
+      const busy = lastError.value.includes(SERIAL_BUSY_MARK) || lastError.value.includes(OTA_LOCKED_MESSAGE)
       if (!busy) signer.backoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
       warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, busy ? 0 : CORE_S3_BACKOFF_MS / 1000)
       return null

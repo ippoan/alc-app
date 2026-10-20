@@ -18,9 +18,15 @@
  *
  * `useSerialArbiter.request()` は同時に 1 件しか待てない — capture の応答を待っている
  * 間に say を送らない (呼び出し側の責務、register.vue の手順が順に呼ぶだけで満たす)。
+ *
+ * ファームの書き込み中だけ、機体へのほかの送信を止める錠が在る (`ota.begin()` / `ota.end()` /
+ * `ota.request()`。useCoreS3Serial・useAlarmDevice の `ota` と同じ形、Refs ippoan/alc-app#436)。
+ * 錠の間は `request` (鍵の署名)・`capture`・`say` を `OTA_LOCKED_MESSAGE` で断る。
+ * **使うのは `useSerialOta` だけ**。
  */
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
+import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
 import { findDeviceLine } from '~/utils/device-line'
@@ -50,6 +56,13 @@ const isConnected = ref(false)
  * useCoreS3Serial の `deviceInfo` と同じ形
  */
 const deviceInfo = ref<DeviceLine | null>(null)
+
+/**
+ * ファームの書き込み中の錠。機体は `OTA SERIAL` の後、イメージを受け切るまで受けたバイトを
+ * 全部イメージとして読む — その間に `AUTH SIGN`・`VEIN CAPTURE`・`VEIN SAY` を 1 行でも送ると
+ * イメージに混ざって検証で落ちる。掛かっている間に通るのは `ota.request` だけ
+ */
+let otaLocked = false
 
 /** claim を待っている connect() */
 const waiters = new Set<() => void>()
@@ -158,6 +171,7 @@ export function useVeinSerial() {
    * ここでは `instanceof` を確かめずに `Error` として扱う (到達しない分岐を作らない)。
    */
   async function capture(): Promise<string> {
+    if (otaLocked) throw new Error(OTA_LOCKED_MESSAGE)
     let line: string
     try {
       line = await arbiter.request(CLAIMANT_NAME, 'VEIN CAPTURE', 'VEIN CHARA', CAPTURE_TIMEOUT_MS)
@@ -174,6 +188,7 @@ export function useVeinSerial() {
    * 登録の手順は続ける (親の決定)。それ以外の失敗 (`unsupported` 等) はそのまま投げる。
    */
   async function say(x: 'PLACE' | 'AGAIN' | 'ENROLLED' | 'FAILED'): Promise<void> {
+    if (otaLocked) throw new Error(OTA_LOCKED_MESSAGE)
     try {
       await arbiter.request(CLAIMANT_NAME, `VEIN SAY ${x}`, 'OK VEIN SAY', SAY_TIMEOUT_MS)
     } catch (e) {
@@ -183,15 +198,34 @@ export function useVeinSerial() {
   }
 
   /**
-   * 預かったポートで `arbiter.request()` をそのまま撃つ (シリアル OTA 用の口、
-   * Refs ippoan/alc-app-s3#279)。station も vein も `DEVICE timecard` でこの claimant が
-   * 握るので、`useSerialOta` はここ経由でポートを使う (2 本目の claimant を立てない)。
-   * 同時に 1 件しか待てないのは capture/say と同じ — 呼び出し側 (キオスク) が待機画面で
-   * 指静脈を読んでいないときだけ使う。
+   * 預かったポートで 1 行送って応答 1 つを待つ (鍵の署名 `AUTH SIGN` が使う、Refs ippoan/alc-app#436)。
+   * 同時に 1 件しか待てないのは capture/say と同じ。ファームの書き込み中 (錠) は送らずに reject する
    */
-  function request(line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
-  function request(bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
-  function request(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
+  function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    if (otaLocked) return Promise.reject(new Error(OTA_LOCKED_MESSAGE))
+    return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+  }
+
+  // --- ファームの書き込みだけが使う口 (Refs ippoan/alc-app-s3#279, ippoan/alc-app#436) ---
+
+  /** 錠を掛ける。以後 `otaEnd()` まで、機体へ届くのは `otaRequest` だけ */
+  function otaBegin(): void {
+    otaLocked = true
+  }
+
+  /** 錠を解く (掛かっていなくても害は無い。Vein Station には始め直す heartbeat が無い) */
+  function otaEnd(): void {
+    otaLocked = false
+  }
+
+  /**
+   * 錠に関係なく、行またはバイト列を送って応答 1 つを待つ (`useCoreS3Serial().ota.request` と同じ形)。
+   * station も vein も `DEVICE timecard` でこの claimant が握るので、`useSerialOta` はここ経由で
+   * ポートを使う (2 本目の claimant を立てない)
+   */
+  function otaRequest(line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
+  function otaRequest(bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  function otaRequest(payload: string | Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
     // 実装側の引数は union なので、arbiter のどちらの overload にも当てはまるよう
     // バイト列 overload (errPrefix 必須) の形に寄せて渡す
     return arbiter.request(CLAIMANT_NAME, payload as Uint8Array, matchPrefix, timeoutMs, errPrefix as string)
@@ -206,6 +240,7 @@ export function useVeinSerial() {
     capture,
     say,
     request,
+    ota: { begin: otaBegin, end: otaEnd, request: otaRequest },
     onClose,
     onEvent: lineDispatch.onEvent,
     onJson: lineDispatch.onJson,

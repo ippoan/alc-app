@@ -13,6 +13,8 @@
 export interface FirmwareImage {
   manifestUrl: string
   appUrl: string
+  /** この flavor 専用の書き直しのページ。無ければ target の `installerUrl` */
+  installerUrl?: string
 }
 
 /** 対象の端末 1 種の固定情報 */
@@ -28,8 +30,9 @@ export interface FirmwareTarget {
 /** 配布ページ (alc-app-s3 の GitHub Pages) */
 const PAGES_BASE = 'https://ippoan.github.io/alc-app-s3/'
 
-function image(manifest: string, app: string): FirmwareImage {
-  return { manifestUrl: `${PAGES_BASE}${manifest}`, appUrl: `${PAGES_BASE}firmware/${app}` }
+function image(manifest: string, app: string, installer?: string): FirmwareImage {
+  const urls = { manifestUrl: `${PAGES_BASE}${manifest}`, appUrl: `${PAGES_BASE}firmware/${app}` }
+  return installer === undefined ? urls : { ...urls, installerUrl: `${PAGES_BASE}${installer}` }
 }
 
 /** 合図の `target` → 対象の allowlist。表に無い target は無視する */
@@ -40,6 +43,8 @@ export const FIRMWARE_TARGETS: Readonly<Record<string, FirmwareTarget>> = {
     installerUrl: PAGES_BASE,
     flavors: {
       'timecard-station': image('manifest-timecard-station.json', 'alc-hub-atoms3-timecard-station-app.bin'),
+      // 指静脈の読み取りを持つ版 (`--features vein`)。書き直しのページは vein.html
+      'timecard-vein': image('manifest-timecard-vein-r12-b.json', 'alc-hub-atoms3-timecard-vein-app.bin', 'vein.html'),
     },
   },
   // CoreS3 (統合ハブ)。CoreS3 SE も同じイメージで更新する

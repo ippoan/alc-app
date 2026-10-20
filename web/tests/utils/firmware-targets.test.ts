@@ -9,13 +9,19 @@ describe('FIRMWARE_TARGETS', () => {
     expect(Object.keys(FIRMWARE_TARGETS).sort()).toEqual(['alarm', 'cores3', 'timecard-station'])
   })
 
-  it('timecard-station は flavor 1 件で、URL は今までと同じ 2 本 (BOARD は見ない)', () => {
+  it('timecard-station は flavor 2 件 (station と vein) で、vein だけ書き直しのページを持つ (BOARD は見ない)', () => {
     expect(FIRMWARE_TARGETS['timecard-station']).toEqual({
       installerUrl: BASE,
       flavors: {
         'timecard-station': {
           manifestUrl: `${BASE}manifest-timecard-station.json`,
           appUrl: `${BASE}firmware/alc-hub-atoms3-timecard-station-app.bin`,
+        },
+        // Vein Station 版 (Refs ippoan/alc-app#436)
+        'timecard-vein': {
+          manifestUrl: `${BASE}manifest-timecard-vein-r12-b.json`,
+          appUrl: `${BASE}firmware/alc-hub-atoms3-timecard-vein-app.bin`,
+          installerUrl: `${BASE}vein.html`,
         },
       },
     })
@@ -46,13 +52,16 @@ describe('FIRMWARE_TARGETS', () => {
     const urls = Object.values(FIRMWARE_TARGETS)
       .flatMap(target => Object.values(target.flavors))
       .flatMap(image => [image.manifestUrl, image.appUrl])
-    expect(urls).toHaveLength(10)
+    expect(urls).toHaveLength(12)
     for (const url of urls) expect(url.startsWith(BASE)).toBe(true)
     // 同じ URL を 2 つの flavor が指していない
     expect(new Set(urls).size).toBe(urls.length)
   })
 
   it('書き直しのページ (installerUrl) も配布ページの中 (Refs ippoan/alc-app#425)', () => {
-    for (const target of Object.values(FIRMWARE_TARGETS)) expect(target.installerUrl.startsWith(BASE)).toBe(true)
+    for (const target of Object.values(FIRMWARE_TARGETS)) {
+      expect(target.installerUrl.startsWith(BASE)).toBe(true)
+      for (const image of Object.values(target.flavors)) expect(image.installerUrl ?? BASE).toMatch(/^https:\/\/ippoan\.github\.io\/alc-app-s3\//)
+    }
   })
 })

@@ -62,8 +62,11 @@ describe('fetchLatestFirmwareVersions', () => {
   it('対象を渡すと、その対象の flavor の manifest だけを取りに行く', async () => {
     const f = vi.fn(async () => ({ ok: true, json: async () => ({ version: '0.3.0' }) }))
     vi.stubGlobal('fetch', f)
-    expect(await fetchLatestFirmwareVersions('timecard-station')).toEqual({ 'timecard-station': '0.3.0' })
-    expect(f.mock.calls.map(c => (c as unknown[])[0])).toEqual(['https://ippoan.github.io/alc-app-s3/manifest-timecard-station.json'])
+    expect(await fetchLatestFirmwareVersions('timecard-station')).toEqual({ 'timecard-station': '0.3.0', 'timecard-vein': '0.3.0' })
+    expect(f.mock.calls.map(c => (c as unknown[])[0])).toEqual([
+      'https://ippoan.github.io/alc-app-s3/manifest-timecard-station.json',
+      'https://ippoan.github.io/alc-app-s3/manifest-timecard-vein-r12-b.json',
+    ])
   })
 
   it('警告デバイス (alarm) は表に在る: flavor 1 件の manifest だけを取りに行く (Refs ippoan/alc-app#425)', async () => {

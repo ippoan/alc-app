@@ -44,6 +44,8 @@ const vein = vi.hoisted(() => ({
   capture: vi.fn(),
   // useDeviceToken が抜線でキャッシュを捨てるために登録する (Refs ippoan/alc-app#436)
   onClose: vi.fn(),
+  // useSerialOta が書き込みのポートとして掴む (Refs ippoan/alc-app#436)
+  ota: { begin: vi.fn(), end: vi.fn(), request: vi.fn() },
 }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 

@@ -4,9 +4,11 @@
  *
  * 対象は 3 種 ({@link RUNNABLE_TARGETS}):
  *
- * - **Vein Station** (`timecard-station`): Atom VoiceS3R の `atoms3-timecard` `station` ビルド。
+ * - **Vein Station** (`timecard-station`): Atom VoiceS3R の `atoms3-timecard` の `station` ビルドと
+ *   `vein` ビルド (指静脈の読み取りを持つ版。機体の FLAVOR で引き分ける、Refs ippoan/alc-app#436)。
  *   LAN も Wi-Fi も持たず、USB で運行者 PC につながっている。管理者が /device/setup で
- *   「最新にする」を押すと合図が出る。受けは `TenkoKiosk.vue`
+ *   「最新にする」を押すと合図が出る。受けは `TenkoKiosk.vue`。画面の前の人が帯
+ *   (`VeinStationFirmwareNotice.vue`) から押しても始まる
  * - **CoreS3** (`cores3`): 統合ハブ。管理者が 1 台を指定して合図を出す。受けは
  *   `FirmwareOtaHost.vue`。画面の前の人が帯 (`CoreS3DeviceFirmwareNotice.vue`) から押しても始まる
  * - **警告デバイス** (`alarm`): 運行管理者 / IT点呼 の席の PC に繋がる Atom VoiceS3R。合図は無く、
@@ -66,8 +68,9 @@
  *
  * # ポート
  *
- * Vein Station は `useVeinSerial` (claimant `timecard`)、CoreS3 は `useCoreS3Serial().ota`、
- * 警告デバイスは `useAlarmDevice().ota` が握っているものを借りる。2 本目の claimant も reader も立てない。
+ * Vein Station は `useVeinSerial().ota` (claimant `timecard`)、CoreS3 は `useCoreS3Serial().ota`、
+ * 警告デバイスは `useAlarmDevice().ota` が握っているものを借りる。どれも書き込みの間は錠を掛け、
+ * 機体へのほかの送信 (署名の要求・指静脈の読み取り等) を止める。2 本目の claimant も reader も立てない。
  *
  * # CoreS3 だけの手当て (順番を変えない)
  *
@@ -229,7 +232,7 @@ export interface SerialOtaRunOptions {
   isBusy?: () => boolean
 }
 
-/** 書き込みに使うポート (`useVeinSerial()` / `useCoreS3Serial().ota` / `useAlarmDevice().ota` のどれか) */
+/** 書き込みに使うポート (`useVeinSerial().ota` / `useCoreS3Serial().ota` / `useAlarmDevice().ota` のどれか) */
 interface OtaPort {
   isConnected: Readonly<Ref<boolean>>
   request: {
@@ -294,6 +297,7 @@ export function useSerialOta() {
   const firmware = useFirmwareReport()
   const hubPort: OtaPort = { isConnected: coreS3.isConnected, request: coreS3.ota.request }
   const alarmPort: OtaPort = { isConnected: alarmDevice.isConnected, request: alarmDevice.ota.request }
+  const veinPort: OtaPort = { isConnected: vein.isConnected, request: vein.ota.request }
   /**
    * 始めてよくなる (待機画面へ戻る・機体が空く) のを待っている合図。呼び出し元 (合図の受け)
    * ごとに持つ — 画面が外れたら一緒に捨てる (管理者が押し直す)
@@ -384,7 +388,7 @@ export function useSerialOta() {
 
   /**
    * `hubId` は CoreS3 のときだけ、書き込みを始める機体の id (合図の `device_id` と照合済み)。
-   * Vein Station と警告デバイスは null — 報告も id の確認もしない (錠は警告デバイスにも在る)
+   * Vein Station と警告デバイスは null — 報告も id の確認もしない (錠はどちらにも在る)
    */
   async function flash(
     target: string,
@@ -395,6 +399,8 @@ export function useSerialOta() {
   ): Promise<SerialOtaResult> {
     const hub = hubId !== null
     const alarm = target === ALARM_TARGET
+    /** Vein Station (station 版・vein 版) */
+    const station = !hub && !alarm
     /** 管理者の一覧へ遷移を出す (CoreS3 だけ)。**await しない** */
     const tell = (phase: FirmwarePhase, extra: FirmwareReportExtra): void => {
       if (hub) void firmware.report(phase, extra)
@@ -406,7 +412,7 @@ export function useSerialOta() {
       tell('skipped', { reason: 'unsupported' })
       return 'skipped'
     }
-    // station 以外 (vein 等) がつながっているキオスクは対象外。
+    // 表に無い flavor の機体は対象外 (station 版も vein 版も同じ target で、flavor で引き分ける)。
     // 以後の `OTA SERIAL` と再起動後の照合には、機体が名乗った FLAVOR を使う
     const flavor = device.flavor
     if (flavor === null || !Object.hasOwn(entry.flavors, flavor)) {
@@ -440,9 +446,10 @@ export function useSerialOta() {
       return 'busy'
     }
 
-    // ここから `ota.end()` まで、CoreS3 / 警告デバイスへのほかの送信 (heartbeat・署名の要求) が止まる
+    // ここから `ota.end()` まで、機体へのほかの送信 (heartbeat・署名の要求・指静脈の読み取り) が止まる
     if (hub) coreS3.ota.begin()
     if (alarm) alarmDevice.ota.begin()
+    if (station) vein.ota.begin()
 
     // 受信リングの探り (冒頭 doc)。チャンクを丸ごと受けられると名乗った機体にだけ書く
     let rx: number
@@ -513,6 +520,7 @@ export function useSerialOta() {
     // (警告デバイスは席の署名) が reject される。未接続なら何も送らず、次の接続がハートビートを始める
     if (hub) coreS3.ota.end()
     if (alarm) alarmDevice.ota.end()
+    if (station) vein.ota.end()
 
     state.value = { kind: 'rebooting' }
     tell('rebooting', progress)
@@ -535,8 +543,9 @@ export function useSerialOta() {
       const id = parseAuthStatusLine(await ask('AUTH STATUS', 'AUTH ', AUTH_STATUS_TIMEOUT_MS))
       if (id !== hubId) throw new OtaError('device changed after reboot', 'device_changed')
     }
-    else if (alarm) {
-      // このポートには席の署名の要求が流れる。「既に応答待ち」のときだけ間を置いて送り直す
+    else {
+      // このポートには署名の要求 (警告デバイスは席の署名、Vein Station は端末の鍵の署名) が流れる。
+      // 「既に応答待ち」のときだけ間を置いて送り直す
       const deadline = Date.now() + BUSY_RETRY_TOTAL_MS
       ask = (...args) => requestWhenFree(port, deadline, ...args)
     }
@@ -566,7 +575,7 @@ export function useSerialOta() {
     if (!entry) return 'skipped'
     if (running) return 'busy'
     const hub = target === HUB_TARGET
-    const port = hub ? hubPort : target === ALARM_TARGET ? alarmPort : vein
+    const port = hub ? hubPort : target === ALARM_TARGET ? alarmPort : veinPort
     if (!port.isConnected.value) return 'skipped'
     // 宛先の照合 (冒頭 doc)。預けた後に機体が差し替えられた場合も、ここで弾く
     const hubId = hub ? firmware.deviceId.value : null
@@ -594,10 +603,11 @@ export function useSerialOta() {
     }
     finally {
       // この順を変えない。`end()` は錠が掛かっていなければ、`release()` は保留していなければ
-      // 何もしないので、無条件に呼ぶ (警告デバイスの錠も、どの出口でもここで必ず解ける)
+      // 何もしないので、無条件に呼ぶ (警告デバイス・Vein Station の錠も、どの出口でもここで必ず解ける)
       running = false
       coreS3.ota.end()
       alarmDevice.ota.end()
+      vein.ota.end()
       firmware.release()
     }
   }

@@ -5,7 +5,7 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 /**
  * キオスクのシリアル OTA (Refs ippoan/alc-app-s3#279, ippoan/alc-app#403)。
  *
- * 端末 (station) は useVeinSerial の `request` / `isConnected` の裏にいる偽物で模す。
+ * 端末 (station) は useVeinSerial の `ota` / `isConnected` の裏にいる偽物で模す。
  * 行の応答は契約どおり (`OTA READY 4096` / `OTA ACK <累計>` / `OTA OK` / `OTA CONFIRMED`)、
  * `OTA OK` の後は 500 ms で切れて 12 秒後につながり直す。
  *
@@ -15,7 +15,11 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 const link = vi.hoisted(() => ({
   isConnected: null as unknown as { value: boolean },
-  request: null as unknown as ReturnType<typeof vi.fn>,
+  ota: {
+    begin: null as unknown as ReturnType<typeof vi.fn>,
+    end: null as unknown as ReturnType<typeof vi.fn>,
+    request: null as unknown as ReturnType<typeof vi.fn>,
+  },
 }))
 mockNuxtImport('useVeinSerial', () => () => link)
 
@@ -55,6 +59,8 @@ let events: string[]
 /** CoreS3・警告デバイス・報告の偽物を作り直す (既定は「CoreS3 も警告デバイスも繋がっていない」) */
 function resetHubMocks(): void {
   events = []
+  link.ota.begin = vi.fn()
+  link.ota.end = vi.fn()
   alarm.isConnected = ref(false)
   alarm.ota.begin = vi.fn(() => { events.push('alarm:begin') })
   alarm.ota.end = vi.fn(() => { events.push('alarm:end') })
@@ -175,7 +181,7 @@ describe('useSerialOta', () => {
       log: [],
     }
     link.isConnected = ref(true)
-    link.request = vi.fn(fakeRequest)
+    link.ota.request = vi.fn(fakeRequest)
     resetHubMocks()
     manifest = { version: '0.2.0' }
     // 256 KB + 端数 (最後のチャンクが短い形)
@@ -269,7 +275,7 @@ describe('useSerialOta', () => {
   it('OTA OK の前に切れていても、つながり直すのを待って確定する', async () => {
     // 最後のチャンクの応答より先に切断が見える形
     dev.disconnects = false
-    link.request = vi.fn((payload: string | Uint8Array, matchPrefix: string, t: number, e?: string) => {
+    link.ota.request.mockImplementation((payload: string | Uint8Array, matchPrefix: string, t: number, e?: string) => {
       if (typeof payload !== 'string' && matchPrefix === 'OTA OK') {
         link.isConnected.value = false
         setTimeout(() => {
@@ -303,7 +309,7 @@ describe('useSerialOta', () => {
 
   it('(2) OTA ACK を受けるまで次のチャンクを送らない', async () => {
     let releaseAck: (() => void) | null = null
-    link.request = vi.fn((payload: string | Uint8Array, matchPrefix: string, t: number, e?: string) => {
+    link.ota.request.mockImplementation((payload: string | Uint8Array, matchPrefix: string, t: number, e?: string) => {
       if (typeof payload !== 'string' && dev.received === 0) {
         dev.received += payload.length
         dev.log.push(`<${payload.length} B>`)
@@ -332,7 +338,7 @@ describe('useSerialOta', () => {
 
   it('チャンクは OTA ACK / 最後だけ OTA OK を待ち、失敗行は OTA ERR で拾う', async () => {
     await runToEnd()
-    const calls = link.request.mock.calls.filter(c => typeof c[0] !== 'string')
+    const calls = link.ota.request.mock.calls.filter(c => typeof c[0] !== 'string')
     expect(calls.slice(0, -1).every(c => c[1] === 'OTA ACK' && c[3] === 'OTA ERR')).toBe(true)
     expect(calls.at(-1)![1]).toBe('OTA OK')
     expect(calls.at(-1)![3]).toBe('OTA ERR')
@@ -410,7 +416,7 @@ describe('useSerialOta', () => {
 
   it('要求の形: 探りは 5 秒で、失敗側の合図は ERR UNSUPPORTED だけ', async () => {
     await runToEnd()
-    expect(link.request.mock.calls.filter(c => c[0] === 'OTA CONFIRM')[0]).toEqual(['OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'ERR UNSUPPORTED'])
+    expect(link.ota.request.mock.calls.filter(c => c[0] === 'OTA CONFIRM')[0]).toEqual(['OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'ERR UNSUPPORTED'])
   })
 
   it('ACK の累計が送った量と合わなければ止める', async () => {
@@ -466,7 +472,7 @@ describe('useSerialOta', () => {
       ota.enqueue(target)
       await ota.runQueued()
     }
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(ota.state.value).toEqual({ kind: 'idle' })
   })
@@ -493,7 +499,7 @@ describe('useSerialOta', () => {
     ota.enqueue('cores3', { deviceId: 'kiosk-a' })
     await ota.runQueued()
 
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
     expect(hub.ota.request).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(ota.state.value).toEqual({ kind: 'idle' })
@@ -508,6 +514,67 @@ describe('useSerialOta', () => {
     expect(fw.report).not.toHaveBeenCalled()
     // 錠も保留も掛けていないので、本物はどちらも何もしない
     expect(events).toEqual(['end', 'alarm:end', 'release'])
+  })
+
+  it('Vein Station の錠は探りの前に掛け、再起動を待つ前と終わりで解く (Refs ippoan/alc-app#436)', async () => {
+    await runToEnd()
+    expect(link.ota.begin).toHaveBeenCalledTimes(1)
+    expect(link.ota.end).toHaveBeenCalledTimes(2)
+    const calls = link.ota.request.mock.calls
+    const order = link.ota.request.mock.invocationCallOrder
+    const probe = order[calls.findIndex(c => c[0] === 'OTA CONFIRM')]!
+    const lastChunk = order[calls.findLastIndex(c => typeof c[0] !== 'string')]!
+    const confirmDevice = order[calls.findLastIndex(c => c[0] === 'DEVICE')]!
+    // 名乗りを聞いた後・探りの前に掛ける
+    expect(link.ota.begin.mock.invocationCallOrder[0]!).toBeLessThan(probe)
+    expect(link.ota.begin.mock.invocationCallOrder[0]!).toBeGreaterThan(order[0]!)
+    // 最後のチャンクの後・再接続後の名乗りの前に解く (再接続直後の鍵の署名を断らない)
+    expect(link.ota.end.mock.invocationCallOrder[0]!).toBeGreaterThan(lastChunk)
+    expect(link.ota.end.mock.invocationCallOrder[0]!).toBeLessThan(confirmDevice)
+  })
+
+  it('Vein Station の書き込みが途中で失敗しても、錠は必ず解ける', async () => {
+    dev.finalLine = 'OTA ERR verify'
+    expect(await runToEnd()).toBe('failed')
+    expect(link.ota.begin).toHaveBeenCalledTimes(1)
+    expect(link.ota.end).toHaveBeenCalledTimes(1)
+    expect(link.ota.end.mock.invocationCallOrder[0]!).toBeGreaterThan(link.ota.begin.mock.invocationCallOrder[0]!)
+  })
+
+  it('Vein Station の探りが断られたら (書かずに引き返す)、錠は解ける', async () => {
+    dev.probeLine = 'ERR UNSUPPORTED'
+    expect(await runToEnd()).toBe('unsupported')
+    expect(link.ota.begin).toHaveBeenCalledTimes(1)
+    expect(link.ota.end).toHaveBeenCalledTimes(1)
+  })
+
+  it('Vein Station 版 (FLAVOR=timecard-vein) は vein 版のイメージを取り、同じ FLAVOR で確定する', async () => {
+    const VEIN_MANIFEST = 'https://ippoan.github.io/alc-app-s3/manifest-timecard-vein-r12-b.json'
+    const VEIN_APP = 'https://ippoan.github.io/alc-app-s3/firmware/alc-hub-atoms3-timecard-vein-app.bin'
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === VEIN_MANIFEST) return new Response(JSON.stringify(manifest))
+      if (url === VEIN_APP) return new Response(new Uint8Array(imageBytes))
+      return new Response('not found', { status: 404 })
+    })
+    dev.flavor = 'timecard-vein'
+    expect(await runToEnd()).toBe('updated')
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([VEIN_MANIFEST, VEIN_APP])
+    expect(dev.log).toContain(`OTA SERIAL ${imageBytes} timecard-vein`)
+    expect(ota.state.value).toEqual({ kind: 'done', ver: '0.2.0' })
+  })
+
+  it('Vein Station の再接続後の名乗りが「既に応答待ち」(鍵の署名と重なった) で弾かれても、送り直して確定する', async () => {
+    let busyLeft = 2
+    link.ota.request.mockImplementation((payload: string | Uint8Array, matchPrefix: string, t: number, e?: string) => {
+      if (dev.rebooted && payload === 'DEVICE' && busyLeft > 0) {
+        busyLeft--
+        return Promise.reject(new Error('request(timecard): 既に応答待ちです'))
+      }
+      return fakeRequest(payload, matchPrefix, t, e)
+    })
+    expect(await runToEnd()).toBe('updated')
+    expect(busyLeft).toBe(0)
+    expect(dev.log.slice(-2)).toEqual(['DEVICE', 'OTA CONFIRM'])
   })
 
   it('取得には時間切れを付ける (固まった取得で「更新中」のまま残らない)', async () => {
@@ -540,12 +607,12 @@ describe('useSerialOta', () => {
   it('端末がつながっていなければ何もしない (捨てる)', async () => {
     link.isConnected.value = false
     expect(await runToEnd()).toBe('skipped')
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('つながっているのが station 以外 (FLAVOR 違い) なら何もしない', async () => {
-    dev.flavor = 'timecard-vein'
+  it('表に無い FLAVOR の機体なら何もしない', async () => {
+    dev.flavor = 'timecard-unknown'
     await runToEnd()
     expect(dev.log).toEqual(['DEVICE'])
     expect(fetchMock).not.toHaveBeenCalled()
@@ -611,7 +678,7 @@ describe('useSerialOta', () => {
   it('enqueue した target を runQueued で 1 回だけ走らせる', async () => {
     dev.ver = '0.2.0' // 版が同じ (DEVICE だけで終わる) 形で呼ばれた回数を数える
     await ota.runQueued()
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
 
     ota.enqueue('timecard-station')
     await ota.runQueued()
@@ -735,7 +802,7 @@ describe('useSerialOta (cores3)', () => {
     }
     // Vein Station は繋がっていない (CoreS3 だけのキオスク)
     link.isConnected = ref(false)
-    link.request = vi.fn(async () => { throw new Error('unexpected request to vein') })
+    link.ota.request = vi.fn(async () => { throw new Error('unexpected request to vein') })
     resetHubMocks()
     hub.isConnected.value = true
     hub.ota.request = vi.fn(hubRequest)
@@ -783,7 +850,7 @@ describe('useSerialOta (cores3)', () => {
   /** 何も起きていない (機体へ 1 行も送らず、取得も報告も保留も錠も無い) */
   function expectUntouched(): void {
     expect(hub.ota.request).not.toHaveBeenCalled()
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(fw.report).not.toHaveBeenCalled()
     expect(fw.hold).not.toHaveBeenCalled()
@@ -869,7 +936,7 @@ describe('useSerialOta (cores3)', () => {
     expect(events.lastIndexOf('tx:<chunk>')).toBeLessThan(events.indexOf('end'))
     expect(events.indexOf('tx:<chunk>')).toBeGreaterThan(events.indexOf('report:writing'))
     expect(hubDev.received).toBe(imageBytes)
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
 
     expect(hub.ota.begin).toHaveBeenCalledTimes(1)
     expect(hub.ota.end).toHaveBeenCalledTimes(2)
@@ -1314,7 +1381,7 @@ describe('useSerialOta (cores3)', () => {
     expect(await ota.run('timecard-station')).toBe('busy')
     expect(await finish(p)).toBe('updated')
     expect(sent().filter(l => l.startsWith('OTA SERIAL'))).toHaveLength(1)
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
   })
 })
 
@@ -1418,7 +1485,7 @@ describe('useSerialOta (alarm)', () => {
     }
     // 運行管理者の席: 繋がっているのは警告デバイスだけ
     link.isConnected = ref(false)
-    link.request = vi.fn(async () => { throw new Error('unexpected request to vein') })
+    link.ota.request = vi.fn(async () => { throw new Error('unexpected request to vein') })
     resetHubMocks()
     alarm.isConnected.value = true
     alarm.ota.request = vi.fn(alarmRequest)
@@ -1514,7 +1581,7 @@ describe('useSerialOta (alarm)', () => {
     await runToEnd()
     expect(hub.ota.request).not.toHaveBeenCalled()
     expect(hub.ota.begin).not.toHaveBeenCalled()
-    expect(link.request).not.toHaveBeenCalled()
+    expect(link.ota.request).not.toHaveBeenCalled()
     expect(fw.report).not.toHaveBeenCalled()
     expect(fw.hold).not.toHaveBeenCalled()
   })

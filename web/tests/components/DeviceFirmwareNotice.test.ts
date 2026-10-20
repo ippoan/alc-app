@@ -232,6 +232,32 @@ describe('DeviceFirmwareNotice', () => {
     w.unmount()
   })
 
+  it.each([
+    ['timecard-vein', 'vein.html'],
+    ['timecard-station', ''],
+    ['timecard-unknown', ''],
+  ])('★ Vein Station の案内先は flavor の書き直しのページ → 無ければ target の入口 (flavor=%s, Refs ippoan/alc-app#436)', async (flavor, page) => {
+    fetchLatest.mockResolvedValue({ [flavor]: '0.2.0' })
+    start.mockResolvedValue('failed')
+    const w = await mount({ target: 'timecard-station', flavor })
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="device-firmware-installer"]').attributes('href')).toBe(`${INSTALLER}${page}`)
+    w.unmount()
+  })
+
+  it('結果の行が残ったまま名乗りが消えたら (切断など)、案内先は target の入口に戻る', async () => {
+    fetchLatest.mockResolvedValue({ 'timecard-vein': '0.2.0' })
+    start.mockResolvedValue('failed')
+    const w = await mount({ target: 'timecard-station', flavor: 'timecard-vein' })
+    await startButton(w).trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="device-firmware-installer"]').attributes('href')).toBe(`${INSTALLER}vein.html`)
+    await w.setProps({ flavor: null, version: null })
+    expect(w.find('[data-testid="device-firmware-installer"]').attributes('href')).toBe(INSTALLER)
+    w.unmount()
+  })
+
   it('表に無い対象では、unsupported の案内にリンクを付けない (URL を作らない)', async () => {
     fetchLatest.mockResolvedValue({ x: '0.2.0' })
     start.mockResolvedValue('unsupported')

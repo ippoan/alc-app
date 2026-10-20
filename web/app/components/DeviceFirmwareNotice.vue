@@ -68,10 +68,13 @@ const showBand = computed(() =>
   && serialOta.state.value.kind === 'idle',
 )
 
-/** 表に無い target では案内先を出さない */
-const installerUrl = computed(() =>
-  Object.hasOwn(FIRMWARE_TARGETS, props.target) ? FIRMWARE_TARGETS[props.target]!.installerUrl : null,
-)
+/** 案内先は flavor の書き直しのページ → 無ければ target の入口。表に無い target では出さない */
+const installerUrl = computed(() => {
+  if (!Object.hasOwn(FIRMWARE_TARGETS, props.target)) return null
+  const entry = FIRMWARE_TARGETS[props.target]!
+  const image = props.flavor !== null && Object.hasOwn(entry.flavors, props.flavor) ? entry.flavors[props.flavor]! : null
+  return image?.installerUrl ?? entry.installerUrl
+})
 
 async function onStart(): Promise<void> {
   if (starting.value) return
