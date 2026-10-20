@@ -692,6 +692,32 @@ describe('useSerialArbiter', () => {
     })
   })
 
+  describe('isClaimedPort', () => {
+    it('どれかの機体に預けたポートだけ true (プローブ中は false)', async () => {
+      const dev = createMockPort()
+      const outsider = createMockPort({ vid: 0x1A86 })
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+
+      const { claimant } = createClaimant()
+      arbiter.register('alarm', claimant)
+      await vi.advanceTimersByTimeAsync(0)
+
+      // 開いて機種を聞いている間は、握っていても預けてはいない
+      expect(mod.isArbitratedPort(dev.port)).toBe(true)
+      expect(mod.isClaimedPort(dev.port)).toBe(false)
+
+      dev.emit('DEVICE alarm state=idle\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(mod.isClaimedPort(dev.port)).toBe(true)
+      expect(mod.isClaimedPort(outsider.port)).toBe(false)
+
+      await arbiter.unregister('alarm')
+      expect(mod.isClaimedPort(dev.port)).toBe(false)
+    })
+  })
+
   // ---------- 開けないポート ----------
 
   describe('開けないポート', () => {

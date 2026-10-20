@@ -352,6 +352,13 @@ export function useDeviceToken() {
     })
     // 繋がっている間は、キオスクの鍵が取れない送信を無認証へ落とさない (api.ts が同期で読む)
     watch(vein.isConnected, connected => setKioskDeviceKeyRequired(connected), { immediate: true, flush: 'sync' })
+    // 挿されたら抑止を解いてすぐ鍵を読む (useBpStationDeviceToken の ATOM の onOpen と同じ形) —
+    // 開発用の印を、送信を待たずに鍵で決めるため。取れなければ今までどおり送信時に取り直す
+    watch(vein.isConnected, (connected) => {
+      if (!connected) return
+      veinBackoffUntil.value = 0
+      void getDeviceJwt()
+    }, { flush: 'sync' })
   }
 
   /** CoreS3 (統合ハブ)。署名は SIGNBP → SIGN の 2 段構えで、ボンド状態も書く */
