@@ -26,12 +26,14 @@ const cameraStream = ref<MediaStream | null>(null)
 const cameraIsActive = ref(false)
 const cameraStart = vi.fn(async () => { cameraIsActive.value = true })
 const cameraStop = vi.fn(() => { cameraIsActive.value = false })
+const cameraSnapshot = vi.fn(async () => null as Blob | null)
 mockNuxtImport('useCamera', () => () => ({
   stream: cameraStream,
   videoRef: ref(null),
   isActive: cameraIsActive,
   start: cameraStart,
   stop: cameraStop,
+  takeSnapshotAsync: cameraSnapshot,
 }))
 
 const isRecording = ref(false)
@@ -165,6 +167,21 @@ describe('composables/useBlowVideoRecording', () => {
       onAlcStateChange('blow_waiting')
 
       expect(startRecording).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('snapshot (吹き終わりの写真)', () => {
+    it('camera の takeSnapshotAsync の結果をそのまま返す', async () => {
+      const photo = new Blob(['jpg'], { type: 'image/jpeg' })
+      cameraSnapshot.mockResolvedValue(photo)
+      const { snapshot } = useBlowVideoRecording()
+      await expect(snapshot()).resolves.toBe(photo)
+    })
+
+    it('撮れなければ null', async () => {
+      cameraSnapshot.mockResolvedValue(null)
+      const { snapshot } = useBlowVideoRecording()
+      await expect(snapshot()).resolves.toBeNull()
     })
   })
 

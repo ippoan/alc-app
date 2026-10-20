@@ -88,11 +88,19 @@ describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', 
     wrapper.unmount()
   })
 
-  it('正常判定 — 値と緑バッジを出す', async () => {
-    const wrapper = await mountModal(readingOf({ result: 'normal', value: 0.15 }), 'nfc')
-    expect(wrapper.find(VALUE).text()).toBe('0.150 mg/L')
+  it('正常判定で値 0 — 値と緑バッジを出す', async () => {
+    const wrapper = await mountModal(readingOf({ result: 'normal', value: 0 }), 'nfc')
+    expect(wrapper.find(VALUE).text()).toBe('0.000 mg/L')
     expect(wrapper.find(RESULT).text()).toBe('正常')
     expect(wrapper.find(RESULT).classes()).toContain('bg-green-100')
+    wrapper.unmount()
+  })
+
+  it('正常判定でも値が 0 より上 — 「検知」と赤バッジを出す', async () => {
+    const wrapper = await mountModal(readingOf({ result: 'normal', value: 0.15 }), 'nfc')
+    expect(wrapper.find(VALUE).text()).toBe('0.150 mg/L')
+    expect(wrapper.find(RESULT).text()).toBe('検知')
+    expect(wrapper.find(RESULT).classes()).toContain('bg-red-100')
     wrapper.unmount()
   })
 
@@ -201,7 +209,7 @@ describe('StrayAlcoholModal — 本人確認前のアルコール測定通知', 
   })
 
   it('新しい測定 (seq が変わる) が届くと前の表示を畳んで出し直す', async () => {
-    const wrapper = await mountModal(readingOf({ seq: 1, result: 'normal' }), 'nfc')
+    const wrapper = await mountModal(readingOf({ seq: 1, result: 'normal', value: 0 }), 'nfc')
     expect(wrapper.find(RESULT).text()).toBe('正常')
     await wrapper.setProps({ reading: readingOf({ seq: 2, result: 'over' }) })
     expect(wrapper.find(MODAL).exists()).toBe(true)

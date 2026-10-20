@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadEvent, NfcReadSource } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, lookupCarInspection, punchTimecard } from '~/utils/api'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, lookupCarInspection, punchTimecard, uploadFacePhoto } from '~/utils/api'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
@@ -367,6 +367,7 @@ const {
   startCamera: startMeasuringCamera,
   stopCamera: stopMeasuringCamera,
   onAlcStateChange,
+  snapshot: takeBlowSnapshot,
   finishRecording: finishVideoRecording,
   uploadRecording: uploadVideoRecording,
   reset: resetVideoRecording,
@@ -639,6 +640,8 @@ watch(step, async (s, prev) => {
 
 // FC-1200 測定結果 → BLE 医療データ / 手動入力データをマージ → API に保存
 async function onMeasurementResult(result: MeasurementResult) {
+  // 吹き終わりの写真。録画を止めるとカメラが落ちるので、その前に撮る (撮れなければ null)
+  const blowPhoto = await takeBlowSnapshot().catch(() => null)
   result.tenkoType = tenkoType.value
   result.carinsCertNo = carinsCertNo.value
   result.carinsVehicleId = carinsVehicleId.value
@@ -691,6 +694,15 @@ async function onMeasurementResult(result: MeasurementResult) {
   try {
     console.log('[Measurement] activeMeasurementId:', activeMeasurementId.value, 'isOnline:', isOnline.value)
     if (activeMeasurementId.value && isOnline.value) {
+      // 吹き終わりの写真を保存して測定に載せる (失敗しても測定の保存は止めない。オフラインは対象外)
+      if (blowPhoto) {
+        try {
+          result.facePhotoUrl = await uploadFacePhoto(blowPhoto)
+        }
+        catch (e) {
+          console.warn('[Measurement] blow photo upload failed:', e)
+        }
+      }
       // started レコードを completed に更新
       const updateData: Record<string, unknown> = {
         status: 'completed',

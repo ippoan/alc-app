@@ -29,13 +29,13 @@ onMounted(() => {
 onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 
 // pass / fail は遠隔点呼だけの値で helper に無いのでここに残す
-function alcoholLabel(r: string) {
+function alcoholLabel(r: string, v: number | null) {
   const extra: Record<string, string> = { pass: '正常', fail: '検出' }
-  return extra[r] ?? alcoholResultLabel(r)
+  return extra[r] ?? alcoholResultLabel(r, v ?? 0)
 }
 
-function alcoholClass(r: string) {
-  return alcoholResultClass(r === 'pass' ? 'normal' : r)
+function alcoholClass(r: string, v: number | null) {
+  return alcoholResultClass(r === 'pass' ? 'normal' : r, v ?? 0)
 }
 
 function formatTime(d: string | null) {
@@ -216,10 +216,10 @@ function rowBg(row: DailyHealthRow): string {
               <template v-if="row.alcohol_result">
                 <span
                   class="px-1.5 py-0.5 rounded text-xs font-medium"
-                  :class="alcoholClass(row.alcohol_result)"
+                  :class="alcoholClass(row.alcohol_result, row.alcohol_value)"
                 >
                   {{ row.alcohol_value != null ? row.alcohol_value.toFixed(2) : '' }}
-                  {{ alcoholLabel(row.alcohol_result) }}
+                  {{ alcoholLabel(row.alcohol_result, row.alcohol_value) }}
                 </span>
               </template>
               <span v-else class="text-gray-300">-</span>

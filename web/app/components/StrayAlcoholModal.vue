@@ -158,7 +158,7 @@ const measuredAtLabel = computed(() => {
 // 集約したまま、引数側で寄せる)。基準超過 (over) だけを赤で目立たせる (ユーザー判断)。
 // alcoholResultClass は error を黄にするが、このモーダルは error を normal に
 // 読み替えて渡すので緑のまま (ユーザー判断)。
-const badgeClass = computed(() => alcoholResultClass(props.reading?.result === 'over' ? 'over' : 'normal'))
+const badgeClass = computed(() => alcoholResultClass(props.reading?.result === 'over' ? 'over' : 'normal', props.reading?.value ?? 0))
 </script>
 
 <template>
@@ -191,7 +191,7 @@ const badgeClass = computed(() => alcoholResultClass(props.reading?.result === '
             data-testid="stray-alcohol-modal-result"
             class="ml-2 px-2 py-0.5 rounded text-xs font-medium"
             :class="badgeClass"
-          >{{ alcoholResultLabel(reading.result) }}</span>
+          >{{ alcoholResultLabel(reading.result, reading.value) }}</span>
         </div>
         <p class="text-xs text-gray-500 mb-4">
           {{ measuredAtLabel }} に記録しました — この記録は点呼には含まれません

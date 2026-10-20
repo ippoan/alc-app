@@ -442,8 +442,8 @@ onMounted(() => {
                     <span
                       v-if="row.alcohol.result"
                       class="ml-1 px-2 py-0.5 rounded text-xs font-medium"
-                      :class="alcoholResultClass(row.alcohol.result)"
-                    >{{ alcoholResultLabel(row.alcohol.result) }}</span>
+                      :class="alcoholResultClass(row.alcohol.result, row.alcohol.value ?? 0)"
+                    >{{ alcoholResultLabel(row.alcohol.result, row.alcohol.value ?? 0) }}</span>
                   </template>
                   <span v-else class="text-gray-400">—</span>
                 </td>

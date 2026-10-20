@@ -56,6 +56,7 @@ mockNuxtImport('useCamera', () => () => ({
   isActive: ref(false),
   start: vi.fn(async () => {}),
   stop: vi.fn(),
+  takeSnapshotAsync: vi.fn(async () => null),
 }))
 
 mockNuxtImport('useVideoRecorder', () => () => ({
