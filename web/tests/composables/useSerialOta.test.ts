@@ -363,6 +363,9 @@ describe('useSerialOta', () => {
     // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
     expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'OTA ERR write' })
+    // 失敗の理由をコンソールに 1 行残す (段は失敗の幕に変わる前のもの。% は ACK を受けた 2 チャンクぶん)
+    const pct = Math.floor((2 * 4096 * 100) / imageBytes)
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(`[SERIAL_OTA] failed: target=timecard-station stage=writing pct=${pct} word=write reason=OTA ERR write`)
   })
 
   it('(3) 検証で OTA ERR verify なら failed (再起動を待たない)', async () => {
@@ -450,6 +453,7 @@ describe('useSerialOta', () => {
     // `OTA CONFIRM` は書き込みの前の探りの 1 回だけ (確定は送っていない)
     expect(dev.log.filter(l => l === 'OTA CONFIRM')).toHaveLength(1)
     expect(ota.state.value).toEqual({ kind: 'failed', reason: 'reconnect timeout' })
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith('[SERIAL_OTA] failed: target=timecard-station stage=rebooting word=reconnect_timeout reason=reconnect timeout')
   })
 
   it('(4) 90 秒以内につながり直さなければ確定せず failed', async () => {

@@ -593,6 +593,9 @@ export function useSerialOta() {
         // `failed` にしない — 書き直しを案内するほどのことではなく、押し直せば済む
         return 'busy'
       }
+      // どの段で何に断られたかを残す (Vein Station・警告デバイスはサーバーへの報告が無い)。settle の前に読む
+      const at = state.value
+      console.warn(`[SERIAL_OTA] failed: target=${target} stage=${at.kind}${at.kind === 'writing' ? ` pct=${at.pct}` : ''} word=${failureWord(e)} reason=${reason}`)
       settle({ kind: 'failed', reason })
       if (hub) {
         // 報告は端末の token を取りに行くので、錠を解いてから
