@@ -11,7 +11,7 @@ import { updateMeasurement, startMeasurement, uploadFacePhoto } from '~/utils/ap
 const getEmployeeByNfcIdMock = vi.fn()
 const getEmployeeByCodeMock = vi.fn()
 // 免許証タッチの打刻 (Refs ippoan/alc-app-s3#135)。既定は成功
-const punchTimecardMock = vi.fn(async () => {})
+const punchTimecardMock = vi.fn(async (_cardId: string, _measurementId?: string | null) => {})
 const checkFaceApprovalMock = vi.fn(() => null)
 // vehicle 段の照合 (Refs ippoan/alc-app-s3#110)。既定は null (未登録扱い) — 個別のテストで差し替える
 const lookupCarInspectionMock = vi.fn(async () => null as import('~/types').CarInspectionLookupResponse | null)
@@ -19,7 +19,7 @@ const lookupCarInspectionMock = vi.fn(async () => null as import('~/types').CarI
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: (nfcId: string) => getEmployeeByNfcIdMock(nfcId),
   getEmployeeByCode: (code: string) => getEmployeeByCodeMock(code),
-  punchTimecard: (cardId: string) => punchTimecardMock(cardId),
+  punchTimecard: (cardId: string, measurementId?: string | null) => punchTimecardMock(cardId, measurementId),
   startMeasurement: vi.fn(async () => ({ id: 'measurement-1' })),
   updateMeasurement: vi.fn(async () => ({})),
   uploadBlowVideo: vi.fn(async () => 'https://example.com/blow.webm'),
@@ -1028,9 +1028,10 @@ describe('NormalMeasurement — 打刻と種別の選択 (Refs ippoan/alc-app-s3
 
     await touch(wrapper, '2601012901010')
 
-    // 打刻は NFC の段から既存の打刻の口へ、NfcStatus が emit した生の値で飛ぶ
+    // 打刻は NFC の段から既存の打刻の口へ、NfcStatus が emit した生の値で飛ぶ。
+    // 始めた測定の id を添えて打刻と点呼を結ぶ (Refs ippoan/alc-app#436)
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
-    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')
+    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010', 'measurement-1')
 
     expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="choice-pre-operation"]').exists()).toBe(true)
@@ -1041,6 +1042,18 @@ describe('NormalMeasurement — 打刻と種別の選択 (Refs ippoan/alc-app-s3
     expect(done.exists()).toBe(true)
     expect(done.text()).toMatch(/^打刻しました \d{2}:\d{2}$/)
     expect(wrapper.text()).toContain(APPROVED_EMPLOYEE.name)
+    wrapper.unmount()
+  })
+
+  it('測定の開始に失敗した回は、測定の id を添えずに打刻する', async () => {
+    vi.mocked(startMeasurement).mockRejectedValueOnce(new Error('boom'))
+    const wrapper = await mountNfcStep()
+
+    await touch(wrapper, '2601012901010')
+
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010', null)
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -1472,7 +1485,7 @@ describe('NormalMeasurement — 読み取り経路による打刻の出し分け
     await touchFrom(wrapper, '2601012901010', 'bridge')
 
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
-    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')
+    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010', 'measurement-1')
     expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -1486,7 +1499,7 @@ describe('NormalMeasurement — 読み取り経路による打刻の出し分け
     await touchFrom(wrapper, '2601012901010', 'vein-station')
 
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
-    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')
+    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010', 'measurement-1')
     expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
     wrapper.unmount()
   })

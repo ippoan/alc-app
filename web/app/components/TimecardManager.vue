@@ -7,6 +7,7 @@ import {
 import { jstTodayDate } from '~/utils/jst'
 import { isDevDevice, usesAdminToken } from '~/utils/token-selection'
 import { cardKindOf } from '~/utils/card-kind'
+import { punchTenkoOf } from '~/utils/alcohol'
 
 type SubTab = 'cards' | 'punches'
 
@@ -125,6 +126,8 @@ interface HistoryRow {
    * とは別の軸 — 既存の「区分」列とは混同しないこと。
    */
   cardKind: ReturnType<typeof cardKindOf>
+  /** 打刻に結ばれた点呼 (Refs ippoan/alc-app#436)。結ばれていない行は null */
+  tenko: ReturnType<typeof punchTenkoOf>
 }
 
 /**
@@ -147,8 +150,10 @@ const historyRows = computed<HistoryRow[]>(() =>
       at: p.punched_at,
       employeeName: displayName(p),
       deviceName: p.device_name ?? '-',
-      origin: p.kind === 'license' ? ('tenko' as const) : ('punch' as const),
+      // 打刻から点呼に移った行 (measurement_id で結ばれた行) も点呼として出す (Refs ippoan/alc-app#436)
+      origin: p.kind === 'license' || p.measurement_id ? ('tenko' as const) : ('punch' as const),
       cardKind: cardKindOf(p.card_kind),
+      tenko: punchTenkoOf(p),
     }))
     // 表示は日付で絞ってあるので、同日内の新しい順に並べれば足りる
     .sort((a, b) => b.at.localeCompare(a.at)),
@@ -385,6 +390,15 @@ async function exportCsv() {
                   class="px-2 py-0.5 rounded text-xs font-medium"
                   :class="row.origin === 'tenko' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'"
                 >{{ row.origin === 'tenko' ? '点呼' : '打刻' }}</span>
+                <template v-if="row.tenko?.alcohol">
+                  <span v-if="row.tenko.alcohol.value" data-testid="punch-alcohol-value" class="ml-1 tabular-nums text-gray-700">{{ row.tenko.alcohol.value }}</span>
+                  <span
+                    data-testid="punch-alcohol-result"
+                    class="ml-1 px-2 py-0.5 rounded text-xs font-medium"
+                    :class="row.tenko.alcohol.cls"
+                  >{{ row.tenko.alcohol.label }}</span>
+                </template>
+                <span v-if="row.tenko?.pending" data-testid="punch-tenko-pending" class="ml-1 text-xs text-gray-500">確定待ち</span>
               </td>
               <td class="px-4 py-2">
                 <span

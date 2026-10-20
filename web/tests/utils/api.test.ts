@@ -2259,6 +2259,26 @@ describe.skipIf(isLive)('punchTimecard (#134 worker 経由)', () => {
     expect(JSON.parse(init.body)).toEqual({ card_id: 'CARD-1' })
   })
 
+  it('★ 測定の id を渡せば body に measurement_id を載せる (Refs ippoan/alc-app#436)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson({ seq: 1 }))
+
+    await punchTimecard('CARD-1', 'measurement-1')
+
+    const [, init] = mockFetch.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ card_id: 'CARD-1', measurement_id: 'measurement-1' })
+  })
+
+  it('測定の id が null なら body に measurement_id を載せない', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson({ seq: 1 }))
+
+    await punchTimecard('CARD-1', null)
+
+    const [, init] = mockFetch.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ card_id: 'CARD-1' })
+  })
+
   it('admin JWT が無ければキオスクの device JWT を使う', async () => {
     initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
     mockFetch.mockResolvedValueOnce(okJson({ seq: 2 }))

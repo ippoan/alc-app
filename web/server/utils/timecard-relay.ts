@@ -15,7 +15,8 @@
  * `Authorization` ヘッダーの preflight が通らない。
  *
  * ★ tenant_id / device_id は auth-worker introspect の結果だけを使う —
- * ブラウザからの body は `card_id` しか読まない。
+ * ブラウザからの body は `card_id` と `measurement_id` (下の `normalizeMeasurementId`)
+ * しか読まない。
  */
 import type { Forward, IntrospectClaims } from './print-relay'
 import { RECORDER_BASE } from './print-relay'
@@ -79,19 +80,35 @@ export function decideTimecardPunchAccess(claims: IntrospectClaims): TimecardPun
   return { ok: true, tenantId: claims.tenant_id, deviceId: BROWSER_DEVICE_ID }
 }
 
+/** 測定の id (UUID) の形。大文字小文字どちらも受ける。 */
+const MEASUREMENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 打刻に添える測定の id を正規化する (pure、Refs ippoan/alc-app#436)。
+ *
+ * 画面がこの打刻の時点で始めている測定の id で、打刻と点呼を 1 対 1 で結ぶ。
+ * **UUID の形のときだけ**小文字にして返し、それ以外は `undefined` (= 載せない)。
+ * 形が違っても打刻そのものは止めない — 結べないだけで、打刻は今どおり残す。
+ */
+export function normalizeMeasurementId(value: unknown): string | undefined {
+  return typeof value === 'string' && MEASUREMENT_ID_RE.test(value) ? value.toLowerCase() : undefined
+}
+
 /**
  * recorder `POST /tenants/:t/devices/:d/timecard-punch` への forward request を組む。
  * 認証は `Authorization: <INTERNAL_SHARED_SECRET>` (生の値、recorder が定数時間比較)。
  *
- * body は `card_id` だけ。**`kind` も `seq` も送らない** — recorder 側が
- * `timecard` を立てて採番する (クライアントに kind を選ばせない)。
+ * body は `card_id` (と、UUID の形のときだけ `measurement_id`)。**`kind` も `seq` も
+ * 送らない** — recorder 側が `timecard` を立てて採番する (クライアントに kind を選ばせない)。
  */
 export function buildRecorderTimecardPunchForward(input: {
   sharedSecret: string
   tenantId: string
   deviceId: string
   cardId: string
+  measurementId?: unknown
 }): Forward {
+  const measurementId = normalizeMeasurementId(input.measurementId)
   const url = `${RECORDER_BASE}/tenants/${encodeURIComponent(input.tenantId)}/devices/${encodeURIComponent(
     input.deviceId,
   )}/timecard-punch`
@@ -100,7 +117,7 @@ export function buildRecorderTimecardPunchForward(input: {
     init: {
       method: 'POST',
       headers: { Authorization: input.sharedSecret, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_id: input.cardId }),
+      body: JSON.stringify(measurementId ? { card_id: input.cardId, measurement_id: measurementId } : { card_id: input.cardId }),
     },
   }
 }

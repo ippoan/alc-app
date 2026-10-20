@@ -871,6 +871,18 @@ export interface TimePunchWithDevice {
    * になりうる** — 型は `string | null` だが、実行時は防御的に扱うこと。
    */
   card_kind: string | null
+  /**
+   * この打刻と 1 対 1 で結ばれた測定 (点呼) の id (Refs ippoan/alc-app#436)。画面が打刻の時点で
+   * 始めていた測定の id を打刻に載せたもの。結ばれていない打刻では null / 欠落。
+   * 下の 3 つも同じ — サーバが返さない間・結ばれていない行では null / `undefined`。
+   */
+  measurement_id?: string | null
+  /** 結ばれた測定のアルコール値 (mg/L) */
+  alcohol_level?: number | null
+  /** 結ばれた測定のアルコール判定 (`'normal'` / `'over'` / `'error'`) */
+  result?: string | null
+  /** 結ばれた測定の点呼が確定待ちか */
+  tenko_pending?: boolean | null
   punched_at: string
   created_at: string
 }

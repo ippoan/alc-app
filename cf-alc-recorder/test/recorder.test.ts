@@ -955,6 +955,32 @@ describe("/watch-timecard の振る舞い", () => {
     expect(calls[0].items[0].recorded_at_ms).toBeNull();
   });
 
+  it("★ ブラウザ打刻の measurement_id は UUID の形のときだけ小文字で残す (Refs ippoan/alc-app#436)", async () => {
+    const res = await punchViaHttp("tenant-1", "device-kiosk-1", {
+      card_id: "MMMM",
+      measurement_id: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+    });
+    expect(res.status).toBe(202);
+    const calls = await spyIngest();
+    expect(calls[0].items[0].payload).toEqual({
+      card_id: "MMMM",
+      measurement_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    });
+  });
+
+  it("ブラウザ打刻の measurement_id が UUID の形でなければ捨てて、打刻は通す", async () => {
+    const bad = ["not-a-uuid", 42, "", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa-x"];
+    for (const measurementId of bad) {
+      const res = await punchViaHttp("tenant-1", "device-kiosk-1", {
+        card_id: "NNNN",
+        measurement_id: measurementId,
+      });
+      expect(res.status).toBe(202);
+    }
+    const calls = await spyIngest();
+    expect(calls.map((c) => c.items[0].payload)).toEqual(bad.map(() => ({ card_id: "NNNN" })));
+  });
+
   it("ブラウザ打刻の seq は同ミリ秒でも衝突しない", async () => {
     // 端末と違って再送が無いので冪等キーではないが、
     // UNIQUE (tenant_id, device_id, seq) に当たると打刻が落ちる
