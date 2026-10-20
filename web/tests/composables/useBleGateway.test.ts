@@ -1221,6 +1221,41 @@ describe('useBleGateway', () => {
       expect(gw.error.value).toBeNull()
     })
 
+    it('体温計の temperature / connected / disconnected を CoreS3 と同じく受ける', async () => {
+      const dev = createMockPort()
+      await connectVein(dev)
+
+      dev.emit('{"type":"connected","device":"thermometer","name":"NT-100B"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.thermometerConnected.value).toBe(true)
+
+      dev.emit('{"type":"temperature","value":36.4,"unit":"celsius"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.latestTemperature.value).toMatchObject({ value: 36.4, unit: 'celsius' })
+
+      dev.emit('{"type":"disconnected","device":"thermometer"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.thermometerConnected.value).toBe(false)
+
+      // それでも BLE ゲートウェイとしては繋がない
+      expect(gw.isConnected.value).toBe(false)
+      expect(gw.transport.value).toBeNull()
+    })
+
+    it('血圧計の connected / blood_pressure・heartbeat は見ない (体温計とアルコールだけ)', async () => {
+      const dev = createMockPort()
+      await connectVein(dev)
+
+      dev.emit('{"type":"connected","device":"blood_pressure"}\n')
+      dev.emit('{"type":"blood_pressure","systolic":120,"diastolic":80,"pulse":60}\n')
+      dev.emit('{"type":"heartbeat","thermo":true,"bp":true}\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(gw.bloodPressureConnected.value).toBe(false)
+      expect(gw.latestBloodPressure.value).toBeNull()
+      expect(gw.thermometerConnected.value).toBe(false)
+    })
+
     it('gateway の disconnect / cleanup は Vein Station のポートを返さない (指静脈・端末 JWT が止まらない)', async () => {
       const dev = createMockPort()
       const vein = await connectVein(dev)

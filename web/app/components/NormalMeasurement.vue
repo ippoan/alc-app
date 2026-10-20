@@ -290,7 +290,7 @@ function clearCarinsAdvanceTimer() {
 // 電子車検証の段で CoreS3 の NFC_CARINS を直接受ける (新しい component は作らず、
 // 免許証の通り道 (useNfcReader) にも流さない。Refs ippoan/alc-app-s3#135)。
 // 番号を保持したまま帯を出し、少し置いてから自動で体温の段へ進む
-// (Refs ippoan/alc-app-s3#110、#135)
+// (Refs ippoan/alc-app-s3#110、#135)。電子車検証の読み取りは CoreS3 のみ (Vein Station・測定台の ATOM S3 には無い機能なので useUsbHub に寄せない。Refs ippoan/alc-app#436)
 const offCarinsEvent = useCoreS3Serial().onEvent((name, args) => {
   if (name !== 'NFC_CARINS' || step.value !== 'vehicle') return
 

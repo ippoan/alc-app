@@ -24,13 +24,15 @@ const { isConnected, error, readers, bridgeVersion, connect, onRead, onLicenseRe
 const { latestVersion, checkLatestVersion, isUpdateAvailable } = useNfcBridgeUpdate()
 const { isCheckingKioskAccess } = useKioskAccess()
 
-// WebSerial の初回許可はユーザー操作が要る (CoreS3 / 測定台の Atom S3 直結のポート選択)
+// WebSerial の初回許可はユーザー操作が要る (CoreS3 / 測定台の Atom S3 / Vein Station 直結の
+// ポート選択。ピッカーは arbiter が共有するので、どの機体の requestPort() でも同じ)
 const coreS3 = useCoreS3Serial()
-const atomS3 = useAtomS3Serial()
 const canUseSerial = isWebSerialSupported()
 // USB 直結で NFC リーダーが繋がっているか。ブリッジの接続状態とは別 (下の案内の条件)。
-// 測定台に CoreS3 は挿さらず Atom S3 だけが挿さる (Refs ippoan/alc-app#353)
-const isDirectConnected = computed(() => coreS3.isConnected.value || atomS3.isConnected.value)
+// 測定台に CoreS3 は挿さらず Atom S3 だけが挿さる (Refs ippoan/alc-app#353)。Vein Station の
+// Port A の NFC ユニットも同じ (Refs ippoan/alc-app#436)
+const { nfc: nfcHub } = useUsbHub()
+const isDirectConnected = nfcHub.isConnected
 // 血圧測定台として開いた画面か。判定は `useBpStationMode` 1 か所 (Refs ippoan/alc-app#368) —
 // URL の `?station=bp` だけでなく端末の名乗り (`DEVICE bp-station`) も見る。
 // 未接続案内で名指しする端末が違うので、ここで出し分ける
@@ -54,7 +56,7 @@ const licenseExpiryStatus = ref<LicenseExpiryStatus | null>(null)
 const showUpdateBanner = computed(() => {
   if (isAndroidApp.value) return false
   if (!isConnected.value || !latestVersion.value) return false
-  // USB 直結 (CoreS3 / 測定台の Atom S3) にブリッジは要らない
+  // USB 直結 (CoreS3 / 測定台の Atom S3 / Vein Station) にブリッジは要らない
   if (isDirectConnected.value) return false
   // version 未送信（旧ブリッジ）→ 常にアップデート促す
   if (!bridgeVersion.value) return true
@@ -198,7 +200,7 @@ const showNfcGuide = ref(false)
 
     <!-- 未接続時の案内 -->
     <!-- USB 直結 (WebSerial): 常駐アプリは要らない。NFC ブリッジの接続状態とは切り離す —
-         NFC ブリッジ (bridge/Android) が繋がっていても CoreS3 の USB 許可はまだかもしれない。
+         NFC ブリッジ (bridge/Android) が繋がっていても機体の USB 許可はまだかもしれない。
          測定台では CoreS3 ではなく Atom S3 が挿さるので、名指しする端末を出し分ける -->
     <template v-if="canUseSerial && !isDirectConnected && !isCheckingKioskAccess">
       <div class="flex flex-col items-center gap-2">
@@ -207,7 +209,7 @@ const showNfcGuide = ref(false)
           初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。
         </p>
         <p v-else class="text-sm text-center text-gray-500">
-          CoreS3 が USB でつながっているか確認してください。<br>
+          NFC リーダーをつないだ機体 (CoreS3 / Vein Station) が USB でつながっているか確認してください。<br>
           初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。
         </p>
         <button

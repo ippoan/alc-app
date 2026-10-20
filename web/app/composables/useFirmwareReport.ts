@@ -52,6 +52,7 @@ export function parseAuthStatusLine(line: string): string | null {
 }
 
 export function useFirmwareReport() {
+  // ファーム報告の帯は CoreS3 のみ (Vein Station・測定台の ATOM S3 には無い機能なので useUsbHub に寄せない。Refs ippoan/alc-app#436)
   const coreS3 = useCoreS3Serial()
   const { getDeviceJwt } = useDeviceToken()
 

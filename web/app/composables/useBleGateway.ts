@@ -33,6 +33,18 @@ const FC1200_EVT_STATE: Record<string, Fc1200State | null> = {
   MEASURING: 'measuring',
 }
 
+/**
+ * Vein Station から受ける JSON か (Refs ippoan/alc-app#436)。アルコールと体温計だけ。
+ * `ready` / `heartbeat` は serial の heartbeat 監視 (30 秒無音で release) を動かし、
+ * 血圧計は測定台・CoreS3 の役なので見ない。`found` / `ble_status` は processMessage に case が無い
+ */
+function isVeinMessage(msg: unknown): msg is BleGatewayMessage {
+  // `{` で始まる行だけが来るので msg は必ず object
+  const m = msg as { type?: unknown, device?: unknown }
+  if (m.type === 'alcohol' || m.type === 'temperature') return true
+  return (m.type === 'connected' || m.type === 'disconnected') && m.device === 'thermometer'
+}
+
 // シングルトン: 全コンポーネントで共有
 const isConnected = ref(false)
 const error = ref<string | null>(null)
@@ -112,23 +124,22 @@ export function useBleGateway() {
   // (Refs ippoan/alc-app-s3#135)。**接続の有無と無関係に繋ぐ** — 理由は
   // `fc1200Wired` の doc を参照 (Refs ippoan/rust-alc-api#644)
   //
-  // Vein Station の RS232 につないだ FC-1200 も同じ `EVT FC1200` と alcohol JSON を出す
+  // Vein Station の RS232 につないだ FC-1200 も同じ `EVT FC1200` と alcohol JSON を出し、
+  // BLE の体温計 (NT-100B) も CoreS3 と同じ `temperature` / `connected` / `disconnected` で出す
   // (Refs ippoan/alc-app#436)。ただし **`transports` には入れない** — WS 接続時の
   // `t.disconnect()` や `cleanup()` の `t.release()` が Vein のポートを返してしまい、
   // 指静脈と端末 JWT (useDeviceToken) が止まる。sendCommand の BLE JSON も書いてしまう。
-  // ポートに触らない購読 (`onEvent` / `onJson`) だけをここで足し、alcohol 以外の JSON は見ない
+  // ポートに触らない購読 (`onEvent` / `onJson`) だけをここで足し、見る JSON は {@link isVeinMessage} に絞る
   const vein = useVeinTransport()
   if (!fc1200Wired) {
     fc1200Wired = true
-    const onFc1200Event = (name: string, args: string[]): void => {
+    // CoreS3 と Vein Station (アルコールチェッカーをつなぐ機体の組)
+    useUsbHub().alcohol.onEvent((name, args) => {
       if (name !== 'FC1200') return
       alcoholStage.value = FC1200_EVT_STATE[args[0] ?? ''] ?? null
-    }
-    coreS3.onEvent(onFc1200Event)
-    vein.onEvent(onFc1200Event)
+    })
     vein.onJson((msg) => {
-      // `{` で始まる行だけが来るので msg は必ず object
-      if ((msg as { type?: unknown }).type === 'alcohol') processMessage(msg as BleGatewayMessage)
+      if (isVeinMessage(msg)) processMessage(msg)
     })
   }
 

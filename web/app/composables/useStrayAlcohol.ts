@@ -7,7 +7,7 @@ import { readAlcohol, toAlcoholReading } from '~/utils/alcohol'
  *
  * `useBleGateway.wire()` は `medical` 段まで JSON ハンドラを登録しないため、
  * それより前に届いた alcohol JSON は `useCoreS3Serial.dispatchJson` で購読者
- * 0 件のまま捨てられる。測定自体は CoreS3 ハブ側が既に保存しているので
+ * 0 件のまま捨てられる (Vein Station の RS232 につないだ FC-1200 も同じ)。測定自体は CoreS3 ハブ側が既に保存しているので
  * (`hub_measurements` に `session_id: null` で入る)、タブレットは「測りましたよ」
  * と知らせるだけでよい。**保存も紐付けもしない**。
  *
@@ -22,11 +22,12 @@ let seq = 0
 let wired = false
 
 export function useStrayAlcohol() {
-  const coreS3 = useCoreS3Serial()
+  // CoreS3 と Vein Station (アルコールチェッカーをつなぐ機体の組。Refs ippoan/alc-app#436)
+  const { alcohol } = useUsbHub()
 
   if (!wired) {
     wired = true
-    coreS3.onJson((msg) => {
+    alcohol.onJson((msg) => {
       if ((msg as { type?: unknown } | null)?.type !== 'alcohol') return
       const reading = toAlcoholReading(readAlcohol(msg))
       if (!reading) return

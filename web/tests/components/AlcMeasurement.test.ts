@@ -37,6 +37,13 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   isStartupProbing: readonly(ref(false)),
 }))
 
+// --- useVeinSerial のモック (RS232 に FC-1200 をつないだ Vein Station、Refs ippoan/alc-app#436) ---
+
+const veinConnected = ref(false)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinConnected),
+}))
+
 // --- useBleGateway のモック (latestAlcohol / alcoholStage / clearAlcoholReading だけ使う) ---
 
 const latestAlcohol = ref<AlcoholReading | null>(null)
@@ -72,6 +79,7 @@ describe('AlcMeasurement', () => {
     fc1200IsSupported.mockReturnValue(true)
     fc1200AutoConnect.mockResolvedValue(true)
     coreS3Connected.value = false
+    veinConnected.value = false
     latestAlcohol.value = null
     alcoholStage.value = null
     strayAlcohol.value = null
@@ -97,6 +105,45 @@ describe('AlcMeasurement', () => {
     expect(wrapper.text()).toContain('CoreS3 につないだアルコールチェッカーで測定してください')
     expect(wrapper.text()).not.toContain('FC-1200 が見つかりません')
     wrapper.unmount()
+  })
+
+  // =============================================
+  // Vein Station の RS232 につないだ FC-1200 (Refs ippoan/alc-app#436)
+  // =============================================
+
+  describe('Vein Station', () => {
+    it('Vein Station だけ: PC 直結の autoConnect を呼ばず、Vein Station の名で段階表示を出す', async () => {
+      veinConnected.value = true
+      fc1200AutoConnect.mockResolvedValue(false)
+      alcoholStage.value = 'blow_waiting'
+      const wrapper = await mountAlc()
+      expect(fc1200AutoConnect).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('Vein Station につないだアルコールチェッカーで測定してください')
+      expect(wrapper.text()).toContain('FC-1200 のセンサー部に向かって約5秒間')
+      expect(wrapper.text()).not.toContain('FC-1200 が見つかりません')
+      wrapper.unmount()
+    })
+
+    it('Vein Station だけ: latestAlcohol (Vein の alcohol JSON) を result として emit する', async () => {
+      veinConnected.value = true
+      const wrapper = await mountAlc()
+      const measuredAt = new Date('2026-10-20T09:00:00Z')
+      latestAlcohol.value = { value: 0, unit: 'mg/L', result: 'normal', useCount: 3, measuredAt }
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('result')).toEqual([[{
+        employeeId: 'emp-1', alcoholValue: 0, resultType: 'normal', deviceUseCount: 3, measuredAt,
+      }]])
+      wrapper.unmount()
+    })
+
+    it('CoreS3 と Vein Station の両方: 表示は CoreS3 の名、PC 直結の autoConnect は止める', async () => {
+      coreS3Connected.value = true
+      veinConnected.value = true
+      const wrapper = await mountAlc()
+      expect(fc1200AutoConnect).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('CoreS3 につないだアルコールチェッカーで測定してください')
+      wrapper.unmount()
+    })
   })
 
   // =============================================

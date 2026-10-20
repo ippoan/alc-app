@@ -18,7 +18,7 @@ import { listTimecardCards } from '~/utils/api'
  * 目的 (WS を待たない) が崩れる。**手元の答えを即返し、引き直しは背景で**行う。
  * ただし**古すぎる台帳では引かない** (`STALE_LIMIT_MS`。下の定数の doc 参照)。
  *
- * 引き直す契機は 4 つ。**どれも背景で走り、`resolve()` を待たせない**:
+ * 引き直す契機は 5 つ。**どれも背景で走り、`resolve()` を待たせない**:
  *
  * | 契機 | 何のためか |
  * |---|---|
@@ -26,6 +26,7 @@ import { listTimecardCards } from '~/utils/api'
  * | **経過時間 (`startPeriodicRefresh`)** | 打刻が一度も来なくても古びないように。**朝いちばんの 1 人目**が古い台帳に当たらない |
  * | **`resolve()` のたび** | 取得時刻を見て古ければ引き直す (`MAX_AGE_MS`)。古すぎて引かなかったときも |
  * | **引けなかったとき** | 運用中に登録された新しいカードを拾う (`MISS_MIN_AGE_MS`) |
+ * | **端末の鍵が取れたとき** | 起動直後に鍵無しで失敗した引き直しをやり直す |
  *
  * ## ★ 時刻での同期が要る本当の理由は「削除」
  *
@@ -104,6 +105,8 @@ let restored = false
 let refreshing = false
 /** 定期同期のタイマー */
 let periodicTimer: ReturnType<typeof setInterval> | null = null
+/** 端末の鍵が取れたときの取り直しの watch の解除 (restore で 1 回だけ張る) */
+let stopJwtWatch: (() => void) | null = null
 
 /** テスト用: module スコープの状態を捨てる。 */
 export function _resetTimecardCardIndex(): void {
@@ -113,6 +116,8 @@ export function _resetTimecardCardIndex(): void {
   refreshing = false
   if (periodicTimer !== null) clearInterval(periodicTimer)
   periodicTimer = null
+  stopJwtWatch?.()
+  stopJwtWatch = null
 }
 
 function apply(entries: readonly TimecardCardEntry[], at: number): void {
@@ -180,6 +185,12 @@ export function useTimecardCardIndex() {
     }
     // **古ければ引き直す。**新しければ IndexedDB のぶんをそのまま使い、叩かない
     void refresh(MAX_AGE_MS)
+    // 端末の鍵が後から取れたら引き直す (Refs ippoan/alc-app#436)。起動直後は機体の claim が
+    // 鍵の取得より遅れることがあり、そのとき最初の引き直しは鍵無しで失敗する
+    // (本日の打刻履歴の TodayPunchHistory と同じ理由。Refs ippoan/alc-app#238)
+    stopJwtWatch = watch(useDeviceToken().hasDeviceJwt, (has) => {
+      if (has) void refresh()
+    })
   }
 
   /**

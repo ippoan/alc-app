@@ -151,6 +151,14 @@ path = "app/composables/useVeinSerial.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useUsbHub.ts"
+branches = true
+
+[[files]]
+path = "app/composables/useTimecardCardIndex.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useSerialOta.ts"
 branches = true
 

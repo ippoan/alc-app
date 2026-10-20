@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { ref, nextTick } from 'vue'
+import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { IDBFactory } from 'fake-indexeddb'
 
 const listTimecardCardsMock = vi.fn()
 vi.mock('~/utils/api', () => ({
   listTimecardCards: (...args: unknown[]) => listTimecardCardsMock(...args),
 }))
+
+// 端末の鍵が取れたときの取り直し (Refs ippoan/alc-app#436)
+const hasDeviceJwt = ref(false)
+mockNuxtImport('useDeviceToken', () => () => ({ hasDeviceJwt }))
 
 import { useTimecardCardIndex, _resetTimecardCardIndex, normalizeCardId } from '~/composables/useTimecardCardIndex'
 import { saveTimecardCardIndex, loadTimecardCardIndex } from '~/utils/timecard-card-db'
@@ -25,6 +31,7 @@ describe('useTimecardCardIndex', () => {
     listTimecardCardsMock.mockReset()
     listTimecardCardsMock.mockResolvedValue([])
     _resetTimecardCardIndex()
+    hasDeviceJwt.value = false
     warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
 
@@ -67,6 +74,39 @@ describe('useTimecardCardIndex', () => {
 
     resolveFetch([])
     await settle()
+  })
+
+  it('★ 端末の鍵が後から取れたら引き直す (起動直後の鍵無しの失敗を取り戻す)', async () => {
+    listTimecardCardsMock.mockRejectedValueOnce(new Error('401'))
+    const idx = useTimecardCardIndex()
+    await idx.restore()
+    await settle()
+    expect(listTimecardCardsMock).toHaveBeenCalledTimes(1)
+    expect(idx.isFresh()).toBe(false)
+
+    listTimecardCardsMock.mockResolvedValue([{ card_id: 'AAAA', employee_id: 'emp-1' }])
+    hasDeviceJwt.value = true
+    await nextTick()
+    expect(listTimecardCardsMock).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(idx.isFresh()).toBe(true))
+    expect(idx.resolve('AAAA')).toBe('emp-1')
+
+    // 鍵を失っても引き直さない (立ったときだけ)
+    hasDeviceJwt.value = false
+    await nextTick()
+    expect(listTimecardCardsMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('_resetTimecardCardIndex は鍵の watch を外す', async () => {
+    const idx = useTimecardCardIndex()
+    await idx.restore()
+    await settle()
+    _resetTimecardCardIndex()
+    listTimecardCardsMock.mockClear()
+    hasDeviceJwt.value = true
+    await nextTick()
+    await settle()
+    expect(listTimecardCardsMock).not.toHaveBeenCalled()
   })
 
   it('restore は 1 回だけ効く', async () => {
