@@ -34,6 +34,12 @@ export function useBlowVideoRecording() {
   const videoStoreId = ref<string | null>(null)
   const uploadStatus = ref<BlowVideoUploadStatus | null>(null)
   let recordedBlob: Blob | null = null
+  /** `measuring` に入った瞬間に撮った写真 (吹き込みの直後で、顔がまだ機器の前にある) */
+  let measuringPhoto: Blob | null = null
+  /** この測定で `measuring` の撮影をもう始めたか (2 回目の `measuring` では撮り直さない) */
+  let measuringShotStarted = false
+  /** `reset()` のたびに進める。撮影中に reset されたら、遅れて届いた写真を次の測定に持ち込まない */
+  let generation = 0
 
   /**
    * 起動時の後片付け: 7 日超のローカル録画を削除し、未アップロード分を送り直す。
@@ -77,13 +83,44 @@ export function useBlowVideoRecording() {
   }
 
   /**
-   * `AlcMeasurement` の `state-change` を受けて吹き込み待ちで録画を始める。
-   * PC 直結の FC-1200 と CoreS3 経由 (EVT FC1200) のどちらの進みでも同じ語が来る。
+   * `AlcMeasurement` の `state-change` を受けて吹き込み待ちで録画を始め、
+   * 測定中 (`measuring`) に切り替わった最初の 1 回で静止画を撮って控える。
+   * PC 直結の FC-1200 と CoreS3 / Vein Station 経由 (EVT FC1200) のどれでも同じ語が来る。
    */
   function onAlcStateChange(alcState: string): void {
     if (alcState === 'blow_waiting' && camera.stream.value && !isRecording.value) {
       startRecording(camera.stream.value)
     }
+    if (alcState === 'measuring' && !measuringShotStarted) {
+      measuringShotStarted = true
+      void captureMeasuringPhoto()
+    }
+  }
+
+  async function captureMeasuringPhoto(): Promise<void> {
+    const gen = generation
+    try {
+      const blob = await camera.takeSnapshotAsync()
+      if (gen !== generation) return
+      if (!blob) {
+        console.warn('[BlowVideo] measuring photo: camera returned no image')
+        return
+      }
+      measuringPhoto = blob
+    }
+    catch (e) {
+      console.warn('[BlowVideo] measuring photo failed:', e)
+    }
+  }
+
+  /**
+   * `measuring` の瞬間に撮った写真を取り出す (取り出すと控えは空になる)。
+   * 撮れていない・まだ撮影中なら null — 利用側は結果の時点で `snapshot()` を撮り直す。
+   */
+  function takeMeasuringPhoto(): Blob | null {
+    const blob = measuringPhoto
+    measuringPhoto = null
+    return blob
   }
 
   /**
@@ -132,6 +169,9 @@ export function useBlowVideoRecording() {
   /** 次の測定に備えて録画の状態を捨てる */
   function reset(): void {
     recordedBlob = null
+    measuringPhoto = null
+    measuringShotStarted = false
+    generation++
     videoStoreId.value = null
     uploadStatus.value = null
     stopCamera()
@@ -148,6 +188,7 @@ export function useBlowVideoRecording() {
     stopCamera,
     onAlcStateChange,
     snapshot,
+    takeMeasuringPhoto,
     finishRecording,
     uploadRecording,
     reset,

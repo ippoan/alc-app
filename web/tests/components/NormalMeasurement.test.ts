@@ -532,13 +532,14 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
   describe('吹き終わりの写真', () => {
     const PHOTO = new Blob(['jpg'], { type: 'image/jpeg' })
 
-    async function runToResult() {
+    async function runToResult(beforeResult?: (wrapper: Awaited<ReturnType<typeof mountWithStubs>>) => Promise<void>) {
       getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
       const wrapper = await mountWithStubs()
       await touch(wrapper, '2601012901010')
       await chooseType(wrapper, 'choice-alcohol')
       wrapper.findComponent(BleStatusStub).vm.$emit('skip')
       await wrapper.vm.$nextTick()
+      await beforeResult?.(wrapper)
       wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', {
         employeeId: 'emp-1',
         alcoholValue: 0.12,
@@ -570,6 +571,28 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
       const wrapper = await runToResult()
       expect(uploadFacePhoto).toHaveBeenCalledWith(PHOTO)
       expect(completedBody().face_photo_url).toBe('https://example.com/blow.jpg')
+      wrapper.unmount()
+    })
+
+    it('測定中 (measuring) に入った瞬間に撮った控えを保存し、結果の時点では撮らない', async () => {
+      const MEASURING_PHOTO = new Blob(['measuring'], { type: 'image/jpeg' })
+      takeSnapshotAsyncMock.mockResolvedValueOnce(MEASURING_PHOTO)
+      const wrapper = await runToResult(async (w) => {
+        w.findComponent(AlcMeasurementStub).vm.$emit('state-change', 'measuring')
+        await new Promise(resolve => setTimeout(resolve, 0))
+        // まだ保存の前なので upload はしない (中断された測定の写真を残さない)
+        expect(uploadFacePhoto).not.toHaveBeenCalled()
+      })
+      expect(takeSnapshotAsyncMock).toHaveBeenCalledTimes(1)
+      expect(uploadFacePhoto).toHaveBeenCalledWith(MEASURING_PHOTO)
+      expect(completedBody().face_photo_url).toBe('https://example.com/blow.jpg')
+      wrapper.unmount()
+    })
+
+    it('控えが無ければ結果の時点で撮る', async () => {
+      const wrapper = await runToResult()
+      expect(takeSnapshotAsyncMock).toHaveBeenCalledTimes(1)
+      expect(uploadFacePhoto).toHaveBeenCalledWith(PHOTO)
       wrapper.unmount()
     })
 
