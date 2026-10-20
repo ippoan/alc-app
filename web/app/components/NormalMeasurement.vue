@@ -251,7 +251,9 @@ function punchFailureMessage(e: unknown): string {
 /**
  * 打刻する (best-effort: 失敗しても投げない)。**点呼を打刻の失敗で止めない**。
  * オフラインでは打たない — 打刻のキューイングはこの段では持たない
- * (未送信の測定結果キューに打刻を混ぜると flush の経路が濁る)。
+ * (未送信の測定結果キューに打刻を混ぜると flush の経路が濁る)。 *
+ * 測定の開始レコードがあれば (`activeMeasurementId`) その id を打刻に載せ、打刻と点呼を
+ * 1 対 1 で結ぶ (Refs ippoan/alc-app#436)。無い回 (開始の失敗) は今どおり打刻だけ。
  */
 async function tryPunch(cardId: string) {
   if (!isOnline.value) {
@@ -265,7 +267,7 @@ async function tryPunch(cardId: string) {
   lastPunchedCardId = cardId
   lastPunchedAt = now
   try {
-    await punchTimecard(cardId)
+    await punchTimecard(cardId, activeMeasurementId.value)
     punchedAt.value = new Date()
   }
   catch (e) {

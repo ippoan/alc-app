@@ -13,6 +13,7 @@ import { listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
 import { selectSendToken } from '~/utils/token-selection'
 import { cardKindOf, type CardKind } from '~/utils/card-kind'
+import { punchTenkoOf, type PunchTenko } from '~/utils/alcohol'
 
 const { accessToken } = useAuth()
 const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
@@ -44,7 +45,7 @@ const employeeMap = computed(() => {
 })
 
 /** 本日の打刻 (新しい順)。**サーバから引き直したものだけ**を出す。 */
-const recentPunches = ref<{ key: string; name: string; time: string; cardKind: CardKind }[]>([])
+const recentPunches = ref<{ key: string; name: string; time: string; cardKind: CardKind; tenko: PunchTenko | null }[]>([])
 /**
  * 直近の取得状態。**「本日の打刻はまだありません」は取得成功で 0 件のときだけ**
  * 出す (Refs ippoan/alc-app#238)。端末 JWT がまだ無い/取得に失敗した間の空を
@@ -109,6 +110,8 @@ async function loadTodayPunches() {
       name: displayName(p),
       time: formatTime(p.punched_at),
       cardKind: cardKindOf(p.card_kind),
+      // 打刻から点呼に移った行は点呼とアルコール値を添える (Refs ippoan/alc-app#436)
+      tenko: punchTenkoOf(p),
     }))
     loadStatus.value = 'loaded'
     emit('latest', toLatestPunch(res.punches[0]))
@@ -223,7 +226,25 @@ defineExpose({ reload, highlight })
               >免許証</span><span
                 v-else-if="p.cardKind === 'other'"
                 class="inline-block mr-1 px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700"
-              >IC</span>{{ p.name }}
+              >IC</span>{{ p.name }}<template v-if="p.tenko">
+                <span
+                  data-testid="today-punch-tenko"
+                  class="inline-block ml-1 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
+                >点呼</span><span
+                  v-if="p.tenko.alcohol?.value"
+                  data-testid="today-punch-alcohol-value"
+                  class="ml-1 text-xs tabular-nums"
+                >{{ p.tenko.alcohol.value }}</span><span
+                  v-if="p.tenko.alcohol"
+                  data-testid="today-punch-alcohol-result"
+                  class="inline-block ml-1 px-1.5 py-0.5 rounded text-xs font-medium"
+                  :class="p.tenko.alcohol.cls"
+                >{{ p.tenko.alcohol.label }}</span><span
+                  v-if="p.tenko.pending"
+                  data-testid="today-punch-tenko-pending"
+                  class="ml-1 text-xs text-gray-500"
+                >確定待ち</span>
+              </template>
             </td>
             <td
               class="py-2 px-4 text-right tabular-nums transition-colors duration-1000"

@@ -1210,9 +1210,12 @@ function punchError(failure: PunchFailure, message: string, status?: number): Er
  *
  * tenant_id / device_id は route が JWT から決めるので**ここからは送らない**。
  *
+ * `measurementId` は、この打刻の時点で画面が始めている測定の id。渡せば打刻と点呼が
+ * 1 対 1 で結ばれる (Refs ippoan/alc-app#436)。無ければ body に載せない (今どおり)。
+ *
  * 失敗は `punchFailure` を載せて投げる (上の型を参照)。
  */
-export async function punchTimecard(cardId: string): Promise<void> {
+export async function punchTimecard(cardId: string, measurementId?: string | null): Promise<void> {
   // 付けるトークンは `request()` と同じ規則で選ぶ (dev端末なら端末の鍵が先、
   // Refs ippoan/alc-app#387)
   const jwt = await selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
@@ -1223,7 +1226,7 @@ export async function punchTimecard(cardId: string): Promise<void> {
     await bearerRequest<unknown>('/api/timecard/punch', jwt, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_id: cardId }),
+      body: JSON.stringify(measurementId ? { card_id: cardId, measurement_id: measurementId } : { card_id: cardId }),
     })
   }
   catch (e) {

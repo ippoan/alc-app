@@ -117,7 +117,11 @@ const MAX_CARD_ID_LEN = 256;
 /** ブラウザ打刻 1 件の入力 (alc-app の server route 由来、field は untrusted)。 */
 export interface TimecardPunchInput {
   card_id?: unknown;
+  measurement_id?: unknown;
 }
+
+/** 測定の id (UUID) の形。大文字小文字どちらも受け、残すときは小文字にする。 */
+const MEASUREMENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type BuildTimecardPunchResult =
   | { ok: true; item: ParsedMeasurement }
@@ -136,6 +140,10 @@ export type BuildTimecardPunchResult =
  *
  * `payload` を `{ card_id }` だけにしてあるのも従来と同じ形 — 社員の解決
  * (`employee_id` の凍結) は ingest 側 (`freeze_employee_id`) が 1 か所で行う。
+ *
+ * 例外は `measurement_id` — 画面がこの打刻の時点で始めている測定の id で、
+ * 打刻と点呼を 1 対 1 で結ぶ (Refs ippoan/alc-app#436)。**UUID の形のときだけ**
+ * 小文字にして残し、形が違えば捨てる (打刻自体は通す)。
  */
 export function buildTimecardPunch(
   input: TimecardPunchInput,
@@ -145,6 +153,10 @@ export function buildTimecardPunch(
   if (!raw || raw.length > MAX_CARD_ID_LEN) {
     return { ok: false, error: "invalid_card_id" };
   }
+  const measurementId =
+    typeof input.measurement_id === "string" && MEASUREMENT_ID_RE.test(input.measurement_id)
+      ? input.measurement_id.toLowerCase()
+      : null;
   return {
     ok: true,
     item: {
@@ -152,7 +164,7 @@ export function buildTimecardPunch(
       kind: TIMECARD_KIND,
       recorded_at_ms: null,
       session_id: null,
-      payload: { card_id: raw },
+      payload: measurementId ? { card_id: raw, measurement_id: measurementId } : { card_id: raw },
     },
   };
 }

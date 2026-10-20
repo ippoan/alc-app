@@ -106,6 +106,50 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     wrapper.unmount()
   })
 
+  it('★ 測定と結ばれた行は「点呼」とアルコール値を出す (0 は通常、0 より上は赤)。結ばれていない行は今どおり (Refs ippoan/alc-app#436)', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        { id: 'p1', employee_id: null, employee_name: '田中太郎', card_id: null, measurement_id: 'm-1', alcohol_level: 0.05, result: 'normal', tenko_recorded: false, punched_at: '2026-10-20T00:02:00Z' },
+        { id: 'p2', employee_id: null, employee_name: '鈴木花子', card_id: null, measurement_id: 'm-2', alcohol_level: 0, result: 'normal', tenko_recorded: true, punched_at: '2026-10-20T00:01:00Z' },
+        { id: 'p3', employee_id: null, employee_name: '佐藤次郎', card_id: null, punched_at: '2026-10-20T00:00:00Z' },
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows).toHaveLength(3)
+
+    expect(rows[0]!.find('[data-testid="today-punch-tenko"]').text()).toBe('点呼')
+    expect(rows[0]!.find('[data-testid="today-punch-alcohol-value"]').text()).toBe('0.050 mg/L')
+    const detected = rows[0]!.find('[data-testid="today-punch-alcohol-result"]')
+    expect(detected.text()).toBe('検知')
+    expect(detected.classes()).toContain('bg-red-100')
+    expect(rows[0]!.find('[data-testid="today-punch-tenko-pending"]').exists()).toBe(true)
+
+    const normal = rows[1]!.find('[data-testid="today-punch-alcohol-result"]')
+    expect(normal.text()).toBe('正常')
+    expect(normal.classes()).toContain('bg-green-100')
+    expect(rows[1]!.find('[data-testid="today-punch-tenko-pending"]').exists()).toBe(false)
+
+    expect(rows[2]!.find('[data-testid="today-punch-tenko"]').exists()).toBe(false)
+    expect(rows[2]!.text()).toContain('佐藤次郎')
+    wrapper.unmount()
+  })
+
+  it('結ばれていても結果がまだ無い行は「点呼」だけを出す', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        { id: 'p1', employee_id: null, employee_name: '田中太郎', card_id: null, measurement_id: 'm-1', alcohol_level: null, result: null, punched_at: '2026-10-20T00:00:00Z' },
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    expect(wrapper.find('[data-testid="today-punch-tenko"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="today-punch-alcohol-value"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="today-punch-alcohol-result"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('card_kind が license の行だけ「免許証」チップを出す (Refs ippoan/rust-alc-api#644)', async () => {
     listTimePunchesMock.mockResolvedValueOnce({
       punches: [

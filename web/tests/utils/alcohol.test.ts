@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readAlcohol, toAlcoholReading, alcoholResultLabel, alcoholResultClass, alcoholTone } from '~/utils/alcohol'
+import { readAlcohol, toAlcoholReading, alcoholResultLabel, alcoholResultClass, alcoholTone, punchTenkoOf } from '~/utils/alcohol'
 
 describe('readAlcohol', () => {
   it('CoreS3 の payload (正常) を読む', () => {
@@ -107,5 +107,56 @@ describe('alcoholResultClass', () => {
 
   it('未知の値は赤', () => {
     expect(alcoholResultClass('pass', 0)).toBe('bg-red-100 text-red-800')
+  })
+})
+
+describe('punchTenkoOf (打刻に結ばれた点呼、Refs ippoan/alc-app#436)', () => {
+  const MID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+
+  it('結ばれていない行 (measurement_id が null / 欠落) は null', () => {
+    expect(punchTenkoOf({ measurement_id: null })).toBeNull()
+    expect(punchTenkoOf({})).toBeNull()
+  })
+
+  it('値 0 の正常は緑の「正常」、値を mg/L で出す', () => {
+    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0, result: 'normal', tenko_recorded: true })).toEqual({
+      pending: false,
+      alcohol: { label: '正常', cls: 'bg-green-100 text-green-800', value: '0.000 mg/L' },
+    })
+  })
+
+  it('0 より上は赤の「検知」', () => {
+    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0.05, result: 'normal' })).toEqual({
+      pending: false,
+      alcohol: { label: '検知', cls: 'bg-red-100 text-red-800', value: '0.050 mg/L' },
+    })
+  })
+
+  it('吹込不良 (error) は値を出さない', () => {
+    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0, result: 'error' })?.alcohol).toEqual({
+      label: '測定エラー',
+      cls: 'bg-yellow-100 text-yellow-800',
+      value: null,
+    })
+  })
+
+  it('結果が無い (測定中) なら alcohol は null。確定待ちは tenko_recorded が false のときだけ', () => {
+    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: null, result: null, tenko_recorded: false })).toEqual({
+      pending: true,
+      alcohol: null,
+    })
+  })
+
+  it('tenko_recorded が null / 欠落 (サーバがまだ返さない) なら確定待ちと言わない', () => {
+    expect(punchTenkoOf({ measurement_id: MID, tenko_recorded: null })?.pending).toBe(false)
+    expect(punchTenkoOf({ measurement_id: MID })?.pending).toBe(false)
+  })
+
+  it('判定はあるが値が無い行は値を出さない (色は値 0 として決める)', () => {
+    expect(punchTenkoOf({ measurement_id: MID, result: 'over' })?.alcohol).toEqual({
+      label: '超過',
+      cls: 'bg-red-100 text-red-800',
+      value: null,
+    })
   })
 })

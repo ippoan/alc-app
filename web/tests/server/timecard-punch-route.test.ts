@@ -125,6 +125,23 @@ describe('POST /api/timecard/punch が recorder へ送る dev の区別 (Refs #3
   })
 })
 
+describe('POST /api/timecard/punch の measurement_id (Refs #436)', () => {
+  it('★ UUID の形なら小文字にして recorder へ素通しする', async () => {
+    body = { card_id: 'CARD-1', measurement_id: 'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA' }
+    await handler(makeEvent())
+    const fwd = forwarded()
+    expect(fwd.pathname).toBe('/tenants/t1/devices/d1/timecard-punch')
+    expect(fwd.body).toEqual({ card_id: 'CARD-1', measurement_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+  })
+
+  it('形が違えば捨てて、打刻は今どおり通す', async () => {
+    body = { card_id: 'CARD-1', measurement_id: 'not-a-uuid' }
+    const res = await handler(makeEvent())
+    expect(forwarded().body).toEqual({ card_id: 'CARD-1' })
+    expect(res).toBe(JSON.stringify({ seq: 1 }))
+  })
+})
+
 describe('POST /api/timecard/punch の拒否 (従来どおり)', () => {
   it('Bearer が無ければ 401 (cookie は見ない)', async () => {
     await expect(handler(makeEvent({ bearer: undefined }))).rejects.toMatchObject({ statusCode: 401 })

@@ -15,7 +15,8 @@
  * **rust-alc-api の `POST /api/timecard/punch` を直に叩かせない。** 直行すると
  * その打刻だけ合図が鳴らない (経路依存の挙動になる)。
  *
- * ★ tenant_id / device_id は introspect の結果だけを使う。body は `card_id` のみ。
+ * ★ tenant_id / device_id は introspect の結果だけを使う。body は `card_id` と
+ *   `measurement_id` (UUID の形のときだけ素通し、Refs ippoan/alc-app#436) のみ。
  * ★ INTERNAL_SHARED_SECRET はこの route の中だけ (ブラウザに返さない・ログしない)。
  *
  * 純粋ロジック (認可判定・forward 構築) は server/utils/timecard-relay.ts。
@@ -56,7 +57,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 503, statusMessage: 'binding が未設定です' })
   }
 
-  const body = (await readBody(event).catch(() => undefined)) as { card_id?: unknown } | undefined
+  const body = (await readBody(event).catch(() => undefined)) as { card_id?: unknown, measurement_id?: unknown } | undefined
   const cardId = typeof body?.card_id === 'string' ? body.card_id : ''
   if (!cardId) {
     throw createError({ statusCode: 400, statusMessage: 'card_id がありません' })
@@ -97,6 +98,8 @@ export default defineEventHandler(async (event) => {
     tenantId: access.tenantId,
     deviceId: access.deviceId,
     cardId,
+    // 形の検査 (UUID のときだけ・小文字化) は buildRecorderTimecardPunchForward が持つ
+    measurementId: body?.measurement_id,
   })
   // dev端末の打刻は recorder に `X-Device-Dev: 1` で伝える。recorder はこれを backend への
   // 転送と `/watch-timecard` の合図の両方に使う。**dev でなければヘッダー自体を付けない**

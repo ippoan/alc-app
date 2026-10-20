@@ -96,6 +96,33 @@ describe('buildRecorderTimecardPunchForward', () => {
     })
     expect(url).toBe('https://alc-recorder.internal/tenants/a%2Fb/devices/c%20d/timecard-punch')
   })
+
+  it('★ measurementId が UUID の形なら小文字にして body に載せる (Refs #436)', () => {
+    const { init } = buildRecorderTimecardPunchForward({
+      sharedSecret: SECRET,
+      tenantId: 't',
+      deviceId: 'd',
+      cardId: 'X',
+      measurementId: 'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA',
+    })
+    expect(JSON.parse(init.body as string)).toEqual({
+      card_id: 'X',
+      measurement_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    })
+  })
+
+  it('measurementId が UUID の形でなければ載せない (打刻は {card_id} のまま)', () => {
+    for (const measurementId of [undefined, null, 42, '', 'not-a-uuid', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa-x']) {
+      const { init } = buildRecorderTimecardPunchForward({
+        sharedSecret: SECRET,
+        tenantId: 't',
+        deviceId: 'd',
+        cardId: 'X',
+        measurementId,
+      })
+      expect(JSON.parse(init.body as string)).toEqual({ card_id: 'X' })
+    }
+  })
 })
 
 /** テスト用の JWT を組む (署名は使わないので固定文字列)。 */
