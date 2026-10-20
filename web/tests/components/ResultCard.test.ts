@@ -44,3 +44,38 @@ describe('ResultCard — 判定の色 (Refs ippoan/alc-app#436)', () => {
     expect(wrapper.html()).toContain('border-yellow-300')
   })
 })
+
+describe('ResultCard — IT点呼 / 終了 (Refs ippoan/alc-app#436)', () => {
+  it('itOffer を渡さなければ「次の測定へ」だけで、押すと reset を出す (今までと同一)', async () => {
+    const wrapper = await mountCard({})
+    expect(wrapper.find('[data-testid="result-it"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="result-finish"]').exists()).toBe(false)
+    const next = wrapper.find('[data-testid="result-reset"]')
+    expect(next.text()).toBe('次の測定へ')
+    await next.trigger('click')
+    expect(wrapper.emitted('reset')).toHaveLength(1)
+  })
+
+  it('itOffer を渡すと「次の測定へ」の代わりに 2 つのボタンと残り秒数を出し、押すと it / finish を出す', async () => {
+    const wrapper = await mountSuspended(ResultCard, {
+      props: { result: resultOf(), itOffer: { secondsLeft: 12, busy: false } },
+    })
+    expect(wrapper.find('[data-testid="result-reset"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="result-countdown"]').text()).toBe('あと 12 秒で終了します')
+    await wrapper.find('[data-testid="result-it"]').trigger('click')
+    await wrapper.find('[data-testid="result-finish"]').trigger('click')
+    expect(wrapper.emitted('it')).toHaveLength(1)
+    expect(wrapper.emitted('finish')).toHaveLength(1)
+    expect(wrapper.emitted('reset')).toBeUndefined()
+  })
+
+  it('busy のあいだは 2 つのボタンを押せない', async () => {
+    const wrapper = await mountSuspended(ResultCard, {
+      props: { result: resultOf(), itOffer: { secondsLeft: 30, busy: true } },
+    })
+    expect(wrapper.find('[data-testid="result-it"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="result-finish"]').attributes('disabled')).toBeDefined()
+    await wrapper.find('[data-testid="result-it"]').trigger('click')
+    expect(wrapper.emitted('it')).toBeUndefined()
+  })
+})

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi, afterEach } from 'vite
 import {
   initApi, KIOSK_DEVICE_AUTH_FAILED_MESSAGE,
   // Measurements
-  saveMeasurement, startMeasurement, updateMeasurement, getMeasurements, getMeasurement,
+  saveMeasurement, startMeasurement, updateMeasurement, confirmMeasurementTenko, getMeasurements, getMeasurement,
   // Employees
   getEmployees, getEmployeeByNfcId, getEmployeeByCode, getEmployeeById,
   createEmployee, updateEmployee, deleteEmployee,
@@ -2606,6 +2606,23 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     expect(url).toBe(`/api/proxy/measurements/${UUID1}`)
     expect(init.method).toBe('PUT')
     expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+  })
+
+  it('点呼の確定 (Refs ippoan/alc-app#436) → 測定と同じ proxy に POST し、tenko_method を body に載せる', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ tenko_session_id: UUID1, tenko_method: 'IT点呼' }))
+    const confirmed = await confirmMeasurementTenko(UUID1, 'IT点呼')
+    expect(confirmed).toEqual({ tenko_session_id: UUID1, tenko_method: 'IT点呼' })
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe(`/api/proxy/measurements/${UUID1}/tenko`)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ tenko_method: 'IT点呼' })
+  })
+
+  it('点呼の確定の 409 → status 付きの Error を投げる (画面が「記録済み」を出し分ける)', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'already_confirmed', tenko_method: '通常点呼' }), { status: 409 }))
+    await expect(confirmMeasurementTenko(UUID1, 'IT点呼')).rejects.toMatchObject({ status: 409 })
   })
 
   it('device JWT で本文の無い GET には Content-Type を付けない', async () => {

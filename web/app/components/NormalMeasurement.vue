@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadEvent, NfcReadSource } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, lookupCarInspection, punchTimecard, uploadFacePhoto } from '~/utils/api'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, confirmMeasurementTenko, lookupCarInspection, punchTimecard, uploadFacePhoto } from '~/utils/api'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
@@ -26,11 +26,12 @@ const props = defineProps<{
    */
   itMode?: boolean
   /**
-   * 通常点呼の流れの中で IT点呼 を**選べる**ようにする (Refs ippoan/alc-app#387)。
-   * 測定の結果が届いた後・保存の前に「このまま保存 / IT点呼」の段を 1 つ挟む。
+   * 通常点呼の流れの中で IT点呼 を**選べる**ようにする (Refs ippoan/alc-app#387, #436)。
+   * 測定の結果は届いた時点で保存し、点呼の記録だけを確定待ちにして、結果の画面で
+   * 「IT点呼 / 終了」を押してもらう (押されなければ通常点呼で確定する)。
    *
-   * 段が出るのは `canOfferItChoice()` の条件を全部満たした回だけで、満たさない回は
-   * 今までどおり測定の結果で即保存する。**指定しなければ (false でも) 今までの通常点呼と
+   * 確定待ちにするのは `canOfferItChoice()` の条件を全部満たした回だけで、満たさない回は
+   * 今までどおり保存の PUT で点呼の記録まで作る。**指定しなければ (false でも) 今までの通常点呼と
    * 1 つも変わらない。** 本人確認の入口 (社員証・手入力) は `itMode` と違って狭めない。
    */
   itSelectable?: boolean
@@ -41,7 +42,7 @@ const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 // --- IT点呼 (itMode か itSelectable のときだけ) ---
 // **通常点呼では生成しない** — 通話の composable は `useWebRtc` / `useCamera` を抱えるので、
 // 作るだけで unmount 時の後始末が増える。生成は setup の 1 度きりなので、mount の後で
-// `itSelectable` が立った画面は次に mount されるまで選択の段を出さない
+// `itSelectable` が立った画面は次に mount されるまで IT点呼 を選べない
 const itCall = props.itMode || props.itSelectable ? useItTenkoCall() : null
 const itCallState = computed(() => itCall?.state.value ?? null)
 const itJudgment = computed(() => itCall?.judgment.value ?? null)
@@ -49,39 +50,43 @@ const itJudgment = computed(() => itCall?.judgment.value ?? null)
 const itCallNotStarted = ref(false)
 const IT_LICENSE_ONLY_MESSAGE = 'IT点呼は免許証で本人確認してください'
 
-// --- 通常点呼の中で IT点呼 を選ぶ段 (itSelectable のときだけ。Refs ippoan/alc-app#387) ---
-// 段 (`step`) は増やさない — `step === 'result'` のまま、保存の前の 1 状態として持つ
-// (上の進み具合の表示も CoreS3 に送る段も今までと同じ)。
+// --- 通常点呼の中で IT点呼 を選ぶ (itSelectable のときだけ。Refs ippoan/alc-app#387, #436) ---
+// 測定は結果が出た時点で保存する (待つ間に画面を閉じても測定値が残る)。点呼の記録だけを
+// 確定待ちにし、結果の画面で「IT点呼 / 終了」を押したときに確定する。押されなければ
+// 30 秒で通常点呼として確定し、それも届かなければサーバーの見回りが通常点呼で確定する。
+// 段 (`step`) は増やさない — `step === 'result'` のまま持つ。
 
-/** 何も押されないまま「このまま保存」と同じ動きをするまでの秒数 */
-const IT_CHOICE_TIMEOUT_S = 30
+/** 何も押されないまま通常点呼として確定するまでの秒数 */
+const IT_OFFER_TIMEOUT_S = 30
 /**
  * 今回の本人確認の方法。入口 (免許証 / 免許証でないカード / 打刻の案内 / 手入力) が 1 つ入れ、
  * `reset` で消す。読むのは IT点呼 を選べるかの判定と、測定の保存の `identity_method`
  */
 const identityMethod = ref<IdentityMethod | null>(null)
-/** 選択の段を出しているか */
-const itChoiceOpen = ref(false)
-/** 選択の段の残り秒数 (画面に出す) */
-const itChoiceSecondsLeft = ref(0)
-/** 今回の点呼で IT点呼 を選んだか */
+/** 保存した測定の点呼が確定待ちか (結果の画面に「IT点呼 / 終了」を出す) */
+const tenkoPending = ref(false)
+/** 確定待ちの残り秒数 (画面に出す) */
+const itOfferSecondsLeft = ref(0)
+/** 確定の呼び出し中 (ボタンを押せなくする) */
+const tenkoConfirming = ref(false)
+/** 確定についての案内 (409 など)。null = 出さない */
+const tenkoNotice = ref<string | null>(null)
+/** 今回の点呼で IT点呼 を選び、確定できたか */
 const itChosen = ref(false)
-let itChoiceTimer: ReturnType<typeof setInterval> | null = null
-/** 選択を待っている保存の続き。null = 待っていない */
-let settleItChoice: ((viaIt: boolean) => void) | null = null
+let itOfferTimer: ReturnType<typeof setInterval> | null = null
 
 /**
- * 今回の点呼を IT点呼 として扱うか — `itMode` (最初から IT点呼) か、選択の段で選んだ。
- * **保存と保存後の動きはこれ 1 つで分ける。** 本人確認の制限と見出しは `itMode` のまま
+ * 今回の点呼を IT点呼 として扱うか — `itMode` (最初から IT点呼) か、結果の画面で選んだ。
+ * **保存後の動きはこれ 1 つで分ける。** 本人確認の制限と見出しは `itMode` のまま
  */
 const itActive = computed(() => itCall !== null && (props.itMode || itChosen.value))
 
 /**
- * 選択の段を出してよいか。**1 つでも欠けたら出さず、今までどおり即保存する。**
+ * IT点呼 を選べる回か。**1 つでも欠けたら確定待ちにせず、今までどおり保存で点呼まで記録する。**
  * 本人確認は運転免許証か、(`IT_TENKO_ALLOW_IC_CARD` のあいだ) この端末に繋いだ機体で読んだ
- * 社員証。別の端末の打刻から始めた回・免許証でないカード・手入力では出さない。
+ * 社員証。別の端末の打刻から始めた回・免許証でないカード・手入力では選べない。
  * 測定の開始レコードが無い回 (`activeMeasurementId` が null) は保存が端末のキューへ回り、
- * IT点呼 を選んでも成立しないので出さない
+ * IT点呼 を選んでも成立しないので選べない
  */
 function canOfferItChoice(): boolean {
   return itCall !== null
@@ -94,34 +99,69 @@ function canOfferItChoice(): boolean {
     && activeMeasurementId.value !== null
 }
 
-/** 選択の段を閉じる (タイマーも止める)。待っている保存があれば `viaIt` で先へ進める */
-function closeItChoice(viaIt: boolean) {
-  if (itChoiceTimer !== null) {
-    clearInterval(itChoiceTimer)
-    itChoiceTimer = null
+function stopItOfferTimer() {
+  if (itOfferTimer !== null) {
+    clearInterval(itOfferTimer)
+    itOfferTimer = null
   }
-  itChoiceOpen.value = false
-  const settle = settleItChoice
-  settleItChoice = null
-  settle?.(viaIt)
+}
+
+/** 確定待ちを始める (結果の画面に「IT点呼 / 終了」と残り秒数を出す) */
+function openItOffer(measurementId: string) {
+  tenkoPending.value = true
+  itOfferSecondsLeft.value = IT_OFFER_TIMEOUT_S
+  itOfferTimer = setInterval(() => {
+    itOfferSecondsLeft.value -= 1
+    if (itOfferSecondsLeft.value <= 0) {
+      // 放置 → 通常点呼で確定し、結果の画面を「次の測定へ」の形に戻す (自動では次へ戻らない)
+      stopItOfferTimer()
+      tenkoPending.value = false
+      confirmAsNormal(measurementId)
+    }
+  }, 1000)
 }
 
 /**
- * 選択の段を出し、選ばれるまで待つ。**必ず resolve する** — ボタン・30 秒の放置・
- * 画面を離れた (unmount) のどれでも保存へ進むので、測定の結果が保存されないまま残らない
- * (放置と unmount は通常点呼として保存)
+ * 通常点呼で確定する。**結果を待たない** — 通信の失敗・409 (既に確定済み) のどれでも、
+ * 確定はサーバーの見回りが済ませるので画面を止めない
  */
-function askItChoice(): Promise<boolean> {
-  itChoiceOpen.value = true
-  itChoiceSecondsLeft.value = IT_CHOICE_TIMEOUT_S
-  itChoiceTimer = setInterval(() => {
-    itChoiceSecondsLeft.value -= 1
-    if (itChoiceSecondsLeft.value <= 0) closeItChoice(false)
-  }, 1000)
-  return new Promise<boolean>((resolve) => { settleItChoice = resolve })
+function confirmAsNormal(measurementId: string) {
+  confirmMeasurementTenko(measurementId, '通常点呼').catch((e) => {
+    console.warn('[Measurement] tenko confirm (normal) failed:', e)
+  })
 }
-// 選択を待ったまま画面を離れたら、通常点呼として保存する
-onUnmounted(() => closeItChoice(false))
+
+/** 「終了」: 通常点呼で確定して次の測定へ */
+function finishItOffer() {
+  const id = activeMeasurementId.value
+  stopItOfferTimer()
+  if (id) confirmAsNormal(id)
+  reset()
+}
+
+/** 「IT点呼」: IT点呼 で確定し、返った点呼の記録で運行管理者との通話を始める */
+async function chooseIt() {
+  const id = activeMeasurementId.value
+  if (!itCall || !id || tenkoConfirming.value) return
+  stopItOfferTimer()
+  tenkoConfirming.value = true
+  try {
+    const confirmed = await confirmMeasurementTenko(id, IT_TENKO_METHOD)
+    itChosen.value = true
+    if (confirmed.tenko_session_id) void itCall.start(confirmed.tenko_session_id)
+    else itCallNotStarted.value = true
+  } catch (e) {
+    console.warn('[Measurement] tenko confirm (IT) failed:', e)
+    tenkoNotice.value = (e as { status?: number })?.status === 409
+      ? '通常点呼として記録済みのため、IT点呼 は選べません'
+      : '通信に失敗したため、通常点呼として記録されます'
+  } finally {
+    tenkoConfirming.value = false
+    tenkoPending.value = false
+  }
+}
+// 確定待ちのまま画面を離れたら、残り秒数は数えない (確定はサーバーの見回りが済ませる)
+onUnmounted(stopItOfferTimer)
 
 const step = ref<NormalMeasurementStep>('nfc')
 const employeeId = ref('')
@@ -677,14 +717,10 @@ async function onMeasurementResult(result: MeasurementResult) {
   }
 
   measurementResult.value = result
-  // IT点呼 を選べる回は、結果の画面を選択の段から始める (保存は選ばれてから)
-  const itChoice = canOfferItChoice() ? askItChoice() : null
   step.value = 'result'
 
   // 録画停止 + ローカル保存 (カメラもここで落ちる)
   await finishVideoRecording(employeeId.value, activeMeasurementId.value || undefined)
-
-  if (itChoice) itChosen.value = await itChoice
 
   isSaving.value = true
   saveError.value = null
@@ -725,6 +761,8 @@ async function onMeasurementResult(result: MeasurementResult) {
       }
       // **通常点呼では key ごと足さない** (body を今までと同一に保つ)
       if (itActive.value) updateData.tenko_method = IT_TENKO_METHOD
+      // IT点呼 を選べる回は点呼の記録を確定待ちにする (`tenko_method` は確定のときに送る)
+      if (canOfferItChoice()) updateData.defer_tenko = true
       // 本人確認の方法は IT点呼 に限らず送る。**値が無い回は key ごと足さない**
       if (identityMethod.value) updateData.identity_method = identityMethod.value
       // carins の番号は console に出さない (simplify-reviewer の検査点、Refs ippoan/alc-app-s3#110)
@@ -732,10 +770,13 @@ async function onMeasurementResult(result: MeasurementResult) {
       delete loggableUpdateData.carins_cert_no
       delete loggableUpdateData.carins_vehicle_id
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(loggableUpdateData))
-      const saved = await updateMeasurement(activeMeasurementId.value, updateData)
+      const savingId = activeMeasurementId.value
+      const saved = await updateMeasurement(savingId, updateData)
       if (itActive.value) itSessionId = saved.tenko_session_id ?? null
       console.log('[Measurement] updateMeasurement success')
       saveStatus.value = 'saved'
+      // 保存中に「次の測定へ」で戻った回は出さない (確定はサーバーの見回りが済ませる)
+      if (saved.tenko_pending === true && activeMeasurementId.value === savingId) openItOffer(savingId)
 
       // 録画をバックグラウンドでアップロード (録画が無ければ何もしない)
       uploadVideoRecording(activeMeasurementId.value)
@@ -797,8 +838,11 @@ const showCancel = computed(() => step.value !== 'nfc' && step.value !== 'result
 function reset() {
   itCall?.stop()
   itCallNotStarted.value = false
-  closeItChoice(false)
-  itChoiceSecondsLeft.value = 0
+  stopItOfferTimer()
+  tenkoPending.value = false
+  itOfferSecondsLeft.value = 0
+  tenkoConfirming.value = false
+  tenkoNotice.value = null
   itChosen.value = false
   identityMethod.value = null
   step.value = 'nfc'
@@ -1208,38 +1252,9 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
 
       <!-- Step 5: 結果表示 -->
       <div v-if="step === 'result' && measurementResult" class="flex flex-col gap-4">
-        <!-- 通常点呼の中で IT点呼 を選ぶ段 (保存の前)。ResultCard (「次の測定へ」を持つ) は出さない —
-             まだ保存していない。何も押されなければ残り秒数が尽きたところで通常点呼として保存する -->
-        <div
-          v-if="itChoiceOpen"
-          data-testid="it-choice-panel"
-          class="bg-white rounded-2xl p-6 shadow-sm flex flex-col gap-3"
-        >
-          <h2 class="text-lg font-semibold text-gray-700">保存の方法を選んでください</h2>
-          <p class="text-sm text-gray-500">
-            {{ employeeName }} / アルコール濃度 {{ measurementResult.alcoholValue.toFixed(2) }} mg/L
-          </p>
-          <button
-            data-testid="it-choice-save"
-            class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-            @click="closeItChoice(false)"
-          >
-            このまま保存
-          </button>
-          <button
-            data-testid="it-choice-it"
-            class="w-full px-6 py-3 bg-white border-2 border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
-            @click="closeItChoice(true)"
-          >
-            IT点呼 (運行管理者と通話)
-          </button>
-          <p data-testid="it-choice-countdown" class="text-sm text-gray-500 text-center">
-            あと {{ itChoiceSecondsLeft }} 秒でこのまま保存します
-          </p>
-        </div>
         <!-- IT点呼: 運行管理者の判定を待つあいだ。ResultCard (「次の測定へ」を持つ) は出さない -->
         <div
-          v-else-if="itCall && itAwaitingJudgment"
+          v-if="itCall && itAwaitingJudgment"
           data-testid="it-call-panel"
           class="bg-white rounded-2xl p-6 shadow-sm flex flex-col gap-3"
         >
@@ -1288,8 +1303,19 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
           v-else
           :result="measurementResult"
           :employee-name="employeeName"
+          :it-offer="tenkoPending ? { secondsLeft: itOfferSecondsLeft, busy: tenkoConfirming } : null"
           @reset="reset"
+          @it="chooseIt"
+          @finish="finishItOffer"
         />
+        <!-- IT点呼 を選べなかった (既に通常点呼で記録済み / 通信の失敗) -->
+        <div
+          v-if="tenkoNotice"
+          data-testid="tenko-notice"
+          :class="['w-full border rounded-xl px-4 py-2 text-center text-sm', EXPIRY_TONE_CLASS.banner.yellow]"
+        >
+          {{ tenkoNotice }}
+        </div>
         <!-- IT点呼: 運行管理者の判定 -->
         <div
           v-if="itJudgment"

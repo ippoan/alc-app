@@ -3,8 +3,9 @@ import { ref, readonly, defineComponent } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
 
-// 通常点呼の中で IT点呼 を選ぶ段 (`itSelectable`) と、**`itSelectable` を付けない通常点呼が
-// 今までと変わらないこと**を固定する (Refs ippoan/alc-app#387)。alc-app は main へのマージから
+// 通常点呼の中で IT点呼 を選ぶ流れ (`itSelectable`) と、**`itSelectable` を付けない通常点呼が
+// 今までと変わらないこと**を固定する (Refs ippoan/alc-app#387, #436)。測定は結果が出た時点で
+// 保存し (`defer_tenko: true`)、結果の画面の「IT点呼 / 終了」(押されなければ 30 秒) で点呼を確定する。alc-app は main へのマージから
 // 数分で本番に出るので、「印が無い端末 = `itSelectable` なし」の挙動 (送る body・通信の本数・
 // 画面) をここで釘付けにする。モックと stub は NormalMeasurement.itMode.test.ts と同じ形。
 // 既存の NormalMeasurement.test.ts / NormalMeasurement.itMode.test.ts は 1 行も書き換えていない。
@@ -30,6 +31,7 @@ const getEmployeeByCodeMock = vi.fn()
 const punchTimecardMock = vi.fn(async () => {})
 const startMeasurementMock = vi.fn(async () => ({ id: 'measurement-1' }))
 const updateMeasurementMock = vi.fn()
+const confirmTenkoMock = vi.fn()
 
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: (nfcId: string) => getEmployeeByNfcIdMock(nfcId),
@@ -37,6 +39,7 @@ vi.mock('~/utils/api', () => ({
   punchTimecard: (cardId: string) => punchTimecardMock(cardId),
   startMeasurement: (employeeId: string) => startMeasurementMock(employeeId),
   updateMeasurement: (id: string, data: Record<string, unknown>) => updateMeasurementMock(id, data),
+  confirmMeasurementTenko: (id: string, method: string) => confirmTenkoMock(id, method),
   uploadBlowVideo: vi.fn(async () => 'https://example.com/blow.webm'),
   lookupCarInspection: vi.fn(async () => null),
 }))
@@ -282,11 +285,17 @@ const COMPLETED_BODY_KEYS = [
 /** 本人確認を通った回の完了の PUT の key (今までの key の後ろに `identity_method` が 1 つ) */
 const SAVED_BODY_KEYS = [...COMPLETED_BODY_KEYS, 'identity_method']
 
-const panel = (wrapper: Wrapper) => wrapper.find('[data-testid="it-choice-panel"]')
-const saveButton = (wrapper: Wrapper) => wrapper.find('[data-testid="it-choice-save"]')
-const itButton = (wrapper: Wrapper) => wrapper.find('[data-testid="it-choice-it"]')
+/** IT点呼 を選べる回の完了の PUT の key (今までの key の後ろに `defer_tenko` と `identity_method`) */
+const DEFERRED_BODY_KEYS = [...COMPLETED_BODY_KEYS, 'defer_tenko', 'identity_method']
+const ALREADY_NORMAL = '通常点呼として記録済みのため、IT点呼 は選べません'
+const CONFIRM_FAILED = '通信に失敗したため、通常点呼として記録されます'
 
-/** 選択の段の 30 秒だけを偽の時計にする (flush の setTimeout は本物のまま) */
+const itButton = (wrapper: Wrapper) => wrapper.find('[data-testid="result-it"]')
+const finishButton = (wrapper: Wrapper) => wrapper.find('[data-testid="result-finish"]')
+const countdown = (wrapper: Wrapper) => wrapper.find('[data-testid="result-countdown"]')
+const notice = (wrapper: Wrapper) => wrapper.find('[data-testid="tenko-notice"]')
+
+/** 確定待ちの 30 秒だけを偽の時計にする (flush の setTimeout は本物のまま) */
 function fakeInterval() {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
 }
@@ -307,19 +316,26 @@ beforeEach(() => {
   itCall.error.value = null
   getEmployeeByNfcIdMock.mockResolvedValue(EMPLOYEE)
   getEmployeeByCodeMock.mockResolvedValue(EMPLOYEE)
-  // backend は完了の PUT に点呼の記録の id を返す。**通常点呼はこれを見ない**
-  updateMeasurementMock.mockImplementation(async () => ({ id: 'measurement-1', tenko_session_id: 'session-1' }))
+  // backend は完了の PUT に点呼の記録の id を返す。`defer_tenko` を受けた回は記録を作らず確定待ち
+  updateMeasurementMock.mockImplementation(async (_id: string, data: Record<string, unknown>) => data.defer_tenko
+    ? { id: 'measurement-1', tenko_session_id: null, tenko_pending: true }
+    : { id: 'measurement-1', tenko_session_id: 'session-1' })
+  confirmTenkoMock.mockImplementation(async (_id: string, method: string) => ({
+    tenko_session_id: method === 'IT点呼' ? 'session-it' : 'session-normal',
+    tenko_method: method,
+  }))
 })
 
 describe('NormalMeasurement — itSelectable なし (通常点呼は今までと 1 つも変わらない)', () => {
-  it('★ prop なし: 免許証で本人確認しても選択の段は出ず、測定の結果で即保存する', async () => {
+  it('★ prop なし: 免許証で本人確認しても確定待ちにせず、測定の結果で点呼まで保存する', async () => {
     const wrapper = await mountNm()
     await runToResult(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(completedBodies()).toHaveLength(1)
     expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
     expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
+    expect(confirmTenkoMock).not.toHaveBeenCalled()
     expect(nextButton(wrapper)).toBeTruthy()
     // 通話の composable も作らない
     expect(useItTenkoCallSpy).not.toHaveBeenCalled()
@@ -327,7 +343,7 @@ describe('NormalMeasurement — itSelectable なし (通常点呼は今までと
     wrapper.unmount()
   })
 
-  it('★ itSelectable = false (印が無い端末に index.vue が渡す値): 結果の画面の DOM は prop なしと同一', async () => {
+  it('★ itSelectable = false: 結果の画面の DOM は prop なしと同一', async () => {
     const plain = await mountNm()
     await runToResult(plain)
     const expected = plain.html()
@@ -338,40 +354,88 @@ describe('NormalMeasurement — itSelectable なし (通常点呼は今までと
     await runToResult(wrapper)
 
     expect(wrapper.html()).toBe(expected)
-    expect(panel(wrapper).exists()).toBe(false)
     expect(completedBodies()).toHaveLength(1)
     expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
     expect(useItTenkoCallSpy).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('mount の後で itSelectable が立っても、その画面では選択の段を出さない (通話の composable を作っていない)', async () => {
+  it('mount の後で itSelectable が立っても、その画面では IT点呼 を選べない (通話の composable を作っていない)', async () => {
     const wrapper = await mountNm()
     await wrapper.setProps({ itSelectable: true })
     await runToResult(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(completedBodies()).toHaveLength(1)
-    expect('tenko_method' in completedBodies()[0]!).toBe(false)
+    expect('defer_tenko' in completedBodies()[0]!).toBe(false)
     wrapper.unmount()
   })
 })
 
-describe('NormalMeasurement — itSelectable: 選択の段が出る条件', () => {
-  it('★ 免許証で本人確認した回は、測定の結果のあとに選択の段が出て、PUT はまだ呼ばれていない', async () => {
+describe('NormalMeasurement — itSelectable: 即保存と、IT点呼 を選べる条件', () => {
+  it('★ 免許証の回は結果が出た時点で PUT し (defer_tenko 付き・tenko_method なし)、結果の画面に「IT点呼 / 終了」と 30 秒を出す', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(true)
-    expect(saveButton(wrapper).text()).toBe('このまま保存')
-    expect(itButton(wrapper).text()).toBe('IT点呼 (運行管理者と通話)')
-    expect(wrapper.find('[data-testid="it-choice-countdown"]').text()).toBe('あと 30 秒でこのまま保存します')
-    expect(completedBodies()).toHaveLength(0)
+    expect(completedBodies()).toHaveLength(1)
+    const body = completedBodies()[0]!
+    expect(Object.keys(body)).toEqual(DEFERRED_BODY_KEYS)
+    expect(body.defer_tenko).toBe(true)
+    expect('tenko_method' in body).toBe(false)
+    expect(body.identity_method).toBe('license')
     expect(offlineSaveMock).not.toHaveBeenCalled()
-    // まだ保存していないので「次の測定へ」も、通話の画面も、保存中の表示も無い
+
+    expect(itButton(wrapper).text()).toBe('IT点呼 (運行管理者と通話)')
+    expect(finishButton(wrapper).text()).toBe('終了')
+    expect(countdown(wrapper).text()).toBe('あと 30 秒で終了します')
+    // 確定待ちの間は「次の測定へ」も、判定待ちの画面も出さない
     expect(nextButton(wrapper)).toBeUndefined()
     expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('保存中...')
+    // 値と判定は今までどおり結果カードに出る
+    expect(wrapper.text()).toContain('0.00 mg/L')
+    expect(confirmTenkoMock).not.toHaveBeenCalled()
+    expect(itCall.start).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('保存中はボタンを出さない (確定待ちは保存が済んで tenko_pending が返ってから)', async () => {
+    updateMeasurementMock.mockReturnValue(new Promise(() => {}))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    expect(wrapper.text()).toContain('保存中...')
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 保存中に「次の測定へ」で戻ったら、遅れて返った確定待ちを次の回に持ち込まない', async () => {
+    fakeInterval()
+    let resolveSave: (v: unknown) => void = () => {}
+    updateMeasurementMock.mockReturnValueOnce(new Promise((r) => { resolveSave = r }))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    await nextButton(wrapper)!.trigger('click')
+    await flush(wrapper)
+    resolveSave({ id: 'measurement-1', tenko_session_id: null, tenko_pending: true })
+    await flush(wrapper)
+    vi.advanceTimersByTime(60_000)
+    await flush(wrapper)
+
+    expect(confirmTenkoMock).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ tenko_pending を返さない backend では確定待ちにせず「次の測定へ」の形のまま', async () => {
+    updateMeasurementMock.mockImplementation(async () => ({ id: 'measurement-1', tenko_session_id: 'session-1' }))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    expect(completedBodies()[0]!.defer_tenko).toBe(true)
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect(nextButton(wrapper)).toBeTruthy()
     expect(itCall.start).not.toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -384,23 +448,21 @@ describe('NormalMeasurement — itSelectable: 選択の段が出る条件', () =
     plain.unmount()
 
     const wrapper = await mountNm({ itSelectable: true })
-    // 待機の画面 (手入力の入口を含む) は prop なしと同一
     expect(wrapper.html()).toBe(idleHtml)
     await runToResult(wrapper)
 
     expect(wrapper.find('header').html()).toBe(header)
-    expect(wrapper.find('header').text()).toContain('アルコールチェッカー')
     wrapper.unmount()
   })
 
   it.each(['other', 'car_inspection', undefined] as const)(
-    '★ 免許証でないタップ (card_type = %s) は断らずに進み、選択の段を出さず即保存する',
+    '★ 免許証でないタップ (card_type = %s) は断らずに進み、確定待ちにせず保存する',
     async (cardType) => {
       const wrapper = await mountNm({ itSelectable: true })
       await touch(wrapper, cardType)
       await measure(wrapper)
 
-      expect(panel(wrapper).exists()).toBe(false)
+      expect(itButton(wrapper).exists()).toBe(false)
       expect(completedBodies()).toHaveLength(1)
       expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
       expect(completedBodies()[0]!.identity_method).toBe('nfc_card')
@@ -409,38 +471,19 @@ describe('NormalMeasurement — itSelectable: 選択の段が出る条件', () =
     },
   )
 
-  it('★ 社員証 (この端末に繋いだ機体で読んだ打刻からの直行) は、定数が true なら選択の段が出て、IT点呼 を選ぶと ic_card で保存する', async () => {
+  it('★ 社員証 (この端末に繋いだ機体で読んだ打刻からの直行) は、定数が true なら確定待ちにし、IT点呼 で確定できる', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await runFromPunch(wrapper, true)
 
-    expect(panel(wrapper).exists()).toBe(true)
-    expect(completedBodies()).toHaveLength(0)
+    expect(Object.keys(completedBodies()[0]!)).toEqual(DEFERRED_BODY_KEYS)
+    expect(completedBodies()[0]!.identity_method).toBe('ic_card')
+    expect(completedBodies()[0]!.tenko_type).toBe('normal')
 
     await itButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(completedBodies()).toHaveLength(1)
-    const body = completedBodies()[0]!
-    expect(Object.keys(body)).toEqual([...COMPLETED_BODY_KEYS, 'tenko_method', 'identity_method'])
-    expect(body.tenko_method).toBe('IT点呼')
-    expect(body.identity_method).toBe('ic_card')
-    // 打刻の案内からの回は種別なしの測定 (始業・終業にはならない)
-    expect(body.tenko_type).toBe('normal')
-    expect(itCall.start).toHaveBeenCalledWith('session-1')
-    wrapper.unmount()
-  })
-
-  it('社員証の回で「このまま保存」を選ぶと、tenko_method は付かず ic_card だけが残る', async () => {
-    const wrapper = await mountNm({ itSelectable: true })
-    await runFromPunch(wrapper, true)
-
-    await saveButton(wrapper).trigger('click')
-    await flush(wrapper)
-
-    expect(completedBodies()).toHaveLength(1)
-    expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
-    expect(completedBodies()[0]!.identity_method).toBe('ic_card')
-    expect(itCall.start).not.toHaveBeenCalled()
+    expect(confirmTenkoMock).toHaveBeenCalledWith('measurement-1', 'IT点呼')
+    expect(itCall.start).toHaveBeenCalledWith('session-it')
     wrapper.unmount()
   })
 
@@ -448,46 +491,40 @@ describe('NormalMeasurement — itSelectable: 選択の段が出る条件', () =
     ['false を渡す', false],
     ['由来を渡さない', undefined],
   ] as const)(
-    '★ 別の端末の打刻からの直行 (%s) は、定数が true でも選択の段を出さず remote_punch で即保存する',
+    '★ 別の端末の打刻からの直行 (%s) は、定数が true でも確定待ちにせず remote_punch で保存する',
     async (_label, readOnThisDevice) => {
       const wrapper = await mountNm({ itSelectable: true })
       await runFromPunch(wrapper, readOnThisDevice)
 
-      expect(panel(wrapper).exists()).toBe(false)
-      expect(completedBodies()).toHaveLength(1)
+      expect(itButton(wrapper).exists()).toBe(false)
       expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
       expect(completedBodies()[0]!.identity_method).toBe('remote_punch')
-      expect(itCall.start).not.toHaveBeenCalled()
       wrapper.unmount()
     },
   )
 
-  it('★ 定数が false なら、社員証 (この端末に繋いだ機体で読んだ打刻) でも選択の段を出さず即保存する (記録は ic_card のまま)', async () => {
+  it('★ 定数が false なら、社員証の回は確定待ちにしない (記録は ic_card のまま)', async () => {
     flags.allowIcCard = false
     const wrapper = await mountNm({ itSelectable: true })
     await runFromPunch(wrapper, true)
 
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(completedBodies()).toHaveLength(1)
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
     expect(completedBodies()[0]!.identity_method).toBe('ic_card')
     wrapper.unmount()
   })
 
-  it('★ 免許証の回は、定数が false でも選択の段が出る', async () => {
+  it('★ 免許証の回は、定数が false でも確定待ちにする', async () => {
     flags.allowIcCard = false
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(true)
-    await itButton(wrapper).trigger('click')
-    await flush(wrapper)
-    expect(completedBodies()[0]!.tenko_method).toBe('IT点呼')
-    expect(completedBodies()[0]!.identity_method).toBe('license')
+    expect(completedBodies()[0]!.defer_tenko).toBe(true)
+    expect(itButton(wrapper).exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('★ 手入力は選択の段を出さず即保存する', async () => {
+  it('★ 手入力は確定待ちにしない', async () => {
     const wrapper = await mountNm({ itSelectable: true })
 
     await wrapper.findAll('button').find(b => b.text() === '手動でIDを入力する')!.trigger('click')
@@ -496,149 +533,198 @@ describe('NormalMeasurement — itSelectable: 選択の段が出る条件', () =
     await flush(wrapper)
     await measure(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(completedBodies()).toHaveLength(1)
-    expect('tenko_method' in completedBodies()[0]!).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect('defer_tenko' in completedBodies()[0]!).toBe(false)
     expect(completedBodies()[0]!.identity_method).toBe('manual')
     wrapper.unmount()
   })
 
-  it('★ オフラインでは選択の段を出さず、今までどおり端末に保存する', async () => {
+  it('★ オフラインでは今までどおり端末に保存する (確定待ちにしない)', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await touch(wrapper, 'driver_license')
     isOnlineRef.value = false
     await measure(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
     expect(updateMeasurementMock).not.toHaveBeenCalled()
     expect(offlineSaveMock).toHaveBeenCalledTimes(1)
-    // 端末のキュー (再送の POST) には本人確認の方法を運ばない
     expect(JSON.stringify(offlineSaveMock.mock.calls[0])).not.toContain('identity_method')
-    // 選んでいないので「IT点呼 にならなかった」の案内も出さない
+    expect(JSON.stringify(offlineSaveMock.mock.calls[0])).not.toContain('defer_tenko')
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(wrapper.find('[data-testid="it-call-not-started"]').exists()).toBe(false)
     expect(nextButton(wrapper)).toBeTruthy()
     wrapper.unmount()
   })
 
-  it('★ デモモードでは選択の段を出さない', async () => {
+  it('★ デモモードでは確定待ちにしない', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await touch(wrapper, 'driver_license')
     await wrapper.find('[data-testid="choice-alcohol"]').trigger('click')
     await wrapper.vm.$nextTick()
     wrapper.findComponent(BleStatusStub).vm.$emit('skip')
     await wrapper.vm.$nextTick()
-    // 免許証で入ったあとでデモに切り替わった体にする (デモの入口は手入力だけなので、
-    // 免許証の印とデモが同時に立つのはこの形だけ)
     demoModeRef.value = true
     wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', measurementResult())
     await flush(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(completedBodies()).toHaveLength(1)
-    expect('tenko_method' in completedBodies()[0]!).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect('defer_tenko' in completedBodies()[0]!).toBe(false)
     wrapper.unmount()
   })
 
-  it('測定の開始レコードが無い回 (保存が端末のキューへ回る) は選択の段を出さない', async () => {
+  it('測定の開始レコードが無い回 (保存が端末のキューへ回る) は確定待ちにしない', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     startMeasurementMock.mockRejectedValue(new Error('500'))
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(offlineSaveMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('★ PUT に失敗したら端末に保存し、確定待ちにしない', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    updateMeasurementMock.mockRejectedValue(new Error('500'))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    expect(offlineSaveMock).toHaveBeenCalledTimes(1)
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="it-call-not-started"]').exists()).toBe(false)
+    expect(nextButton(wrapper)).toBeTruthy()
     wrapper.unmount()
   })
 
   it.each([
     { name: 'itMode だけ', props: { itMode: true } },
     { name: 'itMode と itSelectable の両方', props: { itMode: true, itSelectable: true } },
-  ])('★ $name: 選択の段は出ず、最初から IT点呼 として保存する (回帰)', async ({ props }) => {
+  ])('★ $name: 確定待ちにせず、最初から IT点呼 として保存して通話へ (回帰)', async ({ props }) => {
     const wrapper = await mountNm(props)
     await runToResult(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
     expect(completedBodies()).toHaveLength(1)
     expect(completedBodies()[0]!.tenko_method).toBe('IT点呼')
+    expect('defer_tenko' in completedBodies()[0]!).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect(confirmTenkoMock).not.toHaveBeenCalled()
     expect(itCall.start).toHaveBeenCalledWith('session-1')
     expect(useItTenkoCallSpy).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })
 
-describe('NormalMeasurement — itSelectable: 「このまま保存」', () => {
-  it('★ PUT の body は今までと同じ key だけ (tenko_method の key が無い)。通話は始めず「次の測定へ」が出る', async () => {
+describe('NormalMeasurement — itSelectable: 「終了」と 30 秒', () => {
+  it('★ 「終了」: 通常点呼で確定して待機の画面へ戻る', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
 
-    await saveButton(wrapper).trigger('click')
+    await finishButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(completedBodies()).toHaveLength(1)
-    const body = completedBodies()[0]!
-    expect(Object.keys(body)).toEqual(SAVED_BODY_KEYS)
-    expect('tenko_method' in body).toBe(false)
-    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
-    expect(offlineSaveMock).not.toHaveBeenCalled()
-    // 応答に点呼の記録の id が載っていても、それで何も始めない
+    expect(confirmTenkoMock).toHaveBeenCalledTimes(1)
+    expect(confirmTenkoMock).toHaveBeenCalledWith('measurement-1', '通常点呼')
     expect(itCall.start).not.toHaveBeenCalled()
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="it-call-not-started"]').exists()).toBe(false)
-    expect(nextButton(wrapper)).toBeTruthy()
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('保存中は通常点呼と同じ画面 (「保存中...」と「次の測定へ」。判定待ちの画面にはしない)', async () => {
-    updateMeasurementMock.mockReturnValue(new Promise(() => {}))
+  it('「終了」の確定が通信エラーでも画面を止めず待機へ戻る', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    confirmTenkoMock.mockRejectedValue(new Error('network'))
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
 
-    await saveButton(wrapper).trigger('click')
+    await finishButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(wrapper.text()).toContain('保存中...')
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
-    expect(nextButton(wrapper)).toBeTruthy()
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(warn).toHaveBeenCalledWith('[Measurement] tenko confirm (normal) failed:', expect.any(Error))
     wrapper.unmount()
   })
 
-  it('保存したあとの結果の画面の DOM は prop なしの通常点呼と同一', async () => {
-    const plain = await mountNm()
-    await runToResult(plain)
-    const expected = plain.html()
-    plain.unmount()
-
+  it('★ 残り秒数が減り、30 秒で通常点呼として確定して「次の測定へ」の形に戻る (自動では次へ戻らない)', async () => {
+    fakeInterval()
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
-    await saveButton(wrapper).trigger('click')
+
+    vi.advanceTimersByTime(29_000)
+    await flush(wrapper)
+    expect(countdown(wrapper).text()).toBe('あと 1 秒で終了します')
+    expect(confirmTenkoMock).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1_000)
     await flush(wrapper)
 
-    expect(wrapper.html()).toBe(expected)
+    expect(confirmTenkoMock).toHaveBeenCalledTimes(1)
+    expect(confirmTenkoMock).toHaveBeenCalledWith('measurement-1', '通常点呼')
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect(nextButton(wrapper)).toBeTruthy()
+    // 結果の画面のまま
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+    expect(itCall.start).not.toHaveBeenCalled()
+
+    // タイマーは止まっている
+    vi.advanceTimersByTime(60_000)
+    await flush(wrapper)
+    expect(confirmTenkoMock).toHaveBeenCalledTimes(1)
+    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
+
+    await nextButton(wrapper)!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ 確定待ちのまま画面を離れたら (unmount)、タイマーを止める (確定はサーバーの見回りに任せる)', async () => {
+    fakeInterval()
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    wrapper.unmount()
+    vi.advanceTimersByTime(60_000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(confirmTenkoMock).not.toHaveBeenCalled()
+    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('reset のあと、次の回が免許証ならまた 30 秒から数える', async () => {
+    fakeInterval()
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    vi.advanceTimersByTime(10_000)
+    await flush(wrapper)
+    await finishButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    await runToResult(wrapper)
+
+    expect(countdown(wrapper).text()).toBe('あと 30 秒で終了します')
+    expect(completedBodies()).toHaveLength(2)
     wrapper.unmount()
   })
 })
 
 describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
-  it('★ PUT に tenko_method が足され、応答の tenko_session_id で通話が始まる', async () => {
+  it('★ IT点呼 で確定し、返った tenko_session_id で通話を始めて判定待ちの画面に入る', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
 
     await itButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(completedBodies()).toHaveLength(1)
-    const body = completedBodies()[0]!
-    expect(Object.keys(body)).toEqual([...COMPLETED_BODY_KEYS, 'tenko_method', 'identity_method'])
-    expect(body.identity_method).toBe('license')
-    expect(body.tenko_method).toBe('IT点呼')
+    expect(confirmTenkoMock).toHaveBeenCalledTimes(1)
+    expect(confirmTenkoMock).toHaveBeenCalledWith('measurement-1', 'IT点呼')
     expect(itCall.start).toHaveBeenCalledTimes(1)
-    expect(itCall.start).toHaveBeenCalledWith('session-1')
-    // itMode と同じ判定待ちの画面
-    expect(panel(wrapper).exists()).toBe(false)
+    expect(itCall.start).toHaveBeenCalledWith('session-it')
+    // PUT は保存の 1 回だけ
+    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="video-call-stub"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="it-call-end"]').text()).toBe('未完了のまま終了')
+    // 判定待ちの間は結果カードを出さない
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(nextButton(wrapper)).toBeUndefined()
     wrapper.unmount()
   })
@@ -647,37 +733,108 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
     { choice: 'alcohol' as const, tenkoType: 'normal' },
     { choice: 'pre-operation' as const, tenkoType: 'pre_operation' },
     { choice: 'post-operation' as const, tenkoType: 'post_operation' },
-  ])('★ $tenkoType でも同じ段を通る — 選ぶ前は PUT が無く、IT点呼 を選ぶと tenko_method 付きで保存して通話へ', async ({ choice, tenkoType }) => {
+  ])('★ $tenkoType でも同じ — 即保存し、IT点呼 で確定して通話へ', async ({ choice, tenkoType }) => {
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper, choice)
 
-    expect(panel(wrapper).exists()).toBe(true)
-    expect(completedBodies()).toHaveLength(0)
+    expect(completedBodies()[0]).toMatchObject({ tenko_type: tenkoType, defer_tenko: true, record_as_tenko: true })
 
     await itButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(completedBodies()).toHaveLength(1)
-    expect(completedBodies()[0]).toMatchObject({ tenko_type: tenkoType, tenko_method: 'IT点呼', record_as_tenko: true })
-    expect(itCall.start).toHaveBeenCalledWith('session-1')
+    expect(confirmTenkoMock).toHaveBeenCalledWith('measurement-1', 'IT点呼')
+    expect(itCall.start).toHaveBeenCalledWith('session-it')
     wrapper.unmount()
   })
 
-  it('★ 検知あり (over) の回でも選択の段が出て、IT点呼 を選べる (判定は運行管理者がする)', async () => {
+  it('★ 検知あり (over) の回でも即保存し、IT点呼 を選べる (判定は運行管理者がする)', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await touch(wrapper, 'driver_license')
     await measure(wrapper, 'alcohol', 'over')
 
-    expect(panel(wrapper).exists()).toBe(true)
-    expect(completedBodies()).toHaveLength(0)
+    expect(completedBodies()[0]).toMatchObject({ result_type: 'over', alcohol_value: 0.3, defer_tenko: true })
+    expect(wrapper.text()).toContain('0.30 mg/L')
 
     await itButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(completedBodies()).toHaveLength(1)
-    expect(completedBodies()[0]).toMatchObject({ result_type: 'over', alcohol_value: 0.3, tenko_method: 'IT点呼' })
-    expect(itCall.start).toHaveBeenCalledWith('session-1')
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
+    expect(itCall.start).toHaveBeenCalledWith('session-it')
+    wrapper.unmount()
+  })
+
+  it('★ 確定の呼び出し中はボタンを押せない (二重押しで 2 度確定しない)。タイマーも止まる', async () => {
+    fakeInterval()
+    let resolveConfirm: (v: unknown) => void = () => {}
+    confirmTenkoMock.mockReturnValue(new Promise((r) => { resolveConfirm = r }))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(itButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(finishButton(wrapper).attributes('disabled')).toBeDefined()
+
+    // disabled を抜けて届いた 2 度目の emit も受けない
+    wrapper.findComponent({ name: 'ResultCard' }).vm.$emit('it')
+    await flush(wrapper)
+    vi.advanceTimersByTime(60_000)
+    await flush(wrapper)
+    expect(confirmTenkoMock).toHaveBeenCalledTimes(1)
+
+    resolveConfirm({ tenko_session_id: 'session-it', tenko_method: 'IT点呼' })
+    await flush(wrapper)
+    expect(itCall.start).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('★ 409 (既に通常点呼で確定済み) なら案内を出し、「次の測定へ」の形にする', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    confirmTenkoMock.mockRejectedValue(Object.assign(new Error('API エラー (409)'), { status: 409 }))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    expect(notice(wrapper).text()).toBe(ALREADY_NORMAL)
+    expect(itCall.start).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
+    expect(itButton(wrapper).exists()).toBe(false)
+    expect(nextButton(wrapper)).toBeTruthy()
+
+    // 次の測定へ戻ると案内は消える
+    await nextButton(wrapper)!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(notice(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 確定の口が通信エラーでも画面を止めず、「次の測定へ」の形にする', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    confirmTenkoMock.mockRejectedValue(new Error('network'))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    expect(notice(wrapper).text()).toBe(CONFIRM_FAILED)
+    expect(itCall.start).not.toHaveBeenCalled()
+    expect(nextButton(wrapper)).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('確定の応答に tenko_session_id が無ければ通話に進まず案内を出す', async () => {
+    confirmTenkoMock.mockResolvedValue({ tenko_session_id: null, tenko_method: 'IT点呼' })
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    expect(itCall.start).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="it-call-not-started"]').text()).toBe(IT_CALL_NOT_STARTED)
+    expect(nextButton(wrapper)).toBeTruthy()
     wrapper.unmount()
   })
 
@@ -693,6 +850,7 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
 
     expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="it-judgment"]').text()).toBe('運行管理者の判定: OK')
+    expect(itButton(wrapper).exists()).toBe(false)
 
     await nextButton(wrapper)!.trigger('click')
     await wrapper.vm.$nextTick()
@@ -701,118 +859,7 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
     wrapper.unmount()
   })
 
-  it('保存が終わるまでは判定待ちの画面で、「次の測定へ」も「未完了のまま終了」も出さない', async () => {
-    updateMeasurementMock.mockReturnValue(new Promise(() => {}))
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-
-    await itButton(wrapper).trigger('click')
-    await flush(wrapper)
-
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
-    expect(nextButton(wrapper)).toBeUndefined()
-    expect(wrapper.find('[data-testid="it-call-end"]').exists()).toBe(false)
-    expect(itCall.start).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  it('★ 保存に失敗したら通常点呼として端末に保存し、IT点呼 にならなかった案内を出す (itMode と同じ)', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    updateMeasurementMock.mockRejectedValue(new Error('500'))
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-
-    await itButton(wrapper).trigger('click')
-    await flush(wrapper)
-
-    expect(offlineSaveMock).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(offlineSaveMock.mock.calls[0])).not.toContain('tenko_method')
-    expect(itCall.start).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="it-call-not-started"]').text()).toBe(IT_CALL_NOT_STARTED)
-    expect(nextButton(wrapper)).toBeTruthy()
-    wrapper.unmount()
-  })
-
-  it('★ 選択の段のあいだにオフラインに落ちたら、IT点呼 を選んでも通常点呼として端末に保存し案内を出す', async () => {
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-    isOnlineRef.value = false
-
-    await itButton(wrapper).trigger('click')
-    await flush(wrapper)
-
-    expect(updateMeasurementMock).not.toHaveBeenCalled()
-    expect(offlineSaveMock).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(offlineSaveMock.mock.calls[0])).not.toContain('IT点呼')
-    expect(itCall.start).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="it-call-not-started"]').text()).toBe(IT_CALL_NOT_STARTED)
-    wrapper.unmount()
-  })
-})
-
-describe('NormalMeasurement — itSelectable: 放置・reset・unmount', () => {
-  it('★ 残り秒数が減り、30 秒の放置で通常点呼として保存する (それ以上は保存しない)', async () => {
-    fakeInterval()
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-
-    vi.advanceTimersByTime(29_000)
-    await flush(wrapper)
-    expect(wrapper.find('[data-testid="it-choice-countdown"]').text()).toBe('あと 1 秒でこのまま保存します')
-    expect(completedBodies()).toHaveLength(0)
-
-    vi.advanceTimersByTime(1_000)
-    await flush(wrapper)
-
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(completedBodies()).toHaveLength(1)
-    expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
-    expect(itCall.start).not.toHaveBeenCalled()
-    expect(nextButton(wrapper)).toBeTruthy()
-
-    // タイマーは止まっている
-    vi.advanceTimersByTime(60_000)
-    await flush(wrapper)
-    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
-    wrapper.unmount()
-  })
-
-  it('★ ボタンを押したらタイマーは止まる (30 秒を過ぎても 2 度目の保存は起きない)', async () => {
-    fakeInterval()
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-    await itButton(wrapper).trigger('click')
-    await flush(wrapper)
-
-    vi.advanceTimersByTime(60_000)
-    await flush(wrapper)
-
-    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
-    expect(completedBodies()[0]!.tenko_method).toBe('IT点呼')
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('★ 選択を待ったまま画面を離れたら (unmount)、通常点呼として保存してタイマーを止める', async () => {
-    fakeInterval()
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-    expect(completedBodies()).toHaveLength(0)
-
-    wrapper.unmount()
-    await new Promise(resolve => setTimeout(resolve, 0))
-
-    expect(completedBodies()).toHaveLength(1)
-    expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
-    expect(updateMeasurementMock).toHaveBeenCalledWith('measurement-1', expect.anything())
-    expect(itCall.start).not.toHaveBeenCalled()
-
-    vi.advanceTimersByTime(60_000)
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('★ reset で state が戻る — IT点呼 を選んだ次の回が社員証なら、段は出ず tenko_method も付かない', async () => {
+  it('★ reset で state が戻る — IT点呼 を選んだ次の回が免許証でないカードなら、確定待ちにせず通話もしない', async () => {
     const wrapper = await mountNm({ itSelectable: true })
     await runToResult(wrapper)
     await itButton(wrapper).trigger('click')
@@ -823,55 +870,15 @@ describe('NormalMeasurement — itSelectable: 放置・reset・unmount', () => {
     updateMeasurementMock.mockClear()
     itCall.start.mockClear()
 
-    // 免許証の印も「IT点呼 を選んだ」も残っていない
     await touch(wrapper, 'other')
     await measure(wrapper)
 
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(completedBodies()).toHaveLength(1)
+    expect(itButton(wrapper).exists()).toBe(false)
     expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
     expect(completedBodies()[0]!.identity_method).toBe('nfc_card')
     expect(itCall.start).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
     expect(nextButton(wrapper)).toBeTruthy()
-    wrapper.unmount()
-  })
-
-  it('★ reset で本人確認の方法が戻る — 社員証で IT点呼 を選んだ次の回が別の端末の打刻なら、段は出ず remote_punch で保存する', async () => {
-    const wrapper = await mountNm({ itSelectable: true })
-    await runFromPunch(wrapper, true)
-    await itButton(wrapper).trigger('click')
-    await flush(wrapper)
-    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
-    await wrapper.vm.$nextTick()
-    updateMeasurementMock.mockClear()
-    itCall.start.mockClear()
-
-    await runFromPunch(wrapper, false)
-
-    expect(panel(wrapper).exists()).toBe(false)
-    expect(completedBodies()).toHaveLength(1)
-    expect(Object.keys(completedBodies()[0]!)).toEqual(SAVED_BODY_KEYS)
-    expect(completedBodies()[0]!.identity_method).toBe('remote_punch')
-    expect(itCall.start).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  it('reset のあと、次の回が免許証ならまた 30 秒から選択の段が出る', async () => {
-    fakeInterval()
-    const wrapper = await mountNm({ itSelectable: true })
-    await runToResult(wrapper)
-    vi.advanceTimersByTime(10_000)
-    await flush(wrapper)
-    await saveButton(wrapper).trigger('click')
-    await flush(wrapper)
-    await nextButton(wrapper)!.trigger('click')
-    await wrapper.vm.$nextTick()
-
-    await runToResult(wrapper)
-
-    expect(wrapper.find('[data-testid="it-choice-countdown"]').text()).toBe('あと 30 秒でこのまま保存します')
-    expect(completedBodies()).toHaveLength(1)
     wrapper.unmount()
   })
 })

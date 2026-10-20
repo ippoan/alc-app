@@ -6,10 +6,17 @@ const props = defineProps<{
   result: MeasurementResult
   facePhotoBlob?: Blob | null
   employeeName?: string
+  /**
+   * 「IT点呼 / 終了」を出す (Refs ippoan/alc-app#436)。渡したときだけ「次の測定へ」の代わりに
+   * 2 つのボタンと残り秒数を出す。**渡さなければ今までと同一**
+   */
+  itOffer?: { secondsLeft: number, busy: boolean } | null
 }>()
 
 const emit = defineEmits<{
   reset: []
+  it: []
+  finish: []
 }>()
 
 const facePhotoUrl = computed(() => {
@@ -111,8 +118,32 @@ const timeDisplay = computed(() => {
       </div>
     </div>
 
+    <!-- IT点呼 か 終了 (押されなければ残り秒数が尽きたところで通常点呼として記録される) -->
+    <div v-if="itOffer" class="mt-6 flex flex-col gap-3">
+      <button
+        data-testid="result-it"
+        :disabled="itOffer.busy"
+        class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+        @click="emit('it')"
+      >
+        IT点呼 (運行管理者と通話)
+      </button>
+      <button
+        data-testid="result-finish"
+        :disabled="itOffer.busy"
+        class="w-full px-6 py-3 bg-gray-800 text-white rounded-xl font-medium hover:bg-gray-900 transition-colors disabled:opacity-50"
+        @click="emit('finish')"
+      >
+        終了
+      </button>
+      <p data-testid="result-countdown" class="text-sm text-gray-500 text-center">
+        あと {{ itOffer.secondsLeft }} 秒で終了します
+      </p>
+    </div>
     <!-- 次の測定へ -->
     <button
+      v-else
+      data-testid="result-reset"
       class="w-full mt-6 px-6 py-3 bg-gray-800 text-white rounded-xl font-medium hover:bg-gray-900 transition-colors"
       @click="emit('reset')"
     >
