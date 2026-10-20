@@ -423,10 +423,31 @@ export async function startMeasurement(employeeId: string): Promise<ApiMeasureme
 }
 
 /** 測定レコードを更新 (血圧測定台の 4 本のうちの 1 本、Refs #353) */
-export async function updateMeasurement(id: string, data: Record<string, unknown>): Promise<ApiMeasurement> {
-  return request<ApiMeasurement>(`/api/measurements/${id}`, {
+export async function updateMeasurement(id: string, data: Record<string, unknown>): Promise<UpdatedMeasurement> {
+  return request<UpdatedMeasurement>(`/api/measurements/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
+  }, 'bp-station')
+}
+
+/**
+ * 完了の PUT の応答。`tenko_pending` = body に `defer_tenko: true` を足し、点呼の記録を作らず
+ * 確定待ちにした (Refs ippoan/alc-app#436)。この欄を返さない backend では undefined
+ */
+export type UpdatedMeasurement = ApiMeasurement & { tenko_pending?: boolean }
+
+/** 点呼の確定の方法。完了の PUT に `defer_tenko: true` を足して後回しにした点呼を、どちらで記録するか */
+export type TenkoConfirmMethod = '通常点呼' | 'IT点呼'
+
+/**
+ * 後回しにした点呼を確定する (Refs ippoan/alc-app#436)。完了の PUT (`updateMeasurement`) に
+ * `defer_tenko: true` を足した測定だけが対象。409 = 既に別の方法で確定済み (サーバーの見回りが
+ * 通常点呼で確定した等)。口は `updateMeasurement` と同じ
+ */
+export async function confirmMeasurementTenko(id: string, tenkoMethod: TenkoConfirmMethod): Promise<{ tenko_session_id: string | null, tenko_method: string }> {
+  return request(`/api/measurements/${id}/tenko`, {
+    method: 'POST',
+    body: JSON.stringify({ tenko_method: tenkoMethod }),
   }, 'bp-station')
 }
 
