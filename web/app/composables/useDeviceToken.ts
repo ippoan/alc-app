@@ -461,11 +461,17 @@ export function useDeviceToken() {
   /**
    * cache 以外の経路を順に試す。Vein Station が繋がっていれば**その署名だけ** (#436、
    * 失敗しても他へ落とさない)。繋がっていなければ CoreS3 の署名 → credential。
+   * 取っている間に Vein Station がつながったら Vein の鍵で取り直す。
    */
   async function mintDeviceJwt(): Promise<string | null> {
     const nowMs = Date.now()
     if (vein.isConnected.value) return await trySignerJwt(veinSigner, nowMs)
-    return (await trySignerJwt(coreS3Signer, nowMs)) ?? (await tryCredentialJwt(nowMs))
+    const jwt = (await trySignerJwt(coreS3Signer, nowMs)) ?? (await tryCredentialJwt(nowMs))
+    // 取っている間 (CoreS3 の探索は最大 3 秒) に Vein Station がつながったら、その JWT は使わず
+    // Vein の鍵で取り直す。接続時の先取り (watch) は single-flight でこの 1 本に合流するため、
+    // ここで見直さないと読み損ねる / Vein 接続中に CoreS3・credential の JWT が合流先へ渡る
+    if (vein.isConnected.value) return await trySignerJwt(veinSigner, Date.now())
+    return jwt
   }
 
   /**
