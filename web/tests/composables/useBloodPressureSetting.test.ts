@@ -18,6 +18,10 @@ mockNuxtImport('useSignedBpBond', () => () => ({
   hasProbedBpBond: readonly(hasProbedBpBond),
 }))
 
+// Vein Station が機体の設定で「血圧計を使う」と答えたか (null = 未取得、Refs ippoan/alc-app#436)
+const veinOmronBp = ref<boolean | null>(null)
+mockNuxtImport('useVeinSerial', () => () => ({ omronBp: readonly(veinOmronBp) }))
+
 // 測定台として扱うか (URL の印 ∪ 端末の名乗り、Refs ippoan/alc-app#368)。
 // 既定は false = 通常のキオスク — 他のテストは従来どおりの条件で回る
 const isBpStation = ref(false)
@@ -199,6 +203,7 @@ describe('useBpUiEnabled — 血圧を使うかの判定 1 か所 (Refs ippoan/a
     signedBpBonded.value = null
     hasProbedBpBond.value = false
     isBpStation.value = false
+    veinOmronBp.value = null
     api.getDeviceSettings.mockReset()
     api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(false))
   })
@@ -226,6 +231,22 @@ describe('useBpUiEnabled — 血圧を使うかの判定 1 か所 (Refs ippoan/a
 
     expect(bp.bpUiState.value).toBe('show')
     expect(bp.showBpUi.value).toBe(true)
+  })
+
+  it('★ Vein Station が機体の設定で「血圧計を使う」なら show (端末登録もボンドの行も無い PC、Refs #436)', async () => {
+    veinOmronBp.value = true
+    const bp = await unconfirmed()
+
+    expect(bp.bpUiState.value).toBe('show')
+  })
+
+  it('Vein の設定が false / 未取得なら show にしない', async () => {
+    veinOmronBp.value = false
+    const bp = await unconfirmed()
+    expect(bp.bpUiState.value).not.toBe('show')
+
+    veinOmronBp.value = null
+    expect(bp.bpUiState.value).not.toBe('show')
   })
 
   it('★ 署名済みのボンド状態が true なら show (CoreS3 キオスクの症状そのもの、Refs #347)', async () => {

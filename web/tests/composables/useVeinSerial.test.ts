@@ -105,11 +105,17 @@ describe('useVeinSerial', () => {
   }
 
   /** DEVICE timecard を先着させて claim させる (実機と同じ形) */
-  async function connectDevice(dev: MockPortHandle) {
+  async function connectDevice(dev: MockPortHandle, omronReply: string | null = 'OMRON BP=0\n') {
     installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
     await load()
     dev.emit('DEVICE timecard VER=0.1.0\n')
     expect(await connect()).toBe(true)
+    // つながると機体の血圧計の設定を聞く (`OMRON STATUS`)。応答を返して枠を空ける
+    if (omronReply !== null) {
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit(omronReply)
+      await vi.advanceTimersByTimeAsync(0)
+    }
   }
 
   beforeEach(async () => {
@@ -131,6 +137,92 @@ describe('useVeinSerial', () => {
       await load()
       expect(vein.isSupported).toBe(false)
       await expect(vein.connect(0)).resolves.toBe(false)
+    })
+  })
+
+  // ---------- omronBp (機体の設定で血圧計を使うか、Refs ippoan/alc-app#436) ----------
+
+  describe('omronBp', () => {
+    it('つながると OMRON STATUS を聞き、OMRON BP=1 なら true', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=1\n')
+
+      expect(dev.writes).toContain('OMRON STATUS\n')
+      expect(vein.omronBp.value).toBe(true)
+    })
+
+    it('OMRON BP=0 なら false', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=0\n')
+
+      expect(vein.omronBp.value).toBe(false)
+    })
+
+    it('値が 0/1 でない応答は分からないまま (null)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=x\n')
+
+      expect(vein.omronBp.value).toBeNull()
+    })
+
+    it('旧ファームで応答が無ければ null のまま', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'ERR OMRON: unsupported\n')
+      await vi.advanceTimersByTimeAsync(5000)
+
+      expect(vein.omronBp.value).toBeNull()
+    })
+
+    it('鍵の署名 (AUTH SIGN) が先に枠を取っていたら、空いてから聞き直す', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      // useDeviceToken と同じ: つながった瞬間 (同期) に署名を頼む
+      const stop = watch(vein.isConnected, (connected) => {
+        if (connected) void vein.request('AUTH SIGN n', 'AUTH SIG', 10000).catch(() => {})
+      }, { flush: 'sync' })
+      dev.emit('DEVICE timecard VER=0.1.0\n')
+      expect(await connect()).toBe(true)
+      await vi.advanceTimersByTimeAsync(0)
+      // 署名の応答待ちが塞いでいるあいだ、問い合わせは送られない
+      expect(dev.writes.at(-1)).toBe('AUTH SIGN n\n')
+      expect(dev.writes).not.toContain('OMRON STATUS\n')
+
+      dev.emit('AUTH SIG pk sg\n')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(dev.writes.at(-1)).toBe('OMRON STATUS\n')
+      dev.emit('OMRON BP=1\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vein.omronBp.value).toBe(true)
+      stop()
+    })
+
+    it('切断で null に戻り、切断をまたいだ古い応答では書かない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=1\n')
+      expect(vein.omronBp.value).toBe(true)
+
+      await vein.disconnect()
+      expect(vein.omronBp.value).toBeNull()
+    })
+
+    it('切断で応答待ちが落ちても null のまま (エラーを外へ出さない)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, null)
+      await vein.disconnect()
+      await vi.advanceTimersByTimeAsync(5000)
+
+      expect(vein.omronBp.value).toBeNull()
+    })
+
+    it('noteOmronBp: 端末設定で ON/OFF が通ったら値を合わせる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=0\n')
+
+      vein.noteOmronBp(true)
+      expect(vein.omronBp.value).toBe(true)
+      vein.noteOmronBp(false)
+      expect(vein.omronBp.value).toBe(false)
     })
   })
 

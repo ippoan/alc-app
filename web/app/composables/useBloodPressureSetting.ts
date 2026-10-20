@@ -132,6 +132,7 @@ export function useBpUiEnabled() {
   const { signedBpBonded, hasProbedBpBond } = useSignedBpBond()
   const { deviceId } = useAuth()
   const { isBpStation } = useBpStationMode()
+  const vein = useVeinSerial()
 
   const bpUiState = computed<BpUiState>(() => {
     // 測定台は血圧しか測らないので「血圧が要るか」の答えが常に「要る」。ボンド状態
@@ -139,6 +140,8 @@ export function useBpUiEnabled() {
     if (isBpStation.value) return 'show'
     // 1 つでも「使う」と言っていれば出す (未登録端末でも血圧計が在れば出す、Refs #322)
     if (bpEnabled.value || hasBpHardware.value || signedBpBonded.value === true) return 'show'
+    // Vein Station が機体の設定で「血圧計を使う」と答えた (端末登録が無い PC でも読める)
+    if (vein.omronBp.value === true) return 'show'
     // サーバが false と答えた / 署名で「血圧計は無い」と確認できた
     if (bpConfirmed.value || (hasProbedBpBond.value && signedBpBonded.value === false)) return 'unused'
     // まだ一度も取りに行っていない — ここで「未使用」に倒さない

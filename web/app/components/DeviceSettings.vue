@@ -2,6 +2,7 @@
 import type { DeviceSettingsResponse } from '~/types'
 import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
 import { alcoholResultLabel } from '~/utils/alcohol'
+import { requestWhenFree } from '~/utils/serial-request-when-free'
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
@@ -114,25 +115,23 @@ const omronTarget = computed(() => {
  */
 async function sendOmronBp(enabled: boolean): Promise<void> {
   omronBpDeviceError.value = false
-  for (let attempt = 0; ; attempt++) {
-    const target = omronTarget.value
-    if (!target) return
-    try {
-      const reply = await target.request(enabled ? 'OMRON BP ON' : 'OMRON BP OFF', OMRON_REPLY_PREFIX, OMRON_REQUEST_TIMEOUT_MS)
-      const value = reply.slice(OMRON_REPLY_PREFIX.length).trim()
-      if (value !== (enabled ? '1' : '0')) throw new Error(`OMRON: unexpected value "${value}"`)
-      return
-    } catch (e) {
-      // 判定は useSerialArbiter.ts の reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致。
-      // 文言を変えたらここも合わせること
-      const busy = String(e).includes('既に応答待ちです')
-      if (!busy || attempt >= OMRON_BUSY_RETRY_LIMIT) {
-        omronBpDeviceError.value = true
-        return
-      }
-      await new Promise(resolve => setTimeout(resolve, OMRON_BUSY_RETRY_MS))
-      if (omronUnmounted) return
-    }
+  if (!omronTarget.value) return
+  let sentVia: unknown = null
+  try {
+    // 「既に応答待ち」のときだけ間を置いて呼び直す (上限 12 秒。unmount で中止)。
+    // 呼び直すたびに送り先を見直す — 待つあいだに抜かれたら送らない
+    const reply = await requestWhenFree(() => {
+      const target = omronTarget.value
+      if (!target) return Promise.reject(new Error('OMRON: no target'))
+      sentVia = target.request
+      return target.request(enabled ? 'OMRON BP ON' : 'OMRON BP OFF', OMRON_REPLY_PREFIX, OMRON_REQUEST_TIMEOUT_MS)
+    }, { intervalMs: OMRON_BUSY_RETRY_MS, maxRetries: OMRON_BUSY_RETRY_LIMIT, isCancelled: () => omronUnmounted })
+    const value = reply.slice(OMRON_REPLY_PREFIX.length).trim()
+    if (value !== (enabled ? '1' : '0')) throw new Error(`OMRON: unexpected value "${value}"`)
+    // Vein Station の機体の設定を、血圧計の表示の判定 (useBpUiEnabled) にも反映する
+    if (sentVia === vein.request) vein.noteOmronBp(enabled)
+  } catch {
+    if (!omronUnmounted && omronTarget.value) omronBpDeviceError.value = true
   }
 }
 
