@@ -591,6 +591,21 @@ describe('useTenkoKiosk', () => {
       expect(k.bpRequirementUnknown.value).toBe(false)
     })
 
+    it('★ Vein Station が中継する血圧計 (bp_bond で hasBpHardware が立つ) でも止めない — 設定が OFF のままでも', async () => {
+      unknownDevice()
+      bpEnabled.value = false
+      hasBpHardware.value = true
+      startedSession()
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(startTenkoSession).toHaveBeenCalled()
+      expect(k.bpRequirementUnknown.value).toBe(false)
+    })
+
     it('★ まだ署名を試していない端末は止めない — その場で 1 度取りに行ってから判定する', async () => {
       deviceId.value = null
       signedBpBonded.value = null

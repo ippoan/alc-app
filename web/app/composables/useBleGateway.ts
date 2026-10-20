@@ -34,15 +34,18 @@ const FC1200_EVT_STATE: Record<string, Fc1200State | null> = {
 }
 
 /**
- * Vein Station から受ける JSON か (Refs ippoan/alc-app#436)。アルコールと体温計だけ。
- * `ready` / `heartbeat` は serial の heartbeat 監視 (30 秒無音で release) を動かし、
- * 血圧計は測定台・CoreS3 の役なので見ない。`found` / `ble_status` は processMessage に case が無い
+ * Vein Station から受ける JSON か (Refs ippoan/alc-app#436)。アルコール・体温計・血圧計。
+ * Vein 版のファームは BLE を常に起動していて、血圧計は `OMRON BP ON` (NVS) のときだけ拾って
+ * `blood_pressure` / `bp_bond` / 血圧計の `connected` / `disconnected` を出す。
+ * `ready` / `heartbeat` は serial の heartbeat 監視 (30 秒無音で release) を動かすので見ない。
+ * `found` / `ble_status` は processMessage に case が無い
  */
 function isVeinMessage(msg: unknown): msg is BleGatewayMessage {
   // `{` で始まる行だけが来るので msg は必ず object
   const m = msg as { type?: unknown, device?: unknown }
-  if (m.type === 'alcohol' || m.type === 'temperature') return true
-  return (m.type === 'connected' || m.type === 'disconnected') && m.device === 'thermometer'
+  if (m.type === 'alcohol' || m.type === 'temperature' || m.type === 'blood_pressure' || m.type === 'bp_bond') return true
+  return (m.type === 'connected' || m.type === 'disconnected')
+    && (m.device === 'thermometer' || m.device === 'blood_pressure')
 }
 
 // シングルトン: 全コンポーネントで共有
