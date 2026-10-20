@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { StagingFooter, VersionBadge } from '@ippoan/auth-client'
 import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
-import { closeArbitratedPortsForUnload } from '~/composables/useSerialArbiter'
+import { ARBITRATED_VID, closeArbitratedPortsForUnload } from '~/composables/useSerialArbiter'
+import { onPortConnected } from '~/composables/useSerialDeviceManager'
+import { dropDevMarksWithoutOwnDevice, reloadDevMarksFromStorage } from '~/utils/token-selection'
 
 const { init, isLoading } = useAuth()
 const { isAndroidApp } = useFingerprint()
@@ -9,6 +11,7 @@ const { isAndroidApp } = useFingerprint()
 // タブ・ロールに関わらず常時アクティブにするため app.vue で 1 回だけ呼ぶ (listener は
 // module 内で 1 度しか登録されない — 詳細は useHubClaim.ts)。
 useHubClaim()
+const { hasKioskCredential } = useDeviceToken()
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase as string
 const stagingTenantId = config.public.stagingTenantId as string
@@ -70,6 +73,14 @@ onMounted(async () => {
     console.log(`[RELOAD-DETECT] beforeunload at ${stamp()}`)
     onUnload()
   })
+
+  // 開発用の印は、うちの機体が挿さっている間だけ使う (Refs ippoan/alc-app#436)。機体を抜いて
+  // 読み込み直した端末は印を下ろして本番として動き、機体が挿されたら保存した印から戻す
+  // (挿し直し直後に管理者のトークンで本番の記録になる窓を開けない)
+  onPortConnected((port) => {
+    if (port.getInfo().usbVendorId === ARBITRATED_VID) reloadDevMarksFromStorage()
+  })
+  void dropDevMarksWithoutOwnDevice(hasKioskCredential.value)
 
   await init()
 })

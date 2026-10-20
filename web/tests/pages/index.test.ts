@@ -1051,6 +1051,19 @@ describe('pages/index — dev端末の記録 (Refs ippoan/alc-app#387)', () => {
     expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
   })
 
+  it('★ 機体を抜いて印が下りたら、開発用の記録の画面から通常点呼へ戻る', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=dev_records')
+    expect(wrapper.findComponent(DevDeviceRecords).exists()).toBe(true)
+
+    // 起動時の点検 (app.vue) は memory の印だけ下ろし、DEV_DEVICE_MARK_EVENT が出る
+    noteDeviceToken('kiosk', null)
+    await nextTick()
+
+    expect(wrapper.findComponent(DevDeviceRecords).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
   it('画面から印を外すと、項目が消えて通常点呼へ戻る', async () => {
     noteDeviceToken('kiosk', devDeviceJwt())
     wrapper = await mountIndex('/?role=driver&tab=dev_records')

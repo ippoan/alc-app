@@ -32,6 +32,22 @@
  *   — 「取れなかった」と「dev でなくなった」は別のことで、次の起動ではまた dev として始める
  * - 画面から外した ({@link clearDevDeviceMark}) → 消す (memory + localStorage)
  *
+ * # うちの機体が挿さっているかで memory の印を上げ下げする
+ *
+ * 保存した印は消さない。代わりに **memory の印だけ**を、うちの機体 (USB の VID が
+ * {@link ARBITRATED_VID}。CoreS3・Vein Station・ATOM S3・VoiceS3R の共通) の口が挿さっているかで
+ * 上げ下げする。dev の機体を抜いて読み込み直した端末が、いつまでも「開発用の端末」のまま
+ * 本番の記録を開発用に回さないため。
+ *
+ * - 起動時 ({@link dropDevMarksWithoutOwnDevice}): 許可済みの口にうちの機体が 1 つも無ければ、
+ *   3 種の memory の印を下ろす。1 つでもあれば何もしない (今までどおり保存した印で始まる)。
+ *   端末登録のある PC はキオスクの印を下ろさない
+ * - 挿されたとき ({@link reloadDevMarksFromStorage}): 3 種の memory の印を保存した印から読み直す
+ *   (起動時と同じ状態に戻す)。挿し直し直後に管理者のトークンで本番の記録になる窓 (#389) は、
+ *   保存した印がそのまま塞ぐ
+ *
+ * 保存した印は、本番の機体を挿して本番の鍵が取れたときに今までどおり消える。
+ *
  * localStorage が使えない環境 (SSR・private mode・容量超過) では memory の印だけで動く。
  *
  * # 署名は検証しない
@@ -40,12 +56,15 @@
  * 読めないトークンは dev でない側 (= 今までの挙動) に倒れる。
  */
 import { decodeJwtPayloadFromToken } from '@ippoan/auth-client'
+import { ARBITRATED_VID } from '~/composables/useSerialArbiter'
 
 /**
  * 端末の鍵の種類。`api.ts` の getter 3 本と 1 対 1 —
  * キオスク (CoreS3 / 端末登録) / 運行管理者席 (VoiceS3R) / 血圧測定台 (ATOM S3)。
  */
 export type DeviceTokenKind = 'kiosk' | 'manager-device' | 'bp-station'
+
+const ALL_KINDS: readonly DeviceTokenKind[] = ['kiosk', 'manager-device', 'bp-station']
 
 /** 保存先の key (kind ごと)。値は dev のとき `'1'`、dev でなければ key ごと消す。 */
 function storageKey(kind: DeviceTokenKind): string {
@@ -116,16 +135,54 @@ export function noteDeviceToken(kind: DeviceTokenKind, token: string | null): vo
 
 /**
  * その種類の dev の印を外す (memory + localStorage)。{@link noteDeviceToken} が dev でない
- * トークンを取ったときと同じ消し方。
+ * トークンを取ったときと同じ消し方。**保存した印まで消す**ので、うちの機体が抜けただけの
+ * 端末の印の上げ下げには使わない ({@link dropDevMarksWithoutOwnDevice} は memory だけ下ろす)。
  *
- * dev の鍵を**抜いたあと**の PC を管理者として使い直すための操作 — 鍵を抜いただけでは
- * 保存した印が残り (「取れなかった」と「dev でなくなった」は別)、管理者ログインがあっても
- * 管理者のトークンで送らなくなる。**dev の鍵が挿さったままなら、次にトークンを取った時点で
+ * 画面から印を外す操作の口。**dev の鍵が挿さったままなら、次にトークンを取った時点で
  * また印が立つ** (印を決めるのは取れたトークンで、この関数は鍵の側を変えない)。
  */
 export function clearDevDeviceMark(kind: DeviceTokenKind): void {
   setDevMark(kind, false)
   writeStoredMark(kind, false)
+}
+
+// 印を保存した印から読み直した回数。起動時の点検が口の一覧を待つあいだに機体が挿されたかを知る
+let storedMarkReloads = 0
+
+/**
+ * うちの機体の口が挿されたとき: 3 種の memory の印を保存した印から読み直す
+ * (起動時の状態に戻す)。変わった種類があれば {@link DEV_DEVICE_MARK_EVENT} が出る。
+ */
+export function reloadDevMarksFromStorage(): void {
+  storedMarkReloads++
+  for (const kind of ALL_KINDS) setDevMark(kind, readStoredMark(kind))
+}
+
+/**
+ * 起動時の点検 (app.vue の onMounted から 1 回): 許可済みの口にうちの機体 (VID が
+ * {@link ARBITRATED_VID}) が 1 つも無ければ、3 種の memory の印を下ろす。**保存した印は
+ * 触らない**。
+ *
+ * - 1 つでもある・WebSerial が無い・口の一覧が取れない → 何もしない
+ * - 口の一覧を待つあいだに {@link reloadDevMarksFromStorage} が走った (機体が挿された) →
+ *   下ろさない (戻すほうを優先)
+ * - `hasKioskCredential` (端末登録がある PC) → キオスクの印は下ろさない。鍵が機体に無い端末で、
+ *   印を決めるのは登録した鍵のため。useDeviceToken を import すると循環するので引数で受ける
+ */
+export async function dropDevMarksWithoutOwnDevice(hasKioskCredential: boolean): Promise<void> {
+  const reloadsBefore = storedMarkReloads
+  try {
+    const ports = await navigator.serial.getPorts()
+    if (ports.some(port => port.getInfo().usbVendorId === ARBITRATED_VID)) return
+  }
+  catch {
+    return
+  }
+  if (storedMarkReloads !== reloadsBefore) return
+  for (const kind of ALL_KINDS) {
+    if (kind === 'kiosk' && hasKioskCredential) continue
+    setDevMark(kind, false)
+  }
 }
 
 /**

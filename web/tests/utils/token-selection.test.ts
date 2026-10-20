@@ -9,6 +9,8 @@ import {
   type DeviceTokenKind,
   isKioskDeviceKeyRequired,
   setKioskDeviceKeyRequired,
+  dropDevMarksWithoutOwnDevice,
+  reloadDevMarksFromStorage,
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 
@@ -407,5 +409,129 @@ describe('setKioskDeviceKeyRequired / isKioskDeviceKeyRequired (Refs ippoan/alc-
     expect(isKioskDeviceKeyRequired()).toBe(true)
     setKioskDeviceKeyRequired(false)
     expect(isKioskDeviceKeyRequired()).toBe(false)
+  })
+})
+
+// 機体を抜いて読み込み直したら memory の印だけ下ろし、挿されたら保存した印から戻す
+// (Refs ippoan/alc-app#436)。保存した印は消さない — #389 の窓 (挿し直し直後) を塞ぐため。
+describe('dropDevMarksWithoutOwnDevice / reloadDevMarksFromStorage — 機体の抜き挿しで memory の印を上げ下げ', () => {
+  const OWN_VID = 0x303A
+  const onMark = vi.fn()
+
+  function stubPorts(getPorts: () => Promise<unknown[]>) {
+    Object.defineProperty(navigator, 'serial', { value: { getPorts }, configurable: true })
+  }
+  const port = (usbVendorId: number) => ({ getInfo: () => ({ usbVendorId }) })
+
+  function markAll() {
+    for (const kind of KINDS) noteDeviceToken(kind, DEV)
+  }
+
+  beforeEach(() => {
+    onMark.mockClear()
+    window.addEventListener(DEV_DEVICE_MARK_EVENT, onMark)
+  })
+
+  afterEach(() => {
+    window.removeEventListener(DEV_DEVICE_MARK_EVENT, onMark)
+    delete (navigator as unknown as { serial?: unknown }).serial
+  })
+
+  it('うちの機体の口が 0 個 → 3 種の memory の印が下り、localStorage の印は残る', async () => {
+    markAll()
+    stubPorts(async () => [])
+    onMark.mockClear()
+
+    await dropDevMarksWithoutOwnDevice(false)
+
+    for (const kind of KINDS) {
+      expect(isDevDevice(kind)).toBe(false)
+      expect(localStorage.getItem(`alc_dev_device_${kind}`)).toBe('1')
+    }
+    expect(onMark).toHaveBeenCalledTimes(3)
+  })
+
+  it('別の VID の口だけ → うちの機体ではないので下りる', async () => {
+    markAll()
+    stubPorts(async () => [port(0x1A86)])
+
+    await dropDevMarksWithoutOwnDevice(false)
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(false)
+  })
+
+  it('うちの機体の口が 1 個以上 → 下りない (今までどおり保存した印で始まる)', async () => {
+    markAll()
+    stubPorts(async () => [port(0x1A86), port(OWN_VID)])
+    onMark.mockClear()
+
+    await dropDevMarksWithoutOwnDevice(false)
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+    expect(onMark).not.toHaveBeenCalled()
+  })
+
+  it('serial が無い → 下りない', async () => {
+    markAll()
+
+    await dropDevMarksWithoutOwnDevice(false)
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+  })
+
+  it('口の一覧が例外 → 下りない', async () => {
+    markAll()
+    stubPorts(async () => { throw new Error('boom') })
+
+    await dropDevMarksWithoutOwnDevice(false)
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+  })
+
+  it('端末登録がある PC → キオスクの印だけ残り、あとの 2 種は下りる', async () => {
+    markAll()
+    stubPorts(async () => [])
+
+    await dropDevMarksWithoutOwnDevice(true)
+
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(isDevDevice('manager-device')).toBe(false)
+    expect(isDevDevice('bp-station')).toBe(false)
+  })
+
+  it('★ 口の一覧を待つあいだに機体が挿された → 下ろさない', async () => {
+    markAll()
+    let resolvePorts: (ports: unknown[]) => void = () => {}
+    stubPorts(() => new Promise((resolve) => { resolvePorts = resolve }))
+
+    const pending = dropDevMarksWithoutOwnDevice(false)
+    reloadDevMarksFromStorage()
+    resolvePorts([])
+    await pending
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+  })
+
+  it('挿されたとき: 下りていた memory の印が保存した印から戻り、イベントが出る', () => {
+    markAll()
+    for (const kind of KINDS) noteDeviceToken(kind, null)
+    onMark.mockClear()
+
+    reloadDevMarksFromStorage()
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+    expect(onMark).toHaveBeenCalledTimes(3)
+  })
+
+  it('挿されたとき: 保存した印が無い種類は立たず、変わらなければイベントも出ない', () => {
+    noteDeviceToken('kiosk', DEV)
+    noteDeviceToken('kiosk', null)
+    localStorage.removeItem('alc_dev_device_kiosk')
+    onMark.mockClear()
+
+    reloadDevMarksFromStorage()
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(false)
+    expect(onMark).not.toHaveBeenCalled()
   })
 })

@@ -55,7 +55,7 @@ export const BLE_GW_DEVICES = [
 ]
 
 /** 調停の対象にする VID。CoreS3 も VoiceS3R もこれで、記述子では見分けられない */
-const ARBITRATED_VID = 0x303A
+export const ARBITRATED_VID = 0x303A
 
 /**
  * 血圧測定台 (ATOM S3) が名乗る kind (`DEVICE bp-station`)。
