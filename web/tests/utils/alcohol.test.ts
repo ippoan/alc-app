@@ -119,7 +119,7 @@ describe('punchTenkoOf (打刻に結ばれた点呼、Refs ippoan/alc-app#436)',
   })
 
   it('値 0 の正常は緑の「正常」、値を mg/L で出す', () => {
-    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0, result: 'normal', tenko_pending: false })).toEqual({
+    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0, result: 'normal', tenko_recorded: true })).toEqual({
       pending: false,
       alcohol: { label: '正常', cls: 'bg-green-100 text-green-800', value: '0.000 mg/L' },
     })
@@ -140,11 +140,16 @@ describe('punchTenkoOf (打刻に結ばれた点呼、Refs ippoan/alc-app#436)',
     })
   })
 
-  it('結果が無い (測定中) なら alcohol は null。確定待ちは tenko_pending が true のときだけ', () => {
-    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: null, result: null, tenko_pending: true })).toEqual({
+  it('結果が無い (測定中) なら alcohol は null。確定待ちは tenko_recorded が false のときだけ', () => {
+    expect(punchTenkoOf({ measurement_id: MID, alcohol_level: null, result: null, tenko_recorded: false })).toEqual({
       pending: true,
       alcohol: null,
     })
+  })
+
+  it('tenko_recorded が null / 欠落 (サーバがまだ返さない) なら確定待ちと言わない', () => {
+    expect(punchTenkoOf({ measurement_id: MID, tenko_recorded: null })?.pending).toBe(false)
+    expect(punchTenkoOf({ measurement_id: MID })?.pending).toBe(false)
   })
 
   it('判定はあるが値が無い行は値を出さない (色は値 0 として決める)', () => {

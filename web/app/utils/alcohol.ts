@@ -79,7 +79,7 @@ export function alcoholResultClass(result: string, value: number): string {
 
 /** 打刻に結ばれた点呼の表示 (Refs ippoan/alc-app#436)。 */
 export interface PunchTenko {
-  /** 点呼が確定待ちか */
+  /** 点呼が確定待ちか (結ばれた測定がまだ点呼として記録されていない) */
   pending: boolean
   /** アルコールの結果。測定がまだ結果を持たない (測定中・取り止め) ときは null */
   alcohol: { label: string, cls: string, value: string | null } | null
@@ -91,7 +91,7 @@ export interface PunchTenko {
  * 値は吹込不良 (error) では出さない — そのときの値は測定値ではないため (`readAlcohol` の doc)。
  */
 export function punchTenkoOf(
-  p: Pick<TimePunchWithDevice, 'measurement_id' | 'alcohol_level' | 'result' | 'tenko_pending'>,
+  p: Pick<TimePunchWithDevice, 'measurement_id' | 'alcohol_level' | 'result' | 'tenko_recorded'>,
 ): PunchTenko | null {
   if (!p.measurement_id) return null
   const value = typeof p.alcohol_level === 'number' ? p.alcohol_level : null
@@ -102,5 +102,6 @@ export function punchTenkoOf(
         value: p.result !== 'error' && value !== null ? `${value.toFixed(3)} mg/L` : null,
       }
     : null
-  return { pending: p.tenko_pending === true, alcohol }
+  // サーバが欄を返さない間 (null / 欠落) は確定待ちと言わない — 分からないものを待ちと見せない
+  return { pending: p.tenko_recorded === false, alcohol }
 }

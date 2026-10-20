@@ -109,8 +109,8 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
   it('★ 測定と結ばれた行は「点呼」とアルコール値を出す (0 は通常、0 より上は赤)。結ばれていない行は今どおり (Refs ippoan/alc-app#436)', async () => {
     listTimePunchesMock.mockResolvedValueOnce({
       punches: [
-        { id: 'p1', employee_id: null, employee_name: '田中太郎', card_id: null, measurement_id: 'm-1', alcohol_level: 0.05, result: 'normal', tenko_pending: true, punched_at: '2026-10-20T00:02:00Z' },
-        { id: 'p2', employee_id: null, employee_name: '鈴木花子', card_id: null, measurement_id: 'm-2', alcohol_level: 0, result: 'normal', tenko_pending: false, punched_at: '2026-10-20T00:01:00Z' },
+        { id: 'p1', employee_id: null, employee_name: '田中太郎', card_id: null, measurement_id: 'm-1', alcohol_level: 0.05, result: 'normal', tenko_recorded: false, punched_at: '2026-10-20T00:02:00Z' },
+        { id: 'p2', employee_id: null, employee_name: '鈴木花子', card_id: null, measurement_id: 'm-2', alcohol_level: 0, result: 'normal', tenko_recorded: true, punched_at: '2026-10-20T00:01:00Z' },
         { id: 'p3', employee_id: null, employee_name: '佐藤次郎', card_id: null, punched_at: '2026-10-20T00:00:00Z' },
       ],
     })

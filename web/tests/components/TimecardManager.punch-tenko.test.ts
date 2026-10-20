@@ -44,8 +44,8 @@ describe('TimecardManager — 打刻に結ばれた点呼の表示', () => {
   it('★ 結ばれた行は「点呼」とアルコール値 (0 は通常、0 より上は赤)、結ばれていない行は「打刻」のまま', async () => {
     listTimePunchesMock.mockResolvedValueOnce({
       punches: [
-        punch('1', '2026-10-20T00:02:00Z', { measurement_id: 'm-1', alcohol_level: 0.05, result: 'normal', tenko_pending: true }),
-        punch('2', '2026-10-20T00:01:00Z', { measurement_id: 'm-2', alcohol_level: 0, result: 'normal', tenko_pending: false }),
+        punch('1', '2026-10-20T00:02:00Z', { measurement_id: 'm-1', alcohol_level: 0.05, result: 'normal', tenko_recorded: false }),
+        punch('2', '2026-10-20T00:01:00Z', { measurement_id: 'm-2', alcohol_level: 0, result: 'normal', tenko_recorded: true }),
         punch('3', '2026-10-20T00:00:00Z'),
       ],
       total: 3,

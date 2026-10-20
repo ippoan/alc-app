@@ -881,8 +881,8 @@ export interface TimePunchWithDevice {
   alcohol_level?: number | null
   /** 結ばれた測定のアルコール判定 (`'normal'` / `'over'` / `'error'`) */
   result?: string | null
-  /** 結ばれた測定の点呼が確定待ちか */
-  tenko_pending?: boolean | null
+  /** 結ばれた測定が点呼として記録済みか (false なら確定待ち) */
+  tenko_recorded?: boolean | null
   punched_at: string
   created_at: string
 }
