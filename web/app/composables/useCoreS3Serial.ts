@@ -53,6 +53,7 @@ import { writeLine } from '~/composables/useSerialArbiter'
 import { findDeviceLine } from '~/utils/device-line'
 import type { DeviceLine } from '~/utils/device-line'
 import { appendDiag, readDiag } from '~/utils/serialDiagLog'
+import { createLineDispatch } from '~/utils/serial-line-dispatch'
 
 /** arbiter に登録する名前 */
 const CLAIMANT_NAME = 'cores3'
@@ -116,8 +117,8 @@ const isConnected = ref(false)
  */
 const deviceInfo = ref<DeviceLine | null>(null)
 
-const jsonHandlers = new Set<(msg: unknown) => void>()
-const eventHandlers = new Set<(name: string, args: string[]) => void>()
+/** `EVT` / JSON の購読者と配り方 (Atom S3・Vein Station と共通、Refs ippoan/alc-app#436) */
+const lineDispatch = createLineDispatch('CoreS3')
 const openHandlers = new Set<() => void>()
 const closeHandlers = new Set<() => void>()
 /** claim を待っている connect() */
@@ -218,33 +219,12 @@ export function useCoreS3Serial() {
 
   // --- 行の振り分け ---
 
-  /** `EVT <NAME> <args...>` を名前と引数に割る */
-  function dispatchEvent(line: string): void {
-    // 'EVT ' の 4 文字を落とし、最初の空白までが名前
-    const sep = line.indexOf(' ', 4)
-    const name = sep === -1 ? line.slice(4) : line.slice(4, sep)
-    const args = sep === -1 ? [] : line.slice(sep + 1).split(' ')
-    for (const cb of [...eventHandlers]) cb(name, args)
-  }
-
-  function dispatchJson(line: string): void {
-    let msg: unknown
-    try {
-      msg = JSON.parse(line)
-    }
-    catch {
-      console.warn('[CoreS3] Invalid JSON:', line)
-      return
-    }
-    for (const cb of [...jsonHandlers]) cb(msg)
-  }
-
   function handleLine(line: string): void {
     const kind = classify(line)
-    if (kind === 'json') dispatchJson(line)
+    if (kind === 'json') lineDispatch.dispatchJson(line)
     else if (kind === 'event') {
       if (DIAG_EVENT_PREFIXES.some(prefix => line.startsWith(prefix))) appendDiag(`dev ${line}`)
-      dispatchEvent(line)
+      lineDispatch.dispatchEvent(line)
       const queryId = logQueryId(line)
       if (queryId !== null) void replyLog(queryId)
     }
@@ -349,16 +329,7 @@ export function useCoreS3Serial() {
 
   // --- 公開 API ---
 
-  /** JSON として読めた行を受け取る */
-  function onJson(cb: (msg: unknown) => void): void {
-    jsonHandlers.add(cb)
-  }
-
-  /** `EVT <NAME> <args...>` を受け取る。返り値を呼ぶと解除できる */
-  function onEvent(cb: (name: string, args: string[]) => void): () => void {
-    eventHandlers.add(cb)
-    return () => { eventHandlers.delete(cb) }
-  }
+  const { onJson, onEvent } = lineDispatch
 
   /**
    * ポートを預かった (接続した)。登録した時点で既に接続済みなら、その場で 1 回呼ぶ —

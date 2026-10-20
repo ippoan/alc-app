@@ -1172,4 +1172,71 @@ describe('useBleGateway', () => {
       })
     })
   })
+
+  // ---------- Vein Station の RS232 につないだ FC-1200 (Refs ippoan/alc-app#436) ----------
+  // PC に挿すのは Vein Station (`DEVICE timecard`) だけ。CoreS3 と同じ `EVT FC1200` と
+  // alcohol JSON を出すが、ポートは指静脈・端末 JWT と共用なので transports には入れない
+
+  describe('Vein Station (DEVICE timecard)', () => {
+    async function connectVein(dev: MockPortHandle) {
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      const { useVeinSerial } = await import('~/composables/useVeinSerial')
+      const vein = useVeinSerial()
+      dev.emit('DEVICE timecard VER=0.1.0\n')
+      const p = vein.connect(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(await p).toBe(true)
+      return vein
+    }
+
+    it('EVT FC1200 → alcoholStage、alcohol JSON → latestAlcohol (autoConnect を通らなくても)', async () => {
+      const dev = createMockPort()
+      await connectVein(dev)
+      expect(gw.isConnected.value).toBe(false)
+
+      dev.emit('EVT FC1200 BLOW_WAITING\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.alcoholStage.value).toBe('blow_waiting')
+
+      dev.emit('{"type":"alcohol","value":0.15,"unit":"mg/L","result":"over","use_count":7}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.latestAlcohol.value).toMatchObject({ value: 0.15, result: 'over', useCount: 7 })
+      expect(gw.alcoholStage.value).toBe('result_received')
+
+      // BLE ゲートウェイとしては繋がない (transport は立たない)
+      expect(gw.isConnected.value).toBe(false)
+      expect(gw.transport.value).toBeNull()
+    })
+
+    it('alcohol 以外の JSON (ready / error) は見ない — heartbeat 監視もエラー表示も起きない', async () => {
+      const dev = createMockPort()
+      await connectVein(dev)
+
+      dev.emit('{"type":"ready","version":"9.9.9"}\n')
+      dev.emit('{"type":"error","message":"x"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(gw.gatewayVersion.value).toBeNull()
+      expect(gw.error.value).toBeNull()
+    })
+
+    it('gateway の disconnect / cleanup は Vein Station のポートを返さない (指静脈・端末 JWT が止まらない)', async () => {
+      const dev = createMockPort()
+      const vein = await connectVein(dev)
+
+      await gw.disconnect()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(vein.isConnected.value).toBe(true)
+      expect(dev.port.close).not.toHaveBeenCalled()
+
+      // 以後も FC-1200 の段階は届く
+      dev.emit('EVT FC1200 MEASURING\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.alcoholStage.value).toBe('measuring')
+
+      await vein.disconnect()
+    })
+  })
 })

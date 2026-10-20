@@ -75,6 +75,37 @@ function emitAtomEvent(name: string, args: string[] = []) {
   for (const cb of [...atomEventHandlers]) cb(name, args)
 }
 
+// --- useVeinSerial のモック (Vein Station の Port A の NFC ユニット、Refs ippoan/alc-app#436) ---
+
+const veinState = {
+  isConnected: ref(false),
+}
+/** useNfcReader が繋いだ EVT の受け口 */
+let veinEventHandlers: Array<(name: string, args: string[]) => void> = []
+const veinMock = {
+  isSupported: true,
+  connect: vi.fn(async () => veinState.isConnected.value),
+  disconnect: vi.fn(async () => {}),
+  capture: vi.fn(async () => ''),
+  say: vi.fn(async () => {}),
+  request: vi.fn(async () => ''),
+  onClose: vi.fn(),
+  onEvent: vi.fn((cb: (name: string, args: string[]) => void) => {
+    veinEventHandlers.push(cb)
+    return () => {}
+  }),
+  onJson: vi.fn(),
+}
+mockNuxtImport('useVeinSerial', () => () => ({
+  ...veinMock,
+  isConnected: readonly(veinState.isConnected),
+}))
+
+/** Vein Station から `EVT <NAME> <args...>` が届いた体にする */
+function emitVeinEvent(name: string, args: string[] = []) {
+  for (const cb of [...veinEventHandlers]) cb(name, args)
+}
+
 // --- useNfcWebSocket のモック (公開 API 9 キー) ---
 
 const wsState = {
@@ -152,6 +183,8 @@ describe('useNfcReader', () => {
     coreEventHandlers = []
     atomEventHandlers = []
     atomState.isConnected.value = false
+    veinEventHandlers = []
+    veinState.isConnected.value = false
     wsCallbacks.read = []
     wsCallbacks.license = []
     wsCallbacks.error = []
@@ -193,6 +226,7 @@ describe('useNfcReader', () => {
     const reader = await load()
     expect(coreMock.onEvent).toHaveBeenCalledTimes(1)
     expect(atomMock.onEvent).toHaveBeenCalledTimes(1)
+    expect(veinMock.onEvent).toHaveBeenCalledTimes(1)
 
     // 2 つ目の component が同じ composable を呼んでも増えない
     const [second, secondApp] = withSetup(() => mod.useNfcReader())
@@ -599,6 +633,68 @@ describe('useNfcReader', () => {
     expect(reader.isConnected.value).toBe(true)
     expect(reader.readers.value).toEqual(['CoreS3'])
   })
+  // ---------- Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436) ----------
+  // PC に挿すのは Vein Station だけで、CoreS3 も NFC ブリッジも無い構成
+
+  it('Vein Station の EVT NFC_LICENSE を onLicenseRead → onRead の順で配る (source は vein-station)', async () => {
+    const reader = await load()
+    const order: string[] = []
+    let license: NfcLicenseReadEvent | null = null
+    let read: NfcReadEvent | null = null
+    reader.onLicenseRead((e) => { order.push('license'); license = e })
+    reader.onRead((e) => { order.push('read'); read = e })
+
+    emitVeinEvent('NFC_LICENSE', [`issue=${ISSUE}`, `expiry=${EXPIRY}`])
+
+    expect(order).toEqual(['license', 'read'])
+    expect(license).toEqual({
+      type: 'nfc_license_read',
+      card_type: 'driver_license',
+      card_id: CARD_ID,
+      expiry_date: CARD_ID,
+      atr: '',
+    })
+    // station 版は自分で打刻を上げないので 'cores3' とは名乗らない (画面が打刻する側)
+    expect(read).toEqual({ type: 'nfc_read', employee_id: ISSUE + EXPIRY, source: 'vein-station', card_type: 'driver_license' })
+  })
+
+  it('Vein Station の EVT TIMECARD (IC カード) は配らない (免許証だけを点呼に使う)', async () => {
+    const reader = await load()
+    const seen: unknown[] = []
+    reader.onLicenseRead(e => seen.push(e))
+    reader.onRead(e => seen.push(e))
+    reader.onError(e => seen.push(e))
+
+    emitVeinEvent('TIMECARD', ['idm=0123456789ABCDEF'])
+    expect(seen).toEqual([])
+  })
+
+  it('Vein Station が繋がっていれば isConnected が true で、readers は Vein Station になる', async () => {
+    const reader = await load()
+    expect(reader.isConnected.value).toBe(false)
+
+    veinState.isConnected.value = true
+    await nextTick()
+    expect(reader.isConnected.value).toBe(true)
+    expect(reader.readers.value).toEqual(['Vein Station'])
+
+    veinState.isConnected.value = false
+    await nextTick()
+    expect(reader.isConnected.value).toBe(false)
+    expect(reader.readers.value).toEqual([])
+  })
+
+  it('CoreS3 / Atom S3 と Vein Station が両方繋がっていたら CoreS3 → Atom S3 の順で優先する', async () => {
+    atomState.isConnected.value = true
+    veinState.isConnected.value = true
+    const reader = await load()
+    expect(reader.readers.value).toEqual(['ATOM S3'])
+
+    coreState.isConnected.value = true
+    await nextTick()
+    expect(reader.readers.value).toEqual(['CoreS3'])
+  })
+
   // ---------- read に載る card_type (IT点呼 の本人確認、Refs ippoan/alc-app#387) ----------
 
   /** ブリッジから read が 1 件届いた体にする (card_type は read 自身が持つ値) */

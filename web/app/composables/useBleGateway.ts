@@ -13,6 +13,7 @@ import { readAlcohol } from '~/utils/alcohol'
 // そのまま保たれる
 import { useCoreS3Serial as useCoreS3Transport } from '~/composables/useCoreS3Serial'
 import { useAtomS3Serial as useAtomS3Transport } from '~/composables/useAtomS3Serial'
+import { useVeinSerial as useVeinTransport } from '~/composables/useVeinSerial'
 
 // Android BLE Bridge WebSocket
 const BLE_WS_URL = 'ws://127.0.0.1:9877'
@@ -110,11 +111,24 @@ export function useBleGateway() {
   // CoreS3 の画面と連動しないので、PC 直結と同じ語彙でここから進みを出す
   // (Refs ippoan/alc-app-s3#135)。**接続の有無と無関係に繋ぐ** — 理由は
   // `fc1200Wired` の doc を参照 (Refs ippoan/rust-alc-api#644)
+  //
+  // Vein Station の RS232 につないだ FC-1200 も同じ `EVT FC1200` と alcohol JSON を出す
+  // (Refs ippoan/alc-app#436)。ただし **`transports` には入れない** — WS 接続時の
+  // `t.disconnect()` や `cleanup()` の `t.release()` が Vein のポートを返してしまい、
+  // 指静脈と端末 JWT (useDeviceToken) が止まる。sendCommand の BLE JSON も書いてしまう。
+  // ポートに触らない購読 (`onEvent` / `onJson`) だけをここで足し、alcohol 以外の JSON は見ない
+  const vein = useVeinTransport()
   if (!fc1200Wired) {
     fc1200Wired = true
-    coreS3.onEvent((name, args) => {
+    const onFc1200Event = (name: string, args: string[]): void => {
       if (name !== 'FC1200') return
       alcoholStage.value = FC1200_EVT_STATE[args[0] ?? ''] ?? null
+    }
+    coreS3.onEvent(onFc1200Event)
+    vein.onEvent(onFc1200Event)
+    vein.onJson((msg) => {
+      // `{` で始まる行だけが来るので msg は必ず object
+      if ((msg as { type?: unknown }).type === 'alcohol') processMessage(msg as BleGatewayMessage)
     })
   }
 

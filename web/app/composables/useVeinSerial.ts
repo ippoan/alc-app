@@ -6,7 +6,8 @@
  * 端末は `DEVICE timecard …` と名乗る (alc-app-s3 `crates/hub-core/src/protocol.rs` の
  * `HostKind::Timecard`)。機種識別を USB 記述子では行えない理由・`DEVICE` プローブの
  * 仕組みは useAtomS3Serial / useSerialArbiter の doc と同じ (Refs ippoan/alc-app#182, #353)。
- * ここは預かったポートの使い方 (`VEIN CAPTURE` / `VEIN SAY <x>`) だけを持つ。
+ * ここは預かったポートの使い方 (`VEIN CAPTURE` / `VEIN SAY <x>`) と、端末が自分から出す
+ * `EVT` / JSON 行の配布 (`onEvent` / `onJson`、免許証と FC-1200。Refs ippoan/alc-app#436) を持つ。
  *
  * 正本: alc-app-s3 `docs/console-protocol.md` (ippoan/alc-app-s3#274)。
  *   `VEIN CAPTURE` → 成功 `VEIN CHARA <hex>` (1 行)。失敗 `ERR VEIN <reason>`。
@@ -21,6 +22,7 @@
 
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
+import { createLineDispatch } from '~/utils/serial-line-dispatch'
 
 /**
  * arbiter に登録する名前。`DEVICE timecard` の kind と一致させる — 語彙の正本は arbiter 側
@@ -47,6 +49,13 @@ const waiters = new Set<() => void>()
 const closeHandlers = new Set<() => void>()
 
 /**
+ * Port A の NFC ユニット (`EVT NFC_LICENSE …` / `EVT TIMECARD …`) と RS232 の FC-1200
+ * (`EVT FC1200 …` / `{"type":"alcohol",…}`) の行を配る。CoreS3 と同じ語彙・同じ配り方
+ * (Refs ippoan/alc-app#436)
+ */
+const lineDispatch = createLineDispatch('VEIN')
+
+/**
  * `ERR VEIN <reason>` / `ERR VEIN: unsupported` から reason だけを取り出す。
  * `useSerialArbiter.request()` の reject は `ERR VEIN ...` 以降を丸ごと Error.message に
  * するので (`errPrefix` からの slice)、先頭の `ERR VEIN` とその後ろの `:`/空白を落とす。
@@ -65,17 +74,19 @@ export function useVeinSerial() {
 
   // --- arbiter に預けるハンドラ ---
   //
-  // capture/say の応答は全部 arbiter.request() の pendingRequest 横取りで拾われる
-  // (Refs useSerialArbiter.probe の doc)。それ以外の行は Vein Station から来ない想定
-  // なので onLine は何もしない。
+  // capture/say の応答は arbiter.request() が照合して返す。arbiter は照合した後も同じ行を
+  // onLine へ流すが、応答 (`VEIN CHARA` / `OK VEIN` / `ERR VEIN` / `AUTH`) は `EVT ` でも
+  // `{` でも始まらないので、dispatchLine の接頭辞で落ちて二重には配られない。
 
   const claimant: SerialClaimant = {
-    onOpen() {
+    onOpen(_port, _reader, _writer, lines) {
       isConnected.value = true
+      // プローブ中に来ていた行も配る (useAtomS3Serial と同じ)
+      for (const line of lines) lineDispatch.dispatchLine(line)
       for (const notify of [...waiters]) notify()
     },
 
-    onLine() { /* capture/say の応答は request() が横取りする。他に来る行は無い */ },
+    onLine: lineDispatch.dispatchLine,
 
     onClose() {
       isConnected.value = false
@@ -183,5 +194,7 @@ export function useVeinSerial() {
     say,
     request,
     onClose,
+    onEvent: lineDispatch.onEvent,
+    onJson: lineDispatch.onJson,
   }
 }

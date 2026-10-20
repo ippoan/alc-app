@@ -55,6 +55,10 @@ export interface NfcReadEvent {
    * 読んだのが測定台の端末か Windows の常駐アプリかで**案内の出しようが違う**ため
    * (測定台に NFC ブリッジは置かない、Refs ippoan/alc-app#353)。
    *
+   * **`'vein-station'` は Vein Station の Port A の NFC ユニットが読んだ = 誰も打刻していない。**
+   * station 版は LAN を持たず自分では打刻を上げないので、`'bridge'` と同じくブラウザが打つ
+   * (Refs ippoan/alc-app#436)。
+   *
    * **必須にしてある。** optional にすると新しい発火元が黙って打刻を落とす /
    * 二重にする側へ倒れる。
    */
@@ -71,7 +75,7 @@ export interface NfcReadEvent {
 }
 
 /** [`NfcReadEvent.source`] の値。 */
-export type NfcReadSource = 'cores3' | 'bridge' | 'bp-station'
+export type NfcReadSource = 'cores3' | 'bridge' | 'bp-station' | 'vein-station'
 
 /** NFC 免許証読み取りイベント */
 export interface NfcLicenseReadEvent {

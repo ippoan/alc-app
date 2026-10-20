@@ -1360,7 +1360,7 @@ describe('NormalMeasurement — 読み取り経路による打刻の出し分け
   async function touchFrom(
     wrapper: Awaited<ReturnType<typeof mountNfcStep>>,
     nfcId: string,
-    source?: 'cores3' | 'bridge',
+    source?: 'cores3' | 'bridge' | 'vein-station',
   ) {
     wrapper.findComponent(NfcStatusStub).vm.$emit('read', nfcId, undefined, source)
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -1373,6 +1373,20 @@ describe('NormalMeasurement — 読み取り経路による打刻の出し分け
     punchTimecardMock.mockClear()
 
     await touchFrom(wrapper, '2601012901010', 'bridge')
+
+    expect(punchTimecardMock).toHaveBeenCalledTimes(1)
+    expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')
+    expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  // Vein Station (station 版) は LAN を持たず自分で打刻を上げない (Refs ippoan/alc-app#436)
+  it("★ source: 'vein-station' の読み取りでは打刻する (端末が打刻を上げない)", async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(APPROVED_EMPLOYEE)
+    const wrapper = await mountNfcStep()
+    punchTimecardMock.mockClear()
+
+    await touchFrom(wrapper, '2601012901010', 'vein-station')
 
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
     expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010')

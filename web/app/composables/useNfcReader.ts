@@ -15,6 +15,11 @@
  *     取り合いは arbiter が `DEVICE <kind>` で捌くので、1 本のポートを両方が
  *     預かることは無い。測定台の Atom S3 を掴むのは useBpStationDeviceToken
  *     (起動時に 1 回) なので、ここは**受け口を繋ぐだけ**で connect() はしない
+ *   - Vein Station (`DEVICE timecard`) の Port A に NFC ユニットを挿す構成もある。
+ *     これも CoreS3 と同じ `EVT NFC_LICENSE` を出すので同じ受け口に足す
+ *     (Refs ippoan/alc-app#436)。掴むのは useDeviceToken なので、ここは繋ぐだけ。
+ *     IC カード (`EVT TIMECARD`) は社員の引き当てが要るので、まだ配らない
+ *     (handleDeviceEvent が名前で見ないだけで落ちる)
  *
  * それでも経路の切り替わり際に同じ免許証が二重に届きうるので、同じ employee_id を
  * DEDUPE_WINDOW_MS 以内に再受信したら捨てる。firmware 側にも重複除去はあるが、
@@ -69,6 +74,8 @@ export function useNfcReader() {
   const core = useCoreS3Serial()
   // 測定台の Atom S3 (NFC は CoreS3 と共通実装なので、行も `EVT NFC_LICENSE` で同じ)
   const atom = useAtomS3Serial()
+  // Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)
+  const vein = useVeinSerial()
 
   const isConnected = ref(false)
   const error = ref<string | null>(null)
@@ -158,6 +165,7 @@ export function useNfcReader() {
     wired = true
     core.onEvent(fanout('cores3'))
     atom.onEvent(fanout('bp-station'))
+    vein.onEvent(fanout('vein-station'))
   }
 
   // --- NFC ブリッジ (9876) ---
@@ -180,6 +188,7 @@ export function useNfcReader() {
   function directReader(): string | null {
     if (core.isConnected.value) return 'CoreS3'
     if (atom.isConnected.value) return 'ATOM S3'
+    if (vein.isConnected.value) return 'Vein Station'
     return null
   }
 
@@ -208,7 +217,7 @@ export function useNfcReader() {
 
   // immediate: 既に接続済みの CoreS3 / Atom S3 / ブリッジへ再 mount した時点で local ref に
   // 反映する (タブを戻すたびに local isConnected が false から作り直されるため)。
-  watch([core.isConnected, atom.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
+  watch([core.isConnected, atom.isConnected, vein.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
 
   function connect(): void {
     wantConnected = true
