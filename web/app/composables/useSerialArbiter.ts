@@ -284,6 +284,17 @@ export function isArbitratedPort(port: SerialPort): boolean {
   return false
 }
 
+/**
+ * どれかの機体に預けたポートか ({@link isArbitratedPort} と違い、プローブ中のポートは含めない)。
+ * 開発用の印を下ろす判定 (`token-selection.ts`) が「どの機体にも決まっていない口」を数えるのに使う
+ */
+export function isClaimedPort(port: SerialPort): boolean {
+  for (const s of sessions) {
+    if (s.port === port && s.owner) return true
+  }
+  return false
+}
+
 /** 行を 1 本書く。失敗を例外ではなく false で返す */
 export async function writeLine(
   w: WritableStreamDefaultWriter<Uint8Array>,

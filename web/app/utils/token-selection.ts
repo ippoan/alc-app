@@ -39,9 +39,10 @@
  * 上げ下げする。dev の機体を抜いて読み込み直した端末が、いつまでも「開発用の端末」のまま
  * 本番の記録を開発用に回さないため。
  *
- * - 起動時 ({@link dropDevMarksWithoutOwnDevice}): 許可済みの口にうちの機体が 1 つも無ければ、
- *   3 種の memory の印を下ろす。1 つでもあれば何もしない (今までどおり保存した印で始まる)。
- *   端末登録のある PC はキオスクの印を下ろさない
+ * - 起動時と機体がつながったとき ({@link dropDevMarksWithoutOwnDevice}): 許可済みのうちの機体の口が
+ *   すべてどれかの機体につながっていれば、つながっていない種類の memory の印を下ろす (口が 1 つも
+ *   無ければ 3 種とも)。どの機体にも決まっていない口が 1 つでもあれば何もしない (保存した印のまま)。
+ *   つながった種類の印は、その機体の鍵が取れた時点で決まる。端末登録のある PC はキオスクの印を下ろさない
  * - 挿されたとき ({@link reloadDevMarksFromStorage}): 3 種の memory の印を保存した印から読み直す
  *   (起動時と同じ状態に戻す)。挿し直し直後に管理者のトークンで本番の記録になる窓 (#389) は、
  *   保存した印がそのまま塞ぐ
@@ -56,7 +57,7 @@
  * 読めないトークンは dev でない側 (= 今までの挙動) に倒れる。
  */
 import { decodeJwtPayloadFromToken } from '@ippoan/auth-client'
-import { ARBITRATED_VID } from '~/composables/useSerialArbiter'
+import { ARBITRATED_VID, isClaimedPort } from '~/composables/useSerialArbiter'
 
 /**
  * 端末の鍵の種類。`api.ts` の getter 3 本と 1 対 1 —
@@ -159,21 +160,32 @@ export function reloadDevMarksFromStorage(): void {
 }
 
 /**
- * 起動時の点検 (app.vue の onMounted から 1 回): 許可済みの口にうちの機体 (VID が
- * {@link ARBITRATED_VID}) が 1 つも無ければ、3 種の memory の印を下ろす。**保存した印は
- * 触らない**。
+ * 開発用の印の点検 (app.vue が起動時に 1 回と、うちの機体がつながるたびに呼ぶ): 許可済みの
+ * うちの機体 (VID が {@link ARBITRATED_VID}) の口が**すべてどれかの機体につながっていれば**、
+ * つながっていない種類の memory の印を下ろす。**保存した印は触らない**。
  *
- * - 1 つでもある・WebSerial が無い・口の一覧が取れない → 何もしない
+ * - どの機体にも決まっていない口が 1 つでもある (つながる途中・この画面が受けない機体・旧いファーム) →
+ *   何もしない。その口の機体の印を、鍵を読む前に下ろさないため (#389)
+ * - 口が 1 つも無い → 3 種とも下ろす (機体を抜いて読み込み直した端末)
+ * - つながっている種類 → 下ろさない。印はその機体の鍵が取れた時点で {@link noteDeviceToken} が決める
+ * - WebSerial が無い・口の一覧が取れない → 何もしない
  * - 口の一覧を待つあいだに {@link reloadDevMarksFromStorage} が走った (機体が挿された) →
  *   下ろさない (戻すほうを優先)
  * - `hasKioskCredential` (端末登録がある PC) → キオスクの印は下ろさない。鍵が機体に無い端末で、
  *   印を決めるのは登録した鍵のため。useDeviceToken を import すると循環するので引数で受ける
+ *
+ * `isConnected` (kiosk = CoreS3 か Vein Station、bp-station = ATOM S3、manager-device = VoiceS3R) は
+ * **口の一覧を待った後に**読む — 待つあいだに機体がつながると、その口は数えられるのに種類は
+ * 「つながっていない」と読まれて下ろされてしまうため。
  */
-export async function dropDevMarksWithoutOwnDevice(hasKioskCredential: boolean): Promise<void> {
+export async function dropDevMarksWithoutOwnDevice(
+  hasKioskCredential: boolean,
+  isConnected: (kind: DeviceTokenKind) => boolean = () => false,
+): Promise<void> {
   const reloadsBefore = storedMarkReloads
   try {
     const ports = await navigator.serial.getPorts()
-    if (ports.some(port => port.getInfo().usbVendorId === ARBITRATED_VID)) return
+    if (ports.some(port => port.getInfo().usbVendorId === ARBITRATED_VID && !isClaimedPort(port))) return
   }
   catch {
     return
@@ -181,6 +193,7 @@ export async function dropDevMarksWithoutOwnDevice(hasKioskCredential: boolean):
   if (storedMarkReloads !== reloadsBefore) return
   for (const kind of ALL_KINDS) {
     if (kind === 'kiosk' && hasKioskCredential) continue
+    if (isConnected(kind)) continue
     setDevMark(kind, false)
   }
 }

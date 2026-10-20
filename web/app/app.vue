@@ -76,11 +76,27 @@ onMounted(async () => {
 
   // 開発用の印は、うちの機体が挿さっている間だけ使う (Refs ippoan/alc-app#436)。機体を抜いて
   // 読み込み直した端末は印を下ろして本番として動き、機体が挿されたら保存した印から戻す
-  // (挿し直し直後に管理者のトークンで本番の記録になる窓を開けない)
+  // (挿し直し直後に管理者のトークンで本番の記録になる窓を開けない)。挿した機体がつながったら、
+  // 挿していない種類の印を下ろす (つながった機体の印はその鍵で決まる)
   onPortConnected((port) => {
     if (port.getInfo().usbVendorId === ARBITRATED_VID) reloadDevMarksFromStorage()
   })
-  void dropDevMarksWithoutOwnDevice(hasKioskCredential.value)
+  const coreS3 = useCoreS3Serial()
+  const vein = useVeinSerial()
+  const atom = useAtomS3Serial()
+  // 種類ごとの「その機体がつながっているか」(kiosk = CoreS3 か Vein Station)
+  const ownDeviceConnected = {
+    'kiosk': [coreS3.isConnected, vein.isConnected],
+    'bp-station': [atom.isConnected],
+    'manager-device': [alarm.isConnected],
+  }
+  const checkDevMarks = (): void => {
+    void dropDevMarksWithoutOwnDevice(hasKioskCredential.value, kind => ownDeviceConnected[kind].some(c => c.value))
+  }
+  watch(Object.values(ownDeviceConnected).flat(), (now, before) => {
+    if (now.some((c, i) => c && !before[i])) checkDevMarks()
+  })
+  checkDevMarks()
 
   await init()
 })

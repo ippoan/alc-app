@@ -14,6 +14,13 @@ import {
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 
+// どの機体に預けた口か (arbiter の実物は口を開かないと立たないので、集合で差し替える)
+const claimedPorts = vi.hoisted(() => new Set<unknown>())
+vi.mock('~/composables/useSerialArbiter', async importOriginal => ({
+  ...await importOriginal<typeof import('~/composables/useSerialArbiter')>(),
+  isClaimedPort: (port: unknown) => claimedPorts.has(port),
+}))
+
 const ADMIN = browserJwt()
 const DEV = devDeviceJwt()
 const PLAIN = plainDeviceJwt()
@@ -435,6 +442,7 @@ describe('dropDevMarksWithoutOwnDevice / reloadDevMarksFromStorage — 機体の
   afterEach(() => {
     window.removeEventListener(DEV_DEVICE_MARK_EVENT, onMark)
     delete (navigator as unknown as { serial?: unknown }).serial
+    claimedPorts.clear()
   })
 
   it('うちの機体の口が 0 個 → 3 種の memory の印が下り、localStorage の印は残る', async () => {
@@ -507,6 +515,98 @@ describe('dropDevMarksWithoutOwnDevice / reloadDevMarksFromStorage — 機体の
     const pending = dropDevMarksWithoutOwnDevice(false)
     reloadDevMarksFromStorage()
     resolvePorts([])
+    await pending
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+  })
+
+  // 挿した機体がつながったら、挿していない種類の印を下ろす。つながった種類の印はその鍵で決まる
+  const connectedOnly = (...kinds: DeviceTokenKind[]) => (kind: DeviceTokenKind) => kinds.includes(kind)
+
+  it('口 1 つに Vein Station がつながった → 運行管理者席・測定台が下り、キオスクは残る (鍵で決まる)', async () => {
+    markAll()
+    const vein = port(OWN_VID)
+    claimedPorts.add(vein)
+    stubPorts(async () => [vein])
+
+    await dropDevMarksWithoutOwnDevice(false, connectedOnly('kiosk'))
+
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(isDevDevice('manager-device')).toBe(false)
+    expect(isDevDevice('bp-station')).toBe(false)
+    for (const kind of KINDS) expect(localStorage.getItem(`alc_dev_device_${kind}`)).toBe('1')
+  })
+
+  it('★ どの機体にも決まっていない口が残る間は下ろさない', async () => {
+    markAll()
+    const vein = port(OWN_VID)
+    claimedPorts.add(vein)
+    stubPorts(async () => [vein, port(OWN_VID)])
+    onMark.mockClear()
+
+    await dropDevMarksWithoutOwnDevice(false, connectedOnly('kiosk'))
+
+    for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)
+    expect(onMark).not.toHaveBeenCalled()
+  })
+
+  it('口がすべてつながった → つながっていない種類だけ下りる', async () => {
+    markAll()
+    const coreS3 = port(OWN_VID)
+    const atom = port(OWN_VID)
+    claimedPorts.add(coreS3)
+    claimedPorts.add(atom)
+    stubPorts(async () => [coreS3, atom, port(0x1A86)])
+
+    await dropDevMarksWithoutOwnDevice(false, connectedOnly('kiosk', 'bp-station'))
+
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(isDevDevice('bp-station')).toBe(true)
+    expect(isDevDevice('manager-device')).toBe(false)
+  })
+
+  it('端末登録がある PC → つながっていなくてもキオスクは下ろさない', async () => {
+    markAll()
+    const atom = port(OWN_VID)
+    claimedPorts.add(atom)
+    stubPorts(async () => [atom])
+
+    await dropDevMarksWithoutOwnDevice(true, connectedOnly('bp-station'))
+
+    expect(isDevDevice('kiosk')).toBe(true)
+    expect(isDevDevice('bp-station')).toBe(true)
+    expect(isDevDevice('manager-device')).toBe(false)
+  })
+
+  it('★ つながったかは口の一覧を待った後に読む (待つあいだにつながった種類は下ろさない)', async () => {
+    markAll()
+    const coreS3 = port(OWN_VID)
+    const atom = port(OWN_VID)
+    claimedPorts.add(coreS3)
+    let resolvePorts: (ports: unknown[]) => void = () => {}
+    stubPorts(() => new Promise((resolve) => { resolvePorts = resolve }))
+    const connected = new Set<DeviceTokenKind>(['kiosk'])
+
+    const pending = dropDevMarksWithoutOwnDevice(false, kind => connected.has(kind))
+    claimedPorts.add(atom)
+    connected.add('bp-station')
+    resolvePorts([coreS3, atom])
+    await pending
+
+    expect(isDevDevice('bp-station')).toBe(true)
+    expect(isDevDevice('manager-device')).toBe(false)
+  })
+
+  it('★ つながった後の点検でも、口の一覧を待つあいだに機体が挿されたら下ろさない', async () => {
+    markAll()
+    const vein = port(OWN_VID)
+    claimedPorts.add(vein)
+    let resolvePorts: (ports: unknown[]) => void = () => {}
+    stubPorts(() => new Promise((resolve) => { resolvePorts = resolve }))
+
+    const pending = dropDevMarksWithoutOwnDevice(false, connectedOnly('kiosk'))
+    reloadDevMarksFromStorage()
+    resolvePorts([vein])
     await pending
 
     for (const kind of KINDS) expect(isDevDevice(kind)).toBe(true)

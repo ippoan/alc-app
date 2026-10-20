@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { devDeviceJwt } from '../helpers/dummy-jwt'
 
 // useDeviceToken はモジュールスコープに credential ref + JWT cache を持つ
 // シングルトンなので、テスト毎に resetModules + dynamic import で分離する。
@@ -69,7 +70,8 @@ beforeEach(() => {
   coreS3Mock.startupProbe.mockReset()
   coreS3Mock.startupProbe.mockImplementation(async () => false)
   authMock.deviceTenantId.value = null
-  veinMock.isConnected.value = false
+  // 前のテストの module が張った watch を引き継がないよう、ref ごと作り直す (接続で鍵を先取りするため)
+  veinMock.isConnected = ref(false)
   veinMock.request.mockReset()
   veinMock.onClose.mockReset()
   signAlarmDeviceNonceMock.mockReset()
@@ -1989,6 +1991,55 @@ describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
     expect(hasDeviceJwt.value).toBe(false)
     const { isKioskDeviceKeyRequired } = await import('~/utils/token-selection')
     expect(isKioskDeviceKeyRequired()).toBe(false)
+  })
+
+  it('挿されたら抑止を解いてすぐ鍵を読む (送信を待たずに開発用の印が決まる)', async () => {
+    signAlarmDeviceNonceMock.mockRejectedValueOnce(new Error('ERR AUTH: no key'))
+    stubFetch({ jwt: devDeviceJwt() })
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, hasDeviceJwt, failureBackoffUntil } = useDeviceToken()
+    veinMock.isConnected.value = true
+    await vi.waitFor(() => expect(failureBackoffUntil.value).toBeGreaterThan(Date.now()))
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(1)
+
+    // 抜いて挿し直す → 抑止中でも取り直す
+    veinMock.isConnected.value = false
+    signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    veinMock.isConnected.value = true
+    expect(failureBackoffUntil.value).toBe(0)
+    await vi.waitFor(() => expect(hasDeviceJwt.value).toBe(true))
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(2)
+    const { isDevDevice } = await import('~/utils/token-selection')
+    expect(isDevDevice('kiosk')).toBe(true)
+    // 先取りした分を送信で使う
+    expect(await getDeviceJwt()).toBe(devDeviceJwt())
+    expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('挿された直後の先取りが指静脈の読み取りと重なって断られても落ちず、送信時に取り直す', async () => {
+    signAlarmDeviceNonceMock
+      .mockRejectedValueOnce(new Error('request(timecard): 既に応答待ちです'))
+      .mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, lastFailureStage, failureBackoffUntil } = useDeviceToken()
+    veinMock.isConnected.value = true
+    await vi.waitFor(() => expect(lastFailureStage.value).toBe('vein-sign'))
+    expect(failureBackoffUntil.value).toBe(0)
+
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+  })
+
+  it('抜いたときは鍵を読まない', async () => {
+    veinMock.isConnected.value = true
+    stubFetch()
+    const useDeviceToken = await load()
+    useDeviceToken()
+
+    veinMock.isConnected.value = false
+    expect(signAlarmDeviceNonceMock).not.toHaveBeenCalled()
   })
 
   it('CoreS3 の失敗では、帯の「あと N 秒」は CoreS3 の抑止期限を見る', async () => {
