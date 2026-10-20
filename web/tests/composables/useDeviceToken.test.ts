@@ -2051,6 +2051,75 @@ describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
     expect(await getDeviceJwt()).toBe('vein-jwt')
   })
 
+  describe('取っている間に Vein Station がつながったとき (読み込み直し直後)', () => {
+    /** alarm-token の JWT を、送られた sig で出し分ける fetch mock (署名した鍵の取り違えを見分ける) */
+    function stubFetchBySig() {
+      const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith('/device/alarm-nonce')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
+        if (url.endsWith('/device/alarm-token')) {
+          const { sig } = JSON.parse(init!.body as string) as { sig: string }
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ access_token: sig === 'sig-v' ? 'vein-jwt' : 'core-jwt', expires_in: 900 }) })
+        }
+        if (url.endsWith('/device/token')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 'cred-jwt', expires_in: 3600 }) })
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      return fetchMock
+    }
+
+    it('CoreS3 の探索を待つ間に Vein がつながったら、Vein の鍵で取る (credential へ落とさず、段も no-core-s3 のままにしない)', async () => {
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+      const fetchMock = stubFetchBySig()
+      coreS3Mock.startupProbe.mockImplementation(async () => {
+        veinMock.isConnected.value = true
+        return false
+      })
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt, lastFailureStage } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('vein-jwt')
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', veinMock.request)
+      expect(fetchMock.mock.calls.some(([u]) => (u as string).endsWith('/device/token'))).toBe(false)
+      expect(lastFailureStage.value).toBeNull()
+    })
+
+    it('その Vein の署名が失敗したら null (CoreS3・credential へ落とさない)', async () => {
+      signAlarmDeviceNonceMock.mockRejectedValue(new Error('ERR AUTH: no key'))
+      const fetchMock = stubFetchBySig()
+      coreS3Mock.startupProbe.mockImplementation(async () => {
+        veinMock.isConnected.value = true
+        return false
+      })
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt, lastFailureStage } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+      expect(lastFailureStage.value).toBe('vein-sign')
+      expect(fetchMock.mock.calls.some(([u]) => (u as string).endsWith('/device/token'))).toBe(false)
+    })
+
+    it('CoreS3 の署名が通った後に Vein がつながっても、返るのは Vein の鍵で取った JWT', async () => {
+      coreS3Mock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockImplementation(async (_nonce: string, request: unknown) => {
+        if (request === coreS3Mock.request) {
+          veinMock.isConnected.value = true
+          return { pubkey: 'pub-c', sig: 'sig-c' }
+        }
+        return { pubkey: 'pub-v', sig: 'sig-v' }
+      })
+      stubFetchBySig()
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBe('vein-jwt')
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', coreS3Mock.request)
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledWith('n1', veinMock.request)
+    })
+  })
+
   it('抜いたときは鍵を読まない', async () => {
     veinMock.isConnected.value = true
     stubFetch()
