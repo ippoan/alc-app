@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import BloodPressureMeasurement from '~/components/BloodPressureMeasurement.vue'
+import { BP_STATION_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import { readReloadContext, resetReloadContext, useKioskScreen } from '~/composables/useKioskScreen'
 
 // 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
@@ -323,6 +324,16 @@ describe('BloodPressureMeasurement — 新版への載せ替えの申告 (Refs i
 
     await wrapper.findAll('button').find(b => b.text() === '次の人へ')!.trigger('click')
     expect(safe()).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('測定台の鍵が取れなかった失敗は「未登録」にせず、その文言をそのまま出す (Refs #436)', async () => {
+    getEmployeeByNfcIdMock.mockRejectedValue(new Error(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE))
+    const wrapper = await mountBp()
+
+    await tapCard(wrapper)
+    expect(wrapper.text()).toContain(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(wrapper.text()).not.toContain('登録されていません')
     wrapper.unmount()
   })
 

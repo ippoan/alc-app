@@ -16,7 +16,7 @@
 import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, getEmployeeById, updateDeviceLastLogin } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
-import { employeeNotFoundByNfc, employeeNotFoundByCode } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 
 const props = defineProps<{
   requiredRole: 'manager' | 'admin'
@@ -101,8 +101,8 @@ async function onNfcRead(nfcId: string) {
     // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
     await faceSync({ force: true })
     step.value = 'face_auth'
-  } catch {
-    errorMessage.value = employeeNotFoundByNfc(nfcId)
+  } catch (e) {
+    errorMessage.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   } finally {
     isSubmitting.value = false
   }
@@ -137,8 +137,8 @@ async function onManualSubmit() {
     // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
     await faceSync({ force: true })
     step.value = 'face_auth'
-  } catch {
-    manualError.value = employeeNotFoundByCode(input)
+  } catch (e) {
+    manualError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
   } finally {
     isSubmitting.value = false
   }

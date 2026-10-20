@@ -4,6 +4,8 @@ import type { VueWrapper } from '@vue/test-utils'
 import { flushPromises } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import VeinRegistration from '~/components/VeinRegistration.vue'
+import { BP_STATION_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
+import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 
 /**
  * 血圧測定タブの指静脈登録 (Refs ippoan/vein-match#20)。
@@ -74,11 +76,19 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
   })
 
   it('カードが見つからなければ理由を出し、カード待ちに残る', async () => {
-    getEmployeeByNfcIdMock.mockRejectedValueOnce(new Error('404'))
+    getEmployeeByNfcIdMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (404): employee_not_found'), { status: 404 }))
     const wrapper = await mountVein()
     await tapCard(wrapper)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
-    expect(wrapper.find('.text-red-600').exists()).toBe(true)
+    expect(wrapper.find('.text-red-600').text()).toBe(employeeNotFoundByNfc('test-card-0001'))
+  })
+
+  it('測定台の鍵が取れなかった失敗は「未登録」にせず、その文言をそのまま出す (Refs #436)', async () => {
+    getEmployeeByNfcIdMock.mockRejectedValueOnce(new Error(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE))
+    const wrapper = await mountVein()
+    await tapCard(wrapper)
+    expect(wrapper.find('.text-red-600').text()).toBe(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+    expect(wrapper.text()).not.toContain('登録されていません')
   })
 
   it('カードで乗務員を特定 → 2 回読んで登録 → 次の人へでカード待ちに戻る', async () => {

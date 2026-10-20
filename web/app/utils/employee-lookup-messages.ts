@@ -5,6 +5,34 @@ export function employeeNotFoundByNfc(nfcId: string): string {
   return `この免許証は乗務員に登録されていません (NFC ID: ${nfcId})。管理者画面の「免許証」で読み取り → 保存してください`
 }
 
+/**
+ * 照会の失敗から HTTP の status を読む (読めなければ `null` = 通信の失敗として扱う)。
+ *
+ * 端末の鍵で送る経路 (`api.ts` の `bearerRequest`) の Error は `.status` を持つが、
+ * **管理者のトークンで送る経路 (`@ippoan/auth-client` の `createAuthFetch`) の Error には
+ * `.status` が無く**、message が `API エラー (<status>): <本文>` の形になるだけ。そちらは
+ * message の**先頭の** `(<3 桁>): ` から読む (本文の中の `(404)` を拾わない)。
+ * `createAuthFetch` の文言の形に依存している — 形が変わると読めなくなり、404・400 でも
+ * 手元の写しへ倒れる。
+ */
+export function failureStatus(e: unknown): number | null {
+  const status = (e as { status?: unknown } | null)?.status
+  if (typeof status === 'number') return status
+  const matched = e instanceof Error ? /^[^(]*\((\d{3})\): /.exec(e.message) : null
+  return matched ? Number(matched[1]) : null
+}
+
+/**
+ * 乗務員の照会が失敗したときに画面へ出す文言。**本当に 404 (未登録) のときだけ**
+ * `notFoundMessage` を出し、それ以外 (端末の鍵が取れない・通信失敗・5xx 等) は
+ * Error の message をそのまま出す — どの失敗も「未登録」と出すと、鍵の不調を
+ * 免許証の未登録と取り違える (Refs ippoan/alc-app#436)。
+ */
+export function employeeLookupFailureMessage(e: unknown, notFoundMessage: string): string {
+  if (failureStatus(e) === 404) return notFoundMessage
+  return e instanceof Error && e.message ? e.message : '乗務員の照会に失敗しました'
+}
+
 /** 社員番号で引けなかったとき */
 export function employeeNotFoundByCode(code: string): string {
   return `社員番号「${code}」の乗務員が見つかりません。社員番号を確認するか、管理者に乗務員登録を依頼してください`

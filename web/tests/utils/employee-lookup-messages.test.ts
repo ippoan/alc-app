@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
+import { BP_STATION_DEVICE_AUTH_FAILED_MESSAGE, KIOSK_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import {
   employeeNotFoundByNfc,
   employeeNotFoundByCode,
   noPendingSchedule,
   deviceUnregisteredMessage,
   autoClaimFailedMessage,
+  employeeLookupFailureMessage,
+  failureStatus,
 } from '~/utils/employee-lookup-messages'
 
 describe('employee-lookup-messages', () => {
@@ -42,5 +45,43 @@ describe('employee-lookup-messages', () => {
     expect(msg).toContain('鍵が未登録')
     expect(msg).toContain('auth.ippoan.org/device/setup')
     expect(msg).toContain('ERR AUTH: no key')
+  })
+
+  describe('employeeLookupFailureMessage / failureStatus (Refs ippoan/alc-app#436)', () => {
+    const notFound = '未登録の文言'
+
+    it('404 (.status を持つ Error) のときだけ未登録の文言を返す', () => {
+      expect(employeeLookupFailureMessage(Object.assign(new Error('API エラー (404): {}'), { status: 404 }), notFound)).toBe(notFound)
+    })
+
+    it('.status が無い Error でも message 先頭の (404): から 404 を読む (createAuthFetch の形)', () => {
+      expect(employeeLookupFailureMessage(new Error('API エラー (404): {"error":"employee_not_found"}'), notFound)).toBe(notFound)
+    })
+
+    it('端末の鍵の失敗は未登録にせず、その文言をそのまま返す', () => {
+      expect(employeeLookupFailureMessage(new Error(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE), notFound)).toBe(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+      expect(employeeLookupFailureMessage(new Error(KIOSK_DEVICE_AUTH_FAILED_MESSAGE), notFound)).toBe(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
+    })
+
+    it('404 以外の HTTP エラー (500) も message をそのまま返す', () => {
+      const msg = 'API エラー (500): boom'
+      expect(employeeLookupFailureMessage(Object.assign(new Error(msg), { status: 500 }), notFound)).toBe(msg)
+    })
+
+    it('message が本文中に (404): を含んでも先頭でなければ 404 にしない', () => {
+      const msg = 'API エラー (500): upstream said (404): x'
+      expect(employeeLookupFailureMessage(new Error(msg), notFound)).toBe(msg)
+    })
+
+    it('Error でない値・空の message は汎用文', () => {
+      expect(employeeLookupFailureMessage('boom', notFound)).toBe('乗務員の照会に失敗しました')
+      expect(employeeLookupFailureMessage(null, notFound)).toBe('乗務員の照会に失敗しました')
+      expect(employeeLookupFailureMessage(new Error(''), notFound)).toBe('乗務員の照会に失敗しました')
+    })
+
+    it('failureStatus は読めなければ null', () => {
+      expect(failureStatus(new Error('通信できません'))).toBeNull()
+      expect(failureStatus(undefined)).toBeNull()
+    })
   })
 })

@@ -2,7 +2,7 @@
 import type { MeasurementResult, TenkoType, CarInspectionLookupResponse, NormalMeasurementStep, NfcReadEvent, NfcReadSource } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement, confirmMeasurementTenko, lookupCarInspection, punchTimecard, uploadFacePhoto } from '~/utils/api'
 import { checkLicenseExpiry, checkLicenseExpiryFromString, daysUntilExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus, type ExpiryTone } from '~/utils/license'
-import { employeeNotFoundByNfc, employeeNotFoundByCode, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage, deviceUnregisteredMessage } from '~/utils/employee-lookup-messages'
 import { evtArg } from '~/composables/useCoreS3Serial'
 import { deviceSendsPunch } from '~/utils/device-line'
 import { IDENTITY_METHOD, IT_TENKO_ALLOW_IC_CARD, IT_TENKO_METHOD, type IdentityMethod } from '~/utils/it-tenko'
@@ -509,8 +509,8 @@ async function onNfcRead(nfcId: string, expiryDate?: Date, source?: NfcReadSourc
     // 打刻は best-effort。**失敗しても種別の選択へ必ず進む**
     if (!deviceSendsPunch(source, veinSerial.deviceInfo.value?.flavor)) await tryPunch(nfcId)
     step.value = 'choice'
-  } catch {
-    const msg = employeeNotFoundByNfc(nfcId)
+  } catch (e) {
+    const msg = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
     console.error(msg)
     approvalError.value = msg
   } finally {
@@ -596,8 +596,8 @@ async function onManualSubmit() {
     // 手入力には card_id が無いので打刻しない (打刻は免許証のタッチだけ)
     punchSkipReason.value = 'manual'
     step.value = 'choice'
-  } catch {
-    manualError.value = employeeNotFoundByCode(input)
+  } catch (e) {
+    manualError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
   } finally {
     identityLookups.value -= 1
   }

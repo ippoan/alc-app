@@ -2,7 +2,7 @@
 import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, startMeasurement, updateMeasurement } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
-import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 
 /**
  * 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
@@ -76,8 +76,8 @@ async function onNfcRead(nfcId: string) {
     employeeId.value = emp.id
     employeeName.value = emp.name
     step.value = 'face_auth'
-  } catch {
-    error.value = employeeNotFoundByNfc(nfcId)
+  } catch (e) {
+    error.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   } finally {
     employeeLookups.value -= 1
   }
