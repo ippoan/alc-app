@@ -21,7 +21,8 @@
  *
  * - 読み手は {@link useSignedBpBond} の `readonly` な 2 つだけを見る (書き換えられない)
  * - 書き手 (機種ごとの経路) は {@link setSignedBpBond} を呼ぶ。いまは CoreS3 経路
- *   (`useDeviceToken.ts`) だけが呼ぶ。**ATOM S3 経路はまだ繋いでいない** (口だけ)
+ *   (`useDeviceToken.ts`) だけが呼ぶ。**ATOM S3 経路はまだ繋いでいない** (口だけ)。
+ *   署名は CoreS3 のみ (Vein Station には血圧計のボンドが無いので useUsbHub に寄せない。Refs ippoan/alc-app#436)
  */
 
 /**

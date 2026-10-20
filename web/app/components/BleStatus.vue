@@ -42,6 +42,16 @@ const {
  */
 const { bpUiState, showBpUi } = useBpUiEnabled()
 
+/**
+ * 体温計をつなぐ USB の機体 (CoreS3 / Vein Station)。Vein Station は BLE の JSON を
+ * useBleGateway の transports の外で受けるので (ポートを返さないため)、`isConnected` は
+ * 立たない — Vein がつながっていれば接続済みとして扱い、ws 9877 (Android の BLE ブリッジ) には
+ * 落ちない (Refs ippoan/alc-app#436)。CoreS3 は従来どおり `isConnected` を見る
+ */
+const { thermo: thermoHub } = useUsbHub()
+const viaVein = computed(() => thermoHub.device.value?.kind === 'vein-station')
+const gatewayConnected = computed(() => isConnected.value || viaVein.value)
+
 const autoConnecting = ref(false)
 const autoConnectFailed = ref(false)
 
@@ -49,8 +59,8 @@ const autoConnectFailed = ref(false)
 onMounted(async () => {
   clearReadings()
 
-  // 既に接続済みならスキップ
-  if (isConnected.value) return
+  // 既に接続済みならスキップ (Vein Station だけのときは探しに行かない)
+  if (gatewayConnected.value) return
 
   autoConnecting.value = true
   const success = await startAutoConnect(5, 3000)
@@ -107,17 +117,17 @@ function handleRescan() {
 <template>
   <div class="flex flex-col gap-4">
     <!-- 自動接続中 -->
-    <div v-if="autoConnecting" class="flex flex-col items-center gap-3 py-4">
+    <div v-if="autoConnecting && !gatewayConnected" class="flex flex-col items-center gap-3 py-4">
       <span class="w-4 h-4 rounded-full bg-blue-500 animate-pulse" />
       <p class="text-blue-600 text-sm">BLE ゲートウェイに接続中...</p>
     </div>
 
     <!-- 未接続 (自動接続失敗) -->
-    <div v-else-if="!isConnected" class="flex flex-col items-center gap-3">
+    <div v-else-if="!gatewayConnected" class="flex flex-col items-center gap-3">
       <p class="text-gray-500 text-sm text-center">
-        CoreS3 が見つかりません。<br>
+        体温計をつなぐ機体 (CoreS3 / Vein Station) が見つかりません。<br>
         <template v-if="isWebSerialSupported()">
-          CoreS3 が USB でつながっているか確認してください。
+          CoreS3 または Vein Station が USB でつながっているか確認してください。
         </template>
         <template v-else>
           Android BLE ブリッジが起動していることを確認してください。
@@ -143,6 +153,9 @@ function handleRescan() {
       <!-- 接続中: デバイス状態 + 測定値表示 -->
       <template v-else>
         <!-- デバイス接続状態 -->
+        <p v-if="viaVein" class="text-xs text-gray-500 text-center" data-testid="thermo-hub-label">
+          {{ thermoHub.label.value }} につないだ体温計で測定してください
+        </p>
         <div class="flex gap-6 justify-center text-sm">
           <span class="flex items-center gap-2">
             <span

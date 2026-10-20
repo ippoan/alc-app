@@ -11,6 +11,12 @@ const coreS3Mock = vi.hoisted(() => ({
   onJson: vi.fn(),
 }))
 mockNuxtImport('useCoreS3Serial', () => () => coreS3Mock)
+// Vein Station の RS232 につないだ FC-1200 も同じ alcohol JSON を出す (Refs ippoan/alc-app#436)
+let veinJsonHandler: ((msg: unknown) => void) | null = null
+const veinMock = vi.hoisted(() => ({
+  onJson: vi.fn(),
+}))
+mockNuxtImport('useVeinSerial', () => () => veinMock)
 
 type Mod = typeof import('~/composables/useStrayAlcohol')
 
@@ -26,6 +32,18 @@ describe('useStrayAlcohol', () => {
     coreS3Mock.onJson.mockImplementation((cb: (msg: unknown) => void) => {
       jsonHandler = cb
     })
+    veinJsonHandler = null
+    veinMock.onJson.mockImplementation((cb: (msg: unknown) => void) => {
+      veinJsonHandler = cb
+    })
+  })
+
+  it('Vein Station の alcohol JSON も latest に載せる (CoreS3 と seq を共有する)', async () => {
+    const { useStrayAlcohol } = await load()
+    const { latest } = useStrayAlcohol()
+    jsonHandler!({ type: 'alcohol', value: 0, unit: 'mg/L', result: 'normal', use_count: 1 })
+    veinJsonHandler!({ type: 'alcohol', value: 0.2, unit: 'mg/L', result: 'over', use_count: 2 })
+    expect(latest.value).toMatchObject({ value: 0.2, result: 'over', seq: 2 })
   })
 
   it('初期値は null', async () => {

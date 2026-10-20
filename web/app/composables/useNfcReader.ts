@@ -59,12 +59,6 @@ type EventSink = (name: string, args: string[], source: NfcReadSource) => void
 const sinks = new Set<EventSink>()
 let wired = false
 
-/** 端末 1 台ぶんの `onEvent` に渡す受け口を作る (生きている sink 全部へ配る) */
-function fanout(source: NfcReadSource) {
-  return (name: string, args: string[]): void => {
-    for (const sink of [...sinks]) sink(name, args, source)
-  }
-}
 
 export function useNfcReader() {
   const ws = useNfcWebSocket()
@@ -72,10 +66,11 @@ export function useNfcReader() {
   if (!isWebSerialSupported()) return ws
 
   const core = useCoreS3Serial()
-  // 測定台の Atom S3 (NFC は CoreS3 と共通実装なので、行も `EVT NFC_LICENSE` で同じ)
-  const atom = useAtomS3Serial()
-  // Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)
+  // Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)。掴むためだけに持つ
   const vein = useVeinSerial()
+  // NFC を読める USB の機体 (CoreS3 / 測定台の Atom S3 / Vein Station)。行も
+  // `EVT NFC_LICENSE` で同じなので、受け口と機体名は部品の `nfc` 1 本から取る
+  const { nfc } = useUsbHub()
 
   const isConnected = ref(false)
   const error = ref<string | null>(null)
@@ -163,9 +158,9 @@ export function useNfcReader() {
   sinks.add(handleDeviceEvent)
   if (!wired) {
     wired = true
-    core.onEvent(fanout('cores3'))
-    atom.onEvent(fanout('bp-station'))
-    vein.onEvent(fanout('vein-station'))
+    nfc.onEvent((name, args, source) => {
+      for (const sink of [...sinks]) sink(name, args, source)
+    })
   }
 
   // --- NFC ブリッジ (9876) ---
@@ -178,22 +173,12 @@ export function useNfcReader() {
 
   // --- 状態 ---
 
-  /**
-   * USB 直結で繋がっている端末の名前。無ければ null (= ブリッジの状態を見せる)。
-   *
-   * 測定台には CoreS3 が挿さらず、Atom S3 だけが挿さる。ここで拾わないと、カードは
-   * 読めているのに `isConnected` が false のまま = 「未接続」と出る (Refs ippoan/alc-app#353)。
-   * 両方とは繋がらない前提だが、万一重なったら従来どおり CoreS3 を優先する
-   */
-  function directReader(): string | null {
-    if (core.isConnected.value) return 'CoreS3'
-    if (atom.isConnected.value) return 'ATOM S3'
-    if (vein.isConnected.value) return 'Vein Station'
-    return null
-  }
-
   function sync(): void {
-    const direct = directReader()
+    // USB 直結で繋がっている端末の名前。無ければ null (= ブリッジの状態を見せる)。
+    // 測定台には CoreS3 が挿さらず、Atom S3 だけが挿さる。ここで拾わないと、カードは
+    // 読めているのに `isConnected` が false のまま = 「未接続」と出る (Refs ippoan/alc-app#353)。
+    // 重なったときの優先順 (CoreS3 → ATOM S3 → Vein Station) は useUsbHub が持つ
+    const direct = nfc.label.value
     if (direct) {
       isConnected.value = true
       readers.value = [direct]
@@ -217,7 +202,7 @@ export function useNfcReader() {
 
   // immediate: 既に接続済みの CoreS3 / Atom S3 / ブリッジへ再 mount した時点で local ref に
   // 反映する (タブを戻すたびに local isConnected が false から作り直されるため)。
-  watch([core.isConnected, atom.isConnected, vein.isConnected, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
+  watch([nfc.label, ws.isConnected, ws.error, ws.readers, ws.bridgeVersion], sync, { immediate: true })
 
   function connect(): void {
     wantConnected = true

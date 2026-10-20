@@ -29,12 +29,16 @@ const {
 // — PC 直結の autoConnect は常に行い、CoreS3 の latestAlcohol も同時に待つ。DB9 は
 // 物理的に PC か CoreS3 のどちらか 1 台にしかつながらないので、先に届いた結果を
 // 1 回だけ emit すれば二重計測にはならない (#238)。
-const coreS3 = useCoreS3Serial()
+// Vein Station の RS232 につないだ FC-1200 も同じ扱い (Refs ippoan/alc-app#436)。ただし
+// Vein Station を挿した PC に FC-1200 を直結する運用は無いので、Vein がつながっている
+// ときだけ PC 直結の自動接続と「見つかりません」を止める (CoreS3 の判断は上のまま)
+const { alcohol: alcoholHub } = useUsbHub()
+const veinConnected = computed(() => alcoholHub.connected.value.some(d => d.kind === 'vein-station'))
 const ble = useBleGateway()
 
 // 業務後は `medical` ステップを通らないため、`useBleGateway.wire()` が一度も呼ばれず
 // `ble.latestAlcohol` に alcohol JSON が届かない (#320)。`useStrayAlcohol` は
-// `wire()` を経由せず `coreS3.onJson` を直接購読しているので、`wire()` の有無に
+// `wire()` を経由せず `useUsbHub().alcohol.onJson` (CoreS3 / Vein Station) を直接購読しているので、`wire()` の有無に
 // 関わらず値が届く。`wire()` には一切触らない — 前倒しすると heartbeat 監視も
 // 前倒しになり、30 秒無音で `coreS3.release()` が走る経路を新設してしまう
 // (useStrayAlcohol.ts のコメント参照)。
@@ -81,7 +85,7 @@ onMounted(async () => {
   // strayAlcohol は clear できないので、基準の seq をここで控える (上のコメント参照)
   strayBaselineSeq.value = strayAlcohol.value?.seq ?? 0
 
-  if (!isSupported() || isConnected.value) return
+  if (!isSupported() || isConnected.value || veinConnected.value) return
   autoConnecting.value = true
   const success = await autoConnect()
   autoConnecting.value = false
@@ -100,7 +104,7 @@ watch(result, (val) => {
   }
 })
 
-// 結果を親に通知 (CoreS3 につないだ FC-1200)
+// 結果を親に通知 (CoreS3 / Vein Station につないだ FC-1200)
 watch(() => ble.latestAlcohol.value, (val) => {
   if (val) {
     emitResult({
@@ -113,7 +117,7 @@ watch(() => ble.latestAlcohol.value, (val) => {
   }
 })
 
-// 結果を親に通知 (業務後などで wire() されていない CoreS3 経路。#320)
+// 結果を親に通知 (業務後などで wire() されていない CoreS3 / Vein Station 経路。#320)
 watch(() => strayAlcohol.value, (val) => {
   if (val && val.seq > strayBaselineSeq.value) {
     emitResult({
@@ -207,14 +211,14 @@ function emitDemoResult() {
       </button>
     </div>
 
-    <!-- CoreS3 につないだ FC-1200: firmware が流す EVT FC1200 を PC 直結と同じ語彙で
-         出す (Refs ippoan/alc-app-s3#135) -->
+    <!-- CoreS3 / Vein Station につないだ FC-1200: firmware が流す EVT FC1200 を PC 直結と
+         同じ語彙で出す (Refs ippoan/alc-app-s3#135, ippoan/alc-app#436) -->
     <div
-      v-else-if="coreS3.isConnected.value"
+      v-else-if="alcoholHub.isConnected.value"
       class="flex flex-col items-center gap-4 w-full"
     >
       <div class="bg-blue-50 border-2 border-blue-300 rounded-2xl p-6 text-center w-full">
-        <p class="text-blue-800 font-medium">CoreS3 につないだアルコールチェッカーで測定してください</p>
+        <p class="text-blue-800 font-medium">{{ alcoholHub.label.value }} につないだアルコールチェッカーで測定してください</p>
       </div>
 
       <!-- 状態インジケーター + 吹きかけプロンプト (PC 直結と同じ部品) -->

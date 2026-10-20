@@ -19,6 +19,7 @@ let listenerInstalled = false
 
 export function useHubClaim() {
   const { getDeviceJwt, lastError, startupDeviceJwt } = useDeviceToken()
+  // CoreS3 のみ (Vein Station・測定台の ATOM S3 には無い機能なので useUsbHub に寄せない。Refs ippoan/alc-app#436)
   const coreS3 = useCoreS3Serial()
 
   /** CoreS3 接続中に device JWT を先取りする (getDeviceJwt 自体が single-flight/cache を持つ) */

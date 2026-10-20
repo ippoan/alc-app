@@ -33,6 +33,12 @@ mockNuxtImport('useBleGateway', () => () => ({
   resetGateway: resetGatewayMock,
 }))
 
+// 体温計をつなぐ Vein Station (Refs ippoan/alc-app#436)。CoreS3 は本物 (未接続のまま)
+const veinConnected = ref(false)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinConnected),
+}))
+
 /**
  * この端末で血圧を使うか (Refs ippoan/alc-app#347)。判定の中身
  * (`bpEnabled` / `hasBpHardware` / `signedBpBonded` / `hasProbedBpBond` の組み合わせ) は
@@ -74,8 +80,8 @@ describe('BleStatus — CoreS3 前提の文言・血圧の出し分け (Refs #23
     await new Promise(resolve => setTimeout(resolve, 0))
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.text()).toContain('CoreS3 が見つかりません')
-    expect(wrapper.text()).toContain('CoreS3 が USB でつながっているか確認してください')
+    expect(wrapper.text()).toContain('体温計をつなぐ機体 (CoreS3 / Vein Station) が見つかりません')
+    expect(wrapper.text()).toContain('CoreS3 または Vein Station が USB でつながっているか確認してください')
     expect(wrapper.text()).not.toContain('ATOM Lite')
     const btn = wrapper.findAll('button').find(b => b.text() === 'USB デバイスを選択')
     expect(btn).toBeTruthy()
@@ -165,7 +171,7 @@ describe('BleStatus — allowSkip prop (既定 true。自動点呼の体温・�
     await new Promise(resolve => setTimeout(resolve, 0))
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.text()).toContain('CoreS3 が見つかりません')
+    expect(wrapper.text()).toContain('体温計をつなぐ機体 (CoreS3 / Vein Station) が見つかりません')
     expect(wrapper.findAll('button').find(b => b.text() === 'スキップ')).toBeFalsy()
 
     wrapper.unmount()
@@ -472,6 +478,67 @@ describe('BleStatus — 測定値がそろうと自動的に次へ進む (Refs #
 
     expect(wrapper.find('[data-testid="bp-waiting-note"]').exists()).toBe(false)
 
+    wrapper.unmount()
+  })
+})
+
+// Vein Station だけを挿した PC: BLE ゲートウェイ (ws 9877) を探しに行かず、体温計の画面を出す
+describe('BleStatus — Vein Station (Refs ippoan/alc-app#436)', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    bpUiState.value = 'unused'
+    webSerialSupported = true
+    isConnected.value = false
+    thermometerConnected.value = false
+    latestTemperature.value = null
+    latestBloodPressure.value = null
+    hasMedicalData.value = false
+    startAutoConnectMock.mockReset()
+    startAutoConnectMock.mockResolvedValue(false)
+    clearReadingsMock.mockReset()
+  })
+
+  it('Vein Station がつながっていれば startAutoConnect を走らせず、接続中の画面を機体名で出す', async () => {
+    veinConnected.value = true
+    thermometerConnected.value = true
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.vm.$nextTick()
+
+    expect(clearReadingsMock).toHaveBeenCalledTimes(1)
+    expect(startAutoConnectMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('BLE ゲートウェイに接続中')
+    expect(wrapper.text()).not.toContain('見つかりません')
+    expect(wrapper.get('[data-testid="thermo-hub-label"]').text()).toBe('Vein Station につないだ体温計で測定してください')
+    expect(wrapper.text()).toContain('体温計')
+    wrapper.unmount()
+    veinConnected.value = false
+  })
+
+  it('Vein Station の体温が届いたら CoreS3 と同じく自動で次へ進む', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    veinConnected.value = true
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+
+    latestTemperature.value = { value: 36.5 }
+    hasMedicalData.value = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('36.5')
+    await vi.advanceTimersByTimeAsync(AUTO_NEXT_DELAY_MS)
+    expect(wrapper.emitted('next')).toHaveLength(1)
+
+    wrapper.unmount()
+    vi.useRealTimers()
+    veinConnected.value = false
+  })
+
+  it('Vein Station が無く BLE ゲートウェイ側で接続済みなら、機体名の行は出さない', async () => {
+    isConnected.value = true
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus)
+    expect(wrapper.find('[data-testid="thermo-hub-label"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

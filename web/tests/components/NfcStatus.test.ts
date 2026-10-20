@@ -38,6 +38,12 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
   isConnected: readonly(atomS3Connected),
 }))
 
+// Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)
+const veinConnected = ref(false)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinConnected),
+}))
+
 const deviceModelForFingerprint = ref<string | null>(null)
 mockNuxtImport('useFingerprint', () => () => ({
   isAndroidApp: ref(false),
@@ -162,7 +168,7 @@ describe('NfcStatus — 血圧測定台の未接続案内 (Refs #353)', () => {
 
   it('CoreS3 キオスク: 未接続案内は従来どおり CoreS3 を名指しし、ATOM S3 は出ない', async () => {
     const wrapper = await mountSuspended(NfcStatus)
-    expect(wrapper.text()).toContain('CoreS3 が USB でつながっているか確認してください。')
+    expect(wrapper.text()).toContain('NFC リーダーをつないだ機体 (CoreS3 / Vein Station) が USB でつながっているか確認してください。')
     expect(wrapper.text()).toContain('初めて使う端末では、下のボタンで USB デバイスの使用を許可してください。')
     expect(wrapper.text()).not.toContain('ATOM S3')
     expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeTruthy()
@@ -289,7 +295,7 @@ describe('NfcStatus — 測定台の判定は端末の名乗りも見る (Refs #
   it('(b) URL に station=bp が無く、名乗りが未決着 (null) なら CoreS3 のまま', async () => {
     arbitratedDeviceKind.value = null
     const wrapper = await mountSuspended(NfcStatus, { route: '/' })
-    expect(wrapper.text()).toContain('CoreS3 が USB でつながっているか確認してください。')
+    expect(wrapper.text()).toContain('NFC リーダーをつないだ機体 (CoreS3 / Vein Station) が USB でつながっているか確認してください。')
     expect(wrapper.text()).not.toContain('ATOM S3')
     wrapper.unmount()
   })
@@ -300,5 +306,38 @@ describe('NfcStatus — 測定台の判定は端末の名乗りも見る (Refs #
     expect(wrapper.text()).toContain('測定台の ATOM S3 (VoiceS3R) が USB でつながっているか確認してください。')
     expect(wrapper.text()).not.toContain('CoreS3')
     wrapper.unmount()
+  })
+})
+
+// Vein Station だけを挿した PC でも CoreS3 と同じく USB 直結として扱う (Refs ippoan/alc-app#436)
+describe('NfcStatus — Vein Station の直結 (Refs ippoan/alc-app#436)', () => {
+  beforeEach(() => {
+    isConnected.value = false
+    coreS3Connected.value = false
+    atomS3Connected.value = false
+    veinConnected.value = false
+    arbitratedDeviceKind.value = null
+    latestVersion.value = null
+    webSerialSupported = true
+    isCheckingKioskAccess.value = false
+  })
+
+  it('Vein Station がつながっていれば USB の案内と許可ボタンを出さない', async () => {
+    veinConnected.value = true
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).not.toContain('USB でつながっているか確認してください')
+    expect(findButtonByText(wrapper, 'USB デバイスを選択')).toBeFalsy()
+    wrapper.unmount()
+    veinConnected.value = false
+  })
+
+  it('Vein Station 直結ならブリッジの更新案内を出さない', async () => {
+    veinConnected.value = true
+    isConnected.value = true
+    latestVersion.value = '9.9.9'
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).not.toContain('NFC ブリッジの新しいバージョン')
+    wrapper.unmount()
+    veinConnected.value = false
   })
 })
