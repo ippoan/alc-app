@@ -69,9 +69,11 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
 // Vein Station (指静脈の機体)。血圧計の中継は NVS の `omron_bp` で、設定は同じ 1 行の口で撃つ (Refs ippoan/alc-app#436)
 const veinConnected = ref(false)
 const veinRequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
+const veinConnectMock = vi.fn(async () => true)
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: veinConnected,
   request: veinRequestMock,
+  connect: veinConnectMock,
 }))
 
 // 端末の名乗り (`DEVICE bp-station`)。測定台かどうかの判定は `useBpStationMode` 1 か所で、
@@ -187,6 +189,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     veinConnected.value = false
     veinRequestMock.mockReset()
     veinRequestMock.mockImplementation(async line => echoOmron(line))
+    veinConnectMock.mockClear()
     arbitratedDeviceKind.value = null
     serialPorts.value = []
     serialSupport.supported = false
@@ -480,6 +483,12 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       expect(coreS3RequestMock).not.toHaveBeenCalled()
       expect(wrapper.find('[data-testid="omron-bp-device-error"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="omron-bp-restart-notice"]').exists()).toBe(true)
+    })
+
+    it('開いたときに Vein Station をつなぐ (つながないと omronTarget が null で機体に何も送られない)', async () => {
+      await mountDeviceSettings()
+
+      expect(veinConnectMock).toHaveBeenCalledTimes(1)
     })
 
     it('サーバの値が未確定のまま Vein Station がつながっても何も送らない (つなぐたびに OFF を書かない)', async () => {
