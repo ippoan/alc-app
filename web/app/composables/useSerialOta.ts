@@ -28,9 +28,18 @@
  * 2. 生のバイト列を `<chunk>` ずつ、**1 回の書き込みで**。**`OTA ACK <累計>` を受けてから次を送る**
  * 3. 最後のチャンクの後は `complete()` (検証) の結果 `OTA OK` / `OTA ERR verify`。
  *    `OTA OK` の約 500 ms 後に端末は再起動する
- * 4. 再接続後に `DEVICE` → `DEVICE <kind> VER=<ver> FLAVOR=<flavor>`。
- *    FLAVOR が期待どおりなら `OTA CONFIRM` → `OTA CONFIRMED`
+ * 4. 再起動の合図 (接続が切れてつながり直す、または `EVT OTA_SERIAL_PENDING slot=… timeout_ms=…`) の後に
+ *    `DEVICE` → `DEVICE <kind> VER=<ver> FLAVOR=<flavor>`。FLAVOR が期待どおりで、VER が書き込み前の
+ *    機体の版と違えば `OTA CONFIRM` → `OTA CONFIRMED`
  *    (10 分以内に確定しなければ端末は元のスロットへ戻る)
+ *
+ * # 再起動の合図 (全対象。Refs ippoan/alc-app#436)
+ *
+ * USB の口は、機体が再起動しても画面から見て切れないことがある (2026-10-20 実機、Vein Station: 待ちの
+ * 90 秒間 claimant が一度も外れず、その間に機体の `EVT TIMECARD` も届いた)。そこで「切れてつながり直す」と
+ * 並べて、機体が確定待ちの新しい版で起動したときだけ出す `EVT OTA_SERIAL_PENDING` も合図にする
+ * (早い方)。**時間で先へ進む経路は持たない** — 元の版で起動した機体はこの行を出さないので、
+ * 時間切れ (`reconnect_timeout`) で失敗になり、`OTA CONFIRM` を送らない
  *
  * # 受信リングの探り (全対象。Refs ippoan/alc-app#425)
  *
@@ -62,9 +71,11 @@
  *   だけで、URL はこのファイルに無く、`utils/firmware-targets.ts` の表 ({@link FIRMWARE_TARGETS})
  *   から引く。表に無い target は無視する。この composable が実行するのは
  *   {@link RUNNABLE_TARGETS} に在るものだけ
- * - **VER は「更新するか」の判定にだけ使う。確定の条件は FLAVOR だけ。** Pages は CDN の
- *   max-age が 600 秒で、反映直後は manifest とイメージが一時的に食い違うことがあるため
- *   (manifest の版とイメージの中身がずれても、焼いたものが同じ機種のビルドなら確定してよい)
+ * - **確定の条件は FLAVOR と「VER が書き込み前の機体の版と違う」こと。配布の版 (manifest) とは比べない。**
+ *   Pages は CDN の max-age が 600 秒で、反映直後は manifest とイメージが一時的に食い違うことがあるため
+ *   (manifest の版とイメージの中身がずれても、焼いたものが同じ機種のビルドなら確定してよい)。
+ *   書き込み前と同じ版 = 再起動していない / 元の版に戻った (`not_rebooted`)、版が取れない (`no_version`) は
+ *   確定しない — 送ると機体の確定待ちの印が消え、10 分後の戻しが立たなくなる
  *
  * # ポート
  *
@@ -144,6 +155,7 @@ import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
 import type { FirmwareTarget } from '~/utils/firmware-targets'
 import type { FirmwarePhase } from '~/utils/api'
 import type { FirmwareReportExtra } from '~/composables/useFirmwareReport'
+import type { SerialEventHandler } from '~/utils/serial-line-dispatch'
 
 /** CoreS3 の target。ポートと前後の手当て (冒頭 doc) がこの target だけ違う */
 const HUB_TARGET = 'cores3'
@@ -174,7 +186,7 @@ const BEGIN_TIMEOUT_MS = 60_000
 const ACK_TIMEOUT_MS = 15_000
 /** 最後のチャンク → `OTA OK` (イメージの検証を含む) */
 const VERIFY_TIMEOUT_MS = 60_000
-/** `OTA OK` → 再接続。ポートの探索は 10 秒ごとに再スキャンする */
+/** `OTA OK` → 再起動の合図 (再接続か `EVT OTA_SERIAL_PENDING`)。ポートの探索は 10 秒ごとに再スキャンする */
 const RECONNECT_TIMEOUT_MS = 90_000
 /** `OTA CONFIRM` → `OTA CONFIRMED` */
 const CONFIRM_TIMEOUT_MS = 10_000
@@ -207,6 +219,8 @@ const OTA_ERR = 'OTA ERR'
 const REFLASH_NEEDED = 'reflash_needed'
 /** 受け口を持たない版の機体が `OTA CONFIRM` に返す行の始まり (`ERR UNSUPPORTED (<機種>)`) */
 const ERR_UNSUPPORTED = 'ERR UNSUPPORTED'
+/** 機体が確定待ちの新しい版で起動したときだけ出す EVT の名前 (alc-app-s3 hub-drivers の ota.rs) */
+const EVT_OTA_SERIAL_PENDING = 'OTA_SERIAL_PENDING'
 
 /**
  * {@link useSerialOta} の `run()` の結果 (Refs ippoan/alc-app#425)。画面の前の人が押した更新の
@@ -235,6 +249,8 @@ export interface SerialOtaRunOptions {
 /** 書き込みに使うポート (`useVeinSerial().ota` / `useCoreS3Serial().ota` / `useAlarmDevice().ota` のどれか) */
 interface OtaPort {
   isConnected: Readonly<Ref<boolean>>
+  /** 機体の `EVT <NAME> <args...>` を受ける。返り値を呼ぶと解除できる */
+  onEvent: (cb: SerialEventHandler) => () => void
   request: {
     (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
     (bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
@@ -295,9 +311,9 @@ export function useSerialOta() {
   const coreS3 = useCoreS3Serial()
   const alarmDevice = useAlarmDevice()
   const firmware = useFirmwareReport()
-  const hubPort: OtaPort = { isConnected: coreS3.isConnected, request: coreS3.ota.request }
-  const alarmPort: OtaPort = { isConnected: alarmDevice.isConnected, request: alarmDevice.ota.request }
-  const veinPort: OtaPort = { isConnected: vein.isConnected, request: vein.ota.request }
+  const hubPort: OtaPort = { isConnected: coreS3.isConnected, onEvent: coreS3.onEvent, request: coreS3.ota.request }
+  const alarmPort: OtaPort = { isConnected: alarmDevice.isConnected, onEvent: alarmDevice.ota.onEvent, request: alarmDevice.ota.request }
+  const veinPort: OtaPort = { isConnected: vein.isConnected, onEvent: vein.onEvent, request: vein.ota.request }
   /**
    * 始めてよくなる (待機画面へ戻る・機体が空く) のを待っている合図。呼び出し元 (合図の受け)
    * ごとに持つ — 画面が外れたら一緒に捨てる (管理者が押し直す)
@@ -316,25 +332,25 @@ export function useSerialOta() {
     }
   }
 
-  /** 接続の有無が `want` になるのを `deadline` (Date.now() の値) まで待つ */
-  function waitForConnected(port: OtaPort, want: boolean, deadline: number): Promise<boolean> {
-    if (port.isConnected.value === want) return Promise.resolve(true)
+  /**
+   * `OTA OK` の後、機体が再起動した合図を待つ (冒頭 doc「再起動の合図」)。接続が切れてつながり直す
+   * (`OTA OK` の時点で既に切れていれば、つながる) か、`EVT OTA_SERIAL_PENDING` の早い方で true、
+   * {@link RECONNECT_TIMEOUT_MS} で false。`OTA OK` を受けた直後 (再起動より前) に呼ぶこと —
+   * 起動直後の行を取りこぼさないため
+   */
+  function waitForReboot(port: OtaPort): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      // 真偽値なので、変わった時点で `want` になっている
-      const stop = watch(port.isConnected, () => finish(true), { flush: 'sync' })
-      const timer = setTimeout(() => finish(false), deadline - Date.now())
+      // 真偽値なので、true に変わった時点で「切れていたものがつながった」
+      const stopWatch = watch(port.isConnected, (connected) => { if (connected) finish(true) }, { flush: 'sync' })
+      const stopEvent = port.onEvent((name) => { if (name === EVT_OTA_SERIAL_PENDING) finish(true) })
+      const timer = setTimeout(() => finish(false), RECONNECT_TIMEOUT_MS)
       function finish(ok: boolean): void {
         clearTimeout(timer)
-        stop()
+        stopWatch()
+        stopEvent()
         resolve(ok)
       }
     })
-  }
-
-  /** `OTA OK` の後、いったん切れてからつながり直すのを待つ */
-  async function waitForReconnect(port: OtaPort): Promise<boolean> {
-    const deadline = Date.now() + RECONNECT_TIMEOUT_MS
-    return await waitForConnected(port, false, deadline) && await waitForConnected(port, true, deadline)
   }
 
   /**
@@ -524,7 +540,7 @@ export function useSerialOta() {
 
     state.value = { kind: 'rebooting' }
     tell('rebooting', progress)
-    if (!(await waitForReconnect(port))) throw new OtaError('reconnect timeout', 'reconnect_timeout')
+    if (!(await waitForReboot(port))) throw new OtaError('reconnect timeout', 'reconnect_timeout')
 
     state.value = { kind: 'confirming' }
     let ask: (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string) => Promise<string> = port.request
@@ -550,14 +566,20 @@ export function useSerialOta() {
       ask = (...args) => requestWhenFree(port, deadline, ...args)
     }
     const after = parseDeviceLine(await ask('DEVICE', 'DEVICE ', DEVICE_TIMEOUT_MS))
-    // 確定の条件は FLAVOR だけ (VER は Pages の食い違いがありうるので見ない)。
-    // 確定しなければ端末は 10 分後に元のスロットへ戻る
+    // 確定の条件 (冒頭 doc「何を信じるか」): FLAVOR が同じで、VER が書き込み前の機体の版と違う。
+    // 比べるのは配布の版ではない (書き込みに進んだ時点で device.ver は manifest の版と違う) ので、
+    // Pages の manifest とイメージの食い違いには当たらない。確定しなければ端末は 10 分後に元のスロットへ戻る
     if (after.flavor !== flavor) {
       throw new OtaError(`flavor mismatch after reboot (${after.flavor})`, 'flavor_mismatch')
     }
+    if (device.ver === null || after.ver === null) {
+      throw new OtaError(`no version (before=${device.ver} after=${after.ver})`, 'no_version')
+    }
+    // 再起動していない / 新しい版の起動に失敗して元の版に戻った
+    if (after.ver === device.ver) throw new OtaError(`not rebooted (${after.ver})`, 'not_rebooted')
     await ask('OTA CONFIRM', 'OTA CONFIRMED', CONFIRM_TIMEOUT_MS, OTA_ERR)
     tell('done', progress)
-    settle({ kind: 'done', ver: after.ver ?? '' })
+    settle({ kind: 'done', ver: after.ver })
     return 'updated'
   }
 

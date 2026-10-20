@@ -56,7 +56,8 @@
  * 画面からの更新 (Refs ippoan/alc-app#425): 機体の名乗り (`DEVICE alarm VER=… FLAVOR=…`) の欄を
  * `deviceInfo` に持ち、書き込みだけが使う口 `ota` (錠) を出す。機体は `OTA SERIAL` の後、受けた
  * バイトを全部イメージとして読むので、錠の間は heartbeat も `STATUS` も grace も通常の `request`
- * (席の署名) も送らない。通るのは `ota.request` と `ota.rest` (錠の間だけ書ける) だけ。**使うのは `useSerialOta` だけ**
+ * (席の署名) も送らない。通るのは `ota.request` と `ota.rest` (錠の間だけ書ける) だけ。`ota.onEvent` は
+ * 機体の `EVT` 行を受ける口 (再起動の合図 `EVT OTA_SERIAL_PENDING` を待つため)。**使うのは `useSerialOta` だけ**
  *
  * 診断ログ (`[ALARM-DEV]`) は運行者端末の DevTools で読む用に出しっぱなし (Refs #197)。
  */
@@ -65,6 +66,7 @@ import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { msSinceLoad, writeLine } from '~/composables/useSerialArbiter'
 import { evtArg, OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { findDeviceLine } from '~/utils/device-line'
+import { createLineDispatch } from '~/utils/serial-line-dispatch'
 import type { DeviceLine } from '~/utils/device-line'
 import { licenseNfcId } from '~/utils/license'
 
@@ -163,6 +165,8 @@ let lastLine: string | null = null
  * 掛かっている間に機体へ届くのは `ota.request` と `ota.rest` だけ
  */
 let otaLocked = false
+/** `ota.onEvent` の購読者 (ファームの書き込みが再起動の合図を待つ間だけ居る) */
+const otaEvents = createLineDispatch('ALARM-DEV')
 
 function log(message: string): void {
   console.log(`[ALARM-DEV] ${message} (+${msSinceLoad()}ms)`)
@@ -224,6 +228,7 @@ export function useAlarmDevice() {
   /** 接続後に届いた 1 行。状態行を畳み、カードの行なら合図を出す (id はログに出さない) */
   function handleLine(line: string): void {
     handleStateLine(line)
+    if (line.startsWith('EVT ')) otaEvents.dispatchEvent(line)
     const lookupId = cardLookupId(line)
     if (!lookupId) return
     cardRead.value = { seq: (cardRead.value?.seq ?? 0) + 1, lookupId }
@@ -440,6 +445,6 @@ export function useAlarmDevice() {
     requestPort,
     notifyIntentionalReload,
     request,
-    ota: { begin: otaBegin, end: otaEnd, request: otaRequest, rest: otaRest },
+    ota: { begin: otaBegin, end: otaEnd, request: otaRequest, rest: otaRest, onEvent: otaEvents.onEvent },
   }
 }
