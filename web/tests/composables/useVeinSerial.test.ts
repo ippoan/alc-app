@@ -410,14 +410,37 @@ describe('useVeinSerial', () => {
     })
   })
 
-  // ---------- request (シリアル OTA の口、Refs ippoan/alc-app-s3#279) ----------
+  // ---------- request (鍵の署名の口、Refs ippoan/alc-app#436) ----------
 
   describe('request', () => {
-    it('行を預かったポートへ撃ち、errPrefix 付きで応答を待つ', async () => {
+    it('行を預かったポートへ撃ち、ERR <先頭トークン> で失敗を拾う', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
 
-      const p = vein.request('OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'OTA ERR')
+      const ok = vein.request('AUTH SIGN abc', 'AUTH SIG', 5_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('AUTH SIGN abc\n')
+      dev.emit('AUTH SIG pub sig\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(ok).resolves.toBe('AUTH SIG pub sig')
+
+      const ng = vein.request('DEVICE', 'DEVICE ', 5_000)
+      const assertion = expect(ng).rejects.toThrow('ERR DEVICE busy')
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('ERR DEVICE busy\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await assertion
+    })
+  })
+
+  // ---------- ota (書き込み中の錠、Refs ippoan/alc-app-s3#279, ippoan/alc-app#436) ----------
+
+  describe('ota', () => {
+    it('ota.request は行を預かったポートへ撃ち、errPrefix 付きで応答を待つ', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+
+      const p = vein.ota.request('OTA CONFIRM', 'OTA CONFIRMED', 5_000, 'OTA ERR')
       await vi.advanceTimersByTimeAsync(0)
       expect(dev.writes.at(-1)).toBe('OTA CONFIRM\n')
 
@@ -426,23 +449,11 @@ describe('useVeinSerial', () => {
       await expect(p).resolves.toBe('OTA CONFIRMED')
     })
 
-    it('errPrefix を省くと ERR <先頭トークン> で失敗を拾う', async () => {
+    it('ota.request のバイト列は改行を足さずに書き、OTA ERR で reject する', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
 
-      const p = vein.request('DEVICE', 'DEVICE ', 5_000)
-      const assertion = expect(p).rejects.toThrow('ERR DEVICE busy')
-      await vi.advanceTimersByTimeAsync(0)
-      dev.emit('ERR DEVICE busy\n')
-      await vi.advanceTimersByTimeAsync(0)
-      await assertion
-    })
-
-    it('バイト列は改行を足さずに書き、OTA ERR で reject する', async () => {
-      const dev = createMockPort()
-      await connectDevice(dev)
-
-      const p = vein.request(new Uint8Array([0x41, 0x42, 0x43]), 'OTA ACK', 5_000, 'OTA ERR')
+      const p = vein.ota.request(new Uint8Array([0x41, 0x42, 0x43]), 'OTA ACK', 5_000, 'OTA ERR')
       const assertion = expect(p).rejects.toThrow('OTA ERR write')
       await vi.advanceTimersByTimeAsync(0)
       expect(dev.writes.at(-1)).toBe('ABC')
@@ -450,6 +461,36 @@ describe('useVeinSerial', () => {
       dev.emit('OTA ERR write\n')
       await vi.advanceTimersByTimeAsync(0)
       await assertion
+    })
+
+    it('錠の間は request・capture・say を送らずに断り、ota.request だけが通る。外したらまた通る', async () => {
+      const { OTA_LOCKED_MESSAGE } = await import('~/composables/useCoreS3Serial')
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const before = dev.writes.length
+
+      vein.ota.begin()
+      await expect(vein.request('AUTH SIGN abc', 'AUTH SIG', 5_000)).rejects.toThrow(OTA_LOCKED_MESSAGE)
+      await expect(vein.capture()).rejects.toThrow(OTA_LOCKED_MESSAGE)
+      await expect(vein.say('PLACE')).rejects.toThrow(OTA_LOCKED_MESSAGE)
+      expect(dev.writes.length).toBe(before)
+
+      const ota = vein.ota.request('DEVICE', 'DEVICE ', 5_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('DEVICE\n')
+      dev.emit('DEVICE timecard VER=0.1.0 FLAVOR=timecard-vein\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(ota).resolves.toBe('DEVICE timecard VER=0.1.0 FLAVOR=timecard-vein')
+
+      vein.ota.end()
+      const p = vein.say('PLACE')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN SAY PLACE\n')
+      dev.emit('OK VEIN SAY PLACE\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p).resolves.toBeUndefined()
+      // 掛かっていないときに外しても害は無い
+      vein.ota.end()
     })
   })
 })

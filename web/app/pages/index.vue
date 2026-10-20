@@ -483,6 +483,8 @@ function onRoleTabClick(role: RoleTab) {
       <DeviceUnregisteredBanner />
       <!-- CoreS3 の版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425)。デモのタブでは出さない -->
       <CoreS3DeviceFirmwareNotice v-if="driverSubTab !== 'demo' && driverSubTab !== 'remote_demo'" />
+      <!-- Vein Station (station 版・vein 版) の版の帯 (Refs ippoan/alc-app#436)。置き方は CoreS3 の帯と同じ -->
+      <VeinStationFirmwareNotice v-if="driverSubTab !== 'demo' && driverSubTab !== 'remote_demo'" />
 
       <!-- 通常点呼 / 自動点呼 サブタブ + ハンバーガーメニュー (縦画面時のみ) -->
       <div v-if="!isAndroidLandscape" class="w-full max-w-lg mx-auto px-4 mt-2 flex items-center gap-2">

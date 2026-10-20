@@ -14,6 +14,7 @@ import DeviceSettings from '~/components/DeviceSettings.vue'
 import ScreenShareSender from '~/components/ScreenShareSender.vue'
 import FirmwareOtaHost from '~/components/FirmwareOtaHost.vue'
 import CoreS3DeviceFirmwareNotice from '~/components/CoreS3DeviceFirmwareNotice.vue'
+import VeinStationFirmwareNotice from '~/components/VeinStationFirmwareNotice.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
@@ -1841,6 +1842,26 @@ describe('pages/index — 血圧を測れない端末では自動点呼のタブ
         wrapper.unmount()
       }
       wrapper = null
+    })
+  })
+
+  describe('Vein Station の版の帯 (Refs ippoan/alc-app#436)', () => {
+    const noticeOf = () => wrapper!.findAllComponents(VeinStationFirmwareNotice)
+
+    it('★ 運行者の画面に CoreS3 の帯と並べて 1 つだけ置き、デモのタブでは出さない', async () => {
+      bpUi.state.value = 'show'
+      wrapper = await mountIndex('/?role=driver')
+      expect(noticeOf()).toHaveLength(1)
+      expect(noticeOf()[0]!.props()).toEqual({})
+      await clickMenuItem(wrapper, '自動点呼デモ')
+      expect(noticeOf()).toHaveLength(0)
+      await clickMenuItem(wrapper, 'デバイス設定')
+      expect(noticeOf()).toHaveLength(1)
+    })
+
+    it('運行者以外の役割では mount しない', async () => {
+      wrapper = await mountIndex('/?role=general')
+      expect(noticeOf()).toHaveLength(0)
     })
   })
 

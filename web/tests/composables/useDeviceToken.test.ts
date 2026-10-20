@@ -1975,6 +1975,25 @@ describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
     expect(lastFailureStage.value).toBeNull()
   })
 
+  it('ファームの書き込み中 (錠) で断られた回も抑止せず、錠が外れた次の呼び出しで取り直す', async () => {
+    const { OTA_LOCKED_MESSAGE } = await import('~/composables/useCoreS3Serial')
+    veinMock.isConnected.value = true
+    signAlarmDeviceNonceMock
+      .mockRejectedValueOnce(new Error(OTA_LOCKED_MESSAGE))
+      .mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+    stubFetch()
+
+    const useDeviceToken = await load()
+    const { getDeviceJwt, lastFailureStage, failureBackoffUntil } = useDeviceToken()
+
+    expect(await getDeviceJwt()).toBeNull()
+    expect(lastFailureStage.value).toBe('vein-sign')
+    expect(failureBackoffUntil.value).toBe(0)
+
+    expect(await getDeviceJwt()).toBe('vein-jwt')
+    expect(lastFailureStage.value).toBeNull()
+  })
+
   it('抜線したら Vein Station 由来のキャッシュを捨て、無認証へ落とさない印も下ろす', async () => {
     veinMock.isConnected.value = true
     signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
