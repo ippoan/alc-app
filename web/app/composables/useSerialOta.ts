@@ -150,6 +150,7 @@
  *   「失敗の幕 + `failed` の報告」になる (画面に出さない判定が「state が idle か」のため)
  */
 
+import { isPortBusy, requestWhenFree } from '~/utils/serial-request-when-free'
 import { parseDeviceLine } from '~/utils/device-line'
 import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
 import type { FirmwareTarget } from '~/utils/firmware-targets'
@@ -275,15 +276,6 @@ function failureWord(e: unknown): string {
 }
 
 /**
- * ポートがほかの要求の応答待ちで、こちらの要求を送らずに弾いたか。判定は useSerialArbiter.ts の
- * reject 文言 (`request(<name>): 既に応答待ちです`) の部分一致 (DeviceSettings.vue と同じ)。
- * 文言を変えたらここも合わせること
- */
-function isPortBusy(e: unknown): boolean {
-  return String(e).includes('既に応答待ちです')
-}
-
-/**
  * 応答の行 (`OTA CONFIRMED RX=<n>`) から、機体の USB の受信リングの大きさを読む。
  * 欄が無い行 (大きさを名乗らない古い版) は 0
  */
@@ -357,7 +349,7 @@ export function useSerialOta() {
    * 1 行送って応答を待つ。ポートがほかの要求の応答待ちで弾いたときだけ、間を置いて送り直す
    * (`deadline` まで)。機体が断った・時間切れは送り直さない
    */
-  async function requestWhenFree(
+  function requestWhenFreeOta(
     port: OtaPort,
     deadline: number,
     line: string,
@@ -365,16 +357,11 @@ export function useSerialOta() {
     timeoutMs: number,
     errPrefix?: string,
   ): Promise<string> {
-    for (;;) {
-      try {
-        return await port.request(line, matchPrefix, timeoutMs, errPrefix)
-      }
-      catch (e) {
-        if (!isPortBusy(e)) throw e
-        if (Date.now() + BUSY_RETRY_INTERVAL_MS > deadline) throw new OtaError((e as Error).message, 'busy')
-        await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_INTERVAL_MS))
-      }
-    }
+    return requestWhenFree(() => port.request(line, matchPrefix, timeoutMs, errPrefix), {
+      intervalMs: BUSY_RETRY_INTERVAL_MS,
+      deadline,
+      giveUp: e => new OtaError(e.message, 'busy'),
+    })
   }
 
   /** 結果を数秒出してから idle に戻す */
@@ -553,7 +540,7 @@ export function useSerialOta() {
         new Promise(resolve => setTimeout(resolve, CONFIRMING_REPORT_TIMEOUT_MS)),
       ])
       const deadline = Date.now() + BUSY_RETRY_TOTAL_MS
-      ask = (...args) => requestWhenFree(port, deadline, ...args)
+      ask = (...args) => requestWhenFreeOta(port, deadline, ...args)
       // 再起動を待っている間に別の機体へ差し替えられていたら確定しない
       // (`OTA CONFIRM` は冪等で、別の機体に届いても `OTA CONFIRMED` が返る)
       const id = parseAuthStatusLine(await ask('AUTH STATUS', 'AUTH ', AUTH_STATUS_TIMEOUT_MS))
@@ -563,7 +550,7 @@ export function useSerialOta() {
       // このポートには署名の要求 (警告デバイスは席の署名、Vein Station は端末の鍵の署名) が流れる。
       // 「既に応答待ち」のときだけ間を置いて送り直す
       const deadline = Date.now() + BUSY_RETRY_TOTAL_MS
-      ask = (...args) => requestWhenFree(port, deadline, ...args)
+      ask = (...args) => requestWhenFreeOta(port, deadline, ...args)
     }
     const after = parseDeviceLine(await ask('DEVICE', 'DEVICE ', DEVICE_TIMEOUT_MS))
     // 確定の条件 (冒頭 doc「何を信じるか」): FLAVOR が同じで、VER が書き込み前の機体の版と違う。

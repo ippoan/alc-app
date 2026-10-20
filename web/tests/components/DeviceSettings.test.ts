@@ -70,10 +70,12 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
 const veinConnected = ref(false)
 const veinRequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
 const veinConnectMock = vi.fn(async () => true)
+const veinNoteOmronBpMock = vi.fn()
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: veinConnected,
   request: veinRequestMock,
   connect: veinConnectMock,
+  noteOmronBp: veinNoteOmronBpMock,
 }))
 
 // 端末の名乗り (`DEVICE bp-station`)。測定台かどうかの判定は `useBpStationMode` 1 か所で、
@@ -188,6 +190,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     atomS3Connected.value = false
     veinConnected.value = false
     veinRequestMock.mockReset()
+    veinNoteOmronBpMock.mockReset()
     veinRequestMock.mockImplementation(async line => echoOmron(line))
     veinConnectMock.mockClear()
     arbitratedDeviceKind.value = null
@@ -483,6 +486,26 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       expect(coreS3RequestMock).not.toHaveBeenCalled()
       expect(wrapper.find('[data-testid="omron-bp-device-error"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="omron-bp-restart-notice"]').exists()).toBe(true)
+      // 血圧計の表示の判定 (useBpUiEnabled) が読む Vein の値も合わせる
+      expect(veinNoteOmronBpMock).toHaveBeenCalledWith(true)
+    })
+
+    it('Vein Station へ OFF が通ったら Vein の値も false にする。CoreS3 へ送ったときは触らない', async () => {
+      activatedDeviceId.value = 'device-1'
+      veinConnected.value = true
+      api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(true))
+      const wrapper = await mountDeviceSettings()
+      await checkbox(wrapper).setValue(false)
+      await settle(wrapper)
+      expect(veinNoteOmronBpMock).toHaveBeenLastCalledWith(false)
+
+      veinNoteOmronBpMock.mockReset()
+      veinConnected.value = false
+      coreS3Connected.value = true
+      await checkbox(wrapper).setValue(true)
+      await settle(wrapper)
+      expect(coreS3RequestMock).toHaveBeenCalled()
+      expect(veinNoteOmronBpMock).not.toHaveBeenCalled()
     })
 
     it('開いたときに Vein Station をつなぐ (つながないと omronTarget が null で機体に何も送られない)', async () => {

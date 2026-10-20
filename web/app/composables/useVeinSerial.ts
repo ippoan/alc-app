@@ -28,6 +28,7 @@
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
+import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
 import { findDeviceLine } from '~/utils/device-line'
 import type { DeviceLine } from '~/utils/device-line'
@@ -56,6 +57,24 @@ const isConnected = ref(false)
  * useCoreS3Serial の `deviceInfo` と同じ形
  */
 const deviceInfo = ref<DeviceLine | null>(null)
+
+/**
+ * 機体の設定で「血圧計を使う」(`OMRON BP=1`) か。つながったとき `OMRON STATUS` で聞く。
+ * 未取得 (未接続・応答なし・旧ファーム) は null。端末登録の無い PC では、サーバの設定
+ * (`devices.bp_enabled`) も `bp_bond` の行も当てにできないので、画面はこれで血圧を出すか決める
+ * (Refs ippoan/alc-app#436)。OFF→ON の直後は機体を再起動するまで BLE が血圧計を拾わないが、
+ * ここは設定の値なので 1 になる。
+ */
+const omronBp = ref<boolean | null>(null)
+
+/** 接続の世代。切断・再接続をまたいで、古い問い合わせが呼び直しを続けないための印 */
+let connectionEpoch = 0
+
+/** `OMRON STATUS` の応答上限と、「既に応答待ち」(鍵の署名 `AUTH SIGN` と重なる) の呼び直し */
+const OMRON_STATUS_TIMEOUT_MS = 3000
+const OMRON_STATUS_RETRY_MS = 300
+const OMRON_STATUS_RETRY_LIMIT = 40
+const OMRON_STATUS_PREFIX = 'OMRON BP='
 
 /**
  * ファームの書き込み中の錠。機体は `OTA SERIAL` の後、イメージを受け切るまで受けたバイトを
@@ -108,15 +127,40 @@ export function useVeinSerial() {
       // プローブ中に来ていた行も配る (useAtomS3Serial と同じ)
       for (const line of lines) lineDispatch.dispatchLine(line)
       for (const notify of [...waiters]) notify()
+      // 鍵の署名は isConnected の watch から先に枠を取るので、こちらは空くまで待つ
+      void queryOmronBp()
     },
 
     onLine: lineDispatch.dispatchLine,
 
     onClose() {
+      connectionEpoch++
+      omronBp.value = null
       deviceInfo.value = null
       isConnected.value = false
       for (const cb of [...closeHandlers]) cb()
     },
+  }
+
+  /** 機体に `OMRON STATUS` を聞いて {@link omronBp} に入れる。聞けなければ null のまま */
+  async function queryOmronBp(): Promise<void> {
+    const epoch = ++connectionEpoch
+    try {
+      const reply = await requestWhenFree(
+        () => request('OMRON STATUS', OMRON_STATUS_PREFIX, OMRON_STATUS_TIMEOUT_MS),
+        { intervalMs: OMRON_STATUS_RETRY_MS, maxRetries: OMRON_STATUS_RETRY_LIMIT, isCancelled: () => epoch !== connectionEpoch },
+      )
+      const value = reply.slice(OMRON_STATUS_PREFIX.length).trim()
+      if (value === '1' || value === '0') omronBp.value = value === '1'
+    }
+    catch {
+      // 旧ファーム・時間切れ・抜線: 分からないまま (null)。画面は従来の判定に任せる
+    }
+  }
+
+  /** 端末設定で `OMRON BP ON/OFF` が通ったときに、機体の設定の値を合わせる */
+  function noteOmronBp(enabled: boolean): void {
+    omronBp.value = enabled
   }
 
   /** ポートを失った / 返した (useCoreS3Serial / useAtomS3Serial の onClose と同じ形) */
@@ -240,6 +284,8 @@ export function useVeinSerial() {
     capture,
     say,
     request,
+    omronBp: readonly(omronBp),
+    noteOmronBp,
     ota: { begin: otaBegin, end: otaEnd, request: otaRequest },
     onClose,
     onEvent: lineDispatch.onEvent,
