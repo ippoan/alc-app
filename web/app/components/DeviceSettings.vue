@@ -20,6 +20,8 @@ const alarmDevice = useAlarmDevice()
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
 const atomS3 = useAtomS3Serial()
+// Vein Station (指静脈の機体)。血圧計の中継もここ (Refs ippoan/alc-app#436)
+const vein = useVeinSerial()
 // 血圧測定台として開いた画面か。判定は `useBpStationMode` 1 か所 (Refs ippoan/alc-app#368) —
 // URL の `?station=bp` だけでなく端末の名乗り (`DEVICE bp-station`) も見るので、
 // `?station=bp` の無い URL で開いた測定台でも正しく名指しできる。
@@ -33,7 +35,7 @@ const bleGwDeviceName = computed(() => isBpStation.value ? 'ATOM S3' : 'CoreS3')
 // (firmware hub-ble の `omron_enabled`)。
 // 正本はサーバの端末設定 (`devices.bp_enabled`) — 端末の NVS に置くと端末を
 // 入れ替えたときに消えるため。画面の表示はこの 1 系統だけを見る。
-const { bpEnabled, setBpEnabled } = useBloodPressureSetting()
+const { bpEnabled, bpConfirmed, setBpEnabled } = useBloodPressureSetting()
 
 // 常時起動 ON/OFF (端末自身での切替)。call_enabled / call_schedule は現在値を
 // 保持したまま always_on だけ差し替える (updateDeviceCallSettings は全項目送信の
@@ -100,6 +102,8 @@ const omronTarget = computed(() => {
   // 測定台の PC には CoreS3 も警告デバイスも挿さらないので、上の 2 分岐とは実際には競合しない。
   // 測定台のファームは警告デバイスと同じ Atom S3 系で、設定の反映に再起動が要る。
   if (atomS3.isConnected.value) return { needsRestart: true, request: atomS3.request }
+  // Vein Station (指静脈の機体)。血圧計の中継は NVS の `omron_bp` が ON のときだけで、反映に再起動が要る
+  if (vein.isConnected.value) return { needsRestart: true, request: vein.request }
   return null
 })
 
@@ -134,8 +138,10 @@ async function sendOmronBp(enabled: boolean): Promise<void> {
 
 // 端末が繋がったとき / サーバの設定が届いたときに、今の設定を端末へ流し込む。
 // マウント時に既に繋がっていればその時点で 1 回送る。
+// サーバの値が確定する前 (端末登録の無い PC では読めず既定 false のまま) は送らない —
+// つなぐたびに NVS へ OFF を書いてしまう。切り替えを押したときは確定済みになるので送られる。
 watch([omronTarget, bpEnabled], ([target, enabled]) => {
-  if (target) void sendOmronBp(enabled)
+  if (target && bpConfirmed.value) void sendOmronBp(enabled)
 }, { immediate: true })
 
 /** チェックを変えた。サーバへの保存が正で、端末へは watch が流し込む */

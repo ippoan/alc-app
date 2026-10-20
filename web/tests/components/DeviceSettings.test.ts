@@ -66,6 +66,14 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
   request: atomS3RequestMock,
 }))
 
+// Vein Station (指静脈の機体)。血圧計の中継は NVS の `omron_bp` で、設定は同じ 1 行の口で撃つ (Refs ippoan/alc-app#436)
+const veinConnected = ref(false)
+const veinRequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: veinConnected,
+  request: veinRequestMock,
+}))
+
 // 端末の名乗り (`DEVICE bp-station`)。測定台かどうかの判定は `useBpStationMode` 1 か所で、
 // URL の印と名乗りの OR (Refs ippoan/alc-app#368)
 const arbitratedDeviceKind = ref<'bp-station' | 'other' | null>(null)
@@ -75,9 +83,15 @@ mockNuxtImport('useSerialArbiter', () => () => ({
 
 // 血圧計を使うかの表示は useBloodPressureSetting の 1 系統 (Refs ippoan/alc-app-s3#135)
 const bpEnabled = ref(false)
-const setBpEnabledMock = vi.fn((v: boolean) => { bpEnabled.value = v })
+// サーバの値が確定したか (本物の `applied`)。setBpEnabled で true になる
+const bpConfirmed = ref(false)
+const setBpEnabledMock = vi.fn((v: boolean) => {
+  bpConfirmed.value = true
+  bpEnabled.value = v
+})
 mockNuxtImport('useBloodPressureSetting', () => () => ({
   bpEnabled: readonly(bpEnabled),
+  bpConfirmed: readonly(bpConfirmed),
   setBpEnabled: setBpEnabledMock,
 }))
 
@@ -170,12 +184,16 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     alarmRequestMock.mockReset()
     alarmRequestMock.mockImplementation(async line => echoOmron(line))
     atomS3Connected.value = false
+    veinConnected.value = false
+    veinRequestMock.mockReset()
+    veinRequestMock.mockImplementation(async line => echoOmron(line))
     arbitratedDeviceKind.value = null
     serialPorts.value = []
     serialSupport.supported = false
     atomS3RequestMock.mockReset()
     atomS3RequestMock.mockImplementation(async line => echoOmron(line))
     bpEnabled.value = false
+    bpConfirmed.value = false
     setBpEnabledMock.mockClear()
     api.getDeviceSettings.mockReset()
     api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(false))
@@ -449,6 +467,32 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
         .toBe('設定を変えました。VoiceS3R は再起動すると有効になります')
     })
 
+    it('Vein Station が繋がっていれば端末にも送る (OMRON BP ON → OK OMRON BP=1、再起動の案内つき)', async () => {
+      activatedDeviceId.value = 'device-1'
+      veinConnected.value = true
+      const wrapper = await mountDeviceSettings()
+
+      await checkbox(wrapper).setValue(true)
+      await settle(wrapper)
+
+      expect(api.updateDeviceCallSettings).toHaveBeenCalledWith('device-1', true, null, undefined, true)
+      expect(veinRequestMock).toHaveBeenLastCalledWith('OMRON BP ON', 'OK OMRON BP=', 3000)
+      expect(coreS3RequestMock).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="omron-bp-device-error"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="omron-bp-restart-notice"]').exists()).toBe(true)
+    })
+
+    it('サーバの値が未確定のまま Vein Station がつながっても何も送らない (つなぐたびに OFF を書かない)', async () => {
+      // 端末登録の無い PC: サーバの値が読めず bpConfirmed が false のまま
+      activatedDeviceId.value = null
+      veinConnected.value = true
+      const wrapper = await mountDeviceSettings()
+      await settle(wrapper)
+
+      expect(bpConfirmed.value).toBe(false)
+      expect(veinRequestMock).not.toHaveBeenCalled()
+    })
+
     it('(受け口) サーバの設定が血圧の表示に反映される', async () => {
       activatedDeviceId.value = 'device-1'
       api.getDeviceSettings.mockResolvedValue(deviceSettingsResponse(true))
@@ -517,6 +561,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
 
     it('他の応答待ち (AUTH SIGN 等) と重なって「既に応答待ちです」なら、間を置いて呼び直す', async () => {
       activatedDeviceId.value = 'device-1'
+      bpConfirmed.value = true // サーバの値が確定済み (未確定のうちは自動では送らない)
       coreS3Connected.value = true
       vi.useFakeTimers()
       try {
@@ -539,6 +584,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
 
     it('「既に応答待ちです」の再試行中に unmount されたら呼び直さない', async () => {
       activatedDeviceId.value = 'device-1'
+      bpConfirmed.value = true // サーバの値が確定済み (未確定のうちは自動では送らない)
       coreS3Connected.value = true
       coreS3RequestMock.mockRejectedValue(new Error('request(CoreS3): 既に応答待ちです'))
       vi.useFakeTimers()
@@ -556,6 +602,7 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
 
     it('「既に応答待ちです」でも切断されていれば呼び直さない', async () => {
       activatedDeviceId.value = 'device-1'
+      bpConfirmed.value = true // サーバの値が確定済み (未確定のうちは自動では送らない)
       coreS3Connected.value = true
       coreS3RequestMock.mockImplementationOnce(async () => {
         coreS3Connected.value = false

@@ -1242,17 +1242,39 @@ describe('useBleGateway', () => {
       expect(gw.transport.value).toBeNull()
     })
 
-    it('血圧計の connected / blood_pressure・heartbeat は見ない (体温計とアルコールだけ)', async () => {
+    it('血圧計の connected / blood_pressure / bp_bond / disconnected を受ける (omron_bp ON のとき Vein が中継する)', async () => {
       const dev = createMockPort()
       await connectVein(dev)
 
+      dev.emit('{"type":"bp_bond","bonded":true}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.hasBpHardware.value).toBe(true)
+
       dev.emit('{"type":"connected","device":"blood_pressure"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.bloodPressureConnected.value).toBe(true)
+
       dev.emit('{"type":"blood_pressure","systolic":120,"diastolic":80,"pulse":60}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.latestBloodPressure.value).toMatchObject({ systolic: 120, diastolic: 80, pulse: 60, unit: 'mmHg' })
+
+      dev.emit('{"type":"disconnected","device":"blood_pressure"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(gw.bloodPressureConnected.value).toBe(false)
+
+      // BLE ゲートウェイとしては繋がない
+      expect(gw.isConnected.value).toBe(false)
+      expect(gw.transport.value).toBeNull()
+    })
+
+    it('heartbeat は見ない (30 秒無音の監視を動かさない)', async () => {
+      const dev = createMockPort()
+      await connectVein(dev)
+
       dev.emit('{"type":"heartbeat","thermo":true,"bp":true}\n')
       await vi.advanceTimersByTimeAsync(0)
 
       expect(gw.bloodPressureConnected.value).toBe(false)
-      expect(gw.latestBloodPressure.value).toBeNull()
       expect(gw.thermometerConnected.value).toBe(false)
     })
 
