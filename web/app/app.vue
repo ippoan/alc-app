@@ -3,6 +3,7 @@ import { StagingFooter, VersionBadge } from '@ippoan/auth-client'
 import { RELOAD_REASON_KEY } from '~/utils/reload-reason'
 import { ARBITRATED_VID, closeArbitratedPortsForUnload } from '~/composables/useSerialArbiter'
 import { onPortConnected } from '~/composables/useSerialDeviceManager'
+import { installVeinDevPort } from '~/composables/useVeinDevPort'
 import { dropDevMarksWithoutOwnDevice, reloadDevMarksFromStorage } from '~/utils/token-selection'
 
 const { init, isLoading } = useAuth()
@@ -83,6 +84,8 @@ onMounted(async () => {
   })
   const coreS3 = useCoreS3Serial()
   const vein = useVeinSerial()
+  // 開発用の端末だけの診断の口 (window.alcVein。印が外れれば消える。useVeinDevPort の doc)
+  installVeinDevPort(vein.request)
   const atom = useAtomS3Serial()
   // 種類ごとの「その機体がつながっているか」(kiosk = CoreS3 か Vein Station)
   const ownDeviceConnected = {
