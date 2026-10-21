@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiEmployee } from '~/types'
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, uploadFacePhoto, updateEmployeeFace, approveFace, rejectFace, getTenkoCallDrivers, getPendingVeinTemplates, approveVeinTemplate, deleteVeinTemplate, type TenkoCallDriver } from '~/utils/api'
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, uploadFacePhoto, updateEmployeeFace, approveFace, rejectFace, getTenkoCallDrivers, getPendingVeinTemplates, getApprovedVeinTemplates, approveVeinTemplate, deleteVeinTemplate, type TenkoCallDriver } from '~/utils/api'
 import { failureStatus } from '~/utils/employee-lookup-messages'
 import { getRawFaceDescriptor, getAllDescriptorsWithTimestamp } from '~/utils/face-db'
 import { FACE_MODEL_VERSION } from '~/composables/useFaceDetection'
@@ -213,6 +213,9 @@ const { user } = useAuth()
 const isAdmin = computed(() => user.value?.role === 'admin')
 // employee_id → 一覧で見た版 (updated_at)。承認はこの版を指定する
 const pendingVein = ref(new Map<string, string>())
+// 承認済みの指静脈がある employee_id。削除は乗務員の削除と同じ 2 段で確かめる (確認中の行は別に持つ)
+const approvedVein = ref(new Set<string>())
+const veinDeletingId = ref<string | null>(null)
 
 async function handleVeinDecision(id: string, decide: () => Promise<void>) {
   approvingId.value = id
@@ -238,6 +241,11 @@ function handleVeinReject(id: string) {
   return handleVeinDecision(id, () => deleteVeinTemplate(id))
 }
 
+function handleVeinDelete(id: string) {
+  veinDeletingId.value = null
+  return handleVeinDecision(id, () => deleteVeinTemplate(id))
+}
+
 // employee_code でマッチ
 const tenkoDriverMap = computed(() => {
   const map = new Map<string, TenkoCallDriver>()
@@ -256,15 +264,17 @@ async function fetchData() {
   isLoading.value = true
   error.value = null
   try {
-    const [emps, drivers, veins] = await Promise.all([
+    const [emps, drivers, veins, approved] = await Promise.all([
       getEmployees(),
       getTenkoCallDrivers().catch(() => [] as TenkoCallDriver[]),
-      // 取れなくても乗務員の一覧は出す (承認待ちが出ないだけ)
+      // 取れなくても乗務員の一覧は出す (承認待ち・承認済みが出ないだけ)
       isAdmin.value ? getPendingVeinTemplates().catch(() => []) : [],
+      isAdmin.value ? getApprovedVeinTemplates().catch(() => []) : [],
     ])
     employees.value = emps
     tenkoDrivers.value = drivers
     pendingVein.value = new Map(veins.map(v => [v.employee_id, v.updated_at]))
+    approvedVein.value = new Set(approved.map(v => v.employee_id))
   } catch (e) {
     error.value = e instanceof Error ? e.message : '取得エラー'
   } finally {
@@ -599,6 +609,24 @@ onMounted(() => fetchData())
                         @click="handleVeinReject(emp.id)"
                       >
                         指静脈を却下
+                      </button>
+                    </template>
+                    <template v-else-if="approvedVein.has(emp.id)">
+                      <button
+                        v-if="veinDeletingId === emp.id"
+                        :disabled="approvingId === emp.id"
+                        class="px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700 disabled:opacity-50"
+                        @click="handleVeinDelete(emp.id)"
+                      >
+                        本当に削除
+                      </button>
+                      <button
+                        v-else
+                        :disabled="approvingId === emp.id"
+                        class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs"
+                        @click="veinDeletingId = emp.id"
+                      >
+                        指静脈を削除
                       </button>
                     </template>
                     <button

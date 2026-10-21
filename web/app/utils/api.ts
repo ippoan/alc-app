@@ -655,8 +655,8 @@ export async function getVeinTemplates(): Promise<{ logic_version: string; templ
   return request<{ logic_version: string; templates: ApiVeinTemplate[] }>('/api/vein/templates')
 }
 
-/** 管理者の承認を待っている指静脈の登録 (1 件分)。`updated_at` は承認するときの版 */
-export interface ApiPendingVeinTemplate {
+/** 指静脈の登録 (1 件分、承認待ち・承認済みの一覧で共通)。`updated_at` は承認するときの版 */
+export interface ApiVeinTemplateVersion {
   employee_id: string
   updated_at: string
 }
@@ -665,9 +665,22 @@ export interface ApiPendingVeinTemplate {
  * 承認待ちの指静脈の登録を全件取る (管理者だけ、Refs ippoan/alc-app#436)。
  * 登録は管理者が承認するまで照合に使われない。口がまだ無い backend (404) は 0 件として扱う。
  */
-export async function getPendingVeinTemplates(): Promise<ApiPendingVeinTemplate[]> {
+export async function getPendingVeinTemplates(): Promise<ApiVeinTemplateVersion[]> {
   try {
-    return await request<ApiPendingVeinTemplate[]>('/api/vein/templates/pending')
+    return await request<ApiVeinTemplateVersion[]>('/api/vein/templates/pending')
+  } catch (e) {
+    if (failureStatus(e) === 404) return []
+    throw e
+  }
+}
+
+/**
+ * 承認済みの指静脈の登録を全件取る (管理者だけ、Refs ippoan/alc-app#436)。
+ * 乗務員一覧で承認済みの指静脈を削除するのに使う。口がまだ無い backend (404) は 0 件として扱う。
+ */
+export async function getApprovedVeinTemplates(): Promise<ApiVeinTemplateVersion[]> {
+  try {
+    return await request<ApiVeinTemplateVersion[]>('/api/vein/templates/approved')
   } catch (e) {
     if (failureStatus(e) === 404) return []
     throw e
@@ -685,7 +698,7 @@ export async function approveVeinTemplate(employeeId: string, updatedAt: string)
   })
 }
 
-/** 指静脈の登録を消す (管理者の却下、Refs ippoan/alc-app#436) */
+/** 指静脈の登録を消す (管理者の却下・承認済みの削除、Refs ippoan/alc-app#436) */
 export async function deleteVeinTemplate(employeeId: string): Promise<void> {
   await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, { method: 'DELETE' })
 }

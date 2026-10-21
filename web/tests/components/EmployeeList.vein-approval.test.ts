@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   getEmployees: vi.fn(),
   getTenkoCallDrivers: vi.fn(),
   getPendingVeinTemplates: vi.fn(),
+  getApprovedVeinTemplates: vi.fn(),
   approveVeinTemplate: vi.fn(),
   deleteVeinTemplate: vi.fn(),
 }))
@@ -53,6 +54,7 @@ describe('EmployeeList の指静脈の承認 (Refs ippoan/alc-app#436)', () => {
     api.getEmployees.mockReset().mockResolvedValue([EMP])
     api.getTenkoCallDrivers.mockReset().mockResolvedValue([])
     api.getPendingVeinTemplates.mockReset().mockResolvedValue([{ employee_id: EMP.id, updated_at: VERSION }])
+    api.getApprovedVeinTemplates.mockReset().mockResolvedValue([])
     api.approveVeinTemplate.mockReset().mockResolvedValue(undefined)
     api.deleteVeinTemplate.mockReset().mockResolvedValue(undefined)
   })
@@ -137,5 +139,84 @@ describe('EmployeeList の指静脈の承認 (Refs ippoan/alc-app#436)', () => {
     await button(wrapper, '指静脈を却下')!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('指静脈の承認エラー')
+  })
+
+  describe('承認済みの指静脈の削除', () => {
+    const OTHER = { ...EMP, id: 'emp-test-2', code: '002', name: 'テスト次郎' }
+
+    beforeEach(() => {
+      api.getEmployees.mockResolvedValue([EMP, OTHER])
+      api.getPendingVeinTemplates.mockResolvedValue([])
+      api.getApprovedVeinTemplates.mockResolvedValue([{ employee_id: EMP.id, updated_at: VERSION }])
+    })
+
+    it('承認済みの乗務員の行にだけ「指静脈を削除」を出す', async () => {
+      const wrapper = await mountList()
+      const rows = wrapper.findAll('tr').filter(r => r.text().includes('テスト'))
+      expect(rows.find(r => r.text().includes('テスト太郎'))!.text()).toContain('指静脈を削除')
+      expect(rows.find(r => r.text().includes('テスト次郎'))!.text()).not.toContain('指静脈を削除')
+    })
+
+    it('1 段目では消さず、「本当に削除」で消して一覧を取り直す', async () => {
+      const wrapper = await mountList()
+      await button(wrapper, '指静脈を削除')!.trigger('click')
+      await flushPromises()
+      expect(api.deleteVeinTemplate).not.toHaveBeenCalled()
+      api.getApprovedVeinTemplates.mockResolvedValue([])
+      await button(wrapper, '本当に削除')!.trigger('click')
+      await flushPromises()
+      expect(api.deleteVeinTemplate).toHaveBeenCalledWith(EMP.id)
+      expect(api.getApprovedVeinTemplates).toHaveBeenCalledTimes(2)
+      expect(button(wrapper, '指静脈を削除')).toBeUndefined()
+      expect(button(wrapper, '本当に削除')).toBeUndefined()
+    })
+
+    it('乗務員の削除の確認とは別に持つ', async () => {
+      const wrapper = await mountList()
+      await button(wrapper, '指静脈を削除')!.trigger('click')
+      await flushPromises()
+      // 乗務員の「削除」は 1 段目のまま (指静脈の確認が乗務員の確認に化けない)
+      expect(wrapper.findAll('button').filter(x => x.text() === '本当に削除')).toHaveLength(1)
+      expect(wrapper.findAll('button').filter(x => x.text() === '削除')).toHaveLength(2)
+    })
+
+    it('失敗は文言をそのまま出す', async () => {
+      api.deleteVeinTemplate.mockRejectedValueOnce(new Error('API エラー (403): forbidden'))
+      const wrapper = await mountList()
+      await button(wrapper, '指静脈を削除')!.trigger('click')
+      await flushPromises()
+      await button(wrapper, '本当に削除')!.trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('API エラー (403): forbidden')
+      expect(button(wrapper, '指静脈を削除')).toBeDefined()
+    })
+
+    it('承認待ちにも居るときは承認待ちの表示を優先する', async () => {
+      api.getPendingVeinTemplates.mockResolvedValue([{ employee_id: EMP.id, updated_at: VERSION }])
+      const wrapper = await mountList()
+      expect(button(wrapper, '指静脈を却下')).toBeDefined()
+      expect(button(wrapper, '指静脈を削除')).toBeUndefined()
+    })
+
+    it('管理者でなければ承認済みを取りに行かず、ボタンも出さない', async () => {
+      user.value = { role: 'viewer' }
+      const wrapper = await mountList()
+      expect(api.getApprovedVeinTemplates).not.toHaveBeenCalled()
+      expect(button(wrapper, '指静脈を削除')).toBeUndefined()
+    })
+
+    it('ログインしていなければ承認済みを取りに行かない', async () => {
+      user.value = null
+      const wrapper = await mountList()
+      expect(api.getApprovedVeinTemplates).not.toHaveBeenCalled()
+      expect(button(wrapper, '指静脈を削除')).toBeUndefined()
+    })
+
+    it('承認済みが取れなくても乗務員の一覧は出す', async () => {
+      api.getApprovedVeinTemplates.mockRejectedValue(new Error('API エラー (500): boom'))
+      const wrapper = await mountList()
+      expect(wrapper.text()).toContain('テスト太郎')
+      expect(button(wrapper, '指静脈を削除')).toBeUndefined()
+    })
   })
 })
