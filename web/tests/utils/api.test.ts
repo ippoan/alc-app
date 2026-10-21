@@ -71,6 +71,7 @@ import {
   identifyVein,
   getVeinTemplates,
   getPendingVeinTemplates,
+  getApprovedVeinTemplates,
   approveVeinTemplate,
   deleteVeinTemplate,
 } from '~/utils/api'
@@ -2946,6 +2947,23 @@ describe.skipIf(isLive)('指静脈の承認 (Refs ippoan/alc-app#436)', () => {
   it('404 以外の失敗はそのまま投げる', async () => {
     mockFetch.mockResolvedValueOnce(errResponse(403, 'forbidden'))
     await expect(getPendingVeinTemplates()).rejects.toThrow('API エラー (403)')
+  })
+
+  it('承認済みの一覧を GET で取る', async () => {
+    const approved = [{ employee_id: TEST_EMPLOYEE_ID, updated_at: '2026-10-20T00:00:00Z' }]
+    mockFetch.mockResolvedValueOnce(okJson(approved))
+    await expect(getApprovedVeinTemplates()).resolves.toEqual(approved)
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/vein\/templates\/approved$/)
+  })
+
+  it('承認済みの口がまだ無い (404) ときは 0 件', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(404))
+    await expect(getApprovedVeinTemplates()).resolves.toEqual([])
+  })
+
+  it('承認済みの取得で 404 以外の失敗はそのまま投げる', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(403, 'forbidden'))
+    await expect(getApprovedVeinTemplates()).rejects.toThrow('API エラー (403)')
   })
 
   it('承認は一覧で見た版 (updated_at) を body に載せて POST する', async () => {
