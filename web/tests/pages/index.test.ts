@@ -17,6 +17,7 @@ import CoreS3DeviceFirmwareNotice from '~/components/CoreS3DeviceFirmwareNotice.
 import VeinStationFirmwareNotice from '~/components/VeinStationFirmwareNotice.vue'
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
+import VeinTestPanel from '~/components/VeinTestPanel.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
 import ManagerAlarmBar from '~/components/ManagerAlarmBar.vue'
@@ -1087,6 +1088,93 @@ describe('pages/index — dev端末の記録 (Refs ippoan/alc-app#387)', () => {
     expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
     await toggleMenu(wrapper)
     expect(menuLabels(wrapper)).not.toContain(LABEL)
+  })
+})
+
+describe('pages/index — 指静脈の確認タブ (Refs ippoan/alc-app#436)', () => {
+  // 普段の画面の自動照合と取り合わずに試験コマンドを打つ専用タブ。dev の印がある端末だけ。
+  // このタブには BloodPressureMeasurement / TenkoKiosk を出さない
+
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+  const LABEL = '指静脈の確認'
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    clearDevDeviceMark('kiosk')
+    noteDeviceToken('manager-device', null)
+    localStorage.clear()
+    landscape.on.value = false
+  })
+
+  async function toggleMenu(w: VueWrapper) {
+    const b = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!b) throw new Error('hamburger not found')
+    await b.trigger('click')
+    await nextTick()
+  }
+
+  function menuLabels(w: VueWrapper) {
+    return w.find('.absolute.right-0').findAll('button').map(b => b.text())
+  }
+
+  it('dev の印が無い端末ではメニューに出ない', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).not.toContain(LABEL)
+  })
+
+  it('★ dev の印がある端末ではメニューに出て、選ぶとパネルだけが開く (血圧測定・キオスクは出ない)', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver')
+    await toggleMenu(wrapper)
+    const labels = menuLabels(wrapper)
+    expect(labels.indexOf('開発用の記録')).toBeLessThan(labels.indexOf(LABEL))
+    await wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === LABEL)!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.findComponent(VeinTestPanel).exists()).toBe(true)
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
+    expect(wrapper.findComponent(TenkoKiosk).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(false)
+  })
+
+  it('★ dev の印がある端末は ?tab=vein_test で開ける', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=vein_test')
+    expect(wrapper.findComponent(VeinTestPanel).exists()).toBe(true)
+  })
+
+  it('dev の印が無い端末が ?tab=vein_test で開いても通常点呼になる', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=vein_test')
+    expect(wrapper.findComponent(VeinTestPanel).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
+  it('★ 機体を抜いて印が下りたら、指静脈の確認の画面から通常点呼へ戻る', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=vein_test')
+    expect(wrapper.findComponent(VeinTestPanel).exists()).toBe(true)
+
+    noteDeviceToken('kiosk', null)
+    await nextTick()
+
+    expect(wrapper.findComponent(VeinTestPanel).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
+  it('印が下りても、ほかのタブ (IT点呼) にいるときは動かさない', async () => {
+    noteDeviceToken('kiosk', devDeviceJwt())
+    wrapper = await mountIndex('/?role=driver&tab=it')
+    noteDeviceToken('kiosk', null)
+    await nextTick()
+    expect(wrapper.find('.normal-measurement-stub[it-mode]').exists()).toBe(true)
   })
 })
 

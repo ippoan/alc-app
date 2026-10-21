@@ -7,7 +7,7 @@ vi.mock('~/utils/token-selection', async importOriginal => ({
 }))
 
 import { DEV_DEVICE_MARK_EVENT } from '~/utils/token-selection'
-import { installVeinDevPort, isAllowedVeinDevLine, VEIN_DEV_SEND_TIMEOUT_MS } from '~/composables/useVeinDevPort'
+import { installVeinDevPort, isAllowedVeinDevLine, sendVeinDevLine, VEIN_DEV_SEND_TIMEOUT_MS } from '~/composables/useVeinDevPort'
 
 let dispose: (() => void) | null = null
 
@@ -103,5 +103,19 @@ describe('isAllowedVeinDevLine', () => {
     expect(isAllowedVeinDevLine('VEIN TEST CLEAR 2')).toBe(true)
     expect(isAllowedVeinDevLine('VEIN FINGER?')).toBe(true)
     expect(isAllowedVeinDevLine('VEIN CAPTURE')).toBe(false)
+  })
+})
+
+describe('sendVeinDevLine (window.alcVein と試験タブが共有する送信関数)', () => {
+  it('通る行は errPrefix 付きで request に渡る (timeout 省略は既定 30 秒)', async () => {
+    const request = vi.fn(async () => 'OK')
+    await expect(sendVeinDevLine(request, 'VEIN TEST CLEAR 2', 'VEIN TEST CLEARED 2')).resolves.toBe('OK')
+    expect(request).toHaveBeenCalledWith('VEIN TEST CLEAR 2', 'VEIN TEST CLEARED 2', VEIN_DEV_SEND_TIMEOUT_MS, 'ERR ')
+  })
+
+  it('通らない行は request を呼ばずに reject する', async () => {
+    const request = vi.fn(async () => 'OK')
+    await expect(sendVeinDevLine(request, 'AUTH SIGN abc', 'OK', 1000)).rejects.toThrow('alcVein.send')
+    expect(request).not.toHaveBeenCalled()
   })
 })

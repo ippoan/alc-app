@@ -83,3 +83,19 @@ export async function loadVeinTemplates(): Promise<VeinTemplateSnapshot | null> 
     tx.onerror = () => reject(tx.error)
   })
 }
+
+/**
+ * 手元の写しを**すべて消す** (templates と meta を同一 transaction で clear)。
+ * 一度も保存していなくても成功する。消したあと照合は「データがありません」になり、
+ * 次の同期 (`syncVeinTemplates`) で取り直す
+ */
+export async function clearVeinTemplates(): Promise<void> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([TEMPLATES_STORE, META_STORE], 'readwrite')
+    tx.objectStore(TEMPLATES_STORE).clear()
+    tx.objectStore(META_STORE).clear()
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}

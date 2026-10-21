@@ -23,6 +23,11 @@ export const VEIN_OFFLINE_NO_DATA_MESSAGE = '指静脈の照合データがあ�
 
 let lastSyncedAt: number | null = null
 
+/** 「前回の同期から○分」の記憶を忘れる。手元の写しを消したあと、次の呼び出しで取り直させる */
+export function resetVeinSyncClock(): void {
+  lastSyncedAt = null
+}
+
 /**
  * テンプレートの一覧をサーバーから取り、手元をまるごと差し替える。あわせて wasm を
  * 1 度読んでおく (Service Worker にキャッシュさせ、オフラインでも読めるようにする)。

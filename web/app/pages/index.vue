@@ -117,7 +117,7 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'it'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'vein_test' | 'it'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
@@ -128,6 +128,8 @@ const driverSubTab = ref<DriverSubTab>(
   // dev端末の記録 (Refs ippoan/alc-app#387)。**dev の印がある端末でだけ開く** — 印の無い
   // 端末が URL で開いても、メニューに無い画面が出るだけなので通常点呼へ倒す
   : route.query.tab === 'dev_records' && isDevDevice('kiosk') ? 'dev_records'
+  // 指静脈の確認 (Refs ippoan/alc-app#436)。dev_records と同じく dev の印がある端末でだけ開く
+  : route.query.tab === 'vein_test' && isDevDevice('kiosk') ? 'vein_test'
   // IT点呼 は印に関係なくどの端末でも開ける
   : route.query.tab === 'it' ? 'it'
   : 'normal',
@@ -159,11 +161,15 @@ const IT_TENKO_TAB: SubTabDef = { key: 'it', label: 'IT点呼' }
 // 印 (`isDevDevice`) は同期で読める代わりに reactive ではないので、ここに写しを持ち、
 // メニューを開くたびに読み直す — 起動後に dev の鍵でトークンが取れた端末でも、開けば出る
 const DEV_RECORDS_TAB: SubTabDef = { key: 'dev_records', label: '開発用の記録' }
+// 指静脈の確認 (Refs ippoan/alc-app#436): 普段の画面の自動照合と取り合わずに、ファームの試験コマンドを
+// 打つ専用タブ。出す条件・印が下りたときの戻し方は「開発用の記録」と同じ
+const VEIN_TEST_TAB: SubTabDef = { key: 'vein_test', label: '指静脈の確認' }
+const DEV_ONLY_TABS: readonly DriverSubTab[] = ['dev_records', 'vein_test']
 const devKioskMark = ref(isDevDevice('kiosk'))
 function refreshDevKioskMark() {
   devKioskMark.value = isDevDevice('kiosk')
-  // 機体を抜いて印が下りたとき、「開発用の記録」の画面にいたら通常点呼へ戻す
-  if (!devKioskMark.value && driverSubTab.value === 'dev_records') driverSubTab.value = 'normal'
+  // 機体を抜いて印が下りたとき、「開発用の記録」「指静脈の確認」の画面にいたら通常点呼へ戻す
+  if (!devKioskMark.value && DEV_ONLY_TABS.includes(driverSubTab.value)) driverSubTab.value = 'normal'
 }
 /** 画面から印を外したあと: 項目を消し、行き場の無くなった画面を通常点呼へ戻す */
 function onDevMarkCleared() {
@@ -196,7 +202,7 @@ const menuTabs = computed(() => [
   ...MENU_TABS,
   ...(bpInVisible.value ? [] : [BP_TAB]),
   IT_TENKO_TAB,
-  ...(devKioskMark.value ? [DEV_RECORDS_TAB] : []),
+  ...(devKioskMark.value ? [DEV_RECORDS_TAB, VEIN_TEST_TAB] : []),
 ])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
 // 配列から導出するので、可視側へ移った `bp` を選んでもアイコンは点かない
@@ -718,6 +724,8 @@ function onRoleTabClick(role: RoleTab) {
           <BloodPressureMeasurement v-if="driverSubTab === 'bp'" class="flex-1 min-h-0" />
           <!-- dev端末の記録 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る -->
           <DevDeviceRecords v-if="driverSubTab === 'dev_records'" class="flex-1 min-h-0" @cleared="onDevMarkCleared" />
+          <!-- 指静脈の確認 (Refs ippoan/alc-app#436)。自動照合の画面を置かない専用タブ。dev の印がある端末だけ -->
+          <VeinTestPanel v-if="driverSubTab === 'vein_test'" class="flex-1 min-h-0" />
         </div>
       </div>
 

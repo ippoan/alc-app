@@ -40,6 +40,7 @@ const DRIVER_TABS: Record<string, Row> = {
   bp: { components: ['BloodPressureMeasurement'], declares: 'safe', by: 'BloodPressureMeasurement' },
   device: { components: ['DeviceSettings'], declares: null, reason: '設定' },
   dev_records: { components: ['DevDeviceRecords'], declares: null, reason: '閲覧' },
+  vein_test: { components: ['VeinTestPanel'], declares: null, reason: '照合の回数' },
 }
 
 /** 運行者以外の役割 (`pages/index.vue` の `RoleTab`)。運行管理者はタブごと (下の表) */
