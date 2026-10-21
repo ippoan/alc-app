@@ -29,6 +29,10 @@ const match = vi.hoisted(() => ({
 }))
 vi.mock('~/utils/vein-match', () => match)
 
+// 端末のモジュールの同期 (開発用の端末だけ) は vein-module.test.ts の領分。渡したときに呼ぶことだけ見る
+const veinModule = vi.hoisted(() => ({ syncVeinModule: vi.fn() }))
+vi.mock('~/utils/vein-module', () => veinModule)
+
 let mod: typeof import('~/utils/vein-identify')
 
 const EMP = { id: 'emp-1', name: '山田 太郎', face_approval_status: 'approved' } as ApiEmployee
@@ -190,5 +194,17 @@ describe('syncVeinTemplates', () => {
   it('ifOlderThanMs: 一度も同期していなければ取る', async () => {
     api.getVeinTemplates.mockResolvedValue(RES)
     expect(await mod.syncVeinTemplates({ ifOlderThanMs: mod.VEIN_TEMPLATE_SYNC_INTERVAL_MS })).toBe(true)
+  })
+})
+
+describe('syncVeinTemplates — 端末のモジュール (Refs ippoan/alc-app#436)', () => {
+  it('module を渡したときだけ syncVeinModule を同じ間隔で呼ぶ (写しの同期の時計とは別)', async () => {
+    api.getVeinTemplates.mockResolvedValue({ logic_version: '0.1.1', templates: [] })
+    const port = { isConnected: { value: true } } as never
+    await mod.syncVeinTemplates()
+    expect(veinModule.syncVeinModule).not.toHaveBeenCalled()
+    // 写しは同期したばかりで取り直さないが、モジュールは呼ぶ
+    expect(await mod.syncVeinTemplates({ ifOlderThanMs: 60_000, module: port })).toBe(false)
+    expect(veinModule.syncVeinModule).toHaveBeenCalledWith(port, { ifOlderThanMs: 60_000 })
   })
 })

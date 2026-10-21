@@ -6,6 +6,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurem
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 const props = defineProps<{
@@ -295,29 +296,43 @@ const veinDisabledReason = computed<string | null>(() =>
   veinSerial.isConnected.value ? null : 'Vein Station (指静脈読み取り端末) が接続されていません',
 )
 
+/** 開発用の端末だけ、あわせて端末のモジュールも揃える (`syncVeinModule`、Refs ippoan/alc-app#436) */
+function syncVein(opts: { ifOlderThanMs?: number } = {}) {
+  return syncVeinTemplates({ ...opts, module: usesVeinModule() ? veinSerial : undefined })
+}
+
 onMounted(() => {
   void veinSerial.connect()
   // キオスクの起動時: オフラインの照合に使う写しを取る
-  void syncVeinTemplates()
+  void syncVein()
+})
+
+// Vein Station がつながったら、モジュールを揃える (起動時はまだつながっていない)
+watch(veinSerial.isConnected, (c) => {
+  if (c) void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
 })
 
 // 点呼の開始時 (最初の画面に戻ったとき): 前回の同期から時間がたっていれば取り直す
 watch(step, (s) => {
-  if (s === 'nfc') void syncVeinTemplates({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
+  if (s === 'nfc') void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
 })
 
 /** 指静脈で乗務員を特定する。失敗したら画面に出す理由を返す */
 async function identifyByVein(prompt: boolean): Promise<string | null> {
-  let chara: string
+  const viaModule = usesVeinModule()
+  let read: string | number | null
   try {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
-    chara = await veinSerial.capture()
+    // 開発用の端末はモジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
+    read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
   }
   catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`
   }
-  const outcome = await identifyVeinEmployee(chara)
+  const outcome = viaModule
+    ? await identifyVeinModuleEmployee(read as number | null)
+    : await identifyVeinEmployee(read as string)
   if (outcome.kind === 'miss') return VEIN_NO_MATCH_MESSAGE
   if (outcome.kind === 'error') return outcome.message
   // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る

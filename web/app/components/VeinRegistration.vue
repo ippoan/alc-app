@@ -124,6 +124,7 @@ function next() {
       <p v-if="vein.disabledReason.value && !vein.registering.value" class="mt-2 text-sm text-gray-500 text-center">
         {{ vein.disabledReason.value }}
       </p>
+      <p v-if="vein.notice.value" class="mt-2 text-sm text-blue-700 text-center">{{ vein.notice.value }}</p>
       <p v-if="vein.error.value" class="mt-2 text-sm text-red-600 text-center">{{ vein.error.value }}</p>
       <button
         v-if="!vein.registering.value"

@@ -268,13 +268,24 @@ function noteDeviceKind(kind: string): void {
  * 続け、これはそれに割り込んで見るだけ (二重配送だが、対象外の行は利用側で無視される)。
  */
 interface PendingRequest {
-  matchPrefix: string
+  /** 成功の応答の接頭辞。複数あれば、行の中で最も早く現れたものを採る (`VEIN IDENTIFIED` / `VEIN NOMATCH`) */
+  matchPrefixes: readonly string[]
   /** これで始まる行が来たら失敗として reject する (`ERR <送った行の先頭トークン>`) */
   errPrefix: string
   resolve: (line: string) => void
   reject: (err: Error) => void
 }
 const pendingRequests = new Map<PortSession, PendingRequest>()
+
+/** `prefixes` のうち `line` の中で最も早く現れた位置。どれも無ければ -1 */
+function earliestIndexOf(line: string, prefixes: readonly string[]): number {
+  let earliest = -1
+  for (const prefix of prefixes) {
+    const at = line.indexOf(prefix)
+    if (at >= 0 && (earliest < 0 || at < earliest)) earliest = at
+  }
+  return earliest
+}
 
 /** いま arbiter が握っているポートか (他の探索者がこれを掴まないための口) */
 export function isArbitratedPort(port: SerialPort): boolean {
@@ -581,7 +592,7 @@ export function useSerialArbiter() {
             // 切れて応答が連結される (`EVT NFC_READY port=0` + `AUTH SIGBP ...`)。
             // 落ちたバイトは復元できないので、行の中から探して見つけた位置から後ろを使う。
             // 先に現れた方を採る (`ERR AUTH ...` は `AUTH ...` を含みうるため)
-            const matchAt = line.indexOf(pendingRequest.matchPrefix)
+            const matchAt = earliestIndexOf(line, pendingRequest.matchPrefixes)
             const errAt = line.indexOf(pendingRequest.errPrefix)
             if (matchAt >= 0 && (errAt < 0 || matchAt < errAt)) pendingRequest.resolve(line.slice(matchAt))
             else if (errAt >= 0) pendingRequest.reject(new Error(line.slice(errAt)))
@@ -773,13 +784,16 @@ export function useSerialArbiter() {
    * (1 ポートに reader は 1 つ)。失敗行の接頭辞が `ERR <先頭トークン>` の形でない
    * コマンド (`OTA …` は `OTA ERR <reason>`) は `errPrefix` で明示する。バイト列を送るときは
    * 先頭トークンが無いので必ず渡す (型で強制している)。
+   *
+   * 成功の応答が何通りかあるコマンド (`VEIN IDENTIFY` → `VEIN IDENTIFIED <id>` / `VEIN NOMATCH`) は
+   * `matchPrefix` に配列を渡す。行の中で最も早く現れた接頭辞の位置から後ろで resolve する。
    */
-  function request(name: string, line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string>
-  function request(name: string, bytes: Uint8Array, matchPrefix: string, timeoutMs: number, errPrefix: string): Promise<string>
+  function request(name: string, line: string, matchPrefix: string | readonly string[], timeoutMs: number, errPrefix?: string): Promise<string>
+  function request(name: string, bytes: Uint8Array, matchPrefix: string | readonly string[], timeoutMs: number, errPrefix: string): Promise<string>
   function request(
     name: string,
     payload: string | Uint8Array,
-    matchPrefix: string,
+    matchPrefix: string | readonly string[],
     timeoutMs: number,
     errPrefix?: string,
   ): Promise<string> {
@@ -811,7 +825,7 @@ export function useSerialArbiter() {
       }
 
       pendingRequests.set(s, {
-        matchPrefix,
+        matchPrefixes: typeof matchPrefix === 'string' ? [matchPrefix] : matchPrefix,
         // バイト列は型の上で errPrefix 必須なので、既定値を作るのは行のときだけ
         errPrefix: errPrefix ?? `ERR ${String(payload).split(' ')[0]}`,
         resolve: doResolve,

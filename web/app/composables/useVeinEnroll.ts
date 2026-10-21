@@ -10,9 +10,22 @@
  *
  * 手順は「案内 PLACE → 1 回目 → 案内 AGAIN → 2 回目 → 保存 → 案内 ENROLLED」。
  * 失敗したら案内 FAILED を鳴らし、理由を `error` に出す。
+ *
+ * **開発用の端末 (`usesVeinModule`) は、照合をモジュールに任せる経路で登録する** (M-b、
+ * Refs ippoan/alc-app#436): 案内 PLACE → モジュールの ID (その人の ID、無ければ 10〜100 の空き) に
+ * `VEIN ENROLL` (置き直しの案内は `notice` に出す) → 記録をサーバーへ預ける → 手元の対応表に
+ * 「承認待ち」で入れる → 案内 ENROLLED。
  */
 
-import { putVeinTemplate, apiErrorMessage } from '~/utils/api'
+import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage } from '~/utils/api'
+import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
+import { allocateVeinModuleId, usesVeinModule } from '~/utils/vein-module'
+import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
+
+/** モジュールの ID が空いていない / サーバーの上限 (409) */
+export const VEIN_ENROLL_FULL_MESSAGE = 'これ以上登録できません'
+/** 置き直しの照合が外れた (`ERR VEIN RETAKE`)。自動では繰り返さない */
+export const VEIN_ENROLL_RETAKE_MESSAGE = 'もう一度、最初から登録してください'
 
 /** ERR VEIN の理由 (useVeinSerial が message に載せる) / 422 の message (apiErrorMessage) を拾う */
 function veinErrorMessage(e: unknown): string {
@@ -24,6 +37,9 @@ export function useVeinEnroll() {
   const registering = ref(false)
   const error = ref<string | null>(null)
   const registered = ref(false)
+  /** 登録の途中の案内 (置き直し)。終わったら null */
+  const notice = ref<string | null>(null)
+  const { isBpStation } = useBpStationMode()
 
   onMounted(() => veinSerial.connect())
 
@@ -39,19 +55,60 @@ export function useVeinEnroll() {
     registering.value = true
     error.value = null
     try {
-      await veinSerial.say('PLACE')
-      const first = await veinSerial.capture()
-      await veinSerial.say('AGAIN')
-      const second = await veinSerial.capture()
-      await putVeinTemplate(employeeId, [first, second])
+      if (usesVeinModule(isBpStation.value)) await enrollToModule(employeeId)
+      else await enrollChara(employeeId)
       await veinSerial.say('ENROLLED')
       registered.value = true
     } catch (e) {
       error.value = veinErrorMessage(e)
       try { await veinSerial.say('FAILED') } catch { /* 案内の失敗は握り潰す (登録失敗の表示が主) */ }
     } finally {
+      notice.value = null
       registering.value = false
     }
+  }
+
+  /** 今の経路: 特徴量を 2 回読んでサーバーへ */
+  async function enrollChara(employeeId: string): Promise<void> {
+    await veinSerial.say('PLACE')
+    const first = await veinSerial.capture()
+    await veinSerial.say('AGAIN')
+    const second = await veinSerial.capture()
+    await putVeinTemplate(employeeId, [first, second])
+  }
+
+  /** モジュールの経路: モジュールに登録し、記録をサーバーへ預け、対応表に承認待ちで入れる */
+  async function enrollToModule(employeeId: string): Promise<void> {
+    const id = allocateVeinModuleId(await loadVeinModuleEntries(), employeeId)
+    if (id === null) throw new Error(VEIN_ENROLL_FULL_MESSAGE)
+    // 登録し直しはモジュールの記録が置き換わる。承認前の記録を承認済みとして引かないよう先に外す
+    await deleteVeinModuleEntry(employeeId)
+    await veinSerial.say('PLACE')
+    let record: Uint8Array
+    try {
+      record = await veinSerial.enroll(id, (n) => { notice.value = `もう一度置いてください (${n}/3)` })
+    }
+    catch (e) {
+      const reason = (e as Error).message
+      if (reason === 'RETAKE') throw new Error(VEIN_ENROLL_RETAKE_MESSAGE)
+      if (reason === VEIN_RECORD_BROKEN) {
+        // 行が壊れて受け取れなかった記録はモジュールに残さない
+        await veinSerial.syncClear(id).catch(() => {})
+        throw new Error(VEIN_ENROLL_RETAKE_MESSAGE)
+      }
+      throw e
+    }
+    let saved: { updated_at: string }
+    try {
+      saved = await putVeinModuleRecord(employeeId, record)
+    }
+    catch (e) {
+      // サーバーが預からなかった記録はモジュールに残さない (消せなくても照合は対応表で外れる)
+      await veinSerial.syncClear(id).catch(() => {})
+      if (apiErrorCode(e) === 'too_many_module_records') throw new Error(VEIN_ENROLL_FULL_MESSAGE)
+      throw e
+    }
+    await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved: false })
   }
 
   function reset(): void {
@@ -64,6 +121,7 @@ export function useVeinEnroll() {
     registering: readonly(registering),
     error: readonly(error),
     registered: readonly(registered),
+    notice: readonly(notice),
     disabledReason,
     enroll,
     reset,

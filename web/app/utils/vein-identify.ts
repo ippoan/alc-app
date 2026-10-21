@@ -13,6 +13,8 @@ import type { ApiEmployee } from '~/types'
 import { apiErrorMessage, getEmployeeById, getEmployees, getVeinTemplates, identifyVein } from '~/utils/api'
 import { loadVeinTemplates, saveVeinTemplates } from '~/utils/vein-db'
 import { loadVeinWasm, matchVeinOffline } from '~/utils/vein-match'
+import { syncVeinModule } from '~/utils/vein-module'
+import type { VeinModulePort } from '~/utils/vein-module'
 
 /** 点呼の開始時に同期し直す間隔 (前回の同期からこれだけたっていれば取り直す) */
 export const VEIN_TEMPLATE_SYNC_INTERVAL_MS = 10 * 60 * 1000
@@ -34,8 +36,13 @@ export function resetVeinSyncClock(): void {
  *
  * `ifOlderThanMs` を渡すと、前回の同期からその時間がたっていなければ何もしない。
  * **失敗しても投げない** (オフラインなら手元の写しで照合を続ける)。同期したら true。
+ *
+ * `module` を渡すと、開発用の端末ではあわせて端末のモジュールも揃える (`syncVeinModule`。
+ * 時計は別に持つので、モジュールがつながった直後の呼び出しでも写しの同期とは関係なく動く)。
+ * 戻り値はテンプレートの写しの同期の結果だけ
  */
-export async function syncVeinTemplates(opts: { ifOlderThanMs?: number } = {}): Promise<boolean> {
+export async function syncVeinTemplates(opts: { ifOlderThanMs?: number; module?: VeinModulePort } = {}): Promise<boolean> {
+  if (opts.module) void syncVeinModule(opts.module, { ifOlderThanMs: opts.ifOlderThanMs })
   if (opts.ifOlderThanMs !== undefined && lastSyncedAt !== null && Date.now() - lastSyncedAt < opts.ifOlderThanMs) {
     return false
   }

@@ -86,6 +86,7 @@ onMounted(() => fetchEmployees())
 const vein = useVeinEnroll()
 const veinRegistering = vein.registering
 const veinError = vein.error
+const veinNotice = vein.notice
 const veinRegistered = vein.registered
 const veinDisabledReason = vein.disabledReason
 </script>
@@ -159,6 +160,9 @@ const veinDisabledReason = vein.disabledReason
               </button>
               <p v-if="veinDisabledReason && !veinRegistering" class="mt-2 text-sm text-gray-500 text-center">
                 {{ veinDisabledReason }}
+              </p>
+              <p v-if="veinNotice" class="mt-2 text-sm text-blue-700 text-center">
+                {{ veinNotice }}
               </p>
               <p v-if="veinError" class="mt-2 text-sm text-red-600 text-center">
                 {{ veinError }}

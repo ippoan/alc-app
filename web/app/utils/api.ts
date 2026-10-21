@@ -663,6 +663,43 @@ export async function getVeinTemplates(): Promise<{ logic_version: string; templ
   return request<{ logic_version: string; templates: ApiVeinTemplate[] }>('/api/vein/templates')
 }
 
+/** バイト列を base64 に (指静脈のモジュールの記録を JSON で送る) */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary)
+}
+
+/**
+ * 端末の指静脈モジュールの記録全体 (`VEIN ENROLL` の `VEIN RECORD` 行を集めたもの) を預ける
+ * (照合をモジュールに移す M-b、Refs ippoan/alc-app#436, ippoan/alc-vein-worker#16)。登録は管理者が
+ * 承認するまで `GET /api/vein/module-templates` に載らない。
+ *
+ * 上限 (モジュールの記録が 91 人) を超える新規の登録は 409 (`too_many_module_records`)。
+ * 呼び出し側が {@link apiErrorCode} で読める
+ */
+export async function putVeinModuleRecord(
+  employeeId: string,
+  record: Uint8Array,
+): Promise<{ employee_id: string; updated_at: string }> {
+  return request<{ employee_id: string; updated_at: string }>(`/api/vein/templates/${encodeURIComponent(employeeId)}/module`, {
+    method: 'PUT',
+    body: JSON.stringify({ record: bytesToBase64(record) }),
+  })
+}
+
+/** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
+export interface ApiVeinModuleRecord {
+  employee_id: string
+  record: string
+  updated_at: string
+}
+
+/** 承認済みのモジュールの記録を全件取る (端末のモジュールへ書き戻す元、Refs ippoan/alc-app#436) */
+export async function getVeinModuleTemplates(): Promise<{ templates: ApiVeinModuleRecord[] }> {
+  return request<{ templates: ApiVeinModuleRecord[] }>('/api/vein/module-templates')
+}
+
 /** 指静脈の登録 (1 件分、承認待ち・承認済みの一覧で共通)。`updated_at` は承認するときの版 */
 export interface ApiVeinTemplateVersion {
   employee_id: string
