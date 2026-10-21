@@ -34,6 +34,7 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  *   手順は点呼キオスク (`TenkoKiosk`) の指静脈と同じ。つながっていなければカードだけの画面のまま。
  * - **指静脈で特定したときは顔認証を飛ばして測定へ進む** (指静脈が本人確認そのもの)。顔の審査
  *   (`applyFaceApproval`) も通さないので、審査中・却下でも止めない。カードで特定したときは従来どおり顔認証。
+ * - 血圧を受けたらすぐ完了の段へ進み、保存は裏で行う。保存中は次の人へ進ませず、失敗したら完了の段でやり直せる (Refs ippoan/alc-app#436)
  */
 
 type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein'
@@ -192,28 +193,37 @@ function skipFaceAuth() {
   onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
 }
 
+/** 保存 1 件ぶん。`measurementId` は start が通った回に控え、やり直しは update から行う */
+interface SaveJob {
+  employeeId: string
+  bp: NonNullable<typeof latestBloodPressure.value>
+  measurementId: string | null
+}
+let saveJob: SaveJob | null = null
+
 /**
  * 血圧を 1 件だけ保存する。`record_as_tenko` を送らないので点呼の記録は作られない。
  * アルコール値は無いので `alcohol_value` / `result_type` は触らない。
+ * 段は動かさない (完了の段は値を受けた時点で出ている)。成功・失敗は `isSaving` / `saveError` で表す。
  */
-async function save(bp: NonNullable<typeof latestBloodPressure.value>) {
+async function save(job: SaveJob) {
   isSaving.value = true
   saveError.value = null
   const t0 = Date.now()
   devTiming('bp.save.begin')
   try {
-    const measurement = await startMeasurement(employeeId.value)
-    devTiming('bp.save.start-done', { ms: Date.now() - t0 })
-    await updateMeasurement(measurement.id, {
+    if (!job.measurementId) {
+      job.measurementId = (await startMeasurement(job.employeeId)).id
+      devTiming('bp.save.start-done', { ms: Date.now() - t0 })
+    }
+    await updateMeasurement(job.measurementId, {
       status: 'completed',
-      systolic: bp.systolic,
-      diastolic: bp.diastolic,
-      pulse: bp.pulse,
-      medical_measured_at: bp.measuredAt.toISOString(),
+      systolic: job.bp.systolic,
+      diastolic: job.bp.diastolic,
+      pulse: job.bp.pulse,
+      medical_measured_at: job.bp.measuredAt.toISOString(),
     })
     devTiming('bp.save.update-done', { ms: Date.now() - t0 })
-    savedReading.value = { systolic: bp.systolic, diastolic: bp.diastolic, pulse: bp.pulse }
-    step.value = 'done'
   } catch (e) {
     devTiming('bp.save.failed', { ms: Date.now() - t0 })
     saveError.value = e instanceof Error ? e.message : '血圧の保存に失敗しました'
@@ -222,12 +232,22 @@ async function save(bp: NonNullable<typeof latestBloodPressure.value>) {
   }
 }
 
-// 血圧が届いたら保存して完了へ。BleStatus が mount 時に読み値を消すので、
-// 前の人の値では発火しない (immediate にしないのも同じ理由)
+// 血圧が届いたらすぐ完了の段へ進み、保存は裏で走らせる。BleStatus が mount 時に読み値を消すので、
+// 前の人の値では発火しない (immediate にしないのも同じ理由)。完了の段では弾くので二重に保存しない
 watch(latestBloodPressure, (bp) => {
   if (!bp || step.value !== 'measure') return
-  void save(bp)
+  savedReading.value = { systolic: bp.systolic, diastolic: bp.diastolic, pulse: bp.pulse }
+  step.value = 'done'
+  // 保存中に reset されても別の人の ID で保存しないよう、今の乗務員 ID をここで固定する
+  saveJob = { employeeId: employeeId.value, bp, measurementId: null }
+  void save(saveJob)
 })
+
+/** 完了の段の「もう一度保存」。同じ値・同じ ID で、通っていた手前の段は飛ばして続ける */
+function onRetrySave() {
+  if (!saveJob || isSaving.value) return
+  void save(saveJob)
+}
 
 /** BleStatus の「次へ」。血圧が来る前に押されたら進めずに促す */
 function onMeasureNext() {
@@ -243,6 +263,7 @@ function reset() {
   veinError.value = null
   measureNotice.value = null
   saveError.value = null
+  saveJob = null
   savedReading.value = null
   faceSkippable.value = false
   faceSkipNotice.value = null
@@ -328,8 +349,6 @@ function reset() {
         <p class="text-sm text-gray-500 mb-4">{{ employeeName }}さん</p>
         <BleStatus @next="onMeasureNext" @skip="reset" />
         <p v-if="measureNotice" class="mt-3 text-sm text-amber-700 text-center">{{ measureNotice }}</p>
-        <p v-if="isSaving" class="mt-3 text-sm text-gray-500 text-center">保存中...</p>
-        <p v-if="saveError" class="mt-3 text-sm text-red-600 text-center">{{ saveError }}</p>
       </div>
 
       <!-- Step 4: 完了 -->
@@ -343,8 +362,20 @@ function reset() {
         <p v-if="savedReading?.pulse" class="mt-1 text-sm text-gray-500">
           脈拍 {{ savedReading.pulse }} bpm
         </p>
+        <p v-if="isSaving" class="mt-3 text-sm text-gray-500">保存中...</p>
+        <template v-else-if="saveError">
+          <p class="mt-3 text-sm text-red-600">{{ saveError }}</p>
+          <button
+            data-testid="retry-save"
+            class="w-full mt-3 px-4 py-3 bg-white border border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
+            @click="onRetrySave"
+          >
+            もう一度保存
+          </button>
+        </template>
         <button
-          class="w-full mt-6 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+          :disabled="isSaving"
+          class="w-full mt-6 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
           @click="reset"
         >
           次の人へ
