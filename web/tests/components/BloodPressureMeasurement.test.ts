@@ -242,6 +242,117 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     wrapper.unmount()
   })
 
+  describe('完了を先に出し、保存は裏で (Refs ippoan/alc-app#436)', () => {
+    const reading = { systolic: 124, diastolic: 78, pulse: 66, measuredAt: new Date('2026-09-16T01:02:03.000Z') }
+    const nextBtn = (w: Awaited<ReturnType<typeof mountBp>>) => w.findAll('button').find(b => b.text() === '次の人へ')!
+    const retryBtn = (w: Awaited<ReturnType<typeof mountBp>>) => w.find('[data-testid="retry-save"]')
+
+    async function toMeasure() {
+      const wrapper = await mountBp()
+      await tapCard(wrapper)
+      await wrapper.findComponent(FaceAuthStub).vm.$emit('result', { verified: true, similarity: 0.9 })
+      await wrapper.vm.$nextTick()
+      return wrapper
+    }
+
+    it('保存の応答を待たずに完了の段と値が出る。保存中は「次の人へ」が押せず、終わると押せる', async () => {
+      let finishStart!: (v: { id: string }) => void
+      startMeasurementMock.mockImplementation(() => new Promise((resolve) => { finishStart = resolve }))
+      const wrapper = await toMeasure()
+
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(startMeasurementMock).toHaveBeenCalledTimes(1)
+      expect(updateMeasurementMock).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('測定完了')
+      expect(wrapper.text()).toContain('124')
+      expect(wrapper.text()).toContain('保存中...')
+      expect(nextBtn(wrapper).attributes('disabled')).toBeDefined()
+      expect(retryBtn(wrapper).exists()).toBe(false)
+
+      // 保存中に別の値が来ても二重に保存しない (段が done なので弾かれる)
+      latestBloodPressure.value = { ...reading, systolic: 150 }
+      await flush(wrapper)
+      expect(startMeasurementMock).toHaveBeenCalledTimes(1)
+      expect(wrapper.text()).toContain('124')
+
+      finishStart({ id: 'meas-test-1' })
+      await flush(wrapper)
+      expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
+      expect(wrapper.text()).not.toContain('保存中...')
+      expect(nextBtn(wrapper).attributes('disabled')).toBeUndefined()
+      expect(retryBtn(wrapper).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('start で落ちたら赤字と「もう一度保存」。押すと start からやり直し、二度押ししても 1 回だけ', async () => {
+      startMeasurementMock.mockRejectedValueOnce(new Error('接続できません'))
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+
+      expect(wrapper.text()).toContain('測定完了')
+      expect(wrapper.text()).toContain('接続できません')
+      expect(updateMeasurementMock).not.toHaveBeenCalled()
+      // 失敗しても次の人へは進める
+      expect(nextBtn(wrapper).attributes('disabled')).toBeUndefined()
+
+      let finishStart!: (v: { id: string }) => void
+      startMeasurementMock.mockImplementation(() => new Promise((resolve) => { finishStart = resolve }))
+      await retryBtn(wrapper).trigger('click')
+      await flush(wrapper)
+      // 保存中は赤字も「もう一度保存」も消える。二度押しは届いても走らない
+      expect(wrapper.text()).not.toContain('接続できません')
+      expect(retryBtn(wrapper).exists()).toBe(false)
+      await (wrapper.vm as unknown as { $: { setupState: { onRetrySave: () => void } } }).$.setupState.onRetrySave()
+      expect(startMeasurementMock).toHaveBeenCalledTimes(2)
+      expect(startMeasurementMock).toHaveBeenLastCalledWith('emp-test-1')
+
+      finishStart({ id: 'meas-test-1' })
+      await flush(wrapper)
+      expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
+      expect(updateMeasurementMock.mock.calls[0]![1]).toMatchObject({ systolic: 124, diastolic: 78, pulse: 66 })
+      expect(retryBtn(wrapper).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('update だけ落ちたら、取れた id のまま update だけやり直す (start は呼び直さない)', async () => {
+      updateMeasurementMock.mockRejectedValueOnce(new Error('保存に失敗'))
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(wrapper.text()).toContain('保存に失敗')
+
+      await retryBtn(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(startMeasurementMock).toHaveBeenCalledTimes(1)
+      expect(updateMeasurementMock).toHaveBeenCalledTimes(2)
+      expect(updateMeasurementMock.mock.calls[1]![0]).toBe('meas-test-1')
+      expect(updateMeasurementMock.mock.calls[1]![1]).toMatchObject({ systolic: 124, diastolic: 78 })
+      expect(retryBtn(wrapper).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('Error 以外で落ちた文言と、「次の人へ」で捨てた id は次の人に持ち越さない', async () => {
+      updateMeasurementMock.mockRejectedValueOnce('boom')
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(wrapper.text()).toContain('血圧の保存に失敗しました')
+
+      await nextBtn(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+      expect(retryBtn(wrapper).exists()).toBe(false)
+      // 捨てた後は呼んでも何も起きない
+      ;(wrapper.vm as unknown as { $: { setupState: { onRetrySave: () => void } } }).$.setupState.onRetrySave()
+      await flush(wrapper)
+      expect(startMeasurementMock).toHaveBeenCalledTimes(1)
+      expect(updateMeasurementMock).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+    })
+  })
+
   it.each<BpUiState>(['unused', 'unavailable', 'unregistered'])(
     'BloodPressureMeasurement — %s の端末では「血圧計が見つかりません」の案内だけを出す',
     async (state) => {
