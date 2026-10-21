@@ -265,7 +265,7 @@ async function fetchData() {
   error.value = null
   try {
     const [emps, drivers, veins, approved] = await Promise.all([
-      getEmployees(),
+      getEmployees('admin'),
       getTenkoCallDrivers().catch(() => [] as TenkoCallDriver[]),
       // 取れなくても乗務員の一覧は出す (承認待ち・承認済みが出ないだけ)
       isAdmin.value ? getPendingVeinTemplates().catch(() => []) : [],

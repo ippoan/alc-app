@@ -186,8 +186,13 @@ function buildAuthHeaders(): Record<string, string> {
  *   持たず、`request()` の冒頭で上のどちらかに解決する ({@link resolveTenkoMonitorScope}):
  *   運行管理者席の鍵が dev でなければ `'default'` (今までと同じ)、dev なら `'manager-device'`
  *   (運行管理者席の鍵で送る)。付けてよいのは auth-worker の運行管理者の鍵の許可表に在る口だけ
+ * - `'admin'` … **管理画面の口** (一覧・承認・削除など、記録を作らない操作。Refs ippoan/alc-app#436)。
+ *   admin JWT があれば**端末の鍵の dev の印に関係なく** admin JWT で送る — #387 が守るのは
+ *   「dev 端末の**記録**を本番の行にしない」ことで、管理画面の操作は記録を作らないため。
+ *   admin JWT が無ければ `'default'` と全く同じ (着信通知モードの一覧を壊さないため)。
+ *   **点呼・測定・打刻など記録を作る口には付けない**
  */
-export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station' | 'tenko-monitor'
+export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station' | 'tenko-monitor' | 'admin'
 
 /**
  * 運行管理者席の端末で認証できなかったときの文言 (#338 と同じ趣旨 —
@@ -250,6 +255,8 @@ async function request<T>(
 ): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
   if (scope === 'tenko-monitor') scope = resolveTenkoMonitorScope()
+  // 管理画面の口: admin JWT が無ければ 'default' と同じ経路へ (Refs ippoan/alc-app#436)
+  if (scope === 'admin' && !getAccessToken?.()) scope = 'default'
   // 上限 (timeout) の `AbortSignal.timeout()` はここ 1 箇所で載せる
   // (実装は `~/utils/fetch-timeout`。Refs ippoan/alc-app#338)。下の 3 経路はどれも
   // この init をそのまま fetch へ素通しする (createAuthFetch も `{ ...init }` で signal を
@@ -261,8 +268,9 @@ async function request<T>(
     // OIDC mint する (Cloud Run IAM lockdown 後も到達可)。401→refresh→retry を効かせるため
     // proxyAuthFetch (createAuthFetch インスタンス) を使う。
     // **dev端末は例外**で、admin JWT があっても下の端末の鍵の分岐へ進む (規則は
-    // `usesAdminToken`、Refs ippoan/alc-app#387)。
-    if (usesAdminToken(getAccessToken?.(), deviceTokenKindOf(scope))) {
+    // `usesAdminToken`、Refs ippoan/alc-app#387)。ただし管理画面の口 (scope 'admin') は
+    // 記録を作らないので dev端末でも admin JWT で送る (ここに来る 'admin' は admin JWT あり)。
+    if (scope === 'admin' || usesAdminToken(getAccessToken?.(), deviceTokenKindOf(scope))) {
       // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
       // 通過 = initApi 済み) ので non-null。
       return await proxyAuthFetch!<T>(toProxyPath(path), opts)
@@ -667,7 +675,7 @@ export interface ApiVeinTemplateVersion {
  */
 export async function getPendingVeinTemplates(): Promise<ApiVeinTemplateVersion[]> {
   try {
-    return await request<ApiVeinTemplateVersion[]>('/api/vein/templates/pending')
+    return await request<ApiVeinTemplateVersion[]>('/api/vein/templates/pending', {}, 'admin')
   } catch (e) {
     if (failureStatus(e) === 404) return []
     throw e
@@ -680,7 +688,7 @@ export async function getPendingVeinTemplates(): Promise<ApiVeinTemplateVersion[
  */
 export async function getApprovedVeinTemplates(): Promise<ApiVeinTemplateVersion[]> {
   try {
-    return await request<ApiVeinTemplateVersion[]>('/api/vein/templates/approved')
+    return await request<ApiVeinTemplateVersion[]>('/api/vein/templates/approved', {}, 'admin')
   } catch (e) {
     if (failureStatus(e) === 404) return []
     throw e
@@ -695,12 +703,12 @@ export async function approveVeinTemplate(employeeId: string, updatedAt: string)
   await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}/approve`, {
     method: 'POST',
     body: JSON.stringify({ updated_at: updatedAt }),
-  })
+  }, 'admin')
 }
 
 /** 指静脈の登録を消す (管理者の却下・承認済みの削除、Refs ippoan/alc-app#436) */
 export async function deleteVeinTemplate(employeeId: string): Promise<void> {
-  await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, { method: 'DELETE' })
+  await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, { method: 'DELETE' }, 'admin')
 }
 
 /**

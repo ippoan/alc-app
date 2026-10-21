@@ -24,6 +24,7 @@ import {
   uploadFacePhoto, uploadReportAudio, uploadBlowVideo, fetchFacePhoto, fetchMeasurementVideo,
   uploadGuidanceAttachment,
   punchTimecard,
+  getPendingVeinTemplates, getApprovedVeinTemplates, approveVeinTemplate, deleteVeinTemplate,
 } from '~/utils/api'
 import { noteDeviceToken, type DeviceTokenKind } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
@@ -405,5 +406,68 @@ describe("request() — scope 'tenko-monitor' (遠隔点呼モニター)", () =>
 
     expect(kioskGetter).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("request() — scope 'admin' (管理画面の口、Refs ippoan/alc-app#436)", () => {
+  /** 管理画面が `'admin'` を付けて呼ぶ口 (乗務員一覧 + 管理者専用の指静脈 4 本)。 */
+  const ADMIN_CALLS: [string, () => Promise<unknown>, string][] = [
+    ['getEmployees', () => getEmployees('admin'), '/api/proxy/employees'],
+    ['getPendingVeinTemplates', () => getPendingVeinTemplates(), '/api/proxy/vein/templates/pending'],
+    ['getApprovedVeinTemplates', () => getApprovedVeinTemplates(), '/api/proxy/vein/templates/approved'],
+    ['approveVeinTemplate', () => approveVeinTemplate('e 1', '2026-10-21T00:00:00Z'), '/api/proxy/vein/templates/e%201/approve'],
+    ['deleteVeinTemplate', () => deleteVeinTemplate('e 1'), '/api/proxy/vein/templates/e%201'],
+  ]
+
+  it.each(ADMIN_CALLS)('★ dev のキオスク + admin JWT → %s は admin JWT で送る (端末の鍵は取りに行かない)', async (_name, call, url) => {
+    noteDeviceToken('kiosk', DEV_KIOSK_JWT)
+    initWithAdmin()
+
+    await call()
+
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent()).toEqual({ url, bearer: `Bearer ${ADMIN_JWT}`, tenant: null })
+  })
+
+  it('dev でないキオスク + admin JWT → admin JWT (\'default\' と同じ)', async () => {
+    noteDeviceToken('kiosk', PLAIN_KIOSK_JWT)
+    initWithAdmin()
+
+    await getEmployees('admin')
+    await getEmployees()
+
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent(0)).toEqual(sent(1))
+    expect(sent(0)).toEqual({ url: '/api/proxy/employees', bearer: `Bearer ${ADMIN_JWT}`, tenant: null })
+  })
+
+  it('dev のキオスク + admin JWT なし → \'default\' と同じ経路 (キオスクの鍵で送る。エラーにしない)', async () => {
+    noteDeviceToken('kiosk', DEV_KIOSK_JWT)
+    initApi(API_BASE, undefined, () => 'test-tenant', undefined, kioskGetter, managerGetter)
+
+    await getEmployees('admin')
+    await getEmployees()
+
+    expect(kioskGetter).toHaveBeenCalledTimes(2)
+    expect(sent(0)).toEqual(sent(1))
+    expect(sent(0)).toEqual({ url: '/api/proxy/employees', bearer: `Bearer ${DEV_KIOSK_JWT}`, tenant: null })
+  })
+
+  it('admin JWT なし + 端末の鍵も無い → \'default\' と同じ直 fetch (着信通知モードの一覧)', async () => {
+    initApi(API_BASE, () => null, () => 'test-tenant')
+
+    await getEmployees('admin')
+
+    expect(sent()).toEqual({ url: `${API_BASE}/api/employees`, bearer: null, tenant: 'test-tenant' })
+  })
+
+  it('既定の scope は変わらない: dev のキオスク + admin JWT → 端末の鍵で送る', async () => {
+    noteDeviceToken('kiosk', DEV_KIOSK_JWT)
+    initWithAdmin()
+
+    await getEmployees()
+
+    expect(kioskGetter).toHaveBeenCalledTimes(1)
+    expect(sent().bearer).toBe(`Bearer ${DEV_KIOSK_JWT}`)
   })
 })
