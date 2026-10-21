@@ -10,7 +10,7 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  * 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
  *
  * 測る場所と点呼する場所を分けたいという要望から、**カードをかざす → 顔認証 →
- * 血圧を測る → 完了**だけを行う。ここで測った値は「直近の血圧」として後から
+ * 血圧を測る → 完了**だけを行う。指静脈で特定したときは顔認証を挟まない (下記)。ここで測った値は「直近の血圧」として後から
  * 点呼が引き当てる (引き当て側は別 PR)。
  *
  * - **点呼のセッションは作らない。** `useTenkoKiosk` も `saveMeasurement` も使わない —
@@ -31,6 +31,8 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  * - 乗務員の特定は**指静脈が主、カードは予備** (Refs ippoan/alc-app#436)。Vein Station が
  *   つながっていれば、カード待ちの段の上に「指を置いて照合」を大きく出し、カードは下に置く。
  *   手順は点呼キオスク (`TenkoKiosk`) の指静脈と同じ。つながっていなければカードだけの画面のまま。
+ * - **指静脈で特定したときは顔認証を飛ばして測定へ進む** (指静脈が本人確認そのもの)。顔の審査
+ *   (`applyFaceApproval`) も通さないので、審査中・却下でも止めない。カードで特定したときは従来どおり顔認証。
  */
 
 type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein'
@@ -55,7 +57,7 @@ watch(veinSerial.isConnected, (c) => {
 })
 
 const step = ref<BpStep>('nfc')
-/** 指静脈を読んで乗務員を特定している間 (段が `face_auth` へ進むまで) true */
+/** 指静脈を読んで乗務員を特定している間 (段が `measure` へ進むまで) true */
 const veinBusy = ref(false)
 const veinError = ref<string | null>(null)
 // ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。カード待ちでなければ機体を使用中。
@@ -97,12 +99,28 @@ function applyFaceApproval(emp: { name: string; face_approval_status?: string })
   return true
 }
 
-/** カード・指静脈のどちらで特定しても、ここで顔認証へ進む (顔の審査で止めたら進まない) */
-function proceedWithEmployee(emp: { id: string; name: string; face_approval_status?: string }) {
-  if (!applyFaceApproval(emp)) return
+/** 乗務員を控える (カード・指静脈どちらの入口も通る) */
+function selectEmployee(emp: { id: string; name: string }) {
   employeeId.value = emp.id
   employeeName.value = emp.name
+}
+
+/** カードで特定したら顔認証へ進む (顔の審査で止めたら進まない) */
+function proceedWithEmployee(emp: { id: string; name: string; face_approval_status?: string }) {
+  if (!applyFaceApproval(emp)) return
+  selectEmployee(emp)
   step.value = 'face_auth'
+}
+
+/**
+ * 指静脈で特定したら顔認証を挟まず測定へ進む (Refs ippoan/alc-app#436)。指静脈が本人確認そのもの。
+ * 顔を使わないので `applyFaceApproval` は通さず、顔の審査中・却下でも止めない。
+ */
+function proceedWithVeinEmployee(emp: { id: string; name: string }) {
+  selectEmployee(emp)
+  faceSkippable.value = false
+  faceSkipNotice.value = null
+  skipFaceAuth()
 }
 
 async function onNfcRead(nfcId: string) {
@@ -134,8 +152,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
     : await identifyVeinEmployee(read as string)
   if (outcome.kind === 'miss') return '照合できませんでした。もう一度置くか、下のカードで進んでください'
   if (outcome.kind === 'error') return outcome.message
-  // 顔の審査で止めたときはカードと同じく上のエラーに理由が出る
-  proceedWithEmployee(outcome.employee)
+  proceedWithVeinEmployee(outcome.employee)
   return null
 }
 

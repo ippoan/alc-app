@@ -151,6 +151,15 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     wrapper.unmount()
   })
 
+  it('BloodPressureMeasurement — 指静脈がつながっていてもカードで特定したら今までどおり顔認証を挟む', async () => {
+    veinIsConnected.value = true
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('BloodPressureMeasurement — カード待ちを離れている間だけ「機体を使用中」を申告する (Refs ippoan/alc-app#403)', async () => {
     const wrapper = await mountBp()
     const { isDeviceBusy } = useKioskScreen()
@@ -497,7 +506,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     wrapper.unmount()
   })
 
-  it('当たれば顔認証へ進み、名前が出る。案内 → 読み取りの順で送る', async () => {
+  it('当たれば顔認証を挟まず測定へ進み、名前が出る。案内 → 読み取りの順で送る', async () => {
     const wrapper = await mountBp()
     await veinButton(wrapper).trigger('click')
     await flush(wrapper)
@@ -505,7 +514,8 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     expect(vein.say).toHaveBeenCalledWith('PLACE')
     expect(vein.say.mock.invocationCallOrder[0]).toBeLessThan(vein.capture.mock.invocationCallOrder[0]!)
     expect(veinIdentify.identifyVeinEmployee).toHaveBeenCalledWith('chara-hex')
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
     expect(wrapper.text()).toContain('テスト花子')
     expect(vein.say).not.toHaveBeenCalledWith('FAILED')
     wrapper.unmount()
@@ -560,22 +570,40 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     wrapper.unmount()
   })
 
-  it('顔の審査で弾かれたらカードと同じく上に理由を出し、カード待ちに残る', async () => {
-    veinIdentify.identifyVeinEmployee.mockResolvedValue({
-      kind: 'hit',
-      employee: { id: 'emp-vein-2', name: 'テスト五郎', face_approval_status: 'rejected' },
-    })
+  it.each(['rejected', 'pending', 'unregistered'])(
+    '顔が %s の乗務員でも、指静脈で特定すれば止まらず測定へ進む (顔を使わない)',
+    async (status) => {
+      veinIdentify.identifyVeinEmployee.mockResolvedValue({
+        kind: 'hit',
+        employee: { id: 'emp-vein-2', name: 'テスト五郎', face_approval_status: status },
+      })
+      const wrapper = await mountBp()
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(wrapper.text()).not.toContain('却下')
+      expect(wrapper.text()).not.toContain('顔認証をスキップ')
+      expect(wrapper.find('.text-red-700').exists()).toBe(false)
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+      expect(wrapper.text()).toContain('テスト五郎')
+      wrapper.unmount()
+    },
+  )
+
+  it('指静脈で特定した乗務員の血圧は、その乗務員で保存する', async () => {
+    startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+    updateMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
     const wrapper = await mountBp()
     await veinButton(wrapper).trigger('click')
     await flush(wrapper)
-    expect(wrapper.text()).toContain('却下')
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
-    expect(wrapper.find('[data-testid="vein-error"]').exists()).toBe(false)
-    expect(readReloadContext().safe).toBe(1)
+    latestBloodPressure.value = { systolic: 120, diastolic: 80, measuredAt: new Date('2026-10-20T01:00:00.000Z') }
+    await flush(wrapper)
+    expect(startMeasurementMock).toHaveBeenCalledWith('emp-vein-1')
+    expect(wrapper.text()).toContain('測定完了')
     wrapper.unmount()
   })
 
-  it('★ 読んでいる間は機体を使用中・リロード不可。多重に押しても 1 回だけ。顔認証へ進むまで外れない', async () => {
+  it('★ 読んでいる間は機体を使用中・リロード不可。多重に押しても 1 回だけ。測定へ進むまで外れない', async () => {
     let captured!: (chara: string) => void
     vein.capture.mockImplementation(() => new Promise((resolve) => { captured = resolve }))
     let identified!: (o: unknown) => void
@@ -605,7 +633,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
 
     identified({ kind: 'hit', employee: { id: 'emp-vein-1', name: 'テスト花子', face_approval_status: 'approved' } })
     await flush(wrapper)
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
     expect(isDeviceBusy.value).toBe(true)
     expect(readReloadContext().safe).toBe(0)
     wrapper.unmount()
@@ -621,8 +649,6 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
 
     await veinButton(wrapper).trigger('click')
     await flush(wrapper)
-    await wrapper.findComponent(FaceAuthStub).vm.$emit('result', { verified: true, similarity: 0.9 })
-    await wrapper.vm.$nextTick()
     latestBloodPressure.value = { systolic: 120, diastolic: 80, measuredAt: new Date('2026-10-20T01:00:00.000Z') }
     await flush(wrapper)
     expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(1)
@@ -643,7 +669,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
     })
 
-    it('★ 待機中なら「指を置いて」を鳴らさず読み取り、顔認証へ進む', async () => {
+    it('★ 待機中なら「指を置いて」を鳴らさず読み取り、測定へ進む', async () => {
       const wrapper = await mountBp()
       finger.cb!()
       await flush(wrapper)
@@ -651,7 +677,8 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(vein.say).not.toHaveBeenCalledWith('PLACE')
       expect(vein.capture).toHaveBeenCalledTimes(1)
       expect(veinIdentify.identifyVeinEmployee).toHaveBeenCalledWith('chara-hex')
-      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
       wrapper.unmount()
     })
 
@@ -726,7 +753,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       })
     })
 
-    it('VEIN IDENTIFY の ID を対応表で引いて顔認証へ。読み取り (capture) とサーバー照合は使わない', async () => {
+    it('VEIN IDENTIFY の ID を対応表で引いて測定へ。読み取り (capture) とサーバー照合は使わない', async () => {
       const wrapper = await mountBp()
       await veinButton(wrapper).trigger('click')
       await flush(wrapper)
@@ -734,7 +761,8 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(veinModule.identifyVeinModuleEmployee).toHaveBeenCalledWith(12)
       expect(vein.capture).not.toHaveBeenCalled()
       expect(veinIdentify.identifyVeinEmployee).not.toHaveBeenCalled()
-      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
       // 測定台ではない (測定台の鍵には口が無い)
       expect(veinModule.usesVeinModule).toHaveBeenCalledWith(false)
       wrapper.unmount()
