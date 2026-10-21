@@ -243,11 +243,12 @@ export function useVeinSerial() {
 
   /**
    * 預かったポートで 1 行送って応答 1 つを待つ (鍵の署名 `AUTH SIGN` が使う、Refs ippoan/alc-app#436)。
-   * 同時に 1 件しか待てないのは capture/say と同じ。ファームの書き込み中 (錠) は送らずに reject する
+   * 同時に 1 件しか待てないのは capture/say と同じ。ファームの書き込み中 (錠) は送らずに reject する。
+   * `errPrefix` は失敗行の接頭辞 (省略時は arbiter の既定 = 行の先頭トークンの `ERR <先頭トークン>`)
    */
-  function request(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+  function request(line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string): Promise<string> {
     if (otaLocked) return Promise.reject(new Error(OTA_LOCKED_MESSAGE))
-    return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+    return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs, errPrefix)
   }
 
   // --- ファームの書き込みだけが使う口 (Refs ippoan/alc-app-s3#279, ippoan/alc-app#436) ---
