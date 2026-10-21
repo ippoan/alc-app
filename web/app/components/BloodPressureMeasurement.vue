@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, startMeasurement, updateMeasurement } from '~/utils/api'
+import { devTiming } from '~/utils/dev-timing'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
@@ -74,6 +75,7 @@ useKioskScreen().declareSafeToReload(
 
 // 次の人を待つ段に戻ったとき: 前回の同期から時間がたっていれば取り直す
 watch(step, (s) => {
+  devTiming('bp.step', { step: s })
   if (s === 'nfc') void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
 })
 const employeeId = ref('')
@@ -197,8 +199,11 @@ function skipFaceAuth() {
 async function save(bp: NonNullable<typeof latestBloodPressure.value>) {
   isSaving.value = true
   saveError.value = null
+  const t0 = Date.now()
+  devTiming('bp.save.begin')
   try {
     const measurement = await startMeasurement(employeeId.value)
+    devTiming('bp.save.start-done', { ms: Date.now() - t0 })
     await updateMeasurement(measurement.id, {
       status: 'completed',
       systolic: bp.systolic,
@@ -206,9 +211,11 @@ async function save(bp: NonNullable<typeof latestBloodPressure.value>) {
       pulse: bp.pulse,
       medical_measured_at: bp.measuredAt.toISOString(),
     })
+    devTiming('bp.save.update-done', { ms: Date.now() - t0 })
     savedReading.value = { systolic: bp.systolic, diastolic: bp.diastolic, pulse: bp.pulse }
     step.value = 'done'
   } catch (e) {
+    devTiming('bp.save.failed', { ms: Date.now() - t0 })
     saveError.value = e instanceof Error ? e.message : '血圧の保存に失敗しました'
   } finally {
     isSaving.value = false

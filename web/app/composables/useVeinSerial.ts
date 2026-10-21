@@ -38,6 +38,7 @@ import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
 import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
+import { devTiming } from '~/utils/dev-timing'
 import { findDeviceLine } from '~/utils/device-line'
 import type { DeviceLine } from '~/utils/device-line'
 
@@ -172,6 +173,16 @@ function extractVeinErrReason(message: string): string {
   return message.slice(at + 'ERR VEIN'.length).replace(/^[:\s]+/, '')
 }
 
+/** 血圧の遅れの切り分け用 (開発用の端末だけ出る)。本文は EVT 行のみ・JSON は type だけ */
+const TIMING_JSON_TYPES = ['found', 'connected', 'disconnected', 'blood_pressure']
+function tapTiming(line: string): void {
+  if (line.startsWith('EVT OMRON') || line.startsWith('EVT BP')) devTiming('vein.evt', { line })
+  else if (line.startsWith('{')) {
+    const type = TIMING_JSON_TYPES.find(t => line.includes(`"type":"${t}"`))
+    if (type) devTiming('vein.json', { type })
+  }
+}
+
 export function useVeinSerial() {
   // ポートの探索と調停は arbiter に任せる (navigator.serial を自前で叩かない)
   const arbiter = useSerialArbiter()
@@ -189,7 +200,10 @@ export function useVeinSerial() {
       deviceInfo.value = findDeviceLine(lines)
       isConnected.value = true
       // プローブ中に来ていた行も配る (useAtomS3Serial と同じ)
-      for (const line of lines) lineDispatch.dispatchLine(line)
+      for (const line of lines) {
+        tapTiming(line)
+        lineDispatch.dispatchLine(line)
+      }
       for (const notify of [...waiters]) notify()
       // 鍵の署名は isConnected の watch から先に枠を取るので、こちらは空くまで待つ
       void queryOmronBp()
@@ -197,6 +211,7 @@ export function useVeinSerial() {
 
     onLine(line) {
       rawLineTap?.(line)
+      tapTiming(line)
       lineDispatch.dispatchLine(line)
     },
 
