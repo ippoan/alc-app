@@ -307,10 +307,11 @@ watch(step, (s) => {
 })
 
 /** 指静脈で乗務員を特定する。失敗したら画面に出す理由を返す */
-async function identifyByVein(): Promise<string | null> {
+async function identifyByVein(prompt: boolean): Promise<string | null> {
   let chara: string
   try {
-    await veinSerial.say('PLACE')
+    // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
+    if (prompt) await veinSerial.say('PLACE')
     chara = await veinSerial.capture()
   }
   catch (e) {
@@ -325,11 +326,11 @@ async function identifyByVein(): Promise<string | null> {
   return null
 }
 
-async function onVeinIdentify() {
+async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
   if (veinDisabledReason.value || veinBusy.value) return
   veinBusy.value = true
   veinError.value = null
-  const failure = await identifyByVein()
+  const failure = await identifyByVein(prompt)
   if (failure) {
     veinError.value = failure
     // 案内の失敗は握り潰す (画面の理由が主)
@@ -358,6 +359,11 @@ const otaWatch = useTimecardWatch({
 watch(isKioskIdle, (idle) => {
   if (idle) void serialOta.runQueued()
 })
+// 指が置かれた合図 (EVT VEIN FINGER) で照合を始める。待機画面のときだけ。ボタンは古いファーム向けに残す
+const stopFingerWatch = veinSerial.onFingerPlaced(() => {
+  if (isKioskIdle.value) void onVeinIdentify({ prompt: false })
+})
+onUnmounted(stopFingerWatch)
 onMounted(() => {
   // デモは実機が無いので購読しない
   if (!isDemoMode.value) void otaWatch.connect()
@@ -685,7 +691,7 @@ onUnmounted(() => {
               data-testid="vein-identify"
               :disabled="!!veinDisabledReason || veinBusy"
               class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-              @click="onVeinIdentify"
+              @click="onVeinIdentify()"
             >
               {{ veinBusy ? '指を置いてください…' : '指静脈で本人確認' }}
             </button>

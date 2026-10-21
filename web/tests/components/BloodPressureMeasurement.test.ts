@@ -55,10 +55,13 @@ mockNuxtImport('useBleGateway', () => () => ({ latestBloodPressure }))
 // 乗務員の特定も指静脈が主 (Refs ippoan/alc-app#436)
 const veinIsConnected = ref(false)
 const veinConnect = vi.fn(async () => true)
+// 指が置かれた合図 (EVT VEIN FINGER) の購読は、受けた cb を finger.fire で呼べるようにしておく
+const finger = vi.hoisted(() => ({ cb: null as (() => void) | null, off: vi.fn() }))
 const vein = vi.hoisted(() => ({
   isSupported: true,
   say: vi.fn(),
   capture: vi.fn(),
+  onFingerPlaced: vi.fn((cb: () => void) => { finger.cb = cb; return finger.off }),
 }))
 mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
 
@@ -618,5 +621,87 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(2)
     expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
     wrapper.unmount()
+  })
+
+  // 指が置かれた合図 (EVT VEIN FINGER) で、ボタンと同じ照合を始める (Refs ippoan/alc-app#436)
+  describe('指の合図で照合を始める', () => {
+    beforeEach(() => {
+      finger.cb = null
+      finger.off.mockClear()
+      getEmployeeByNfcIdMock.mockReset()
+      getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
+    })
+
+    it('★ 待機中なら「指を置いて」を鳴らさず読み取り、顔認証へ進む', async () => {
+      const wrapper = await mountBp()
+      finger.cb!()
+      await flush(wrapper)
+
+      expect(vein.say).not.toHaveBeenCalledWith('PLACE')
+      expect(vein.capture).toHaveBeenCalledTimes(1)
+      expect(veinIdentify.identifyVeinEmployee).toHaveBeenCalledWith('chara-hex')
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('外れ・読み取り失敗はボタンからと同じ文言を出す', async () => {
+      veinIdentify.identifyVeinEmployee.mockResolvedValue({ kind: 'miss' })
+      const wrapper = await mountBp()
+      finger.cb!()
+      await flush(wrapper)
+
+      expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度置くか、下のカードで進んでください')
+      expect(vein.say).toHaveBeenCalledWith('FAILED')
+      wrapper.unmount()
+    })
+
+    it('カード待ちの段でなければ始めない', async () => {
+      const wrapper = await mountBp()
+      await tapCard(wrapper)
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+      finger.cb!()
+      await flush(wrapper)
+
+      expect(vein.capture).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('照合中・カードの照会中は 2 回目を始めない', async () => {
+      let captured!: (chara: string) => void
+      vein.capture.mockImplementation(() => new Promise((resolve) => { captured = resolve }))
+      const wrapper = await mountBp()
+      finger.cb!()
+      await flush(wrapper)
+      finger.cb!()
+      await flush(wrapper)
+      expect(vein.capture).toHaveBeenCalledTimes(1)
+      captured('chara-hex')
+      await flush(wrapper)
+      wrapper.unmount()
+
+      let resolveEmp!: (e: unknown) => void
+      getEmployeeByNfcIdMock.mockImplementation(() => new Promise((resolve) => { resolveEmp = resolve }))
+      vein.capture.mockReset()
+      vein.capture.mockResolvedValue('chara-hex')
+      const second = await mountBp()
+      void second.findComponent(NfcStatusStub).vm.$emit('read', 'test-card-0001')
+      await second.vm.$nextTick()
+      finger.cb!()
+      await flush(second)
+      expect(vein.capture).not.toHaveBeenCalled()
+      resolveEmp(employee.value)
+      await flush(second)
+      second.unmount()
+    })
+
+    it('unmount で購読を解除する / ボタンは今までどおり「指を置いて」を鳴らす', async () => {
+      const wrapper = await mountBp()
+      expect(finger.off).not.toHaveBeenCalled()
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(vein.say).toHaveBeenCalledWith('PLACE')
+      wrapper.unmount()
+      expect(finger.off).toHaveBeenCalledTimes(1)
+    })
   })
 })

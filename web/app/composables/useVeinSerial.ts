@@ -275,6 +275,17 @@ export function useVeinSerial() {
     return arbiter.request(CLAIMANT_NAME, payload as Uint8Array, matchPrefix, timeoutMs, errPrefix as string)
   }
 
+  /**
+   * 指が置かれた合図 (`EVT VEIN FINGER`) を受け取る。返り値を呼ぶと解除できる。
+   * ファームが「無い → 有る」のときだけ 1 行出す。非対応のファームは `EVT VEIN FINGER UNSUPPORTED`
+   * と名乗るので、引数が `FINGER` 1 つだけのときに限って cb を呼ぶ (Refs ippoan/alc-app#436)
+   */
+  function onFingerPlaced(cb: () => void): () => void {
+    return lineDispatch.onEvent((name, args) => {
+      if (name === 'VEIN' && args.length === 1 && args[0] === 'FINGER') cb()
+    })
+  }
+
   return {
     isSupported,
     isConnected: readonly(isConnected),
@@ -289,6 +300,7 @@ export function useVeinSerial() {
     ota: { begin: otaBegin, end: otaEnd, request: otaRequest },
     onClose,
     onEvent: lineDispatch.onEvent,
+    onFingerPlaced,
     onJson: lineDispatch.onJson,
   }
 }
