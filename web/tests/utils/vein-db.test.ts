@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { IDBFactory } from 'fake-indexeddb'
-import { saveVeinTemplates, loadVeinTemplates } from '~/utils/vein-db'
+import { IDBFactory, IDBDatabase } from 'fake-indexeddb'
+import { saveVeinTemplates, loadVeinTemplates, clearVeinTemplates } from '~/utils/vein-db'
 import type { VeinTemplateSnapshot } from '~/utils/vein-db'
 
 // 指静脈テンプレートの手元の写し (Refs ippoan/vein-match#20)。
@@ -56,5 +56,33 @@ describe('vein-db', () => {
     // keyPath (employeeId) が無い値は put が DataError を投げる → transaction が abort する
     const bad = snapshot({ templates: [{ template: 'X' } as never] })
     await expect(saveVeinTemplates(bad)).rejects.toBeTruthy()
+  })
+
+  it('★ clearVeinTemplates: テンプレートと版を両方消す (読み戻すと null)', async () => {
+    await saveVeinTemplates(snapshot())
+    await clearVeinTemplates()
+    expect(await loadVeinTemplates()).toBeNull()
+  })
+
+  it('clearVeinTemplates: 一度も保存していなくても成功し、消したあとにまた保存できる', async () => {
+    await expect(clearVeinTemplates()).resolves.toBeUndefined()
+    await saveVeinTemplates(snapshot())
+    expect((await loadVeinTemplates())!.templates).toHaveLength(2)
+  })
+
+  it('clearVeinTemplates: transaction が error になったら reject する', async () => {
+    // 次の openDb が返す DB の transaction を失敗させる
+    const original = IDBDatabase.prototype.transaction
+    IDBDatabase.prototype.transaction = function (...args: Parameters<typeof original>) {
+      const tx = original.apply(this, args)
+      queueMicrotask(() => (tx.onerror as ((e: Event) => void) | null)?.(new Event('error')))
+      return tx
+    }
+    try {
+      await expect(clearVeinTemplates()).rejects.toBeNull()
+    }
+    finally {
+      IDBDatabase.prototype.transaction = original
+    }
   })
 })

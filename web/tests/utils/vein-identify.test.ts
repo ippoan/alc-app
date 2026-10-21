@@ -176,6 +176,17 @@ describe('syncVeinTemplates', () => {
     expect(api.getVeinTemplates).toHaveBeenCalledTimes(2)
   })
 
+  it('★ resetVeinSyncClock: 同期済みの記憶を忘れ、間隔の内でも取り直す (手元の写しを消したあと)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    api.getVeinTemplates.mockResolvedValue(RES)
+    vi.setSystemTime(0)
+    await mod.syncVeinTemplates()
+    vi.setSystemTime(1000)
+    expect(await mod.syncVeinTemplates({ ifOlderThanMs: mod.VEIN_TEMPLATE_SYNC_INTERVAL_MS })).toBe(false)
+    mod.resetVeinSyncClock()
+    expect(await mod.syncVeinTemplates({ ifOlderThanMs: mod.VEIN_TEMPLATE_SYNC_INTERVAL_MS })).toBe(true)
+  })
+
   it('ifOlderThanMs: 一度も同期していなければ取る', async () => {
     api.getVeinTemplates.mockResolvedValue(RES)
     expect(await mod.syncVeinTemplates({ ifOlderThanMs: mod.VEIN_TEMPLATE_SYNC_INTERVAL_MS })).toBe(true)

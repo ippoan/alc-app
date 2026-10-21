@@ -34,7 +34,24 @@ export function isAllowedVeinDevLine(line: string): boolean {
   return line === 'VEIN FINGER?' || line.startsWith('VEIN TEST ')
 }
 
-type VeinRequest = (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string) => Promise<string>
+export type VeinRequest = (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string) => Promise<string>
+
+/**
+ * allowlist (`isAllowedVeinDevLine`) を通した行だけを `request` に渡す、診断の口の唯一の送信関数。
+ * `window.alcVein.send` と、試験専用のタブ (`useVeinTest`) が同じ関数を使う — 別の allowlist を持たない。
+ * 通らない行は送らずに reject する
+ */
+export function sendVeinDevLine(
+  request: VeinRequest,
+  line: string,
+  matchPrefix: string,
+  timeoutMs: number = VEIN_DEV_SEND_TIMEOUT_MS,
+): Promise<string> {
+  if (!isAllowedVeinDevLine(line)) {
+    return Promise.reject(new Error('alcVein.send: 送れるのは VEIN TEST … と VEIN FINGER? だけです'))
+  }
+  return request(line, matchPrefix, timeoutMs, ERR_PREFIX)
+}
 
 /**
  * 印を見て `window.alcVein` を生やす/消す。返り値で解除する (イベントの購読と生やしたものを外す)。
@@ -43,10 +60,7 @@ type VeinRequest = (line: string, matchPrefix: string, timeoutMs: number, errPre
 export function installVeinDevPort(request: VeinRequest): () => void {
   const port: AlcVeinDevPort = {
     send(line, matchPrefix, timeoutMs = VEIN_DEV_SEND_TIMEOUT_MS) {
-      if (!isAllowedVeinDevLine(line)) {
-        return Promise.reject(new Error('alcVein.send: 送れるのは VEIN TEST … と VEIN FINGER? だけです'))
-      }
-      return request(line, matchPrefix, timeoutMs, ERR_PREFIX)
+      return sendVeinDevLine(request, line, matchPrefix, timeoutMs)
     },
   }
   const sync = (): void => {
