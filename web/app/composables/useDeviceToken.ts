@@ -104,6 +104,7 @@ import { ref, computed, readonly, watch } from 'vue'
 import type { Ref } from 'vue'
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
+import { devTiming } from '~/utils/dev-timing'
 import { noteDeviceToken, setKioskDeviceKeyRequired } from '~/utils/token-selection'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
@@ -431,10 +432,17 @@ export function useDeviceToken() {
     const nowMs = Date.now()
     // Vein Station 接続中は、その鍵で取った JWT 以外を使わない (#436。接続前に CoreS3 等で取った分は捨て置く)
     const usable = !vein.isConnected.value || cachedSource === 'vein'
-    if (cachedJwt.value && usable && cachedExpMs - REFRESH_BEFORE_MS > nowMs) return cachedJwt.value
+    if (cachedJwt.value && usable && cachedExpMs - REFRESH_BEFORE_MS > nowMs) {
+      devTiming('jwt.cache')
+      return cachedJwt.value
+    }
 
     if (!jwtInFlight) {
-      jwtInFlight = mintDeviceJwt().finally(() => { jwtInFlight = null })
+      devTiming('jwt.mint.begin')
+      jwtInFlight = mintDeviceJwt().finally(() => {
+        devTiming('jwt.mint.end', { ms: Date.now() - nowMs })
+        jwtInFlight = null
+      })
     }
     return jwtInFlight
   }
@@ -511,10 +519,12 @@ export function useDeviceToken() {
       }
       const nonceData = (await nonceRes.json()) as { nonce?: string }
       if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
+      devTiming('jwt.nonce', { ms: Date.now() - nowMs })
 
       stage = signer.signStage
       const signed = await signer.sign(nonceData.nonce)
       if (!signed) throw new Error('AUTH SIG の parse に失敗')
+      devTiming('jwt.sign', { ms: Date.now() - nowMs })
 
       stage = 'token-exchange'
       const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, withTimeout({
@@ -569,6 +579,7 @@ export function useDeviceToken() {
       // いま発行された JWT に乗っているボンド状態 (#336)。`AUTH SIGN` へ落ちた回は
       // `bpBonded` を持たない = 「不明」なので null にする。Vein Station は書かない (#436)
       if (signer.writesBpBond) setSignedBpBond(signed.bpBonded ?? null)
+      devTiming('jwt.token', { ms: Date.now() - nowMs })
       console.info(`[useDeviceToken] 端末の署名に成功 stage=ok elapsed=${Date.now() - nowMs}ms`)
       return cachedJwt.value
     }

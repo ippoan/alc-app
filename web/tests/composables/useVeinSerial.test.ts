@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const timing = vi.hoisted(() => ({ devTiming: vi.fn() }))
+vi.mock('~/utils/dev-timing', () => timing)
+
 // --- Mock SerialPort (useAtomS3Serial.test.ts と同型) ---
 
 interface MockPortHandle {
@@ -322,6 +325,23 @@ describe('useVeinSerial', () => {
         ['FC1200', ['BLOW_WAITING']],
       ])
       expect(jsons).toEqual([{ type: 'alcohol', value: 0.1, result: 'normal' }])
+    })
+
+    it('時間計測: EVT OMRON / EVT BP の行と、血圧の JSON の type だけを devTiming へ渡す', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      timing.devTiming.mockClear()
+
+      dev.emit('EVT OMRON CONNECTING\nEVT BP READ\nEVT NFC_READY\n')
+      dev.emit('{"type":"blood_pressure","systolic":120}\n{"type":"found"}\n{"type":"alcohol","value":0.1}\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(timing.devTiming.mock.calls).toEqual([
+        ['vein.evt', { line: 'EVT OMRON CONNECTING' }],
+        ['vein.evt', { line: 'EVT BP READ' }],
+        ['vein.json', { type: 'blood_pressure' }],
+        ['vein.json', { type: 'found' }],
+      ])
     })
 
     it('プローブ中に来ていた EVT も接続時に配る', async () => {

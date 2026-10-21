@@ -50,6 +50,7 @@
  * (ATOM S3 を抜けば期限切れとともに消える)。
  */
 import { ref, readonly, watch } from 'vue'
+import { devTiming } from '~/utils/dev-timing'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 import { noteDeviceToken } from '~/utils/token-selection'
 
@@ -181,11 +182,13 @@ export function useBpStationDeviceToken() {
       }
       const nonceData = (await nonceRes.json()) as { nonce?: string }
       if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
+      devTiming('bpjwt.nonce', { ms: Date.now() - nowMs })
 
       stage = 'sign'
       // 送り先は測定台の ATOM S3。`AUTH SIGN` へは落とさない (上の doc)
       const signed = await signBondedNonce(nonceData.nonce)
       if (!signed) throw new Error('AUTH SIGBP の parse に失敗')
+      devTiming('bpjwt.sign', { ms: Date.now() - nowMs })
 
       stage = 'token-exchange'
       const tokenRes = await fetch(`${authWorkerUrl}/device/alarm-token`, withTimeout({
@@ -213,6 +216,7 @@ export function useBpStationDeviceToken() {
       cachedExpMs = nowMs + ttl * 1000
       // いま発行された JWT に乗っているボンド状態 — サーバの判断と一致する唯一の材料
       setSignedBpBond(signed.bpBonded)
+      devTiming('bpjwt.token', { ms: Date.now() - nowMs })
       return cachedJwt.value
     }
     catch (e) {
@@ -236,6 +240,7 @@ export function useBpStationDeviceToken() {
     if (cachedJwt.value && cachedExpMs - REFRESH_BEFORE_MS > nowMs) return cachedJwt.value
 
     if (!inFlight) {
+      devTiming('bpjwt.mint.begin')
       inFlight = mint(nowMs).finally(() => { inFlight = null })
     }
     return inFlight
