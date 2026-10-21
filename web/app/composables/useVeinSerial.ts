@@ -16,6 +16,14 @@
  *     使えない機は `ERR VEIN NO_SPEAKER`
  *   `vein` を入れていない端末はどちらも `ERR VEIN: unsupported`
  *
+ * 照合をモジュール自身に任せる口 (M-b、Refs ippoan/alc-app#436。開発用の端末の画面だけが使う):
+ *   `VEIN ENROLL <id>` → 置き直しのたび `EVT VEIN PLACE <2|3>` → 成功 `VEIN RECORD <id> <offset> <hex>` を
+ *     何行か → `VEIN RECORD <id> END <総バイト数>`。置き直しの照合が外れたら `ERR VEIN RETAKE`。最長 1 分弱
+ *   `VEIN IDENTIFY` → `VEIN IDENTIFIED <id>` / `VEIN NOMATCH`
+ *   `VEIN SYNC WRITE <id> <offset> <hex>` (192 バイトまで) → `VEIN SYNC WRITE <id> <次の offset>`、
+ *     `VEIN SYNC WRITE <id> END` → `VEIN SYNC WRITTEN <id> <バイト数>`
+ *   `VEIN SYNC CLEAR <id>` → `VEIN SYNC CLEARED <id>`
+ *
  * `useSerialArbiter.request()` は同時に 1 件しか待てない — capture の応答を待っている
  * 間に say を送らない (呼び出し側の責務、register.vue の手順が順に呼ぶだけで満たす)。
  *
@@ -47,6 +55,27 @@ const CAPTURE_TIMEOUT_MS = 20000
 
 /** `VEIN SAY` は読み取り中でもすぐ鳴るので capture より短くてよい */
 const SAY_TIMEOUT_MS = 5000
+
+/** `VEIN ENROLL` は 3 回置く (1 回あたり指待ち 15 秒強) ので、最長 1 分弱に余裕を足す */
+const ENROLL_TIMEOUT_MS = 90_000
+
+/** `VEIN SYNC WRITE` の 1 行・`VEIN SYNC CLEAR` の応答上限 */
+const SYNC_STEP_TIMEOUT_MS = 5000
+
+/** `VEIN SYNC WRITE <id> END` はフラッシュに書くので長め */
+const SYNC_END_TIMEOUT_MS = 15_000
+
+/** `VEIN SYNC WRITE` の 1 行に載せるバイト数の上限 (ファームの console の 1 行 512 バイトに収める) */
+export const VEIN_SYNC_CHUNK_BYTES = 192
+
+/**
+ * ほかの要求 (鍵の署名・同期の 1 行) の応答待ちで弾かれたときの呼び直し。同期の 1 行は数十 ms で
+ * 返るので短い間隔で足りる。照合 (最長 20 秒) の後ろに並んでも諦めない回数にする
+ */
+const BUSY_RETRY = { intervalMs: 200, maxRetries: 150 }
+
+/** `VEIN RECORD` 行が壊れていた (offset の飛び・総バイト数の食い違い・16 進でない) */
+export const VEIN_RECORD_BROKEN = 'RECORD_BROKEN'
 
 // シングルトン: 1 台の PC につながる Vein Station は 1 台
 const isConnected = ref(false)
@@ -97,6 +126,41 @@ const closeHandlers = new Set<() => void>()
 const lineDispatch = createLineDispatch('VEIN')
 
 /**
+ * `VEIN ENROLL` の応答待ちの間だけ入る、生の行の受け口。`VEIN RECORD` の行はコマンドの応答なので
+ * `lineDispatch` には配られない — END まで arbiter の枠を握ったまま、途中の行をここで集める
+ */
+let rawLineTap: ((line: string) => void) | null = null
+
+/** 16 進の文字列をバイト列に。16 進でなければ null */
+function hexToBytes(hex: string): Uint8Array | null {
+  if (hex.length % 2 !== 0 || !/^[0-9A-Fa-f]*$/.test(hex)) return null
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  return bytes
+}
+
+/** バイト列を大文字の 16 進に */
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('').toUpperCase()
+}
+
+/**
+ * 集めた `VEIN RECORD <id> <offset> <hex>` の塊を 1 つのバイト列にする。offset が 0 から隙間なく
+ * 続き、合計が END の総バイト数と一致するときだけ返す (ファーム doc: ホストは END を見てから確かめて使う)
+ */
+function assembleRecord(chunks: Array<{ offset: number; bytes: Uint8Array }>, total: number): Uint8Array {
+  const record = new Uint8Array(total)
+  let next = 0
+  for (const chunk of [...chunks].sort((a, b) => a.offset - b.offset)) {
+    if (chunk.offset !== next || next + chunk.bytes.length > total) throw new Error(VEIN_RECORD_BROKEN)
+    record.set(chunk.bytes, next)
+    next += chunk.bytes.length
+  }
+  if (next !== total || total === 0) throw new Error(VEIN_RECORD_BROKEN)
+  return record
+}
+
+/**
  * `ERR VEIN <reason>` / `ERR VEIN: unsupported` から reason だけを取り出す。
  * `useSerialArbiter.request()` の reject は `ERR VEIN ...` 以降を丸ごと Error.message に
  * するので (`errPrefix` からの slice)、先頭の `ERR VEIN` とその後ろの `:`/空白を落とす。
@@ -131,7 +195,10 @@ export function useVeinSerial() {
       void queryOmronBp()
     },
 
-    onLine: lineDispatch.dispatchLine,
+    onLine(line) {
+      rawLineTap?.(line)
+      lineDispatch.dispatchLine(line)
+    },
 
     onClose() {
       connectionEpoch++
@@ -242,6 +309,89 @@ export function useVeinSerial() {
   }
 
   /**
+   * 錠を確かめ、ほかの要求の応答待ちで弾かれたら空くまで呼び直して送る。`ERR VEIN <reason>` は
+   * reason だけの Error にする (capture と同じ)
+   */
+  async function veinRequest(line: string, matchPrefix: string | readonly string[], timeoutMs: number): Promise<string> {
+    try {
+      return await requestWhenFree(() => {
+        // 待つ間に錠が掛かることがあるので、送るたびに確かめる
+        if (otaLocked) return Promise.reject(new Error(OTA_LOCKED_MESSAGE))
+        return arbiter.request(CLAIMANT_NAME, line, matchPrefix, timeoutMs)
+      }, BUSY_RETRY)
+    }
+    catch (e) {
+      throw new Error(extractVeinErrReason((e as Error).message))
+    }
+  }
+
+  /**
+   * モジュールの `id` (10〜100) に指静脈を登録し、記録全体 (READ_ENROLL の中身) を返す。
+   * 置き直しの案内 (`EVT VEIN PLACE <n>`、n は 2 か 3) のたびに `onPlace(n)` を呼ぶ。
+   *
+   * 失敗は reason の Error: `RETAKE` (置き直しの照合が外れた。モジュールからは消してある) /
+   * `TIMEOUT` 等の `ERR VEIN <reason>` / 行が壊れていた {@link VEIN_RECORD_BROKEN}。
+   * END まで arbiter の枠を握るので、その間ほかの say / capture は「既に応答待ち」で弾かれる
+   */
+  async function enroll(id: number, onPlace?: (n: number) => void): Promise<Uint8Array> {
+    const prefix = `VEIN RECORD ${id} `
+    const endPrefix = `${prefix}END `
+    const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
+    let broken = false
+    rawLineTap = (line) => {
+      // 行は途中に連結されて届くことがあるので、行の中から探す (arbiter の照合と同じ)
+      const at = line.indexOf(prefix)
+      if (at < 0 || line.includes(endPrefix)) return
+      const [offset, hex] = line.slice(at + prefix.length).split(' ')
+      const bytes = hexToBytes(hex ?? '')
+      if (!/^\d+$/.test(offset!) || !bytes) broken = true
+      else chunks.push({ offset: Number(offset), bytes })
+    }
+    const offPlace = lineDispatch.onEvent((name, args) => {
+      if (name === 'VEIN' && args.length === 2 && args[0] === 'PLACE') onPlace?.(Number(args[1]))
+    })
+    let end: string
+    try {
+      end = await veinRequest(`VEIN ENROLL ${id}`, endPrefix, ENROLL_TIMEOUT_MS)
+    }
+    finally {
+      rawLineTap = null
+      offPlace()
+    }
+    const total = Number(end.slice(endPrefix.length).trim())
+    if (broken || !Number.isInteger(total)) throw new Error(VEIN_RECORD_BROKEN)
+    return assembleRecord(chunks, total)
+  }
+
+  /** モジュール自身の 1:N 照合。当たればモジュールの ID、不一致は null。失敗は reason の Error */
+  async function identify(): Promise<number | null> {
+    const line = await veinRequest('VEIN IDENTIFY', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], CAPTURE_TIMEOUT_MS)
+    if (line.startsWith('VEIN NOMATCH')) return null
+    const id = Number(line.slice('VEIN IDENTIFIED '.length).trim())
+    if (!Number.isInteger(id)) throw new Error('IDENTIFY の応答が読めません')
+    return id
+  }
+
+  /**
+   * サーバーの記録 `record` をモジュールの `id` (10〜100) へ書く。192 バイトずつ送って応答を待ち、
+   * 最後に END でフラッシュへ書かせる。失敗は reason の Error (`WRITE_SEQ` 等)
+   */
+  async function syncWrite(id: number, record: Uint8Array): Promise<void> {
+    for (let offset = 0; offset < record.length; offset += VEIN_SYNC_CHUNK_BYTES) {
+      const chunk = record.subarray(offset, offset + VEIN_SYNC_CHUNK_BYTES)
+      const ackPrefix = `VEIN SYNC WRITE ${id} `
+      const ack = await veinRequest(`${ackPrefix}${offset} ${bytesToHex(chunk)}`, ackPrefix, SYNC_STEP_TIMEOUT_MS)
+      if (Number(ack.slice(ackPrefix.length).trim()) !== offset + chunk.length) throw new Error('WRITE_SEQ')
+    }
+    await veinRequest(`VEIN SYNC WRITE ${id} END`, `VEIN SYNC WRITTEN ${id} `, SYNC_END_TIMEOUT_MS)
+  }
+
+  /** モジュールの `id` (10〜100) の登録を消す。失敗は reason の Error */
+  async function syncClear(id: number): Promise<void> {
+    await veinRequest(`VEIN SYNC CLEAR ${id}`, `VEIN SYNC CLEARED ${id}`, SYNC_STEP_TIMEOUT_MS)
+  }
+
+  /**
    * 預かったポートで 1 行送って応答 1 つを待つ (鍵の署名 `AUTH SIGN` が使う、Refs ippoan/alc-app#436)。
    * 同時に 1 件しか待てないのは capture/say と同じ。ファームの書き込み中 (錠) は送らずに reject する。
    * `errPrefix` は失敗行の接頭辞 (省略時は arbiter の既定 = 行の先頭トークンの `ERR <先頭トークン>`)
@@ -295,6 +445,10 @@ export function useVeinSerial() {
     disconnect,
     capture,
     say,
+    enroll,
+    identify,
+    syncWrite,
+    syncClear,
     request,
     omronBp: readonly(omronBp),
     noteOmronBp,

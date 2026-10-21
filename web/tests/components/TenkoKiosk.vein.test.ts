@@ -27,6 +27,7 @@ vi.mock('~/utils/api', async importOriginal => ({
 const db = vi.hoisted(() => ({
   loadVeinTemplates: vi.fn(),
   saveVeinTemplates: vi.fn(),
+  loadVeinModuleEntries: vi.fn(),
 }))
 vi.mock('~/utils/vein-db', () => db)
 
@@ -35,6 +36,13 @@ const match = vi.hoisted(() => ({
   matchVeinOffline: vi.fn(),
 }))
 vi.mock('~/utils/vein-match', () => match)
+
+// 開発用の端末の印だけ差し替える (対応表の引き方は本物を通す、Refs ippoan/alc-app#436)
+const viaModule = vi.hoisted(() => ({ on: false }))
+vi.mock('~/utils/vein-module', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/vein-module')>()),
+  usesVeinModule: () => viaModule.on,
+}))
 
 // 指が置かれた合図 (EVT VEIN FINGER) の購読は、受けた cb を finger.cb で呼べるようにしておく
 const finger = vi.hoisted(() => ({ cb: null as (() => void) | null, off: vi.fn() }))
@@ -45,6 +53,7 @@ const vein = vi.hoisted(() => ({
   connect: vi.fn(),
   say: vi.fn(),
   capture: vi.fn(),
+  identify: vi.fn(),
   // useDeviceToken が抜線でキャッシュを捨てるために登録する (Refs ippoan/alc-app#436)
   onClose: vi.fn(),
   // useSerialOta が書き込みのポートとして掴む (Refs ippoan/alc-app#436)
@@ -151,6 +160,7 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     db.saveVeinTemplates.mockResolvedValue(undefined)
     db.loadVeinTemplates.mockResolvedValue({ logicVersion: '0.1.1', fetchedAt: 1, templates: [] })
     match.loadVeinWasm.mockResolvedValue(undefined)
+    viaModule.on = false
   })
 
   afterEach(() => setOnline(true))
@@ -343,6 +353,60 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       expect(vein.say).toHaveBeenCalledWith('PLACE')
       wrapper.unmount()
       expect(finger.off).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('開発用の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
+    beforeEach(() => {
+      viaModule.on = true
+      vein.identify.mockResolvedValue(12)
+      db.loadVeinModuleEntries.mockResolvedValue([
+        { employeeId: 'emp-1', moduleId: 12, updatedAt: 'v1', approved: true },
+        { employeeId: 'emp-2', moduleId: 13, updatedAt: 'v1', approved: false },
+      ])
+      api.getEmployeeById.mockResolvedValue(EMP)
+    })
+
+    it('VEIN IDENTIFY の ID → 対応表 → 乗務員で、NFC と同じく identifyEmployee へ合流する', async () => {
+      const wrapper = await mountKiosk()
+      await pressVein(wrapper)
+      expect(vein.identify).toHaveBeenCalledTimes(1)
+      expect(vein.capture).not.toHaveBeenCalled()
+      expect(api.identifyVein).not.toHaveBeenCalled()
+      expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1')
+      expect(identifyEmployeeMock).toHaveBeenCalledWith('emp-1', '山田 太郎')
+      wrapper.unmount()
+    })
+
+    it('★ 承認待ちの ID に当たっても本人確認にしない (不一致の文言)', async () => {
+      vein.identify.mockResolvedValue(13)
+      const wrapper = await mountKiosk()
+      await pressVein(wrapper)
+      expect(api.getEmployeeById).not.toHaveBeenCalled()
+      expect(identifyEmployeeMock).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain(VEIN_NO_MATCH_MESSAGE)
+      wrapper.unmount()
+    })
+
+    it('VEIN NOMATCH は不一致、読み取りの失敗は理由を出す', async () => {
+      vein.identify.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('TIMEOUT'))
+      const wrapper = await mountKiosk()
+      await pressVein(wrapper)
+      expect(wrapper.text()).toContain(VEIN_NO_MATCH_MESSAGE)
+      await pressVein(wrapper)
+      expect(wrapper.text()).toContain('指静脈を読み取れませんでした (TIMEOUT)')
+      wrapper.unmount()
+    })
+
+    it('Vein Station がつながったら、モジュールも揃えにいく (写しは同期したばかりなら取り直さない)', async () => {
+      const connected = ref(false)
+      vein.isConnected = connected
+      const wrapper = await mountKiosk()
+      expect(api.getVeinTemplates).toHaveBeenCalledTimes(1)
+      connected.value = true
+      await flushPromises()
+      expect(api.getVeinTemplates).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
     })
   })
 })

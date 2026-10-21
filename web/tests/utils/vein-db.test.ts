@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { IDBFactory, IDBDatabase } from 'fake-indexeddb'
-import { saveVeinTemplates, loadVeinTemplates, clearVeinTemplates } from '~/utils/vein-db'
-import type { VeinTemplateSnapshot } from '~/utils/vein-db'
+import { saveVeinTemplates, loadVeinTemplates, clearVeinTemplates, loadVeinModuleEntries, putVeinModuleEntry, deleteVeinModuleEntry } from '~/utils/vein-db'
+import type { VeinTemplateSnapshot, VeinModuleEntry } from '~/utils/vein-db'
 
 // 指静脈テンプレートの手元の写し (Refs ippoan/vein-match#20)。
 // オフラインの照合に使う。正本はサーバーで、ここは丸ごと差し替えるだけ
@@ -80,6 +80,71 @@ describe('vein-db', () => {
     }
     try {
       await expect(clearVeinTemplates()).rejects.toBeNull()
+    }
+    finally {
+      IDBDatabase.prototype.transaction = original
+    }
+  })
+
+  // --- モジュールの ID の対応表 (版 2、Refs ippoan/alc-app#436) ---
+
+  const ENTRY: VeinModuleEntry = { employeeId: 'emp-1', moduleId: 10, updatedAt: '2026-10-21T00:00:00Z', approved: false }
+
+  it('対応表: 書いて読み戻し、同じ乗務員は置き換わり、外せる (居なくても成功)', async () => {
+    expect(await loadVeinModuleEntries()).toEqual([])
+    await putVeinModuleEntry(ENTRY)
+    await putVeinModuleEntry({ ...ENTRY, approved: true })
+    await putVeinModuleEntry({ ...ENTRY, employeeId: 'emp-2', moduleId: 11 })
+    expect(await loadVeinModuleEntries()).toEqual([{ ...ENTRY, approved: true }, { ...ENTRY, employeeId: 'emp-2', moduleId: 11 }])
+    await deleteVeinModuleEntry('emp-1')
+    await deleteVeinModuleEntry('emp-none')
+    expect((await loadVeinModuleEntries()).map(e => e.employeeId)).toEqual(['emp-2'])
+  })
+
+  it('対応表は写しの差し替え・全消去で消えない', async () => {
+    await putVeinModuleEntry(ENTRY)
+    await saveVeinTemplates(snapshot())
+    await clearVeinTemplates()
+    expect(await loadVeinModuleEntries()).toEqual([ENTRY])
+  })
+
+  it('★ 版 1 の DB から上げても、既存の写しは消えずに対応表が足される', async () => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open('alc-vein-db', 1)
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore('templates', { keyPath: 'employeeId' })
+        req.result.createObjectStore('meta')
+      }
+      req.onsuccess = () => {
+        const db = req.result
+        const tx = db.transaction(['templates', 'meta'], 'readwrite')
+        tx.objectStore('templates').put({ employeeId: 'emp-old', template: 'OLD', updatedAt: 'x' })
+        tx.objectStore('meta').put({ logicVersion: '0.1.0', fetchedAt: 5 }, 'current')
+        tx.oncomplete = () => { db.close(); resolve() }
+        tx.onerror = () => reject(tx.error)
+      }
+      req.onerror = () => reject(req.error)
+    })
+    expect(await loadVeinTemplates()).toEqual({
+      logicVersion: '0.1.0', fetchedAt: 5, templates: [{ employeeId: 'emp-old', template: 'OLD', updatedAt: 'x' }],
+    })
+    await putVeinModuleEntry(ENTRY)
+    expect(await loadVeinModuleEntries()).toEqual([ENTRY])
+  })
+
+  it('対応表: 書き込み・読み出し・外すの失敗は reject する', async () => {
+    // keyPath (employeeId) が無い値は put が DataError を投げる
+    await expect(putVeinModuleEntry({ moduleId: 10 } as never)).rejects.toBeTruthy()
+    const original = IDBDatabase.prototype.transaction
+    IDBDatabase.prototype.transaction = function (...args: Parameters<typeof original>) {
+      const tx = original.apply(this, args)
+      queueMicrotask(() => (tx.onerror as ((e: Event) => void) | null)?.(new Event('error')))
+      return tx
+    }
+    try {
+      await expect(loadVeinModuleEntries()).rejects.toBeNull()
+      await expect(putVeinModuleEntry(ENTRY)).rejects.toBeNull()
+      await expect(deleteVeinModuleEntry('emp-1')).rejects.toBeNull()
     }
     finally {
       IDBDatabase.prototype.transaction = original

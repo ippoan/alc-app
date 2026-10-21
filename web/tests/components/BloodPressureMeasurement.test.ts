@@ -61,6 +61,7 @@ const vein = vi.hoisted(() => ({
   isSupported: true,
   say: vi.fn(),
   capture: vi.fn(),
+  identify: vi.fn(),
   onFingerPlaced: vi.fn((cb: () => void) => { finger.cb = cb; return finger.off }),
 }))
 mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
@@ -73,6 +74,16 @@ const veinIdentify = vi.hoisted(() => ({
 vi.mock('~/utils/vein-identify', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-identify')>()),
   ...veinIdentify,
+}))
+
+// 開発用の端末だけ照合をモジュールに任せる (Refs ippoan/alc-app#436)。対応表の引き方は vein-module.test.ts
+const veinModule = vi.hoisted(() => ({
+  usesVeinModule: vi.fn((_isBpStation?: boolean) => false),
+  identifyVeinModuleEmployee: vi.fn(),
+}))
+vi.mock('~/utils/vein-module', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/vein-module')>()),
+  ...veinModule,
 }))
 
 const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />', emits: ['read'] }
@@ -606,7 +617,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     updateMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
     const wrapper = await mountBp()
     expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(1)
-    expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith()
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({ module: undefined })
 
     await veinButton(wrapper).trigger('click')
     await flush(wrapper)
@@ -619,7 +630,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     await wrapper.findAll('button').find(b => b.text() === '次の人へ')!.trigger('click')
     await flush(wrapper)
     expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(2)
-    expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
+    expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS, module: undefined })
     wrapper.unmount()
   })
 
@@ -702,6 +713,63 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(vein.say).toHaveBeenCalledWith('PLACE')
       wrapper.unmount()
       expect(finger.off).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('開発用の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
+    beforeEach(() => {
+      veinModule.usesVeinModule.mockReset().mockReturnValue(true)
+      vein.identify.mockReset().mockResolvedValue(12)
+      veinModule.identifyVeinModuleEmployee.mockReset().mockResolvedValue({
+        kind: 'hit',
+        employee: { id: 'emp-vein-1', name: 'テスト花子', face_approval_status: 'approved' },
+      })
+    })
+
+    it('VEIN IDENTIFY の ID を対応表で引いて顔認証へ。読み取り (capture) とサーバー照合は使わない', async () => {
+      const wrapper = await mountBp()
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(vein.identify).toHaveBeenCalledTimes(1)
+      expect(veinModule.identifyVeinModuleEmployee).toHaveBeenCalledWith(12)
+      expect(vein.capture).not.toHaveBeenCalled()
+      expect(veinIdentify.identifyVeinEmployee).not.toHaveBeenCalled()
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+      // 測定台ではない (測定台の鍵には口が無い)
+      expect(veinModule.usesVeinModule).toHaveBeenCalledWith(false)
+      wrapper.unmount()
+    })
+
+    it('不一致・読み取りの失敗は今と同じ文言', async () => {
+      veinModule.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'miss' })
+      const wrapper = await mountBp()
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(veinErrorText(wrapper)).toContain('照合できませんでした')
+
+      vein.identify.mockRejectedValue(new Error('NO_MODULE'))
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(veinErrorText(wrapper)).toBe('指静脈を読み取れませんでした (NO_MODULE)')
+      wrapper.unmount()
+    })
+
+    it('同期にモジュールを渡し、Vein Station がつながったら揃える', async () => {
+      veinIsConnected.value = false
+      const wrapper = await mountBp()
+      expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({ module: expect.objectContaining({ identify: vein.identify }) })
+      veinIsConnected.value = true
+      await flush(wrapper)
+      expect(veinIdentify.syncVeinTemplates).toHaveBeenLastCalledWith({
+        ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS,
+        module: expect.objectContaining({ identify: vein.identify }),
+      })
+      // 抜けたときは何もしない (前のテストの画面も同じ ref を見ているので、回数は差分で見る)
+      const before = veinIdentify.syncVeinTemplates.mock.calls.length
+      veinIsConnected.value = false
+      await flush(wrapper)
+      expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(before)
+      wrapper.unmount()
     })
   })
 })

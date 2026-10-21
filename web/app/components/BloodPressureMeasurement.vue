@@ -3,6 +3,7 @@ import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, startMeasurement, updateMeasurement } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
+import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 /**
@@ -37,10 +38,20 @@ type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein'
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
 const veinSerial = useVeinSerial()
+// 測定台の鍵にはモジュールの記録の口が無いので、測定台では照合をモジュールに任せない (Refs ippoan/alc-app#436)
+const { isBpStation } = useBpStationMode()
+/** 開発用の端末だけ、あわせて端末のモジュールも揃える (`syncVeinModule`) */
+function syncVein(opts: { ifOlderThanMs?: number } = {}) {
+  return syncVeinTemplates({ ...opts, module: usesVeinModule(isBpStation.value) ? veinSerial : undefined })
+}
 onMounted(() => {
   void veinSerial.connect()
   // オフラインの指静脈照合に使う写しを取る (点呼キオスクと同じ)
-  void syncVeinTemplates()
+  void syncVein()
+})
+// Vein Station がつながったら、モジュールを揃える (起動時はまだつながっていない)
+watch(veinSerial.isConnected, (c) => {
+  if (c) void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
 })
 
 const step = ref<BpStep>('nfc')
@@ -61,7 +72,7 @@ useKioskScreen().declareSafeToReload(
 
 // 次の人を待つ段に戻ったとき: 前回の同期から時間がたっていれば取り直す
 watch(step, (s) => {
-  if (s === 'nfc') void syncVeinTemplates({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
+  if (s === 'nfc') void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
 })
 const employeeId = ref('')
 const employeeName = ref('')
@@ -108,15 +119,19 @@ async function onNfcRead(nfcId: string) {
 
 /** 指静脈で乗務員を特定する (手順は TenkoKiosk と同じ)。失敗したら画面に出す理由を返す */
 async function identifyByVein(prompt: boolean): Promise<string | null> {
-  let chara: string
+  const viaModule = usesVeinModule(isBpStation.value)
+  let read: string | number | null
   try {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
-    chara = await veinSerial.capture()
+    // 開発用の端末はモジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
+    read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
   } catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`
   }
-  const outcome = await identifyVeinEmployee(chara)
+  const outcome = viaModule
+    ? await identifyVeinModuleEmployee(read as number | null)
+    : await identifyVeinEmployee(read as string)
   if (outcome.kind === 'miss') return '照合できませんでした。もう一度置くか、下のカードで進んでください'
   if (outcome.kind === 'error') return outcome.message
   // 顔の審査で止めたときはカードと同じく上のエラーに理由が出る

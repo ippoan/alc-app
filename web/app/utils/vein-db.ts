@@ -12,6 +12,9 @@
  * - `templates` store: 社員ごとのテンプレート (base64。wasm の `import_temp_b64` がそのまま読む)
  * - `meta` store: 取得した時点の `logic_version` と取得時刻。**版を一緒に持つのは、wasm の
  *   `logic_version()` と食い違ったらオフラインの照合を止めるため** (`vein-identify.ts`)
+ * - `module_ids` store (版 2 で追加): 照合をモジュールに移す経路 (M-b、Refs ippoan/alc-app#436) の
+ *   乗務員 ↔ 端末のモジュールの ID (10〜100) の対応表。**サーバーは端末の ID を知らない**ので、
+ *   モジュールが返した ID から乗務員を引けるのはこの表だけ (`vein-module.ts`)
  */
 import { openIdb } from '~/utils/idb'
 
@@ -32,16 +35,31 @@ export interface VeinTemplateSnapshot {
   templates: VeinTemplateEntry[]
 }
 
+/** 端末のモジュールの ID に置いた乗務員 1 人 */
+export interface VeinModuleEntry {
+  employeeId: string
+  /** モジュールの ID (10〜100) */
+  moduleId: number
+  /** 置いた記録の版 (サーバーの `updated_at`) */
+  updatedAt: string
+  /** 管理者が承認済みか。承認待ちの ID に当たっても本人確認にしない */
+  approved: boolean
+}
+
 const DB_NAME = 'alc-vein-db'
-const DB_VERSION = 1
+/** 版 1 → 2 で `module_ids` を足した。既存の store はそのまま残す (写しは消えない) */
+const DB_VERSION = 2
 const TEMPLATES_STORE = 'templates'
 const META_STORE = 'meta'
+const MODULE_STORE = 'module_ids'
 const META_KEY = 'current'
 
 function openDb(): Promise<IDBDatabase> {
   return openIdb(DB_NAME, DB_VERSION, (db) => {
-    db.createObjectStore(TEMPLATES_STORE, { keyPath: 'employeeId' })
-    db.createObjectStore(META_STORE)
+    // 版 1 から上げるときは templates / meta が既に在る。無いものだけ作る (module_ids は版 2 で初めて作る)
+    if (!db.objectStoreNames.contains(TEMPLATES_STORE)) db.createObjectStore(TEMPLATES_STORE, { keyPath: 'employeeId' })
+    if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE)
+    db.createObjectStore(MODULE_STORE, { keyPath: 'employeeId' })
   })
 }
 
@@ -95,6 +113,39 @@ export async function clearVeinTemplates(): Promise<void> {
     const tx = db.transaction([TEMPLATES_STORE, META_STORE], 'readwrite')
     tx.objectStore(TEMPLATES_STORE).clear()
     tx.objectStore(META_STORE).clear()
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+/** モジュールの ID の対応表を全件読む */
+export async function loadVeinModuleEntries(): Promise<VeinModuleEntry[]> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODULE_STORE, 'readonly')
+    const req = tx.objectStore(MODULE_STORE).getAll()
+    tx.oncomplete = () => resolve(req.result as VeinModuleEntry[])
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+/** 対応表の 1 人を書く (同じ乗務員は置き換わる) */
+export async function putVeinModuleEntry(entry: VeinModuleEntry): Promise<void> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODULE_STORE, 'readwrite')
+    tx.objectStore(MODULE_STORE).put(entry)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+/** 対応表から 1 人を外す (居なくても成功する) */
+export async function deleteVeinModuleEntry(employeeId: string): Promise<void> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODULE_STORE, 'readwrite')
+    tx.objectStore(MODULE_STORE).delete(employeeId)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
   })

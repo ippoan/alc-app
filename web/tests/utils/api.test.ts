@@ -68,6 +68,8 @@ import {
   reportFirmware,
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
+  putVeinModuleRecord,
+  getVeinModuleTemplates,
   identifyVein,
   getVeinTemplates,
   getPendingVeinTemplates,
@@ -1081,6 +1083,25 @@ describe('api', () => {
       assertMock(() => {
         const body = JSON.parse(mockFetch.mock.calls[0][1].body)
         expect(body.charas).toEqual(['AABBCC', 'DDEEFF'])
+      })
+    })
+
+    // モジュールの記録の口 (Refs ippoan/alc-app#436)。live では書き込まない (送り方だけ mock で見る)
+    it.skipIf(isLive)('putVeinModuleRecord は記録を base64 にして PUT …/module へ送る', async () => {
+      stubOk({ employee_id: TEST_EMPLOYEE_ID, updated_at: '2026-10-21T00:00:00Z' })
+      await callApi(() => putVeinModuleRecord(TEST_EMPLOYEE_ID, new Uint8Array([0xDE, 0xED, 0xDE, 0xED])))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe(`https://api.example.com/api/vein/templates/${TEST_EMPLOYEE_ID}/module`)
+        expect(mockFetch.mock.calls[0][1].method).toBe('PUT')
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ record: '3u3e7Q==' })
+      })
+    })
+
+    it.skipIf(isLive)('getVeinModuleTemplates は GET /api/vein/module-templates', async () => {
+      stubOk({ templates: [] })
+      await callApi(() => getVeinModuleTemplates())
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/module-templates')
       })
     })
 

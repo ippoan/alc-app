@@ -614,4 +614,184 @@ describe('useVeinSerial', () => {
       vein.ota.end()
     })
   })
+
+  // ---------- 照合をモジュールに任せる口 (M-b、Refs ippoan/alc-app#436) ----------
+
+  /** 応答を 1 行流して処理させる */
+  async function reply(dev: MockPortHandle, text: string) {
+    await vi.advanceTimersByTimeAsync(0)
+    dev.emit(text)
+    await vi.advanceTimersByTimeAsync(0)
+  }
+
+  describe('enroll', () => {
+    it('VEIN RECORD の行を END まで集め、offset 順に 1 つの記録にする。置き直しの案内を onPlace へ', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const places: number[] = []
+      const p = vein.enroll(10, n => places.push(n))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN ENROLL 10\n')
+
+      // 置き直しの案内 (形の違う EVT は数えない)
+      await reply(dev, 'EVT VEIN PLACE 2\nEVT VEIN PLACE\nEVT VEIN FOO 3\nEVT NFC PLACE 9\nEVT VEIN PLACE 3\n')
+      // 後ろの塊が先に来ても・前のログ行に連結されても拾う。ほかの ID の行は混ぜない
+      await reply(dev, 'VEIN RECORD 11 0 FFFF\nVEIN RECORD 10 2 dead\nEVT NFC_READY VEIN RECORD 10 0 DEED\nVEIN RECORD 10 END 4\n')
+      await expect(p).resolves.toEqual(new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]))
+      expect(places).toEqual([2, 3])
+    })
+
+    it('onPlace を渡さなくてもよい。END の後の行は集めない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p = vein.enroll(100)
+      await reply(dev, 'EVT VEIN PLACE 2\nVEIN RECORD 100 0 0102\nVEIN RECORD 100 END 2\n')
+      await expect(p).resolves.toEqual(new Uint8Array([1, 2]))
+      // 終わった後の行は onLine へ流れるだけ
+      dev.emit('VEIN RECORD 100 0 0304\n')
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    it('ERR VEIN RETAKE は reason RETAKE の Error', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p = vein.enroll(10)
+      const assertion = expect(p).rejects.toThrow('RETAKE')
+      await reply(dev, 'EVT VEIN PLACE 2\nERR VEIN RETAKE\n')
+      await assertion
+    })
+
+    it.each([
+      ['offset が数字でない', 'VEIN RECORD 10 X DEED\nVEIN RECORD 10 END 2\n'],
+      ['hex が無い', 'VEIN RECORD 10 0\nVEIN RECORD 10 END 2\n'],
+      ['hex が 16 進でない', 'VEIN RECORD 10 0 ZZZZ\nVEIN RECORD 10 END 2\n'],
+      ['hex が奇数桁', 'VEIN RECORD 10 0 ABC\nVEIN RECORD 10 END 2\n'],
+      ['offset に隙間がある', 'VEIN RECORD 10 0 DE\nVEIN RECORD 10 2 DE\nVEIN RECORD 10 END 3\n'],
+      ['総バイト数を超える', 'VEIN RECORD 10 0 DEEDDEED\nVEIN RECORD 10 END 2\n'],
+      ['総バイト数に足りない', 'VEIN RECORD 10 0 DE\nVEIN RECORD 10 END 2\n'],
+      ['総バイト数が 0', 'VEIN RECORD 10 END 0\n'],
+      ['総バイト数が数字でない', 'VEIN RECORD 10 0 DE\nVEIN RECORD 10 END x\n'],
+    ])('%s → RECORD_BROKEN', async (_name, lines) => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p = vein.enroll(10)
+      const assertion = expect(p).rejects.toThrow(mod.VEIN_RECORD_BROKEN)
+      await reply(dev, lines)
+      await assertion
+    })
+  })
+
+  describe('identify', () => {
+    it('VEIN IDENTIFIED <id> は ID、VEIN NOMATCH は null', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const hit = vein.identify()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY\n')
+      await reply(dev, 'EVT VEIN FINGER\nVEIN IDENTIFIED 12\n')
+      await expect(hit).resolves.toBe(12)
+
+      const miss = vein.identify()
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect(miss).resolves.toBeNull()
+    })
+
+    it('ERR VEIN <reason> は reason の Error、読めない ID も Error', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const err = vein.identify()
+      const a1 = expect(err).rejects.toThrow(/^NO_MODULE$/)
+      await reply(dev, 'ERR VEIN NO_MODULE\n')
+      await a1
+
+      const bad = vein.identify()
+      const a2 = expect(bad).rejects.toThrow('IDENTIFY の応答が読めません')
+      await reply(dev, 'VEIN IDENTIFIED x\n')
+      await a2
+    })
+
+    it('ほかの要求の応答待ちで弾かれたら、空くまで呼び直す', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const sign = vein.request('AUTH SIGN abc', 'AUTH SIG', 5_000)
+      await vi.advanceTimersByTimeAsync(0)
+      const p = vein.identify()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes).not.toContain('VEIN IDENTIFY\n')
+      dev.emit('AUTH SIG pk sg\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(sign).resolves.toBe('AUTH SIG pk sg')
+      await vi.advanceTimersByTimeAsync(200)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY\n')
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect(p).resolves.toBeNull()
+    })
+
+    it('呼び直しを待つ間に錠が掛かったら送らずに断る', async () => {
+      const { OTA_LOCKED_MESSAGE } = await import('~/composables/useCoreS3Serial')
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const sign = vein.request('AUTH SIGN abc', 'AUTH SIG', 5_000)
+      await vi.advanceTimersByTimeAsync(0)
+      const p = vein.identify()
+      const assertion = expect(p).rejects.toThrow(OTA_LOCKED_MESSAGE)
+      await vi.advanceTimersByTimeAsync(0)
+      vein.ota.begin()
+      dev.emit('AUTH SIG pk sg\n')
+      await vi.advanceTimersByTimeAsync(200)
+      await assertion
+      await sign
+      expect(dev.writes).not.toContain('VEIN IDENTIFY\n')
+      vein.ota.end()
+    })
+  })
+
+  describe('syncWrite / syncClear', () => {
+    it('192 バイトずつ送って応答を待ち、END で書かせる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const record = new Uint8Array(200).map((_, i) => i)
+      const p = vein.syncWrite(10, record)
+      await vi.advanceTimersByTimeAsync(0)
+      const first = dev.writes.at(-1)!
+      expect(first.startsWith('VEIN SYNC WRITE 10 0 000102')).toBe(true)
+      expect(first.length).toBe('VEIN SYNC WRITE 10 0 '.length + 192 * 2 + 1)
+      await reply(dev, 'VEIN SYNC WRITE 10 192\n')
+      expect(dev.writes.at(-1)).toBe('VEIN SYNC WRITE 10 192 C0C1C2C3C4C5C6C7\n')
+      await reply(dev, 'VEIN SYNC WRITE 10 200\n')
+      expect(dev.writes.at(-1)).toBe('VEIN SYNC WRITE 10 END\n')
+      await reply(dev, 'VEIN SYNC WRITTEN 10 200\n')
+      await expect(p).resolves.toBeUndefined()
+    })
+
+    it('次の offset が合わなければ WRITE_SEQ、機体の失敗は reason のまま', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p1 = vein.syncWrite(10, new Uint8Array([1, 2]))
+      const a1 = expect(p1).rejects.toThrow('WRITE_SEQ')
+      await reply(dev, 'VEIN SYNC WRITE 10 1\n')
+      await a1
+
+      const p2 = vein.syncWrite(10, new Uint8Array([1, 2]))
+      const a2 = expect(p2).rejects.toThrow(/^WRITE_HEADER$/)
+      await reply(dev, 'VEIN SYNC WRITE 10 2\n')
+      await reply(dev, 'ERR VEIN WRITE_HEADER\n')
+      await a2
+    })
+
+    it('syncClear は VEIN SYNC CLEARED <id> で成功、失敗は reason', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const ok = vein.syncClear(42)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN SYNC CLEAR 42\n')
+      await reply(dev, 'VEIN SYNC CLEARED 42\n')
+      await expect(ok).resolves.toBeUndefined()
+
+      const ng = vein.syncClear(42)
+      const assertion = expect(ng).rejects.toThrow(/^RC=01$/)
+      await reply(dev, 'ERR VEIN RC=01\n')
+      await assertion
+    })
+  })
 })

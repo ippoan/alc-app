@@ -984,6 +984,26 @@ describe('useSerialArbiter', () => {
       expect(seen.lines).toContain('AUTH TICKET abc123 EXPIRES=300')
     })
 
+    it('matchPrefix に配列を渡すと、どれか 1 つで resolve する (行の中で先に現れた方を採る)', async () => {
+      const { dev } = await claimAsCore()
+
+      const p1 = arbiter.request('core', 'VEIN IDENTIFY', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      // 無関係な行・ERR でない行は横取りしない
+      dev.emit('EVT VEIN FINGER\n')
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('VEIN NOMATCH\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p1).resolves.toBe('VEIN NOMATCH')
+
+      // 2 つとも含む行 (連結) は先に現れた方の位置から後ろ
+      const p2 = arbiter.request('core', 'VEIN IDENTIFY', ['VEIN NOMATCH', 'VEIN IDENTIFIED '], 10_000)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('EVT X VEIN IDENTIFIED 12 VEIN NOMATCH\n')
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(p2).resolves.toBe('VEIN IDENTIFIED 12 VEIN NOMATCH')
+    })
+
     it('応答待ち中に 2 件目を呼ぶと書かずに即 reject する (同時に 1 件しか待てない)', async () => {
       const { dev } = await claimAsCore()
 
