@@ -24,6 +24,7 @@ const vein = vi.hoisted(() => ({
   say: vi.fn(),
   capture: vi.fn(),
   request: vi.fn(),
+  onFingerPlaced: vi.fn(() => () => {}),
 }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 

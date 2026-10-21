@@ -373,6 +373,35 @@ describe('useVeinSerial', () => {
     })
   })
 
+  describe('onFingerPlaced (EVT VEIN FINGER)', () => {
+    it('EVT VEIN FINGER で cb を呼ぶ。UNSUPPORTED・他の EVT では呼ばない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const cb = vi.fn()
+      vein.onFingerPlaced(cb)
+
+      dev.emit('EVT VEIN FINGER UNSUPPORTED\nEVT VEIN OTHER\nEVT FC1200 FINGER\nEVT VEIN\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(cb).not.toHaveBeenCalled()
+
+      dev.emit('EVT VEIN FINGER\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(cb).toHaveBeenCalledTimes(1)
+    })
+
+    it('返り値で解除すると、以後は呼ばれない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const cb = vi.fn()
+      const off = vein.onFingerPlaced(cb)
+
+      off()
+      dev.emit('EVT VEIN FINGER\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(cb).not.toHaveBeenCalled()
+    })
+  })
+
   // ---------- capture ----------
 
   describe('capture', () => {

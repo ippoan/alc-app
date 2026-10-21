@@ -36,8 +36,11 @@ const match = vi.hoisted(() => ({
 }))
 vi.mock('~/utils/vein-match', () => match)
 
+// 指が置かれた合図 (EVT VEIN FINGER) の購読は、受けた cb を finger.cb で呼べるようにしておく
+const finger = vi.hoisted(() => ({ cb: null as (() => void) | null, off: vi.fn() }))
 const vein = vi.hoisted(() => ({
   isSupported: true,
+  onFingerPlaced: vi.fn((cb: () => void) => { finger.cb = cb; return finger.off }),
   isConnected: null as unknown as { value: boolean },
   connect: vi.fn(),
   say: vi.fn(),
@@ -273,5 +276,73 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     await flushPromises()
     expect(api.getVeinTemplates.mock.calls.length).toBe(calls)
     wrapper.unmount()
+  })
+
+  // 指が置かれた合図 (EVT VEIN FINGER) で、ボタンと同じ照合を始める (Refs ippoan/alc-app#436)
+  describe('指の合図で照合を始める', () => {
+    beforeEach(() => {
+      finger.cb = null
+      finger.off.mockClear()
+    })
+
+    it('★ 待機中なら「指を置いて」を鳴らさず読み取り、identifyEmployee へ合流する', async () => {
+      api.identifyVein.mockResolvedValue({ employee_id: 'emp-1', name: '山田 太郎' })
+      api.getEmployeeById.mockResolvedValue(EMP)
+      const wrapper = await mountKiosk()
+      finger.cb!()
+      await flushPromises()
+
+      expect(vein.say).not.toHaveBeenCalledWith('PLACE')
+      expect(vein.capture).toHaveBeenCalledTimes(1)
+      expect(identifyEmployeeMock).toHaveBeenCalledWith('emp-1', '山田 太郎')
+      wrapper.unmount()
+    })
+
+    it('外れはボタンからと同じ文言を出す', async () => {
+      api.identifyVein.mockResolvedValue({ employee_id: null })
+      const wrapper = await mountKiosk()
+      finger.cb!()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="vein-error"]').text()).toBe(VEIN_NO_MATCH_MESSAGE)
+      expect(vein.say).toHaveBeenCalledWith('FAILED')
+      wrapper.unmount()
+    })
+
+    it('待機画面でなければ始めない', async () => {
+      const wrapper = await mountKiosk()
+      step.value = 'face_auth'
+      await flushPromises()
+      finger.cb!()
+      await flushPromises()
+
+      expect(vein.capture).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('照合中は 2 回目を始めない', async () => {
+      let captured!: (chara: string) => void
+      vein.capture.mockImplementation(() => new Promise((resolve) => { captured = resolve }))
+      api.identifyVein.mockResolvedValue({ employee_id: null })
+      const wrapper = await mountKiosk()
+      finger.cb!()
+      await flushPromises()
+      finger.cb!()
+      await flushPromises()
+
+      expect(vein.capture).toHaveBeenCalledTimes(1)
+      captured('BDBD01')
+      await flushPromises()
+      wrapper.unmount()
+    })
+
+    it('unmount で購読を解除する / ボタンは今までどおり「指を置いて」を鳴らす', async () => {
+      api.identifyVein.mockResolvedValue({ employee_id: null })
+      const wrapper = await mountKiosk()
+      await pressVein(wrapper)
+      expect(vein.say).toHaveBeenCalledWith('PLACE')
+      wrapper.unmount()
+      expect(finger.off).toHaveBeenCalledTimes(1)
+    })
   })
 })

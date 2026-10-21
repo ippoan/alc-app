@@ -107,10 +107,11 @@ async function onNfcRead(nfcId: string) {
 }
 
 /** 指静脈で乗務員を特定する (手順は TenkoKiosk と同じ)。失敗したら画面に出す理由を返す */
-async function identifyByVein(): Promise<string | null> {
+async function identifyByVein(prompt: boolean): Promise<string | null> {
   let chara: string
   try {
-    await veinSerial.say('PLACE')
+    // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
+    if (prompt) await veinSerial.say('PLACE')
     chara = await veinSerial.capture()
   } catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`
@@ -123,12 +124,12 @@ async function identifyByVein(): Promise<string | null> {
   return null
 }
 
-async function onVeinIdentify() {
+async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
   if (veinBusy.value) return
   veinBusy.value = true
   veinError.value = null
   error.value = null
-  const failure = await identifyByVein()
+  const failure = await identifyByVein(prompt)
   if (failure) {
     veinError.value = failure
     // 案内の失敗は握り潰す (画面の理由が主)
@@ -136,6 +137,16 @@ async function onVeinIdentify() {
   }
   veinBusy.value = false
 }
+
+// 指が置かれた合図 (EVT VEIN FINGER) で照合を始める。待機中 (カード待ちで、カードの照会も
+// 指静脈の読み取りも走っていない) のときだけ。ボタンは古いファーム向けに残す
+const isVeinIdle = computed(
+  () => step.value === 'nfc' && !veinBusy.value && employeeLookups.value === 0,
+)
+const stopFingerWatch = veinSerial.onFingerPlaced(() => {
+  if (isVeinIdle.value) void onVeinIdentify({ prompt: false })
+})
+onUnmounted(stopFingerWatch)
 
 function onFaceAuthResult(result: FaceAuthResult) {
   if (!result.verified) return
@@ -238,7 +249,7 @@ function reset() {
             data-testid="vein-identify"
             :disabled="veinBusy"
             class="w-full px-6 py-8 bg-emerald-600 text-white rounded-2xl text-2xl font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-            @click="onVeinIdentify"
+            @click="onVeinIdentify()"
           >
             {{ veinBusy ? '指を置いてください…' : '指を置いて照合' }}
           </button>
