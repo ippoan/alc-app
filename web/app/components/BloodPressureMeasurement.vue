@@ -37,7 +37,7 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  * - 血圧を受けたらすぐ完了の段へ進み、保存は裏で行う。保存中は次の人へ進ませず、失敗したら完了の段でやり直せる (Refs ippoan/alc-app#436)
  */
 
-type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein'
+type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list'
 
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
@@ -334,6 +334,9 @@ function reset() {
     <!-- 指静脈の登録 (入口は下のボタン) -->
     <VeinRegistration v-if="step === 'vein'" :employee="registrationEmployee" @close="step = 'nfc'; registrationEmployee = null" />
 
+    <!-- この端末の指静脈の一覧 (ID ↔ 乗務員、空き、モジュールの人数) -->
+    <VeinModuleList v-else-if="step === 'vein_list'" @close="step = 'nfc'" />
+
     <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
     <div v-else-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
       <h2 class="text-lg font-semibold text-gray-700 mb-2">血圧測定</h2>
@@ -450,6 +453,14 @@ function reset() {
       @click="registrationEmployee = null; step = 'vein'; error = null"
     >
       指静脈を登録する
+    </button>
+    <button
+      v-if="step === 'nfc' && veinSerial.isConnected.value"
+      data-testid="vein-module-list-open"
+      class="w-full px-4 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+      @click="step = 'vein_list'; error = null"
+    >
+      この端末の指静脈の一覧
     </button>
   </div>
 </template>

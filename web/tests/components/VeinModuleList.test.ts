@@ -1,0 +1,85 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import VeinModuleList from '~/components/VeinModuleList.vue'
+import type { VeinModuleEntry } from '~/utils/vein-db'
+
+// この端末の指静脈の一覧 (Refs ippoan/alc-app#436)。乗務員はすべて合成値
+
+const { getEmployeesMock, loadEntriesMock } = vi.hoisted(() => ({
+  getEmployeesMock: vi.fn(),
+  loadEntriesMock: vi.fn(),
+}))
+vi.mock('~/utils/api', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/api')>()),
+  getEmployees: getEmployeesMock,
+}))
+vi.mock('~/utils/vein-db', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/vein-db')>()),
+  loadVeinModuleEntries: loadEntriesMock,
+}))
+const vein = vi.hoisted(() => ({ syncInfo: vi.fn() }))
+mockNuxtImport('useVeinSerial', () => () => vein)
+
+function entry(employeeId: string, moduleId: number, approved = true): VeinModuleEntry {
+  return { employeeId, moduleId, updatedAt: '2026-10-22T00:00:00Z', approved }
+}
+
+async function mountList() {
+  const w = await mountSuspended(VeinModuleList)
+  await flushPromises()
+  return w
+}
+
+describe('VeinModuleList', () => {
+  beforeEach(() => {
+    loadEntriesMock.mockReset().mockResolvedValue([entry('emp-b', 12, false), entry('emp-a', 10)])
+    getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }, { id: 'emp-b', name: '試験 二郎' }])
+    vein.syncInfo.mockReset().mockResolvedValue({ users: 2, max: 100 })
+  })
+
+  it('ID の順に乗務員・状態を並べ、対応表の人数・空き・モジュールの登録人数を出す', async () => {
+    const w = await mountList()
+    const rows = w.findAll('[data-testid="vein-module-table"] tbody tr').map(r => r.text())
+    expect(rows[0]).toContain('10')
+    expect(rows[0]).toContain('試験 一郎')
+    expect(rows[0]).toContain('承認済み')
+    expect(rows[1]).toContain('12')
+    expect(rows[1]).toContain('承認待ち')
+    const summary = w.find('[data-testid="vein-module-summary"]').text()
+    expect(summary).toContain('2 人 (空き 89 / 91)')
+    expect(summary).toContain('2 人 (上限 100)')
+    expect(getEmployeesMock).toHaveBeenCalledWith('bp-station')
+    expect(w.find('[data-testid="vein-module-mismatch"]').exists()).toBe(false)
+  })
+
+  it('モジュールと対応表の人数が違えば知らせる。名前が引けなければ ID で出す', async () => {
+    vein.syncInfo.mockResolvedValue({ users: 0, max: 100 })
+    getEmployeesMock.mockRejectedValue(new Error('offline'))
+    const w = await mountList()
+    expect(w.find('[data-testid="vein-module-mismatch"]').exists()).toBe(true)
+    expect(w.text()).toContain('(名前不明 emp-a)')
+  })
+
+  it('モジュールの人数を読めなければ理由を出す。空きが無ければ知らせる。誰も居なければそう出す', async () => {
+    vein.syncInfo.mockRejectedValue(new Error('TIMEOUT'))
+    loadEntriesMock.mockResolvedValue(Array.from({ length: 91 }, (_, i) => entry(`x${i}`, 10 + i)))
+    const w = await mountList()
+    expect(w.text()).toContain('モジュールの登録人数を読めませんでした (TIMEOUT)')
+    expect(w.text()).toContain('ID の空きがありません')
+    loadEntriesMock.mockResolvedValue([])
+    vein.syncInfo.mockResolvedValue({ users: 0, max: 100 })
+    const empty = await mountList()
+    expect(empty.text()).toContain('まだ誰も入っていません')
+  })
+
+  it('読み直すで取り直し、閉じるで close', async () => {
+    const w = await mountList()
+    const buttons = w.findAll('button')
+    await buttons.find(b => b.text() === '読み直す')!.trigger('click')
+    await flushPromises()
+    expect(loadEntriesMock).toHaveBeenCalledTimes(2)
+    await buttons.find(b => b.text() === '閉じる')!.trigger('click')
+    expect(w.emitted('close')).toHaveLength(1)
+  })
+})
