@@ -63,7 +63,7 @@ describe('VeinFleetManager', () => {
     expect(watchOptions().getToken()).toBe('admin-jwt')
     expect(listVeinFleet).toHaveBeenCalledTimes(1)
     expect(requestVeinFleet).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-testid="vein-fleet-notice"]').text()).toBe('2 台の端末に問い合わせました')
+    expect(wrapper.find('[data-testid="vein-fleet-notice"]').text()).toBe('問い合わせました (接続 2 本)。返事が来た端末から下に出ます')
   })
 
   it('端末ごとに ID 順で乗務員と状態を出す。名前が引けない人は id の頭', async () => {
@@ -91,6 +91,27 @@ describe('VeinFleetManager', () => {
     expect(devices[0]!.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(true)
     expect(devices[1]!.text()).toContain('モジュール -')
     expect(devices[1]!.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(false)
+  })
+
+  it('端末ごとに最終の記録の版 (いちばん新しい版) を出す。版が無い端末は -、読めない版はそのまま', async () => {
+    listVeinFleet.mockResolvedValue({
+      devices: [
+        dev({ entries: [
+          { module_id: 10, employee_id: 'e1', approved: true, version: '2026-10-21T00:00:00Z' },
+          { module_id: 11, employee_id: 'e2', approved: true, version: '2026-10-23T01:02:03Z' },
+          { module_id: 12, employee_id: 'e3', approved: true },
+        ] }),
+        dev({ device_id: 'k2' }),
+        dev({ device_id: 'k3', entries: [{ module_id: 10, employee_id: 'e1', approved: true, version: 'v-x' }] }),
+      ],
+    })
+    const wrapper = await mountManager()
+    const latest = wrapper.findAll('[data-testid="vein-fleet-latest"]').map(e => e.text())
+    expect(latest).toEqual([
+      `最終の記録の版 ${new Date('2026-10-23T01:02:03Z').toLocaleString('ja-JP')}`,
+      '最終の記録の版 -',
+      '最終の記録の版 v-x',
+    ])
   })
 
   it('★ 「更新した」の合図で引き直す', async () => {

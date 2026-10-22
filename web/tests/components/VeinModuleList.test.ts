@@ -53,6 +53,20 @@ describe('VeinModuleList', () => {
     expect(w.find('[data-testid="vein-module-mismatch"]').exists()).toBe(false)
   })
 
+  it('最終の記録の版 (いちばん新しい版) を要約に出す。誰も居なければ -', async () => {
+    loadEntriesMock.mockResolvedValue([
+      { ...entry('emp-a', 10), updatedAt: '2026-10-21T00:00:00Z' },
+      { ...entry('emp-b', 15), updatedAt: '2026-10-23T01:02:03Z' },
+      { ...entry('emp-c', 11), updatedAt: '2026-10-22T00:00:00Z' },
+    ])
+    const w = await mountList()
+    const latest = w.find('[data-testid="vein-module-latest"]').text()
+    expect(latest).toBe(`${new Date('2026-10-23T01:02:03Z').toLocaleString('ja-JP')} (ID 15)`)
+    loadEntriesMock.mockResolvedValue([])
+    const empty = await mountList()
+    expect(empty.find('[data-testid="vein-module-latest"]').text()).toBe('-')
+  })
+
   it('モジュールと対応表の人数が違えば知らせる。名前が引けなければ ID で出す', async () => {
     vein.syncInfo.mockResolvedValue({ users: 0, max: 100 })
     getEmployeesMock.mockRejectedValue(new Error('offline'))

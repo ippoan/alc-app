@@ -54,6 +54,11 @@ function nameOf(entry: VeinModuleEntry): string {
   return names.value.get(entry.employeeId) ?? `(名前不明 ${entry.employeeId.slice(0, 8)})`
 }
 
+/** いちばん新しい記録の版 (`updatedAt` の最大)。人数が多いと表から探せないので要約に出す */
+const latest = computed(() =>
+  entries.value.reduce<VeinModuleEntry | null>((max, e) => (!max || e.updatedAt > max.updatedAt ? e : max), null),
+)
+
 function versionOf(entry: VeinModuleEntry): string {
   const d = new Date(entry.updatedAt)
   return Number.isNaN(d.getTime()) ? entry.updatedAt : d.toLocaleString('ja-JP')
@@ -70,6 +75,8 @@ function versionOf(entry: VeinModuleEntry): string {
         <dd>{{ entries.length }} 人 (空き {{ free }} / {{ capacity }})</dd>
         <dt class="text-gray-500">モジュールの登録人数</dt>
         <dd>{{ moduleInfo ? `${moduleInfo.users} 人 (上限 ${moduleInfo.max})` : '-' }}</dd>
+        <dt class="text-gray-500">最終の記録の版</dt>
+        <dd data-testid="vein-module-latest">{{ latest ? `${versionOf(latest)} (ID ${latest.moduleId})` : '-' }}</dd>
       </dl>
       <p v-if="moduleError" class="mb-3 text-sm text-red-600">{{ moduleError }}</p>
       <p v-if="mismatch" data-testid="vein-module-mismatch" class="mb-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
