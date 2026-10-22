@@ -25,6 +25,7 @@ mockNuxtImport('useTimecardWatch', () => timecardWatch)
 const vein = vi.hoisted(() => ({
   isConnected: null as unknown as { value: boolean },
   syncInfo: vi.fn(),
+  connect: vi.fn(async () => true),
 }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 
@@ -45,6 +46,11 @@ describe('VeinFleetHost', () => {
     loadVeinModuleEntries.mockResolvedValue([ENTRY])
     vein.syncInfo.mockResolvedValue({ users: 1, max: 100 })
     reportVeinFleet.mockResolvedValue(undefined)
+  })
+
+  it('★ mount で Vein Station を掴みに行く (管理者の画面に切り替えても Station の鍵で端末の token を取れるように)', async () => {
+    await mountSuspended(VeinFleetHost)
+    expect(vein.connect).toHaveBeenCalledTimes(1)
   })
 
   it('描くものは無く、Vein Station が最初に繋がったときに 1 回だけ購読を張る', async () => {

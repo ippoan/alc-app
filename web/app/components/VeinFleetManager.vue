@@ -61,7 +61,10 @@ onMounted(async () => {
 })
 
 function deviceName(d: VeinFleetDevice): string {
-  return d.label ?? d.device_id.slice(0, 8)
+  if (d.label) return d.label
+  // 鍵で端末になった機 (Vein Station など) は登録簿に行が無くラベルも無い。鍵の指紋の頭で見分ける
+  if (d.device_id.startsWith('alarm-')) return `Vein Station ${d.device_id.slice(6, 14)}`
+  return d.device_id.slice(0, 8)
 }
 
 function nameOf(employeeId: string): string {
