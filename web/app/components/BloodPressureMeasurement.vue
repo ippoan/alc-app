@@ -30,7 +30,7 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  *   指静脈の登録 (`VeinRegistration`) への入口を出す (Refs ippoan/vein-match#20)。
  *   血圧計の有無とは関係しないので、血圧計が見つからない端末でも出す。
  * - 乗務員の特定は**指静脈が主、カードは予備** (Refs ippoan/alc-app#436)。Vein Station が
- *   つながっていれば、カード待ちの段の上に「指を置いて照合」を大きく出し、カードは下に置く。
+ *   つながっていれば、「指を置いて照合」とカードの枠を横に並べる (カードは縦を詰めた表示)。
  *   手順は点呼キオスク (`TenkoKiosk`) の指静脈と同じ。つながっていなければカードだけの画面のまま。
  * - **指静脈で特定したときは顔認証を飛ばして測定へ進む** (指静脈が本人確認そのもの)。顔の審査
  *   (`applyFaceApproval`) も通さないので、審査中・却下でも止めない。カードで特定したときは従来どおり顔認証。
@@ -42,6 +42,8 @@ type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list'
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
 const veinSerial = useVeinSerial()
+/** Vein Station が繋がっていて、指静脈で照合できる (ボタンをカードの横に出す) */
+const veinReady = computed(() => veinSerial.isSupported && veinSerial.isConnected.value)
 /** あわせて端末のモジュールも揃える (`syncVeinModule`、測定台も同じ。Refs ippoan/alc-app#436) */
 function syncVein(opts: { ifOlderThanMs?: number } = {}) {
   return syncVeinTemplates({ ...opts, module: usesVeinModule() ? veinSerial : undefined })
@@ -365,20 +367,21 @@ function reset() {
       <!-- Step 1: 指を置く (主) / カードをかざす・社員番号を打つ (予備) -->
       <div v-if="step === 'nfc'" class="bg-white rounded-2xl p-4 shadow-sm">
         <h2 class="text-lg font-semibold text-gray-700 mb-4">乗務員ID</h2>
-        <!-- 指静脈 (Refs ippoan/alc-app#436)。Vein Station が無い端末ではカードだけ -->
-        <template v-if="veinSerial.isSupported && veinSerial.isConnected.value">
-          <button
-            data-testid="vein-identify"
-            :disabled="veinBusy"
-            class="w-full px-6 py-8 bg-emerald-600 text-white rounded-2xl text-2xl font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-            @click="onVeinIdentify()"
-          >
-            {{ veinBusy ? (veinAgain ? 'もう一度置いてください…' : '指を置いてください…') : '指を置いて照合' }}
-          </button>
-          <p v-if="veinError" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ veinError }}</p>
-          <h3 class="mt-6 mb-2 text-sm font-medium text-gray-500">カードで進む</h3>
-        </template>
-        <NfcStatus @read="onNfcRead" />
+        <!-- 指静脈 (Refs ippoan/alc-app#436) とカードを横に並べる。Vein Station が無い端末ではカードだけ -->
+        <div :class="veinReady ? 'grid grid-cols-2 gap-3' : ''">
+          <div v-if="veinReady" class="flex flex-col">
+            <button
+              data-testid="vein-identify"
+              :disabled="veinBusy"
+              class="flex-1 w-full px-4 py-4 bg-emerald-600 text-white rounded-2xl text-xl font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+              @click="onVeinIdentify()"
+            >
+              {{ veinBusy ? (veinAgain ? 'もう一度置いてください…' : '指を置いてください…') : '指を置いて照合' }}
+            </button>
+            <p v-if="veinError" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ veinError }}</p>
+          </div>
+          <NfcStatus :compact="veinReady" @read="onNfcRead" />
+        </div>
         <h3 class="mt-6 mb-2 text-sm font-medium text-gray-500">社員番号で進む</h3>
         <EmployeeCodeKeypad v-model="code" @submit="onCodeSubmit" />
       </div>
@@ -447,20 +450,20 @@ function reset() {
       </div>
     </template>
 
-    <button
-      v-if="step === 'nfc' && veinSerial.isConnected.value"
-      class="w-full px-4 py-3 bg-white border border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
-      @click="registrationEmployee = null; step = 'vein'; error = null"
-    >
-      指静脈を登録する
-    </button>
-    <button
-      v-if="step === 'nfc' && veinSerial.isConnected.value"
-      data-testid="vein-module-list-open"
-      class="w-full px-4 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
-      @click="step = 'vein_list'; error = null"
-    >
-      この端末の指静脈の一覧
-    </button>
+    <div v-if="step === 'nfc' && veinSerial.isConnected.value" class="grid grid-cols-2 gap-3">
+      <button
+        class="w-full px-4 py-3 bg-white border border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
+        @click="registrationEmployee = null; step = 'vein'; error = null"
+      >
+        指静脈を登録する
+      </button>
+      <button
+        data-testid="vein-module-list-open"
+        class="w-full px-4 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+        @click="step = 'vein_list'; error = null"
+      >
+        この端末の指静脈の一覧
+      </button>
+    </div>
   </div>
 </template>

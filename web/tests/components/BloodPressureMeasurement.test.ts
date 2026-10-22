@@ -628,14 +628,16 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     getEmployeeByNfcIdMock.mockReset()
   })
 
-  it('つながっていれば指の欄をカードより上に出す', async () => {
+  it('つながっていれば指の欄をカードの左に並べ、カードは縦を詰めた表示にする', async () => {
     const wrapper = await mountBp()
     const html = wrapper.html()
     expect(veinButton(wrapper).text()).toBe('指を置いて照合')
-    expect(wrapper.text()).toContain('カードで進む')
-    // 並び: 指 → カード → 登録の入口
+    // 並び: 指 → カード (同じ 2 列の枠) → 登録の入口・一覧 (2 列)
     expect(html.indexOf('vein-identify')).toBeLessThan(html.indexOf('nfc-stub'))
     expect(html.indexOf('nfc-stub')).toBeLessThan(html.indexOf('指静脈を登録する'))
+    expect(veinButton(wrapper).element.parentElement!.parentElement!.classList.contains('grid-cols-2')).toBe(true)
+    expect(wrapper.findComponent({ name: 'NfcStatus' }).attributes('compact')).toBe('true')
+    expect(wrapper.find('[data-testid="vein-module-list-open"]').element.parentElement!.classList.contains('grid-cols-2')).toBe(true)
     wrapper.unmount()
   })
 
