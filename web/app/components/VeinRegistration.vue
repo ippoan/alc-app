@@ -36,9 +36,8 @@ function onNfcRead(nfcId: string) {
   return lookup(() => getEmployeeByNfcId(nfcId), employeeNotFoundByNfc(nfcId))
 }
 
-// 社員番号のキーパッド。端末のキーボードを出さないよう input 要素にせず、表示だけにする
+// 社員番号のキーパッド (`EmployeeCodeKeypad`) が打った番号
 const code = ref('')
-const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 
 function submitCode() {
   const c = code.value
@@ -63,37 +62,7 @@ function next() {
       <NfcStatus @read="onNfcRead" />
       <div class="mt-4">
         <p class="text-sm text-gray-500 mb-2">カードが無いときは社員番号を入力</p>
-        <div data-testid="code-display" class="h-12 mb-2 px-4 flex items-center justify-center border border-gray-300 rounded-xl text-2xl font-mono tracking-widest text-gray-800">
-          {{ code }}
-        </div>
-        <div class="grid grid-cols-3 gap-2">
-          <button
-            v-for="k in KEYS"
-            :key="k"
-            :data-key="k"
-            class="py-3 bg-gray-100 rounded-xl text-xl font-medium text-gray-800 hover:bg-gray-200"
-            @click="code += k"
-          >
-            {{ k }}
-          </button>
-          <button data-key="clear" class="py-3 bg-gray-100 rounded-xl text-sm text-gray-600 hover:bg-gray-200" @click="code = ''">
-            全部消す
-          </button>
-          <button data-key="0" class="py-3 bg-gray-100 rounded-xl text-xl font-medium text-gray-800 hover:bg-gray-200" @click="code += '0'">
-            0
-          </button>
-          <button data-key="back" class="py-3 bg-gray-100 rounded-xl text-sm text-gray-600 hover:bg-gray-200" @click="code = code.slice(0, -1)">
-            1 文字消す
-          </button>
-        </div>
-        <button
-          data-key="submit"
-          class="w-full mt-2 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-          :disabled="!code"
-          @click="submitCode"
-        >
-          決定
-        </button>
+        <EmployeeCodeKeypad v-model="code" @submit="submitCode" />
       </div>
       <p v-if="lookupError" class="mt-3 text-sm text-red-600">{{ lookupError }}</p>
     </template>
