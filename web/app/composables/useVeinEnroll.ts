@@ -85,7 +85,10 @@ export function useVeinEnroll() {
     await veinSerial.say('PLACE')
     let record: Uint8Array
     try {
-      record = await veinSerial.enroll(id, (n) => { notice.value = `もう一度置いてください (${n}/3)` })
+      // 合計はファームが名乗る (撮影の本数が変わっても画面を直さずに済む)。名乗らない古いファームは回目だけ
+      record = await veinSerial.enroll(id, (n, total) => {
+        notice.value = total === undefined ? `もう一度置いてください (${n} 回目)` : `もう一度置いてください (${n}/${total})`
+      })
     }
     catch (e) {
       const reason = (e as Error).message

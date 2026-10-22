@@ -117,15 +117,20 @@ describe('useVeinEnroll', () => {
     it('空いている ID に VEIN ENROLL → 記録を預ける → 対応表に承認待ちで入れる。置き直しの案内を出す', async () => {
       const vein = await setup()
       let seenNotice: string | null = null
-      veinEnroll.mockImplementation(async (_id: number, onPlace: (n: number) => void) => {
+      let oldFirmwareNotice: string | null = null
+      veinEnroll.mockImplementation(async (_id: number, onPlace: (n: number, total?: number) => void) => {
         onPlace(2)
+        oldFirmwareNotice = vein.notice.value
+        onPlace(3, 6)
         seenNotice = vein.notice.value
         return RECORD
       })
       await vein.enroll('emp-test-1')
 
       expect(veinEnroll).toHaveBeenCalledWith(11, expect.any(Function))
-      expect(seenNotice).toBe('もう一度置いてください (2/3)')
+      // 合計はファームが名乗ったもの。名乗らない古いファームは回目だけ
+      expect(seenNotice).toBe('もう一度置いてください (3/6)')
+      expect(oldFirmwareNotice).toBe('もう一度置いてください (2 回目)')
       expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('emp-test-1')
       expect(putVeinModuleRecordMock).toHaveBeenCalledWith('emp-test-1', RECORD)
       expect(db.putVeinModuleEntry).toHaveBeenCalledWith({
