@@ -21,6 +21,7 @@
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
 import { getEmployeeById, getEmployees, getVeinModuleTemplates } from '~/utils/api'
+import type { ApiVeinModuleRecord } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
@@ -92,6 +93,35 @@ export async function identifyVeinModuleEmployee(moduleId: number | null): Promi
   catch (e) {
     return { kind: 'error', message: `指静脈の照合に失敗しました: ${messageOf(e)}` }
   }
+}
+
+/**
+ * 免許証・社員番号で本人が決まった乗務員の記録を、この端末のモジュールに用意して ID を返す
+ * (Refs ippoan/alc-app#436: 端末に無ければ DB から取ってきて書く)。サーバーの承認済みの一覧で版を
+ * 確かめ、手元の対応表と版が同じならそのまま、違えば (無ければ) 書き直す。サーバーに承認済みの記録が
+ * 無ければ null。サーバーに届かないときは、手元の対応表に承認済みで在ればその ID を使う。
+ * 書き込みの失敗は投げる (呼び手が顔認証などへ逃がす)
+ */
+export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: string): Promise<number | null> {
+  const entries = await loadVeinModuleEntries()
+  const own = entries.find(e => e.employeeId === employeeId)
+  let template: ApiVeinModuleRecord | undefined
+  try {
+    template = (await getVeinModuleTemplates()).templates.find(t => t.employee_id === employeeId)
+  }
+  catch (e) {
+    if (!(e instanceof TypeError)) throw e
+    return own?.approved ? own.moduleId : null
+  }
+  if (!template) return null
+  if (own?.approved && own.updatedAt === template.updated_at) return own.moduleId
+  const id = allocateVeinModuleId(entries, employeeId)
+  if (id === null) throw new Error('モジュールの ID が空いていません (10〜100)')
+  // 書き込みが途中で落ちても、古い版を承認済みとして引かないよう先に外す
+  if (own) await deleteVeinModuleEntry(employeeId)
+  await port.syncWrite(id, base64ToBytes(template.record))
+  await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: template.updated_at, approved: true })
+  return id
 }
 
 let lastModuleSyncedAt: number | null = null

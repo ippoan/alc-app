@@ -702,6 +702,25 @@ describe('useVeinSerial', () => {
     })
   })
 
+  describe('verify', () => {
+    it('VEIN VERIFY <id> を送り、VEIN VERIFIED <id> は true、VEIN NOMATCH は false。撮り直しで onAgain', async () => {
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+      const dev = createMockPort()
+      await connectDevice(dev)
+      let again = 0
+      const hit = vein.verify(12, () => { again += 1 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN VERIFY 12\n')
+      await reply(dev, 'EVT VEIN AGAIN 11\nVEIN VERIFIED 12\n')
+      await expect(hit).resolves.toBe(true)
+      expect(again).toBe(1)
+
+      const miss = vein.verify(12)
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect(miss).resolves.toBe(false)
+    })
+  })
+
   describe('identify', () => {
     it('VEIN IDENTIFIED <id> は ID、VEIN NOMATCH は null', async () => {
       const dev = createMockPort()

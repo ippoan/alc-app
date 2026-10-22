@@ -4,7 +4,7 @@ import { getEmployeeByCode, getEmployeeByNfcId, startMeasurement, updateMeasurem
 import { devTiming } from '~/utils/dev-timing'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
-import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
+import { identifyVeinModuleEmployee, prepareVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 /**
@@ -108,8 +108,41 @@ function selectEmployee(emp: { id: string; name: string }) {
   employeeName.value = emp.name
 }
 
-/** カードで特定したら顔認証へ進む (顔の審査で止めたら進まない) */
-function proceedWithEmployee(emp: { id: string; name: string; face_approval_status?: string }) {
+/**
+ * カード・社員番号で本人が決まった乗務員を、指静脈で確かめる (Refs ippoan/alc-app#436)。
+ * その人の記録をこの端末のモジュールに用意し (無ければ DB から取ってきて書く)、ID を指定した 1:1 で照合する。
+ * 当たれば `'verified'`、指静脈の記録が無ければ `'no_record'`、外れ・失敗は画面に出す文言
+ */
+async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promise<'verified' | 'no_record' | string> {
+  veinBusy.value = true
+  veinAgain.value = false
+  veinError.value = null
+  try {
+    const moduleId = await prepareVeinModuleRecord(veinSerial, emp.id)
+    if (moduleId === null) return 'no_record'
+    await veinSerial.say('PLACE')
+    if (await veinSerial.verify(moduleId, () => { veinAgain.value = true })) return 'verified'
+    await veinSerial.say('FAILED').catch(() => {})
+    return '指静脈で確認できませんでした。顔認証で進みます'
+  }
+  catch (e) {
+    return `指静脈を確かめられませんでした (${(e as Error).message})。顔認証で進みます`
+  }
+  finally {
+    veinBusy.value = false
+  }
+}
+
+/**
+ * カード・社員番号で特定したら、Vein Station がつながっていれば指静脈 (1:1) で確かめて測定へ。
+ * つながっていない・指静脈の記録が無い・外れたときは顔認証へ進む (顔の審査で止めたら進まない)
+ */
+async function proceedWithEmployee(emp: { id: string; name: string; face_approval_status?: string }) {
+  if (usesVeinModule() && veinSerial.isConnected.value) {
+    const outcome = await verifyIdentifiedByVein(emp)
+    if (outcome === 'verified') return proceedWithVeinEmployee(emp)
+    if (outcome !== 'no_record') error.value = outcome
+  }
   if (!applyFaceApproval(emp)) return
   selectEmployee(emp)
   step.value = 'face_auth'
@@ -126,12 +159,12 @@ function proceedWithVeinEmployee(emp: { id: string; name: string }) {
   skipFaceAuth()
 }
 
-/** カード・社員番号で乗務員を引き、引けたら顔認証へ (どちらも同じ手順) */
+/** カード・社員番号で乗務員を引き、引けたら本人確認へ (どちらも同じ手順) */
 async function lookupEmployee(find: () => Promise<{ id: string; name: string; face_approval_status?: string }>, notFound: string) {
   error.value = null
   employeeLookups.value += 1
   try {
-    proceedWithEmployee(await find())
+    await proceedWithEmployee(await find())
   } catch (e) {
     error.value = employeeLookupFailureMessage(e, notFound)
   } finally {

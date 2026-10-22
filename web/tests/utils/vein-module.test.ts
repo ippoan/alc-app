@@ -109,6 +109,62 @@ describe('identifyVeinModuleEmployee', () => {
   })
 })
 
+describe('prepareVeinModuleRecord', () => {
+  const B64 = btoa(String.fromCharCode(0xDE, 0xED))
+
+  it('手元の対応表と版が同じなら、書かずにその ID', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15)])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    const p = port()
+    expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
+    expect(p.syncWrite).not.toHaveBeenCalled()
+  })
+
+  it('★ 端末に無ければ DB の記録を空きへ書き、対応表に承認済みで入れる', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('other', 10)])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v3' }] })
+    const p = port()
+    expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(11)
+    expect(p.syncWrite).toHaveBeenCalledWith(11, expect.any(Uint8Array))
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true })
+  })
+
+  it('版が違えば (承認待ちで置いてあった場合も) 同じ ID に書き直す。古い対応は先に外す', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 20, { approved: false })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v2' }] })
+    const p = port()
+    expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(20)
+    expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('emp-1')
+    expect(p.syncWrite).toHaveBeenCalledWith(20, expect.any(Uint8Array))
+  })
+
+  it('DB に承認済みの記録が無ければ null', async () => {
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
+    expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBeNull()
+  })
+
+  it('サーバーに届かなければ、手元の承認済みの ID を使う (無い・承認待ちなら null)', async () => {
+    api.getVeinModuleTemplates.mockRejectedValue(new TypeError('Failed to fetch'))
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15)])
+    expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBe(15)
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { approved: false })])
+    expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBeNull()
+  })
+
+  it('ほかの失敗・ID の空き無し・書き込みの失敗は投げる', async () => {
+    api.getVeinModuleTemplates.mockRejectedValueOnce(new Error('HTTP 500'))
+    await expect(mod.prepareVeinModuleRecord(port(), 'emp-1')).rejects.toThrow('HTTP 500')
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    db.loadVeinModuleEntries.mockResolvedValue(Array.from({ length: 91 }, (_, i) => entry(`x${i}`, 10 + i)))
+    await expect(mod.prepareVeinModuleRecord(port(), 'emp-1')).rejects.toThrow('モジュールの ID が空いていません')
+    db.loadVeinModuleEntries.mockResolvedValue([])
+    const p = port()
+    p.syncWrite.mockRejectedValue(new Error('WRITE_SEQ'))
+    await expect(mod.prepareVeinModuleRecord(p, 'emp-1')).rejects.toThrow('WRITE_SEQ')
+    expect(db.putVeinModuleEntry).not.toHaveBeenCalled()
+  })
+})
+
 describe('syncVeinModule', () => {
   const B64 = btoa(String.fromCharCode(0xDE, 0xED))
 
