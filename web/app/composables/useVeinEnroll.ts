@@ -11,7 +11,7 @@
  * 手順は「案内 PLACE → 1 回目 → 案内 AGAIN → 2 回目 → 保存 → 案内 ENROLLED」。
  * 失敗したら案内 FAILED を鳴らし、理由を `error` に出す。
  *
- * **開発用の端末 (`usesVeinModule`) は、照合をモジュールに任せる経路で登録する** (M-b、
+ * **`usesVeinModule` が真の端末 (今はすべて) は、照合をモジュールに任せる経路で登録する** (M-b、
  * Refs ippoan/alc-app#436): 案内 PLACE → モジュールの ID (その人の ID、無ければ 10〜100 の空き) に
  * `VEIN ENROLL` (置き直しの案内は `notice` に出す) → 記録をサーバーへ預ける → 手元の対応表に
  * 「承認待ち」で入れる → 案内 ENROLLED。
@@ -39,7 +39,6 @@ export function useVeinEnroll() {
   const registered = ref(false)
   /** 登録の途中の案内 (置き直し)。終わったら null */
   const notice = ref<string | null>(null)
-  const { isBpStation } = useBpStationMode()
 
   onMounted(() => veinSerial.connect())
 
@@ -55,7 +54,7 @@ export function useVeinEnroll() {
     registering.value = true
     error.value = null
     try {
-      if (usesVeinModule(isBpStation.value)) await enrollToModule(employeeId)
+      if (usesVeinModule()) await enrollToModule(employeeId)
       else await enrollChara(employeeId)
       await veinSerial.say('ENROLLED')
       registered.value = true

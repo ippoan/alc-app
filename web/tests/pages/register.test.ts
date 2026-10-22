@@ -45,6 +45,13 @@ vi.mock('~/utils/api', async (importOriginal) => {
   }
 })
 
+// サーバー形式 (2 回読んで PUT) の登録を確かめる。今の本番はすべてモジュール経路
+// (`usesVeinModule` が真) で、そちらは useVeinEnroll.test.ts で見る (Refs ippoan/alc-app#436)
+vi.mock('~/utils/vein-module', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/utils/vein-module')>()),
+  usesVeinModule: () => false,
+}))
+
 async function mountRegister(): Promise<VueWrapper> {
   const wrapper = await mountSuspended(RegisterPage, { shallow: true })
   await nextTick()

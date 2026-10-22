@@ -16,7 +16,7 @@
  *     使えない機は `ERR VEIN NO_SPEAKER`
  *   `vein` を入れていない端末はどちらも `ERR VEIN: unsupported`
  *
- * 照合をモジュール自身に任せる口 (M-b、Refs ippoan/alc-app#436。開発用の端末の画面だけが使う):
+ * 照合をモジュール自身に任せる口 (M-b、Refs ippoan/alc-app#436。指静脈を使うすべての画面が使う):
  *   `VEIN ENROLL <id>` → 置き直しのたび `EVT VEIN PLACE <2|3>` → 成功 `VEIN RECORD <id> <offset> <hex>` を
  *     何行か → `VEIN RECORD <id> END <総バイト数>`。置き直しの照合が外れたら `ERR VEIN RETAKE`。最長 1 分弱
  *   `VEIN IDENTIFY` → `VEIN IDENTIFIED <id>` / `VEIN NOMATCH`

@@ -39,6 +39,13 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   putVeinTemplate: putVeinTemplateMock,
 }))
 
+// サーバー形式 (2 回読んで PUT) の登録を確かめる。今の本番はすべてモジュール経路
+// (`usesVeinModule` が真) で、そちらは useVeinEnroll.test.ts で見る (Refs ippoan/alc-app#436)
+vi.mock('~/utils/vein-module', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/utils/vein-module')>()),
+  usesVeinModule: () => false,
+}))
+
 const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />', emits: ['read'] }
 
 async function mountVein(): Promise<VueWrapper> {

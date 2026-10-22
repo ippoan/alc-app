@@ -21,8 +21,6 @@ const db = vi.hoisted(() => ({
 }))
 vi.mock('~/utils/vein-db', () => db)
 
-const mark = vi.hoisted(() => ({ dev: true }))
-vi.mock('~/utils/token-selection', () => ({ isDevDevice: (kind: string) => kind === 'kiosk' && mark.dev }))
 
 let mod: typeof import('~/utils/vein-module')
 
@@ -44,7 +42,6 @@ beforeEach(async () => {
   vi.clearAllMocks()
   vi.resetModules()
   mod = await import('~/utils/vein-module')
-  mark.dev = true
   db.loadVeinModuleEntries.mockResolvedValue([])
   db.putVeinModuleEntry.mockResolvedValue(undefined)
   db.deleteVeinModuleEntry.mockResolvedValue(undefined)
@@ -57,11 +54,8 @@ afterEach(() => {
 })
 
 describe('usesVeinModule', () => {
-  it('開発用の端末で、測定台でないときだけ', () => {
+  it('★ すべての端末で使う (開発用の印にも測定台にも依らない)', () => {
     expect(mod.usesVeinModule()).toBe(true)
-    expect(mod.usesVeinModule(true)).toBe(false)
-    mark.dev = false
-    expect(mod.usesVeinModule()).toBe(false)
   })
 })
 
@@ -118,10 +112,7 @@ describe('identifyVeinModuleEmployee', () => {
 describe('syncVeinModule', () => {
   const B64 = btoa(String.fromCharCode(0xDE, 0xED))
 
-  it('開発用の端末でない・つながっていないときは何もしない', async () => {
-    mark.dev = false
-    expect(await mod.syncVeinModule(port())).toBe(false)
-    mark.dev = true
+  it('つながっていないときは何もしない', async () => {
     expect(await mod.syncVeinModule(port(false))).toBe(false)
     expect(api.getVeinModuleTemplates).not.toHaveBeenCalled()
   })
