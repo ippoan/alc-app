@@ -54,6 +54,13 @@ const CLAIM_TIMEOUT = 3000
 /** `VEIN CAPTURE` の応答上限。ファームは 1 回の指待ちで最大 15 秒強かかるので余裕を足す */
 const CAPTURE_TIMEOUT_MS = 20000
 
+/**
+ * `VEIN IDENTIFY` の応答上限。モジュールが撮り直しを求めると (`EVT VEIN AGAIN`) 次の指を最長 15 秒
+ * 待ち直し、撮り直しは最大 2 回なので、指待ちが 3 回ぶん (45 秒) かかりうる。それに余裕を足す。
+ * capture と同じ 20 秒だと、撮り直しが 1 回入るだけで画面が先に打ち切っていた (Refs ippoan/alc-app#436)
+ */
+const IDENTIFY_TIMEOUT_MS = 55_000
+
 /** `VEIN SAY` は読み取り中でもすぐ鳴るので capture より短くてよい */
 const SAY_TIMEOUT_MS = 5000
 
@@ -378,9 +385,22 @@ export function useVeinSerial() {
     return assembleRecord(chunks, total)
   }
 
-  /** モジュール自身の 1:N 照合。当たればモジュールの ID、不一致は null。失敗は reason の Error */
-  async function identify(): Promise<number | null> {
-    const line = await veinRequest('VEIN IDENTIFY', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], CAPTURE_TIMEOUT_MS)
+  /**
+   * モジュール自身の 1:N 照合。当たればモジュールの ID、不一致は null。失敗は reason の Error。
+   * モジュールが撮り直しを求めるたび (`EVT VEIN AGAIN`、端末は「もう一度置いてください」を鳴らす)
+   * `onAgain()` を呼ぶ。古いファームはこの行を出さない (待ち時間だけ延びる)
+   */
+  async function identify(onAgain?: () => void): Promise<number | null> {
+    const offAgain = lineDispatch.onEvent((name, args) => {
+      if (name === 'VEIN' && args.length === 1 && args[0] === 'AGAIN') onAgain?.()
+    })
+    let line: string
+    try {
+      line = await veinRequest('VEIN IDENTIFY', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+    }
+    finally {
+      offAgain()
+    }
     if (line.startsWith('VEIN NOMATCH')) return null
     const id = Number(line.slice('VEIN IDENTIFIED '.length).trim())
     if (!Number.isInteger(id)) throw new Error('IDENTIFY の応答が読めません')

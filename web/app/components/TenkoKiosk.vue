@@ -290,6 +290,8 @@ async function onManualSubmit() {
 const veinSerial = useVeinSerial()
 const veinBusy = ref(false)
 const veinError = ref<string | null>(null)
+/** 照合の途中でモジュールが撮り直しを求めた (`EVT VEIN AGAIN`)。ボタンの文言を「もう一度」に変える */
+const veinAgain = ref(false)
 
 /** ボタンを押せない理由。`null` なら押せる */
 const veinDisabledReason = computed<string | null>(() =>
@@ -325,7 +327,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
     // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
-    read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
+    read = viaModule ? await veinSerial.identify(() => { veinAgain.value = true }) : await veinSerial.capture()
   }
   catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`
@@ -344,6 +346,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
 async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
   if (veinDisabledReason.value || veinBusy.value) return
   veinBusy.value = true
+  veinAgain.value = false
   veinError.value = null
   const failure = await identifyByVein(prompt)
   if (failure) {
@@ -708,7 +711,7 @@ onUnmounted(() => {
               class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
               @click="onVeinIdentify()"
             >
-              {{ veinBusy ? '指を置いてください…' : '指静脈で本人確認' }}
+              {{ veinBusy ? (veinAgain ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
             </button>
             <p v-if="veinDisabledReason" class="mt-2 text-xs text-gray-500">{{ veinDisabledReason }}</p>
             <p v-if="veinError" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ veinError }}</p>
