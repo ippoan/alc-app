@@ -42,11 +42,9 @@ type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein'
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
 const veinSerial = useVeinSerial()
-// 測定台の鍵にはモジュールの記録の口が無いので、測定台では照合をモジュールに任せない (Refs ippoan/alc-app#436)
-const { isBpStation } = useBpStationMode()
-/** 測定台でなければ、あわせて端末のモジュールも揃える (`syncVeinModule`) */
+/** あわせて端末のモジュールも揃える (`syncVeinModule`、測定台も同じ。Refs ippoan/alc-app#436) */
 function syncVein(opts: { ifOlderThanMs?: number } = {}) {
-  return syncVeinTemplates({ ...opts, module: usesVeinModule(isBpStation.value) ? veinSerial : undefined })
+  return syncVeinTemplates({ ...opts, module: usesVeinModule() ? veinSerial : undefined })
 }
 onMounted(() => {
   void veinSerial.connect()
@@ -140,12 +138,12 @@ async function onNfcRead(nfcId: string) {
 
 /** 指静脈で乗務員を特定する (手順は TenkoKiosk と同じ)。失敗したら画面に出す理由を返す */
 async function identifyByVein(prompt: boolean): Promise<string | null> {
-  const viaModule = usesVeinModule(isBpStation.value)
+  const viaModule = usesVeinModule()
   let read: string | number | null
   try {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
-    // 測定台以外はモジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
+    // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
     read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
   } catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`

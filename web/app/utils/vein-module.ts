@@ -1,9 +1,11 @@
 /**
  * 指静脈の照合を端末のモジュール自身に任せる経路 (M-b、Refs ippoan/alc-app#436)。
  *
- * **測定台以外の端末 (本番・開発用とも) が使う。** 測定台だけはサーバーの照合 (`VEIN CAPTURE` →
- * `vein-identify.ts`) のまま。本番も開発用と同じ経路にしたのは、登録がモジュールの形式で保存される
- * ため — 開発用だけに絞ると、本番の端末からはその人が照合の相手に一人も載らない (Refs ippoan/alc-app#436)。
+ * **すべての端末 (本番・開発用・測定台) が使う。** 登録がモジュールの形式で保存されるため、
+ * どれか 1 つでもサーバーの照合 (`VEIN CAPTURE` → `vein-identify.ts`) に残すと、その端末からは
+ * 照合の相手が一人も載らない (Refs ippoan/alc-app#436)。測定台の鍵にもモジュールの口
+ * (PUT …/module・GET /vein/module-templates・GET /employees/{id}) を開けてある (auth-worker の
+ * `BP_STATION_ROUTES`)。
  * `VEIN IDENTIFY` / `VEIN SYNC` を持たない古い Vein Station のファームは照合が `ERR VEIN: …` で失敗するので、
  * Web インストーラ (vein.html) で焼き直す。
  *
@@ -34,11 +36,11 @@ export interface VeinModulePort {
 }
 
 /**
- * 照合・登録・同期をモジュールで行う端末か (測定台以外)。測定台 (`isBpStation`) は対象外 —
- * 測定台の鍵にはモジュールの記録の口 (PUT …/module・GET /vein/module-templates) が開いていない
+ * 照合・登録・同期をモジュールで行うか。今はすべての端末で true。サーバーの照合へ戻すときの
+ * 切り替えをこの 1 か所に残してある (呼び手は TenkoKiosk・BloodPressureMeasurement・useVeinEnroll)
  */
-export function usesVeinModule(isBpStation = false): boolean {
-  return !isBpStation
+export function usesVeinModule(): boolean {
+  return true
 }
 
 /**
@@ -97,7 +99,7 @@ let moduleSyncing = false
 
 /**
  * サーバーの承認済みの記録と端末のモジュールを揃える。モジュールがつながっているときだけ動く
- * (測定台で呼ばないのは呼び手が `usesVeinModule` で決める)。`ifOlderThanMs` を渡すと、前回の同期からその時間がたっていなければ何もしない。
+ * (呼ぶかどうかは呼び手が `usesVeinModule` で決める)。`ifOlderThanMs` を渡すと、前回の同期からその時間がたっていなければ何もしない。
  *
  * 1 人ずつ書く・消す。1 人の失敗はその人を飛ばして続ける (次の同期で取り直す)。**投げない**
  * (今の `syncVeinTemplates` と同じ流儀)。最後まで回ったら true

@@ -356,7 +356,7 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     })
   })
 
-  describe('測定台以外の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
+  describe('モジュール経路: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
     beforeEach(() => {
       viaModule.on = true
       vein.identify.mockResolvedValue(12)

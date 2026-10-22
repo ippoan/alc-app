@@ -54,10 +54,8 @@ afterEach(() => {
 })
 
 describe('usesVeinModule', () => {
-  it('★ 本番の端末も使う (開発用の印に依らない)。測定台だけは使わない', () => {
+  it('★ すべての端末で使う (開発用の印にも測定台にも依らない)', () => {
     expect(mod.usesVeinModule()).toBe(true)
-    expect(mod.usesVeinModule(false)).toBe(true)
-    expect(mod.usesVeinModule(true)).toBe(false)
   })
 })
 

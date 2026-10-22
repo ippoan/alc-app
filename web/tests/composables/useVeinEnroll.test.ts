@@ -99,7 +99,7 @@ describe('useVeinEnroll', () => {
     expect(vein.error.value).toBeNull()
   })
 
-  describe('測定台以外の端末: モジュールに登録する (M-b、Refs ippoan/alc-app#436)', () => {
+  describe('モジュール経路: モジュールに登録する (M-b、Refs ippoan/alc-app#436)', () => {
     const RECORD = new Uint8Array([0xDE, 0xED, 0xDE, 0xED])
 
     beforeEach(() => {

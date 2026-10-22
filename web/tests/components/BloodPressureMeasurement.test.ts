@@ -76,9 +76,9 @@ vi.mock('~/utils/vein-identify', async importOriginal => ({
   ...veinIdentify,
 }))
 
-// 測定台以外は照合をモジュールに任せる (Refs ippoan/alc-app#436)。対応表の引き方は vein-module.test.ts
+// 照合をモジュールに任せる (Refs ippoan/alc-app#436)。対応表の引き方は vein-module.test.ts
 const veinModule = vi.hoisted(() => ({
-  usesVeinModule: vi.fn((_isBpStation?: boolean) => false),
+  usesVeinModule: vi.fn(() => false),
   identifyVeinModuleEmployee: vi.fn(),
 }))
 vi.mock('~/utils/vein-module', async importOriginal => ({
@@ -854,7 +854,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     })
   })
 
-  describe('測定台以外の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
+  describe('モジュール経路: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
     beforeEach(() => {
       veinModule.usesVeinModule.mockReset().mockReturnValue(true)
       vein.identify.mockReset().mockResolvedValue(12)
@@ -874,8 +874,6 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(veinIdentify.identifyVeinEmployee).not.toHaveBeenCalled()
       expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
       expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
-      // 測定台ではない (測定台の鍵には口が無い)
-      expect(veinModule.usesVeinModule).toHaveBeenCalledWith(false)
       wrapper.unmount()
     })
 
