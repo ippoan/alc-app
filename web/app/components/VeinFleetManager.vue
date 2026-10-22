@@ -70,6 +70,15 @@ function sortedEntries(d: VeinFleetDevice) {
   return [...d.entries].sort((a, b) => a.module_id - b.module_id)
 }
 
+/** いちばん新しい記録の版 (ISO 文字列の最大)。無ければ null */
+function latestVersion(d: VeinFleetDevice): string | null {
+  const versions = d.entries.map(e => e.version).filter((v): v is string => !!v)
+  if (!versions.length) return null
+  const max = versions.reduce((a, b) => (b > a ? b : a))
+  const t = new Date(max)
+  return Number.isNaN(t.getTime()) ? max : t.toLocaleString('ja-JP')
+}
+
 /** モジュールの登録人数と対応表の件数が違う */
 function mismatch(d: VeinFleetDevice): boolean {
   return d.module_users !== undefined && d.module_users !== d.entries.length
@@ -95,6 +104,7 @@ function mismatch(d: VeinFleetDevice): boolean {
         <h3 class="font-semibold text-gray-800">{{ deviceName(d) }}</h3>
         <span class="text-sm text-gray-600">{{ d.entries.length }} 人 (空き {{ CAPACITY - d.entries.length }} / {{ CAPACITY }})</span>
         <span class="text-sm text-gray-600">モジュール {{ d.module_users !== undefined ? `${d.module_users} 人` : '-' }}</span>
+        <span class="text-sm text-gray-600" data-testid="vein-fleet-latest">最終の記録の版 {{ latestVersion(d) ?? '-' }}</span>
         <span class="text-xs text-gray-400">{{ new Date(d.reported_at_ms).toLocaleString('ja-JP') }} の報告</span>
       </div>
       <p v-if="mismatch(d)" class="mb-2 text-sm text-amber-700" data-testid="vein-fleet-mismatch">

@@ -93,6 +93,27 @@ describe('VeinFleetManager', () => {
     expect(devices[1]!.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(false)
   })
 
+  it('端末ごとに最終の記録の版 (いちばん新しい版) を出す。版が無い端末は -、読めない版はそのまま', async () => {
+    listVeinFleet.mockResolvedValue({
+      devices: [
+        dev({ entries: [
+          { module_id: 10, employee_id: 'e1', approved: true, version: '2026-10-21T00:00:00Z' },
+          { module_id: 11, employee_id: 'e2', approved: true, version: '2026-10-23T01:02:03Z' },
+          { module_id: 12, employee_id: 'e3', approved: true },
+        ] }),
+        dev({ device_id: 'k2' }),
+        dev({ device_id: 'k3', entries: [{ module_id: 10, employee_id: 'e1', approved: true, version: 'v-x' }] }),
+      ],
+    })
+    const wrapper = await mountManager()
+    const latest = wrapper.findAll('[data-testid="vein-fleet-latest"]').map(e => e.text())
+    expect(latest).toEqual([
+      `最終の記録の版 ${new Date('2026-10-23T01:02:03Z').toLocaleString('ja-JP')}`,
+      '最終の記録の版 -',
+      '最終の記録の版 v-x',
+    ])
+  })
+
   it('★ 「更新した」の合図で引き直す', async () => {
     const wrapper = await mountManager()
     listVeinFleet.mockResolvedValue({ devices: [] })
