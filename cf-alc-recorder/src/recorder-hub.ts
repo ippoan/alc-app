@@ -41,6 +41,13 @@ import {
  *     版・更新の状態を DO storage に保存 (端末ごとに 1 件、7 日 TTL、200 件まで)。
  *   - `GET /ota-status` → 保存した報告の一覧。
  *
+ * 指静脈の対応表 (Refs ippoan/alc-app#436):
+ *   - `POST /vein-list-request` → キオスクの購読へ `{ type: "vein_list_request" }` の合図。
+ *   - `POST /vein-list-report` → キオスクの対応表 (モジュールの ID ↔ 乗務員) を DO storage に
+ *     保存 (端末ごとに 1 件、7 日 TTL、200 件まで) し、キオスク以外の購読へ
+ *     `{ type: "vein_list_updated" }` の合図。
+ *   - `GET /vein-list-status` → 保存した対応表の一覧。
+ *
  * Hibernation 復帰: 接続 identity は in-memory に持たず、毎メッセージ
  * `ws.deserializeAttachment()` から読む (= 復帰後も転送先 tenant/device が壊れない)。
  * dev端末かどうか (Refs ippoan/alc-app#387) も同じ attachment に持つ。
@@ -245,6 +252,112 @@ function isExpired(value: unknown, stampKey: string, ttlMs: number, now: number)
   return typeof stamp !== "number" || !stamp || now - stamp > ttlMs;
 }
 
+/** 指静脈の対応表の報告 (`POST /vein-list-report`) の storage key prefix。 */
+const VEIN_LIST_PREFIX = "vein-list:";
+
+/** 対応表の保持期間と件数の上限 (ファームの更新の報告と同じ)。 */
+const VEIN_LIST_TTL_MS = OTA_STATE_TTL_MS;
+const VEIN_LIST_MAX = OTA_STATE_MAX;
+
+/** モジュールの ID の範囲 (ファームの `VEIN SYNC` が受ける 10〜100)。 */
+const VEIN_MODULE_ID_MIN = 10;
+const VEIN_MODULE_ID_MAX = 100;
+
+/** 乗務員の id の字種と長さ (UUID を想定)。 */
+const VEIN_EMPLOYEE_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+/** 版 (サーバーの `updated_at`) の長さ上限。 */
+const VEIN_VERSION_MAX_LEN = 64;
+
+/** モジュールが答える登録人数・上限として受け付ける値の上限。 */
+const VEIN_MODULE_COUNT_MAX = 1000;
+
+/** 対応表の 1 行 (検査済み)。**生体データは持たない** — どの ID に誰を置いたかだけ。 */
+export interface VeinListEntry {
+  module_id: number;
+  employee_id: string;
+  approved: boolean;
+  version?: string;
+}
+
+/** 対応表の報告 1 件 (検査済み)。モジュールが答えなかった値は key ごと持たない。 */
+export interface VeinListReport {
+  device_id: string;
+  entries: VeinListEntry[];
+  module_users?: number;
+  module_max?: number;
+}
+
+type VeinListState = VeinListReport & { reported_at_ms: number };
+
+export type ParseVeinListReportResult =
+  | { ok: true; report: VeinListReport }
+  | { ok: false; error: "invalid_body" | "invalid_device_id" | "invalid_entries" };
+
+function isVeinModuleCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= VEIN_MODULE_COUNT_MAX
+  );
+}
+
+/** 対応表の 1 行を検査する。形が外れていれば null。 */
+function parseVeinListEntry(value: unknown): VeinListEntry | null {
+  const src = value as Record<string, unknown> | null | undefined;
+  const moduleId = src?.module_id;
+  const employeeId = src?.employee_id;
+  if (
+    typeof moduleId !== "number" ||
+    !Number.isInteger(moduleId) ||
+    moduleId < VEIN_MODULE_ID_MIN ||
+    moduleId > VEIN_MODULE_ID_MAX ||
+    typeof employeeId !== "string" ||
+    !VEIN_EMPLOYEE_ID_RE.test(employeeId) ||
+    typeof src?.approved !== "boolean"
+  ) {
+    return null;
+  }
+  const entry: VeinListEntry = { module_id: moduleId, employee_id: employeeId, approved: src.approved };
+  const version = src.version;
+  if (typeof version === "string" && version.length <= VEIN_VERSION_MAX_LEN) entry.version = version;
+  return entry;
+}
+
+/**
+ * 指静脈の対応表の報告を検査する (Refs ippoan/alc-app#436)。
+ *
+ * - **行が 1 つでも外れていたら報告ごと弾く** — 1 行を黙って落とすと、管理画面が
+ *   「その ID は空いている」と誤って見せる。
+ * - 行の数はモジュールの ID の数 (91) まで。
+ * - モジュールの登録人数・上限は任意 (読めなかったキオスクは送らない)。形が外れたら
+ *   その欄だけ捨てる。
+ */
+export function parseVeinListReport(body: unknown): ParseVeinListReportResult {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "invalid_body" };
+  }
+  const src = body as Record<string, unknown>;
+  if (!isOtaDeviceId(src.device_id)) {
+    return { ok: false, error: "invalid_device_id" };
+  }
+  const rows = src.entries;
+  if (!Array.isArray(rows) || rows.length > VEIN_MODULE_ID_MAX - VEIN_MODULE_ID_MIN + 1) {
+    return { ok: false, error: "invalid_entries" };
+  }
+  const entries: VeinListEntry[] = [];
+  for (const row of rows) {
+    const entry = parseVeinListEntry(row);
+    if (!entry) return { ok: false, error: "invalid_entries" };
+    entries.push(entry);
+  }
+  const report: VeinListReport = { device_id: src.device_id, entries };
+  if (isVeinModuleCount(src.module_users)) report.module_users = src.module_users;
+  if (isVeinModuleCount(src.module_max)) report.module_max = src.module_max;
+  return { ok: true, report };
+}
+
 /** 上り 1 メッセージの上限 (これ以上は parse せず reject)。 */
 const MAX_MESSAGE_BYTES = 64 * 1024;
 
@@ -327,6 +440,15 @@ export class RecorderHub extends DurableObject<Env> {
     }
     if (url.pathname === "/ota-status" && request.method === "GET") {
       return this.handleOtaStatus();
+    }
+    if (url.pathname === "/vein-list-request" && request.method === "POST") {
+      return this.handleVeinListRequest();
+    }
+    if (url.pathname === "/vein-list-report" && request.method === "POST") {
+      return this.handleVeinListReport(request);
+    }
+    if (url.pathname === "/vein-list-status" && request.method === "GET") {
+      return this.handleVeinListStatus();
     }
     if (url.pathname === "/timecard-punch" && request.method === "POST") {
       return this.handleTimecardPunch(request);
@@ -776,38 +898,103 @@ export class RecorderHub extends DurableObject<Env> {
     if (!parsed.ok) {
       return json({ error: parsed.error }, 400);
     }
-    const now = Date.now();
-    const key = OTA_STATE_PREFIX + parsed.report.device_id;
-    const kept = await this.pruneExpired<OtaState>(
-      OTA_STATE_PREFIX,
-      OTA_STATE_TTL_MS,
-      "reported_at_ms",
-      now,
-    );
-    // 上限を超える書き込みは、いちばん古い報告を消してから入れる (上書きは件数が増えない)
-    if (!kept.has(key) && kept.size >= OTA_STATE_MAX) {
-      const oldest = [...kept]
-        .sort(([, a], [, b]) => a.reported_at_ms - b.reported_at_ms)
-        .slice(0, kept.size - OTA_STATE_MAX + 1)
-        .map(([k]) => k);
-      await this.deleteKeys(oldest);
-    }
-    const state: OtaState = { ...parsed.report, reported_at_ms: now };
-    await this.ctx.storage.put(key, state);
+    await this.putDeviceReport(OTA_STATE_PREFIX, OTA_STATE_TTL_MS, OTA_STATE_MAX, parsed.report);
     return json({ ok: true });
   }
 
   /** 保存した報告の一覧 (TTL 内のものだけ、`reported_at_ms` の新しい順)。 */
   private async handleOtaStatus(): Promise<Response> {
+    return json({ devices: await this.listDeviceReports<OtaState>(OTA_STATE_PREFIX, OTA_STATE_TTL_MS) });
+  }
+
+  /**
+   * 端末ごとに 1 件の報告を保存する (ファームの更新の報告と指静脈の対応表で共用)。
+   * TTL を過ぎたものを掃除し、上限を超える書き込みはいちばん古い報告を消してから入れる
+   * (同じ端末の上書きは件数が増えない)。
+   */
+  private async putDeviceReport(
+    prefix: string,
+    ttlMs: number,
+    max: number,
+    report: { device_id: string },
+  ): Promise<void> {
     const now = Date.now();
-    const entries = await this.ctx.storage.list<OtaState>({ prefix: OTA_STATE_PREFIX });
-    const devices = [...entries.values()]
-      .filter((state) => !isExpired(state, "reported_at_ms", OTA_STATE_TTL_MS, now))
+    const key = prefix + report.device_id;
+    const kept = await this.pruneExpired<{ reported_at_ms: number }>(
+      prefix,
+      ttlMs,
+      "reported_at_ms",
+      now,
+    );
+    if (!kept.has(key) && kept.size >= max) {
+      const oldest = [...kept]
+        .sort(([, a], [, b]) => a.reported_at_ms - b.reported_at_ms)
+        .slice(0, kept.size - max + 1)
+        .map(([k]) => k);
+      await this.deleteKeys(oldest);
+    }
+    await this.ctx.storage.put(key, { ...report, reported_at_ms: now });
+  }
+
+  /** `prefix` の報告の一覧 (TTL 内のものだけ、`reported_at_ms` の新しい順)。 */
+  private async listDeviceReports<T extends { device_id: string; reported_at_ms: number }>(
+    prefix: string,
+    ttlMs: number,
+  ): Promise<T[]> {
+    const now = Date.now();
+    const entries = await this.ctx.storage.list<T>({ prefix });
+    return [...entries.values()]
+      .filter((state) => !isExpired(state, "reported_at_ms", ttlMs, now))
       .sort(
         (a, b) =>
           b.reported_at_ms - a.reported_at_ms || (a.device_id < b.device_id ? -1 : 1),
       );
-    return json({ devices });
+  }
+
+  // ── 指静脈の対応表 (内部 HTTP API、Refs ippoan/alc-app#436) ────────────────
+
+  /**
+   * 「対応表を送って」の合図。**`KIOSK_TAG` の購読にだけ**送る (シリアル OTA の合図と同じ宛先)。
+   * どの端末の表かはキオスクが報告に載せる — 購読の attachment は端末を持たない。
+   */
+  private handleVeinListRequest(): Response {
+    const sockets = this.ctx.getWebSockets(KIOSK_TAG);
+    for (const ws of sockets) {
+      this.send(ws, { type: "vein_list_request" });
+    }
+    return json({ sent: sockets.length });
+  }
+
+  /**
+   * キオスクの対応表を保存し、管理画面の購読へ「更新した」の**合図だけ**を送る
+   * (中身は `GET /vein-list-status` で引き直させる。打刻の合図と同じ倒し方)。
+   * キオスクの購読には送らない — 自分の報告で起こす必要が無い。
+   */
+  private async handleVeinListReport(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    const parsed = parseVeinListReport(body);
+    if (!parsed.ok) {
+      return json({ error: parsed.error }, 400);
+    }
+    await this.putDeviceReport(VEIN_LIST_PREFIX, VEIN_LIST_TTL_MS, VEIN_LIST_MAX, parsed.report);
+    for (const tag of [WATCH_TAG, WATCH_DEV_TAG]) {
+      for (const ws of this.ctx.getWebSockets(tag)) {
+        if (!this.ctx.getTags(ws).includes(KIOSK_TAG)) this.send(ws, { type: "vein_list_updated" });
+      }
+    }
+    return json({ ok: true });
+  }
+
+  /** 保存した対応表の一覧 (TTL 内のものだけ、新しい順)。 */
+  private async handleVeinListStatus(): Promise<Response> {
+    return json({
+      devices: await this.listDeviceReports<VeinListState>(VEIN_LIST_PREFIX, VEIN_LIST_TTL_MS),
+    });
   }
 
   // ── 下り: command push (内部 HTTP API) ────────────────────────────────────

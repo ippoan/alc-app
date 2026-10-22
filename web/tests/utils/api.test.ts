@@ -65,6 +65,9 @@ import {
   // CoreS3 のファームの更新 (Refs ippoan/alc-app#403)
   listFirmwareDevices,
   updateFirmware,
+  listVeinFleet,
+  requestVeinFleet,
+  reportVeinFleet,
   reportFirmware,
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
@@ -3002,5 +3005,60 @@ describe.skipIf(isLive)('指静脈の承認 (Refs ippoan/alc-app#436)', () => {
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toMatch(/\/vein\/templates\/emp%2F1$/)
     expect(init.method).toBe('DELETE')
+  })
+})
+
+// 全端末の指静脈の一覧 (Refs ippoan/alc-app#436)。same-origin の server route なので mock 専用
+describe.skipIf(isLive)('端末の指静脈の一覧 (#436)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('listVeinFleet / requestVeinFleet: admin JWT を Bearer に載せる', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const payload = { devices: [{ device_id: 'd1', label: null, entries: [], reported_at_ms: 1 }] }
+    mockFetch.mockResolvedValueOnce(okJson(payload))
+    expect(await listVeinFleet()).toEqual(payload)
+    mockFetch.mockResolvedValueOnce(okJson({ sent: 2 }))
+    expect(await requestVeinFleet()).toEqual({ sent: 2 })
+    const [[url1, init1], [url2, init2]] = mockFetch.mock.calls
+    expect(url1).toBe('/api/vein-fleet')
+    expect(init1.method).toBe('GET')
+    expect(url2).toBe('/api/vein-fleet/request')
+    expect(init2.method).toBe('POST')
+    expect(new Headers(init2.headers).get('Authorization')).toBe('Bearer admin-jwt')
+  })
+
+  it('listVeinFleet / requestVeinFleet: admin JWT が無ければ fetch せずに throw', async () => {
+    initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
+    await expect(listVeinFleet()).rejects.toThrow('ログインが必要です')
+    await expect(requestVeinFleet()).rejects.toThrow('ログインが必要です')
+    initApi(API_BASE)
+    await expect(listVeinFleet()).rejects.toThrow('ログインが必要です')
+    await expect(requestVeinFleet()).rejects.toThrow('ログインが必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('★ reportVeinFleet: 利用者がログインしていても、キオスクの端末の token で送る', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ ok: true }))
+    const report = { entries: [{ module_id: 10, employee_id: 'e1', approved: true }], module_users: 1, module_max: 100 }
+    expect(await reportVeinFleet(report)).toBeUndefined()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/vein-fleet/report')
+    expect(init.body).toBe(JSON.stringify(report))
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+  })
+
+  it('reportVeinFleet: 端末の token が無ければ fetch せずに throw', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => null)
+    await expect(reportVeinFleet({ entries: [] })).rejects.toThrow('端末の登録が必要です')
+    initApi(API_BASE, () => 'admin-jwt')
+    await expect(reportVeinFleet({ entries: [] })).rejects.toThrow('端末の登録が必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })

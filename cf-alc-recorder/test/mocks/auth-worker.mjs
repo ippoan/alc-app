@@ -128,6 +128,23 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  // 指静脈の対応表 (Refs ippoan/alc-app#436) 専用。上と同じ理由で別テナント。
+  "kiosk-token-vein": {
+    active: true,
+    tenant_id: "tenant-vein",
+    role: "device-kiosk",
+    sub: "device-kiosk-vein",
+    email: "",
+    exp: 9999999999,
+  },
+  "admin-token-vein": {
+    active: true,
+    tenant_id: "tenant-vein",
+    role: "admin",
+    sub: "",
+    email: "",
+    exp: 9999999999,
+  },
   // 端末の指定つきの合図 (Refs ippoan/alc-app#403) 専用。上と同じ理由で別テナント。
   "kiosk-token-ota-4": {
     active: true,

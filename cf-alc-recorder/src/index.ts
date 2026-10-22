@@ -37,7 +37,11 @@
  *   - POST /tenants/:tenantId/ota-report                … キオスクからの報告
  *       (繋いでいる端末の版・更新の状態) を DO storage に保存 (Refs ippoan/alc-app#403)
  *   - GET  /tenants/:tenantId/ota-status                … 保存した報告の一覧
- *     (`/tenants/...` の 8 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
+ *   - POST /tenants/:tenantId/vein-list-request         … キオスクへ指静脈の対応表を求める合図
+ *   - POST /tenants/:tenantId/vein-list-report          … キオスクの対応表を保存し、管理画面の
+ *       購読へ「更新した」の合図 (Refs ippoan/alc-app#436)
+ *   - GET  /tenants/:tenantId/vein-list-status          … 保存した対応表の一覧
+ *     (`/tenants/...` の 11 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
  *      内部 API。auth-worker /auth/introspect と同じ server-to-server shared secret
  *      認証で、呼び手は alc-app の server route など Worker 間に限られる)
  *
@@ -427,6 +431,21 @@ export default {
       return hubStub(env, decodeURIComponent(otaStatusMatch[1])).fetch(
         "https://recorder-hub.internal/ota-status",
       );
+    }
+
+    // 指静脈の対応表 (Refs ippoan/alc-app#436)。body の検査と保存は DO 側
+    const veinListMatch = url.pathname.match(
+      /^\/tenants\/([^/]+)\/vein-list-(request|report|status)$/,
+    );
+    if (veinListMatch && request.method === (veinListMatch[2] === "status" ? "GET" : "POST")) {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      const fwd = new Request(`https://recorder-hub.internal/vein-list-${veinListMatch[2]}`, {
+        method: request.method,
+        headers: { "Content-Type": "application/json" },
+        body: veinListMatch[2] === "report" ? request.body : null,
+      });
+      return hubStub(env, decodeURIComponent(veinListMatch[1])).fetch(fwd);
     }
 
     const devicesMatch = url.pathname.match(/^\/tenants\/([^/]+)\/devices$/);

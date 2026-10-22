@@ -11,7 +11,7 @@ import {
   resolveSecret,
 } from "../src/auth";
 import { closeCodeForEcho } from "../src/recorder-hub";
-import { isOtaDeviceId, parseOtaReport } from "../src/recorder-hub";
+import { isOtaDeviceId, parseOtaReport, parseVeinListReport } from "../src/recorder-hub";
 
 const BASE = "https://alc-recorder.test";
 const SHARED_SECRET = "test-shared-secret";
@@ -2033,5 +2033,201 @@ describe("command_result の掃除 (prune の共用)", () => {
       expect(await state.storage.get("cmdres:prune-fresh")).toBeDefined();
       expect(await state.storage.get("ota-state:prune-other-prefix")).toBeDefined();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 指静脈の対応表 (Refs ippoan/alc-app#436)
+//
+//   1. `POST /tenants/:t/vein-list-request` でキオスクの購読へ合図
+//   2. `POST /tenants/:t/vein-list-report` で対応表を保存し、管理画面の購読へ合図
+//   3. `GET  /tenants/:t/vein-list-status` で保存した対応表の一覧
+// ---------------------------------------------------------------------------
+
+function veinListViaHttp(
+  tenantId: string,
+  leaf: "request" | "report" | "status",
+  body?: unknown,
+  authHeader: string | null = SHARED_SECRET,
+) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authHeader !== null) headers.Authorization = authHeader;
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/vein-list-${leaf}`, {
+    method: leaf === "status" ? "GET" : "POST",
+    headers,
+    ...(leaf === "status" ? {} : { body: typeof body === "string" ? body : JSON.stringify(body ?? {}) }),
+  });
+}
+
+async function veinListDevices(tenantId: string): Promise<Array<Record<string, unknown>>> {
+  const res = await veinListViaHttp(tenantId, "status");
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { devices: Array<Record<string, unknown>> }).devices;
+}
+
+const VEIN_ENTRY = {
+  module_id: 10,
+  employee_id: "0f8fad5b-d9cb-469f-a165-70867728950e",
+  approved: true,
+  version: "2026-10-22T00:00:00Z",
+};
+
+describe("parseVeinListReport", () => {
+  it("形の合う報告を通し、未知の key は落とす", () => {
+    expect(
+      parseVeinListReport({
+        device_id: "kiosk-1",
+        entries: [{ ...VEIN_ENTRY, extra: 1 }, { module_id: 100, employee_id: "e-2", approved: false }],
+        module_users: 2,
+        module_max: 100,
+        unknown: "x",
+      }),
+    ).toStrictEqual({
+      ok: true,
+      report: {
+        device_id: "kiosk-1",
+        entries: [VEIN_ENTRY, { module_id: 100, employee_id: "e-2", approved: false }],
+        module_users: 2,
+        module_max: 100,
+      },
+    });
+  });
+
+  it("任意の欄は形が外れたらその欄だけ捨てる", () => {
+    expect(
+      parseVeinListReport({
+        device_id: "kiosk-1",
+        entries: [{ ...VEIN_ENTRY, version: "x".repeat(65) }],
+        module_users: -1,
+        module_max: 1.5,
+      }),
+    ).toStrictEqual({
+      ok: true,
+      report: {
+        device_id: "kiosk-1",
+        entries: [{ module_id: 10, employee_id: VEIN_ENTRY.employee_id, approved: true }],
+      },
+    });
+  });
+
+  it("body・device_id が外れたら弾く", () => {
+    expect(parseVeinListReport(null)).toEqual({ ok: false, error: "invalid_body" });
+    expect(parseVeinListReport([])).toEqual({ ok: false, error: "invalid_body" });
+    expect(parseVeinListReport({ entries: [] })).toEqual({ ok: false, error: "invalid_device_id" });
+  });
+
+  it("★ 行が 1 つでも外れていたら報告ごと弾く (黙って落とすと空きに見える)", () => {
+    const bad = [
+      { ...VEIN_ENTRY, module_id: 9 },
+      { ...VEIN_ENTRY, module_id: 101 },
+      { ...VEIN_ENTRY, module_id: 10.5 },
+      { ...VEIN_ENTRY, module_id: "10" },
+      { ...VEIN_ENTRY, employee_id: "a b" },
+      { ...VEIN_ENTRY, employee_id: 1 },
+      { ...VEIN_ENTRY, approved: "true" },
+      null,
+    ];
+    for (const row of bad) {
+      expect(parseVeinListReport({ device_id: "kiosk-1", entries: [VEIN_ENTRY, row] })).toEqual({
+        ok: false,
+        error: "invalid_entries",
+      });
+    }
+    expect(parseVeinListReport({ device_id: "kiosk-1" })).toEqual({ ok: false, error: "invalid_entries" });
+    expect(
+      parseVeinListReport({ device_id: "kiosk-1", entries: Array.from({ length: 92 }, () => VEIN_ENTRY) }),
+    ).toEqual({ ok: false, error: "invalid_entries" });
+  });
+});
+
+describe("vein-list の合図・保存・一覧", () => {
+  it("★ 合図はキオスクの購読にだけ、更新の合図はキオスク以外の購読にだけ届く", async () => {
+    const { ws: kioskWs } = await connectWatcher("kiosk-token-vein");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const kiosk = messageQueue(kioskWs!);
+    const { ws: adminWs } = await connectWatcher("admin-token-vein");
+    expect(adminWs).not.toBeNull();
+    openSockets.push(adminWs!);
+    const admin = messageQueue(adminWs!);
+
+    const req = await veinListViaHttp("tenant-vein", "request");
+    expect(req.status).toBe(200);
+    expect(await req.json()).toEqual({ sent: 1 });
+    expect(await kiosk.next()).toEqual({ type: "vein_list_request" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(admin.pending()).toBe(0);
+
+    const report = await veinListViaHttp("tenant-vein", "report", {
+      device_id: "kiosk-vein-1",
+      entries: [VEIN_ENTRY],
+      module_users: 1,
+      module_max: 100,
+    });
+    expect(report.status).toBe(200);
+    expect(await report.json()).toEqual({ ok: true });
+    expect(await admin.next()).toEqual({ type: "vein_list_updated" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(kiosk.pending()).toBe(0);
+  });
+
+  it("保存して一覧に出す。同じ端末は上書き、新しい順", async () => {
+    const before = Date.now();
+    await veinListViaHttp("tenant-vein-list", "report", { device_id: "k-a", entries: [VEIN_ENTRY] });
+    await new Promise((r) => setTimeout(r, 5));
+    await veinListViaHttp("tenant-vein-list", "report", { device_id: "k-b", entries: [] });
+    await new Promise((r) => setTimeout(r, 5));
+    await veinListViaHttp("tenant-vein-list", "report", {
+      device_id: "k-a",
+      entries: [],
+      module_users: 0,
+    });
+    const devices = await veinListDevices("tenant-vein-list");
+    expect(devices.map((d) => d.device_id)).toEqual(["k-a", "k-b"]);
+    expect(devices[0]).toStrictEqual({
+      device_id: "k-a",
+      entries: [],
+      module_users: 0,
+      reported_at_ms: expect.any(Number),
+    });
+    expect(devices[1].reported_at_ms as number).toBeGreaterThanOrEqual(before);
+  });
+
+  it("TTL を過ぎた対応表は一覧に出ない", async () => {
+    await runInDurableObject(hubStub(env, "tenant-vein-ttl"), async (_instance, state) => {
+      await state.storage.put("vein-list:old", {
+        device_id: "old",
+        entries: [],
+        reported_at_ms: Date.now() - OTA_STATE_TTL_MS - 1000,
+      });
+    });
+    await veinListViaHttp("tenant-vein-ttl", "report", { device_id: "new", entries: [] });
+    expect((await veinListDevices("tenant-vein-ttl")).map((d) => d.device_id)).toEqual(["new"]);
+  });
+
+  it("形が外れた報告・JSON 不正は 400 で保存しない", async () => {
+    const bad = await veinListViaHttp("tenant-vein-bad", "report", { device_id: "k", entries: [null] });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: "invalid_entries" });
+    const broken = await veinListViaHttp("tenant-vein-bad", "report", "{");
+    expect(broken.status).toBe(400);
+    expect(await broken.json()).toEqual({ error: "invalid_json" });
+    expect(await veinListDevices("tenant-vein-bad")).toEqual([]);
+  });
+
+  it("shared secret 無し / 不一致は 401、method 違いは 404", async () => {
+    for (const leaf of ["request", "report", "status"] as const) {
+      expect((await veinListViaHttp("tenant-vein-auth", leaf, {}, null)).status).toBe(401);
+      expect((await veinListViaHttp("tenant-vein-auth", leaf, {}, "wrong-secret")).status).toBe(401);
+    }
+    const getReq = await SELF.fetch(`${BASE}/tenants/tenant-vein-auth/vein-list-request`, {
+      headers: { Authorization: SHARED_SECRET },
+    });
+    expect(getReq.status).toBe(404);
+    const postStatus = await SELF.fetch(`${BASE}/tenants/tenant-vein-auth/vein-list-status`, {
+      method: "POST",
+      headers: { Authorization: SHARED_SECRET },
+    });
+    expect(postStatus.status).toBe(404);
   });
 });

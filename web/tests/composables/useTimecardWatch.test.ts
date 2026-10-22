@@ -388,6 +388,34 @@ describe('useTimecardWatch', () => {
     })
   })
 
+  // ---------- 指静脈の対応表の合図 (Refs ippoan/alc-app#436) ----------
+
+  describe('vein_list', () => {
+    it('vein_list_request / vein_list_updated をそれぞれの口に渡す (打刻の引き直しはしない)', async () => {
+      const onVeinListRequest = vi.fn()
+      const onVeinListUpdated = vi.fn()
+      const { watch, onChange } = make({ onVeinListRequest, onVeinListUpdated })
+      await watch.connect()
+      lastWs().open()
+      onChange.mockClear()
+
+      lastWs().message(JSON.stringify({ type: 'vein_list_request' }))
+      expect(onVeinListRequest).toHaveBeenCalledTimes(1)
+      expect(onVeinListUpdated).not.toHaveBeenCalled()
+      lastWs().message(JSON.stringify({ type: 'vein_list_updated' }))
+      expect(onVeinListUpdated).toHaveBeenCalledTimes(1)
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it('口を渡していなければ無視する', async () => {
+      const { watch } = make()
+      await watch.connect()
+      lastWs().open()
+      expect(() => lastWs().message(JSON.stringify({ type: 'vein_list_request' }))).not.toThrow()
+      expect(() => lastWs().message(JSON.stringify({ type: 'vein_list_updated' }))).not.toThrow()
+    })
+  })
+
   // ---------- onChange 無し (打刻一覧を持たない TenkoKiosk) ----------
 
   describe('onChange を渡さない', () => {

@@ -44,6 +44,7 @@ const TABS = [
   { key: 'devices', label: 'デバイス管理' },
   { key: 'tenko', label: '点呼' },
   { key: 'hub_measurements', label: 'ハブ測定値' },
+  { key: 'vein_fleet', label: '端末の指静脈' },
   { key: 'firmware', label: '端末のファーム' },
 ] as const
 
@@ -167,6 +168,10 @@ const visibleTabs = computed(() => TABS.filter(t =>
 
       <div v-if="activeTab === 'firmware'">
         <FirmwareManager />
+      </div>
+
+      <div v-if="activeTab === 'vein_fleet'">
+        <VeinFleetManager />
       </div>
 
       <div v-if="activeTab === 'camera'" class="space-y-4">
