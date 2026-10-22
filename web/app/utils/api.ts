@@ -833,6 +833,59 @@ export async function reportFirmware(report: FirmwareReport): Promise<void> {
   })
 }
 
+/** 指静脈の対応表の 1 行 (どの ID に誰を置いたか。生体データは持たない。Refs ippoan/alc-app#436) */
+export interface VeinFleetEntry {
+  module_id: number
+  employee_id: string
+  approved: boolean
+  version?: string
+}
+
+/** キオスク 1 台が報告した対応表 */
+export interface VeinFleetDevice {
+  device_id: string
+  label: string | null
+  entries: VeinFleetEntry[]
+  /** モジュールが答えた登録人数・上限。読めなかったキオスクは送らない */
+  module_users?: number
+  module_max?: number
+  reported_at_ms: number
+}
+
+/** 管理者の一覧 (報告の新しい順)。admin の token が要る。 */
+export async function listVeinFleet(): Promise<{ devices: VeinFleetDevice[] }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ devices: VeinFleetDevice[] }>('/api/vein-fleet', jwt, { method: 'GET' })
+}
+
+/**
+ * 購読中の全キオスクへ「対応表を送って」の合図を出す。admin の token が要る。
+ * `sent` は合図を送ったキオスクの数 (0 でも成功 — 購読中のキオスクが居ないだけ)。
+ */
+export async function requestVeinFleet(): Promise<{ sent: number }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ sent: number }>('/api/vein-fleet/request', jwt, { method: 'POST', body: '{}' })
+}
+
+/**
+ * キオスクが自分の対応表を報告する。**キオスクの端末の token だけで送る** (`reportFirmware` と同じ)。
+ * どの端末の表かは server が token から決める。
+ */
+export async function reportVeinFleet(report: {
+  entries: VeinFleetEntry[]
+  module_users?: number
+  module_max?: number
+}): Promise<void> {
+  const jwt = await getKioskDeviceJwt?.()
+  if (!jwt) throw new Error('端末の登録が必要です')
+  await bearerRequest<unknown>('/api/vein-fleet/report', jwt, {
+    method: 'POST',
+    body: JSON.stringify(report),
+  })
+}
+
 /** 認証付きプロキシ経由でバイナリを取得し、object URL にする (顔写真・録画動画で共用)。 */
 async function fetchObjectUrl(path: string): Promise<string | null> {
   if (!apiBase) return null

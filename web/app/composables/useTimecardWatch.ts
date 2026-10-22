@@ -71,6 +71,13 @@ export interface TimecardWatchOptions {
    * 載っているときだけ渡し、無い・文字列でないなら `undefined`。
    */
   onSerialOta?: (target: string, deviceId?: string) => void
+  /**
+   * `{"type":"vein_list_request"}` (管理者が全端末の指静脈の対応表を求めた) を受けたときに呼ぶ。
+   * キオスクだけに届く (Refs ippoan/alc-app#436)。
+   */
+  onVeinListRequest?: () => void
+  /** `{"type":"vein_list_updated"}` (キオスクが対応表を報告した) を受けたときに呼ぶ。管理画面だけに届く */
+  onVeinListUpdated?: () => void
 }
 
 /**
@@ -178,6 +185,8 @@ export function useTimecardWatch(options: TimecardWatchOptions) {
         else if (data.type === 'serial_ota' && typeof data.target === 'string') {
           options.onSerialOta?.(data.target, typeof data.device_id === 'string' ? data.device_id : undefined)
         }
+        else if (data.type === 'vein_list_request') options.onVeinListRequest?.()
+        else if (data.type === 'vein_list_updated') options.onVeinListUpdated?.()
       }
       catch {
         // 非 JSON は無視
