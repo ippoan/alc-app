@@ -721,6 +721,22 @@ describe('useVeinSerial', () => {
     })
   })
 
+  describe('syncInfo', () => {
+    it('VEIN SYNC INFO の登録人数と上限を返す。読めない行は Error', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p = vein.syncInfo()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN SYNC INFO\n')
+      await reply(dev, 'VEIN SYNC INFO USERS=3 MAX=100\n')
+      await expect(p).resolves.toEqual({ users: 3, max: 100 })
+      const bad = vein.syncInfo()
+      const caught = bad.catch(e => e)
+      await reply(dev, 'VEIN SYNC INFO USERS=x\n')
+      expect(((await caught) as Error).message).toBe('SYNC INFO の応答が読めません')
+    })
+  })
+
   describe('identify', () => {
     it('VEIN IDENTIFIED <id> は ID、VEIN NOMATCH は null', async () => {
       const dev = createMockPort()

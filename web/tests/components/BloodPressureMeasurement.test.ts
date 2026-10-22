@@ -94,11 +94,12 @@ const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />',
 const FaceAuthStub = { name: 'FaceAuth', template: '<div class="face-stub" />', emits: ['result'] }
 const BleStatusStub = { name: 'BleStatus', template: '<div class="ble-stub" />', emits: ['next', 'skip'] }
 const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="vein-stub" />', props: ['employee'], emits: ['close'] }
+const VeinModuleListStub = { name: 'VeinModuleList', template: '<div class="vein-list-stub" />', emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, EmployeeCodeKeypad: false } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, EmployeeCodeKeypad: false } },
   })
 }
 
@@ -1053,5 +1054,26 @@ describe('BloodPressureMeasurement — カード・社員番号で決まった�
     expect(veinModule.prepareVeinModuleRecord).not.toHaveBeenCalled()
     expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
     wrapper.unmount()
+  })
+})
+
+describe('BloodPressureMeasurement — この端末の指静脈の一覧 (Refs ippoan/alc-app#436)', () => {
+  it('Vein Station がつながっているときだけ入口を出し、開いて閉じると入口へ戻る', async () => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = false
+    const off = await mountBp()
+    expect(off.find('[data-testid="vein-module-list-open"]').exists()).toBe(false)
+    off.unmount()
+    veinIsConnected.value = true
+    const w = await mountBp()
+    await w.find('[data-testid="vein-module-list-open"]').trigger('click')
+    await flush(w)
+    expect(w.findComponent(VeinModuleListStub).exists()).toBe(true)
+    await w.findComponent(VeinModuleListStub).vm.$emit('close')
+    await flush(w)
+    expect(w.findComponent(VeinModuleListStub).exists()).toBe(false)
+    expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
+    w.unmount()
+    veinIsConnected.value = false
   })
 })

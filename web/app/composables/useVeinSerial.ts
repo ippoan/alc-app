@@ -457,6 +457,17 @@ export function useVeinSerial() {
   }
 
   /**
+   * モジュールの登録人数と上限 (`VEIN SYNC INFO`、ファームは ippoan/alc-app-s3#328 から)。
+   * 端末の一覧の画面と、対応表との食い違いの見分けに使う
+   */
+  async function syncInfo(): Promise<{ users: number; max: number }> {
+    const line = await veinRequest('VEIN SYNC INFO', 'VEIN SYNC INFO ', SYNC_STEP_TIMEOUT_MS)
+    const m = /USERS=(\d+) MAX=(\d+)/.exec(line)
+    if (!m) throw new Error('SYNC INFO の応答が読めません')
+    return { users: Number(m[1]), max: Number(m[2]) }
+  }
+
+  /**
    * 預かったポートで 1 行送って応答 1 つを待つ (鍵の署名 `AUTH SIGN` が使う、Refs ippoan/alc-app#436)。
    * 同時に 1 件しか待てないのは capture/say と同じ。ファームの書き込み中 (錠) は送らずに reject する。
    * `errPrefix` は失敗行の接頭辞 (省略時は arbiter の既定 = 行の先頭トークンの `ERR <先頭トークン>`)
@@ -515,6 +526,7 @@ export function useVeinSerial() {
     verify,
     syncWrite,
     syncClear,
+    syncInfo,
     request,
     omronBp: readonly(omronBp),
     noteOmronBp,
