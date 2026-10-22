@@ -23,6 +23,7 @@ import RoleAuthGate from '~/components/RoleAuthGate.vue'
 import ManagerAlarmBar from '~/components/ManagerAlarmBar.vue'
 import AlarmDeviceFirmwareNotice from '~/components/AlarmDeviceFirmwareNotice.vue'
 import FirmwareOtaOverlay from '~/components/FirmwareOtaOverlay.vue'
+import VeinFleetHost from '~/components/VeinFleetHost.vue'
 import ManagerDashboard from '~/components/ManagerDashboard.vue'
 import TenkoKiosk from '~/components/TenkoKiosk.vue'
 import { clearDevDeviceMark, isDevDevice, noteDeviceToken, DEV_DEVICE_MARK_EVENT } from '~/utils/token-selection'
@@ -1454,6 +1455,15 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
         await clickRole(wrapper, role)
         expect(wrapper.findAllComponents(FirmwareOtaOverlay)).toHaveLength(1)
         expect(wrapper.findComponent(FirmwareOtaHost).exists()).toBe(false)
+      }
+    })
+
+    it('★ 指静脈の一覧の受け答えは、どの役割タブでも 1 つだけ在る (同じブラウザで管理者の一覧を開いても答えられる。Refs ippoan/alc-app#436)', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      expect(wrapper.findAllComponents(VeinFleetHost)).toHaveLength(1)
+      for (const role of [LABEL, '運行管理者', 'システム管理者']) {
+        await clickRole(wrapper, role)
+        expect(wrapper.findAllComponents(VeinFleetHost)).toHaveLength(1)
       }
     })
 
