@@ -123,25 +123,37 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
     await veinSerial.say('PLACE')
     if (await veinSerial.verify(moduleId, () => { veinAgain.value = true })) return 'verified'
     await veinSerial.say('FAILED').catch(() => {})
-    return '指静脈で確認できませんでした。顔認証で進みます'
+    return '指静脈は一致しませんでした (カード・社員番号で本人を確認済みのため、このまま測定します)'
   }
   catch (e) {
-    return `指静脈を確かめられませんでした (${(e as Error).message})。顔認証で進みます`
+    // 端末のファームが古い (VEIN VERIFY が無い)・モジュールが応答しない・記録を書けなかった等
+    return `指静脈を確かめられませんでした (${(e as Error).message})。カード・社員番号で本人を確認済みのため、このまま測定します`
   }
   finally {
     veinBusy.value = false
   }
 }
 
+/** 指静脈の記録が無かった乗務員。登録画面をこの人で開く (カード・社員番号を打ち直させない) */
+const registrationEmployee = ref<{ id: string; name: string } | null>(null)
+
 /**
  * カード・社員番号で特定したら、Vein Station がつながっていれば指静脈 (1:1) で確かめて測定へ。
- * つながっていない・指静脈の記録が無い・外れたときは顔認証へ進む (顔の審査で止めたら進まない)
+ * 顔認証は使わない (Refs ippoan/alc-app#436): 指静脈の記録が無ければその人で登録へ、外れ・失敗は
+ * 理由を出してカード・社員番号の本人確認のまま測定へ。Vein Station がつながっていない端末だけ、
+ * 今までどおり顔認証へ進む (顔の審査で止めたら進まない)
  */
 async function proceedWithEmployee(emp: { id: string; name: string; face_approval_status?: string }) {
   if (usesVeinModule() && veinSerial.isConnected.value) {
     const outcome = await verifyIdentifiedByVein(emp)
-    if (outcome === 'verified') return proceedWithVeinEmployee(emp)
-    if (outcome !== 'no_record') error.value = outcome
+    if (outcome === 'no_record') {
+      registrationEmployee.value = { id: emp.id, name: emp.name }
+      step.value = 'vein'
+      return
+    }
+    proceedWithVeinEmployee(emp)
+    if (outcome !== 'verified') measureNotice.value = outcome
+    return
   }
   if (!applyFaceApproval(emp)) return
   selectEmployee(emp)
@@ -320,7 +332,7 @@ function reset() {
 <template>
   <div class="w-full max-w-md mx-auto p-4 flex flex-col gap-4">
     <!-- 指静脈の登録 (入口は下のボタン) -->
-    <VeinRegistration v-if="step === 'vein'" @close="step = 'nfc'" />
+    <VeinRegistration v-if="step === 'vein'" :employee="registrationEmployee" @close="step = 'nfc'; registrationEmployee = null" />
 
     <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
     <div v-else-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
@@ -435,7 +447,7 @@ function reset() {
     <button
       v-if="step === 'nfc' && veinSerial.isConnected.value"
       class="w-full px-4 py-3 bg-white border border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
-      @click="step = 'vein'; error = null"
+      @click="registrationEmployee = null; step = 'vein'; error = null"
     >
       指静脈を登録する
     </button>
