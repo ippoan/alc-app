@@ -93,6 +93,12 @@ describe('VeinFleetManager', () => {
     expect(devices[1]!.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(false)
   })
 
+  it('鍵で端末になった機 (alarm-<指紋>) はラベルが無ければ Vein Station と指紋の頭で出す', async () => {
+    listVeinFleet.mockResolvedValue({ devices: [dev({ device_id: 'alarm-0123456789abcdef', label: null })] })
+    const wrapper = await mountManager()
+    expect(wrapper.find('[data-testid="vein-fleet-device"] h3').text()).toBe('Vein Station 01234567')
+  })
+
   it('端末ごとに最終の記録の版 (いちばん新しい版) を出す。版が無い端末は -、読めない版はそのまま', async () => {
     listVeinFleet.mockResolvedValue({
       devices: [

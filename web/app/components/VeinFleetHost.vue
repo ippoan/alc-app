@@ -9,6 +9,10 @@
  *
  * 購読は Vein Station が最初に繋がった時点で 1 回だけ張り、以後は張りっぱなし
  * (一度も繋いでいないブラウザは対応表を持たないので張らない)。
+ *
+ * **Vein Station を掴みに行くのもここ** — 掴むのが血圧・点呼の画面だけだと、管理者の画面に
+ * 切り替えたブラウザでは Station が繋がらず、その鍵で端末の token も取れない
+ * (CoreS3 の無い PC では Vein Station が端末の鍵。`useDeviceToken` の vein の署名)。
  */
 import { reportVeinFleet } from '~/utils/api'
 import { loadVeinModuleEntries } from '~/utils/vein-db'
@@ -46,6 +50,8 @@ const fleetWatch = useTimecardWatch({
     if (!props.demo) void report()
   },
 })
+
+onMounted(() => { void veinSerial.connect() })
 
 let subscribed = false
 watch(veinSerial.isConnected, (connected) => {

@@ -225,6 +225,22 @@ describe('キオスクの口 (report)', () => {
     expect(recorderFetch).not.toHaveBeenCalled()
   })
 
+  it('★ 鍵で取った端末の token (sub=alarm:<指紋>) は登録簿に照合せず、alarm-<指紋> を端末の id にする', async () => {
+    introspect = { claims: { ...KIOSK_CLAIMS, sub: 'alarm:0123456789abcdef' }, status: 200 }
+    labels = { json: {}, status: 500 }
+    body = { entries }
+    expect(await report(reportEvent())).toBe('{"ok":true}')
+    expect(JSON.parse(forwarded().body!).device_id).toBe('alarm-0123456789abcdef')
+    expect(labelsCalls()).toHaveLength(0)
+  })
+
+  it('alarm: の後ろが鍵の指紋の形でなければ、ふつうの sub として扱う (字種で 400)', async () => {
+    introspect = { claims: { ...KIOSK_CLAIMS, sub: 'alarm:XYZ' }, status: 200 }
+    body = { entries }
+    await expect(report(reportEvent())).rejects.toMatchObject({ statusCode: 400, statusMessage: '端末の id がありません' })
+    expect(recorderFetch).not.toHaveBeenCalled()
+  })
+
   it('recorder の 400 はそのまま返す', async () => {
     body = { entries: [null] }
     recorderFetch.mockResolvedValueOnce(new Response('{"error":"invalid_entries"}', { status: 400 }))
