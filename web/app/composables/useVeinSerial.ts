@@ -350,13 +350,14 @@ export function useVeinSerial() {
 
   /**
    * モジュールの `id` (10〜100) に指静脈を登録し、記録全体 (READ_ENROLL の中身) を返す。
-   * 置き直しの案内 (`EVT VEIN PLACE <n>`、n は 2 か 3) のたびに `onPlace(n)` を呼ぶ。
+   * 置き直しの案内のたびに `onPlace(n, total)` を呼ぶ。ファームは `EVT VEIN PLACE <n> <合計>` を出す
+   * (撮影 4 + 確認 2 なら合計 6)。合計を名乗らない古いファームの `EVT VEIN PLACE <n>` では total は undefined。
    *
    * 失敗は reason の Error: `RETAKE` (置き直しの照合が外れた。モジュールからは消してある) /
    * `TIMEOUT` 等の `ERR VEIN <reason>` / 行が壊れていた {@link VEIN_RECORD_BROKEN}。
    * END まで arbiter の枠を握るので、その間ほかの say / capture は「既に応答待ち」で弾かれる
    */
-  async function enroll(id: number, onPlace?: (n: number) => void): Promise<Uint8Array> {
+  async function enroll(id: number, onPlace?: (n: number, total?: number) => void): Promise<Uint8Array> {
     const prefix = `VEIN RECORD ${id} `
     const endPrefix = `${prefix}END `
     const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
@@ -371,7 +372,9 @@ export function useVeinSerial() {
       else chunks.push({ offset: Number(offset), bytes })
     }
     const offPlace = lineDispatch.onEvent((name, args) => {
-      if (name === 'VEIN' && args.length === 2 && args[0] === 'PLACE') onPlace?.(Number(args[1]))
+      if (name !== 'VEIN' || args[0] !== 'PLACE' || (args.length !== 2 && args.length !== 3)) return
+      if (!args.slice(1).every(a => /^\d+$/.test(a))) return
+      onPlace?.(Number(args[1]), args[2] === undefined ? undefined : Number(args[2]))
     })
     let end: string
     try {

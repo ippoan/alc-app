@@ -648,17 +648,18 @@ describe('useVeinSerial', () => {
     it('VEIN RECORD の行を END まで集め、offset 順に 1 つの記録にする。置き直しの案内を onPlace へ', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
-      const places: number[] = []
-      const p = vein.enroll(10, n => places.push(n))
+      const places: Array<[number, number | undefined]> = []
+      const p = vein.enroll(10, (n, total) => places.push([n, total]))
       await vi.advanceTimersByTimeAsync(0)
       expect(dev.writes.at(-1)).toBe('VEIN ENROLL 10\n')
 
-      // 置き直しの案内 (形の違う EVT は数えない)
-      await reply(dev, 'EVT VEIN PLACE 2\nEVT VEIN PLACE\nEVT VEIN FOO 3\nEVT NFC PLACE 9\nEVT VEIN PLACE 3\n')
+      // 置き直しの案内。合計を名乗る新しい形と、回目だけの古い形の両方を読む (形の違う EVT は数えない)
+      await reply(dev, 'EVT VEIN PLACE 2\nEVT VEIN PLACE\nEVT VEIN FOO 3\nEVT NFC PLACE 9\nEVT VEIN PLACE 3 6\n')
+      await reply(dev, 'EVT VEIN PLACE x\nEVT VEIN PLACE 4 y\nEVT VEIN PLACE 4 6 1\n')
       // 後ろの塊が先に来ても・前のログ行に連結されても拾う。ほかの ID の行は混ぜない
       await reply(dev, 'VEIN RECORD 11 0 FFFF\nVEIN RECORD 10 2 dead\nEVT NFC_READY VEIN RECORD 10 0 DEED\nVEIN RECORD 10 END 4\n')
       await expect(p).resolves.toEqual(new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]))
-      expect(places).toEqual([2, 3])
+      expect(places).toEqual([[2, undefined], [3, 6]])
     })
 
     it('onPlace を渡さなくてもよい。END の後の行は集めない', async () => {
