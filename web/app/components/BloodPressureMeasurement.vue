@@ -60,6 +60,8 @@ const step = ref<BpStep>('nfc')
 /** 指静脈を読んで乗務員を特定している間 (段が `measure` へ進むまで) true */
 const veinBusy = ref(false)
 const veinError = ref<string | null>(null)
+/** 照合の途中でモジュールが撮り直しを求めた (`EVT VEIN AGAIN`)。ボタンの文言を「もう一度」に変える */
+const veinAgain = ref(false)
 // ファームの更新を始めてよいかの材料 (Refs ippoan/alc-app#403)。カード待ちでなければ機体を使用中。
 // 指静脈を読んでいる間も使用中 (段は `nfc` のまま)
 useKioskScreen().declareDeviceBusy(() => step.value !== 'nfc' || veinBusy.value)
@@ -144,7 +146,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
     // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
-    read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
+    read = viaModule ? await veinSerial.identify(() => { veinAgain.value = true }) : await veinSerial.capture()
   } catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`
   }
@@ -160,6 +162,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
 async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
   if (veinBusy.value) return
   veinBusy.value = true
+  veinAgain.value = false
   veinError.value = null
   error.value = null
   const failure = await identifyByVein(prompt)
@@ -309,7 +312,7 @@ function reset() {
             class="w-full px-6 py-8 bg-emerald-600 text-white rounded-2xl text-2xl font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors"
             @click="onVeinIdentify()"
           >
-            {{ veinBusy ? '指を置いてください…' : '指を置いて照合' }}
+            {{ veinBusy ? (veinAgain ? 'もう一度置いてください…' : '指を置いてください…') : '指を置いて照合' }}
           </button>
           <p v-if="veinError" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ veinError }}</p>
           <h3 class="mt-6 mb-2 text-sm font-medium text-gray-500">カードで進む</h3>

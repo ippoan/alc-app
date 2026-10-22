@@ -877,6 +877,21 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       wrapper.unmount()
     })
 
+    it('★ モジュールが撮り直しを求めたら (onAgain)、ボタンを「もう一度置いてください…」にする', async () => {
+      let finish: (id: number | null) => void = () => {}
+      vein.identify.mockImplementationOnce((onAgain?: () => void) => new Promise((resolve) => {
+        finish = resolve
+        onAgain?.()
+      }))
+      const wrapper = await mountBp()
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(veinButton(wrapper).text()).toBe('もう一度置いてください…')
+      finish(12)
+      await flush(wrapper)
+      wrapper.unmount()
+    })
+
     it('不一致・読み取りの失敗は今と同じ文言', async () => {
       veinModule.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'miss' })
       const wrapper = await mountBp()
