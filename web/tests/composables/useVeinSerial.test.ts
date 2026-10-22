@@ -716,14 +716,19 @@ describe('useVeinSerial', () => {
       await expect(miss).resolves.toBeNull()
     })
 
-    it('★ 撮り直し (EVT VEIN AGAIN) のたびに onAgain を呼ぶ。形の違う EVT は数えず、終わった後は呼ばない', async () => {
+    it('★ 撮り直し (EVT VEIN AGAIN [理由]) のたびに onAgain を呼び、理由を診断ログに残す。形の違う EVT は数えず、終わった後は呼ばない', async () => {
+      const { readDiag } = await import('~/utils/serialDiagLog')
+      vi.spyOn(console, 'info').mockImplementation(() => {})
       const dev = createMockPort()
       await connectDevice(dev)
       let again = 0
       const p = vein.identify(() => { again += 1 })
       await vi.advanceTimersByTimeAsync(0)
-      await reply(dev, 'EVT VEIN AGAIN\nEVT VEIN AGAIN 2\nEVT NFC AGAIN\nEVT VEIN AGAIN\n')
+      await reply(dev, 'EVT VEIN AGAIN\nEVT VEIN AGAIN 11 x\nEVT NFC AGAIN\nEVT VEIN AGAIN 09\n')
       expect(again).toBe(2)
+      const diag = readDiag().join('\n')
+      expect(diag).toContain('撮り直しを求めた (理由 -)')
+      expect(diag).toContain('撮り直しを求めた (理由 09)')
       await reply(dev, 'VEIN IDENTIFIED 12\n')
       await expect(p).resolves.toBe(12)
       dev.emit('EVT VEIN AGAIN\n')

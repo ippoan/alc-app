@@ -40,6 +40,7 @@ import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
 import { devTiming } from '~/utils/dev-timing'
 import { findDeviceLine } from '~/utils/device-line'
+import { appendDiag } from '~/utils/serialDiagLog'
 import type { DeviceLine } from '~/utils/device-line'
 
 /**
@@ -387,12 +388,18 @@ export function useVeinSerial() {
 
   /**
    * モジュール自身の 1:N 照合。当たればモジュールの ID、不一致は null。失敗は reason の Error。
-   * モジュールが撮り直しを求めるたび (`EVT VEIN AGAIN`、端末は「もう一度置いてください」を鳴らす)
-   * `onAgain()` を呼ぶ。古いファームはこの行を出さない (待ち時間だけ延びる)
+   * モジュールが撮り直しを求めるたび (`EVT VEIN AGAIN <理由>`、端末は「もう一度置いてください」を鳴らす)
+   * `onAgain()` を呼ぶ。理由 (`11` = 静脈が写らない / `09` = 同じ指でない) はコンソールと診断ログ
+   * (`alc_serial_diag`) に残す — 毎回撮り直しになるときの切り分け用。理由の無い行 (ippoan/alc-app-s3#316
+   * の版) も合図として受ける。古いファームはこの行を出さない (待ち時間だけ延びる)
    */
   async function identify(onAgain?: () => void): Promise<number | null> {
     const offAgain = lineDispatch.onEvent((name, args) => {
-      if (name === 'VEIN' && args.length === 1 && args[0] === 'AGAIN') onAgain?.()
+      if (name !== 'VEIN' || args[0] !== 'AGAIN' || args.length > 2) return
+      const msg = `[vein] 照合でモジュールが撮り直しを求めた (理由 ${args[1] ?? '-'})`
+      console.info(msg)
+      appendDiag(msg)
+      onAgain?.()
     })
     let line: string
     try {
