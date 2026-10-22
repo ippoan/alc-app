@@ -732,7 +732,6 @@ function onRoleTabClick(role: RoleTab) {
       <!-- 画面共有: タブに関係なく常時フローティング表示 -->
       <ScreenShareSender />
       <FirmwareOtaHost :demo="driverSubTab === 'demo' || driverSubTab === 'remote_demo'" />
-      <VeinFleetHost :demo="driverSubTab === 'demo' || driverSubTab === 'remote_demo'" />
       <!-- 測定ログ: フッターバー (縦画面時のみ。横画面時はサイドバー内) -->
       <MeasurementLog v-if="!isAndroidLandscape" />
     </template>
@@ -818,5 +817,8 @@ function onRoleTabClick(role: RoleTab) {
 
     <!-- 「更新中」の幕。役割に依らず 1 つだけ (運行者の機体にも、席の警告デバイスにも出す) -->
     <FirmwareOtaOverlay />
+    <!-- 全端末の指静脈の一覧のキオスク側の受け答え (Refs ippoan/alc-app#436)。役割に依らず 1 つだけ —
+         同じブラウザでシステム管理者の一覧を開いている間も、このキオスクの対応表を答えられるように -->
+    <VeinFleetHost :demo="driverSubTab === 'demo' || driverSubTab === 'remote_demo'" />
   </div>
 </template>
