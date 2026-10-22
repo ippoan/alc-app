@@ -51,7 +51,7 @@ const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />',
 async function mountVein(): Promise<VueWrapper> {
   const wrapper = await mountSuspended(VeinRegistration, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub } },
+    global: { stubs: { NfcStatus: NfcStatusStub, EmployeeCodeKeypad: false } },
   })
   await nextTick()
   return wrapper as VueWrapper

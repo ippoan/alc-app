@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { FaceAuthResult } from '~/types'
-import { getEmployeeByNfcId, startMeasurement, updateMeasurement } from '~/utils/api'
+import { getEmployeeByCode, getEmployeeByNfcId, startMeasurement, updateMeasurement } from '~/utils/api'
 import { devTiming } from '~/utils/dev-timing'
 import { checkFaceApproval } from '~/utils/face-approval'
-import { employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
+import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
@@ -126,16 +126,28 @@ function proceedWithVeinEmployee(emp: { id: string; name: string }) {
   skipFaceAuth()
 }
 
-async function onNfcRead(nfcId: string) {
+/** カード・社員番号で乗務員を引き、引けたら顔認証へ (どちらも同じ手順) */
+async function lookupEmployee(find: () => Promise<{ id: string; name: string; face_approval_status?: string }>, notFound: string) {
   error.value = null
   employeeLookups.value += 1
   try {
-    proceedWithEmployee(await getEmployeeByNfcId(nfcId))
+    proceedWithEmployee(await find())
   } catch (e) {
-    error.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
+    error.value = employeeLookupFailureMessage(e, notFound)
   } finally {
     employeeLookups.value -= 1
   }
+}
+
+function onNfcRead(nfcId: string) {
+  return lookupEmployee(() => getEmployeeByNfcId(nfcId), employeeNotFoundByNfc(nfcId))
+}
+
+// 社員番号のキーパッド (`EmployeeCodeKeypad`) が打った番号。カードを持っていないときの入口
+const code = ref('')
+
+function onCodeSubmit(c: string) {
+  return lookupEmployee(() => getEmployeeByCode(c, 'bp-station'), employeeNotFoundByCode(c))
 }
 
 /** 指静脈で乗務員を特定する (手順は TenkoKiosk と同じ)。失敗したら画面に出す理由を返す */
@@ -153,7 +165,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
   const outcome = viaModule
     ? await identifyVeinModuleEmployee(read as number | null)
     : await identifyVeinEmployee(read as string)
-  if (outcome.kind === 'miss') return '照合できませんでした。もう一度置くか、下のカードで進んでください'
+  if (outcome.kind === 'miss') return '照合できませんでした。もう一度置くか、下のカードか社員番号で進んでください'
   if (outcome.kind === 'error') return outcome.message
   proceedWithVeinEmployee(outcome.employee)
   return null
@@ -260,6 +272,7 @@ function reset() {
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''
+  code.value = ''
   error.value = null
   veinError.value = null
   measureNotice.value = null
@@ -301,7 +314,7 @@ function reset() {
         {{ error }}
       </div>
 
-      <!-- Step 1: 指を置く (主) / カードをかざす (予備) -->
+      <!-- Step 1: 指を置く (主) / カードをかざす・社員番号を打つ (予備) -->
       <div v-if="step === 'nfc'" class="bg-white rounded-2xl p-4 shadow-sm">
         <h2 class="text-lg font-semibold text-gray-700 mb-4">乗務員ID</h2>
         <!-- 指静脈 (Refs ippoan/alc-app#436)。Vein Station が無い端末ではカードだけ -->
@@ -318,6 +331,8 @@ function reset() {
           <h3 class="mt-6 mb-2 text-sm font-medium text-gray-500">カードで進む</h3>
         </template>
         <NfcStatus @read="onNfcRead" />
+        <h3 class="mt-6 mb-2 text-sm font-medium text-gray-500">社員番号で進む</h3>
+        <EmployeeCodeKeypad v-model="code" @submit="onCodeSubmit" />
       </div>
 
       <!-- Step 2: 顔認証 -->

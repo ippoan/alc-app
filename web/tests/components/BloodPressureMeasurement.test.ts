@@ -21,18 +21,20 @@ const employee = ref<{ id: string, name: string, face_approval_status?: string }
 
 // vi.mock はファイル先頭へ巻き上がるので、factory から触る mock は vi.hoisted で作る。
 // 他の export (useAuth が使う rePairDevice 等) は本物のまま残す
-const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock }
+const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock }
   = vi.hoisted(() => ({
     startMeasurementMock: vi.fn(),
     updateMeasurementMock: vi.fn(),
     saveMeasurementMock: vi.fn(),
     startTenkoSessionMock: vi.fn(),
     getEmployeeByNfcIdMock: vi.fn(),
+    getEmployeeByCodeMock: vi.fn(),
   }))
 
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   getEmployeeByNfcId: getEmployeeByNfcIdMock,
+  getEmployeeByCode: getEmployeeByCodeMock,
   startMeasurement: startMeasurementMock,
   updateMeasurement: updateMeasurementMock,
   saveMeasurement: saveMeasurementMock,
@@ -94,7 +96,7 @@ const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, EmployeeCodeKeypad: false } },
   })
 }
 
@@ -119,6 +121,8 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }
     getEmployeeByNfcIdMock.mockReset()
     getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
+    getEmployeeByCodeMock.mockReset()
+    getEmployeeByCodeMock.mockImplementation(async () => employee.value)
     startMeasurementMock.mockReset()
     startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
     updateMeasurementMock.mockReset()
@@ -148,6 +152,33 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
 
+    wrapper.unmount()
+  })
+
+  it('BloodPressureMeasurement — 社員番号を打って決定すると、カードと同じく顔認証へ進む', async () => {
+    const wrapper = await mountBp()
+    for (const k of ['0', '4', '2']) await wrapper.find(`[data-key="${k}"]`).trigger('click')
+    expect(wrapper.find('[data-testid="code-display"]').text()).toBe('042')
+    await wrapper.find('[data-key="submit"]').trigger('click')
+    await flush(wrapper)
+    // 測定台の鍵で引く (キオスクの鍵の無い測定台でも通る)
+    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('042', 'bp-station')
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.text()).toContain('テスト太郎')
+    // 「次の人へ」で番号も消える
+    await wrapper.findComponent(FaceAuthStub).vm.$emit('result', { verified: true, similarity: 0.9 })
+    await flush(wrapper)
+    wrapper.unmount()
+  })
+
+  it('BloodPressureMeasurement — 社員番号で引けなければ、その番号を添えて知らせて入口に留まる', async () => {
+    getEmployeeByCodeMock.mockRejectedValue(Object.assign(new Error("not found"), { status: 404 }))
+    const wrapper = await mountBp()
+    for (const k of ['9', '9', 'submit']) await wrapper.find(`[data-key="${k}"]`).trigger('click')
+    await flush(wrapper)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.text()).toContain('「99」')
     wrapper.unmount()
   })
 
@@ -638,9 +669,10 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     await veinButton(wrapper).trigger('click')
     await flush(wrapper)
 
-    expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度置くか、下のカードで進んでください')
-    // 開発者向けの語 (社員番号の入口はこの画面に無い) を出さない
-    expect(wrapper.text()).not.toContain('社員番号')
+    expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度置くか、下のカードか社員番号で進んでください')
+    // 案内した入口 (カード・社員番号) が同じ画面にある
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="code-display"]').exists()).toBe(true)
     expect(vein.say).toHaveBeenCalledWith('FAILED')
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
     expect(veinButton(wrapper).attributes('disabled')).toBeUndefined()
@@ -799,7 +831,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       finger.cb!()
       await flush(wrapper)
 
-      expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度置くか、下のカードで進んでください')
+      expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度置くか、下のカードか社員番号で進んでください')
       expect(vein.say).toHaveBeenCalledWith('FAILED')
       wrapper.unmount()
     })
