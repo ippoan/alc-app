@@ -247,6 +247,20 @@ describe('NfcStatus — promptActive (タッチ枠の中身の差し替え、Ref
     wrapper.unmount()
   })
 
+  it('compact なら枠の余白とアイコンを詰める (既定は今までどおり)', async () => {
+    const svgClass = (w: Awaited<ReturnType<typeof mountSuspended>>) => w.find('svg').classes()
+    const normal = await mountSuspended(NfcStatus)
+    expect(normal.find('.border-dashed').classes()).toContain('p-8')
+    expect(svgClass(normal)).toContain('w-12')
+    normal.unmount()
+    const compact = await mountSuspended(NfcStatus, { props: { compact: true } })
+    expect(compact.find('.border-dashed').classes()).not.toContain('p-8')
+    expect(compact.find('.border-dashed').classes()).toContain('py-4')
+    expect(svgClass(compact)).toContain('w-8')
+    expect(compact.text()).toContain('NFC カードをタッチしてください')
+    compact.unmount()
+  })
+
   it('promptActive が true ならタッチの案内を出さず、スロットの中身を出す', async () => {
     const wrapper = await mountSuspended(NfcStatus, {
       props: { promptActive: true },

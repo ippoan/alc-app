@@ -7,6 +7,8 @@ const props = defineProps<{
   /** IC カード打刻のアルコールチェックへの案内ボタンが表示中か (Refs ippoan/rust-alc-api#644)。
    * true の間はタッチ枠のアイコン/案内文を隠し、`#punch-prompt` スロットだけを出す。 */
   promptActive?: boolean
+  /** 縦を詰めた表示 (血圧測定で指静脈のボタンと横に並べるとき。Refs ippoan/alc-app#436) */
+  compact?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -146,8 +148,10 @@ const showNfcGuide = ref(false)
 
     <!-- カードタッチエリア -->
     <div
-      class="flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-2xl transition-colors"
+      class="flex flex-col items-center justify-center border-2 border-dashed rounded-2xl transition-colors"
       :class="{
+        'p-8': !compact,
+        'px-3 py-4': compact,
         'border-gray-300 bg-gray-50': !readAnimation,
         'border-green-400 bg-green-50': readAnimation,
       }"
@@ -158,10 +162,10 @@ const showNfcGuide = ref(false)
            鶏と卵になる (Refs ippoan/rust-alc-api#644) -->
       <slot name="punch-prompt" />
       <template v-if="!promptActive">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg xmlns="http://www.w3.org/2000/svg" class="text-gray-400" :class="compact ? 'w-8 h-8 mb-1' : 'w-12 h-12 mb-3'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z" />
         </svg>
-        <p class="text-gray-500 font-medium">
+        <p class="text-gray-500 font-medium" :class="{ 'text-sm text-center': compact }">
           NFC カードをタッチしてください
         </p>
       </template>
