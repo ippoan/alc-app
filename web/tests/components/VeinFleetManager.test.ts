@@ -63,7 +63,7 @@ describe('VeinFleetManager', () => {
     expect(watchOptions().getToken()).toBe('admin-jwt')
     expect(listVeinFleet).toHaveBeenCalledTimes(1)
     expect(requestVeinFleet).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-testid="vein-fleet-notice"]').text()).toBe('2 台の端末に問い合わせました')
+    expect(wrapper.find('[data-testid="vein-fleet-notice"]').text()).toBe('問い合わせました (接続 2 本)。返事が来た端末から下に出ます')
   })
 
   it('端末ごとに ID 順で乗務員と状態を出す。名前が引けない人は id の頭', async () => {

@@ -33,7 +33,9 @@ async function requestLatest() {
     const { sent } = await requestVeinFleet()
     notice.value = sent === 0
       ? 'いま繋がっている端末がありません (前回の報告を出しています)'
-      : `${sent} 台の端末に問い合わせました`
+      // `sent` は購読の接続の本数で、端末の台数ではない (1 台のキオスクが画面ごとに 2〜3 本張る。
+      // 閉じたタブの接続もしばらく残る) ので、台数として出さない
+      : `問い合わせました (接続 ${sent} 本)。返事が来た端末から下に出ます`
   }
   catch (e) {
     notice.value = e instanceof Error ? e.message : '問い合わせに失敗しました'
