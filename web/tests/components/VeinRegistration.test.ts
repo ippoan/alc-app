@@ -48,8 +48,9 @@ vi.mock('~/utils/vein-module', async (importOriginal) => ({
 
 const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />', emits: ['read'] }
 
-async function mountVein(): Promise<VueWrapper> {
+async function mountVein(props: Record<string, unknown> = {}): Promise<VueWrapper> {
   const wrapper = await mountSuspended(VeinRegistration, {
+    props,
     shallow: true,
     global: { stubs: { NfcStatus: NfcStatusStub, EmployeeCodeKeypad: false } },
   })
@@ -91,6 +92,12 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
     const wrapper = await mountVein()
     expect(veinConnect).toHaveBeenCalled()
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+  })
+
+  it('本人が先に決まっていれば (employee)、特定の段を飛ばしてその人の登録から始める', async () => {
+    const wrapper = await mountVein({ employee: { id: 'emp-test-9', name: '先決 太郎' } })
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+    expect(wrapper.text()).toContain('先決 太郎')
   })
 
   it('カードが見つからなければ理由を出し、カード待ちに残る', async () => {

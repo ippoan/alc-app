@@ -93,7 +93,7 @@ vi.mock('~/utils/vein-module', async importOriginal => ({
 const NfcStatusStub = { name: 'NfcStatus', template: '<div class="nfc-stub" />', emits: ['read'] }
 const FaceAuthStub = { name: 'FaceAuth', template: '<div class="face-stub" />', emits: ['result'] }
 const BleStatusStub = { name: 'BleStatus', template: '<div class="ble-stub" />', emits: ['next', 'skip'] }
-const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="vein-stub" />', emits: ['close'] }
+const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="vein-stub" />', props: ['employee'], emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
@@ -1005,34 +1005,43 @@ describe('BloodPressureMeasurement — カード・社員番号で決まった�
     wrapper.unmount()
   })
 
-  it('指静脈の記録が無い人は、照合せずに顔認証へ', async () => {
+  it('指静脈の記録が無い人は、照合せずにその人で登録画面を開く (顔認証は使わない)', async () => {
     veinModule.prepareVeinModuleRecord.mockResolvedValue(null)
     const wrapper = await mountBp()
     await tapCard(wrapper)
     await flush(wrapper)
     expect(vein.verify).not.toHaveBeenCalled()
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    const reg = wrapper.findComponent(VeinRegistrationStub)
+    expect(reg.exists()).toBe(true)
+    expect(reg.props('employee') ?? reg.attributes('employee')).toBeTruthy()
+    // 閉じたら入口へ戻る
+    await reg.vm.$emit('close')
+    await flush(wrapper)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('外れたら失敗の音を鳴らし、知らせて顔認証へ', async () => {
+  it('外れたら失敗の音を鳴らし、知らせてカード・社員番号の本人確認のまま測定へ (顔認証は使わない)', async () => {
     vein.verify.mockResolvedValue(false)
     const wrapper = await mountBp()
     await tapCard(wrapper)
     await flush(wrapper)
     expect(vein.say).toHaveBeenCalledWith('FAILED')
-    expect(wrapper.text()).toContain('指静脈で確認できませんでした。顔認証で進みます')
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    expect(wrapper.text()).toContain('指静脈は一致しませんでした (カード・社員番号で本人を確認済みのため、このまま測定します)')
     wrapper.unmount()
   })
 
-  it('記録を用意できない・照合で失敗したら、理由を添えて顔認証へ', async () => {
+  it('記録を用意できない・照合で失敗したら、理由を添えて測定へ (顔認証は使わない)', async () => {
     veinModule.prepareVeinModuleRecord.mockRejectedValue(new Error('WRITE_SEQ'))
     const wrapper = await mountBp()
     await tapCard(wrapper)
     await flush(wrapper)
-    expect(wrapper.text()).toContain('指静脈を確かめられませんでした (WRITE_SEQ)。顔認証で進みます')
-    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    expect(wrapper.text()).toContain('指静脈を確かめられませんでした (WRITE_SEQ)')
     wrapper.unmount()
   })
 

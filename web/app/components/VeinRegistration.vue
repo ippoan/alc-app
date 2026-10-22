@@ -11,14 +11,19 @@ import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMes
  * (承認は乗務員一覧、Refs ippoan/alc-app#436)。読み取りと保存の手順は顔登録画面と同じ
  * `useVeinEnroll` の 1 か所。
  *
- * 入口は BloodPressureMeasurement が Vein Station の接続中だけ出す。
+ * 入口は BloodPressureMeasurement が Vein Station の接続中だけ出す。カード・社員番号で決まった人に
+ * 指静脈の記録が無かったときも、その人 (`employee`) でここを開く。
  */
 
+const props = defineProps<{
+  /** 本人が先に決まっているとき (血圧測定でカード・社員番号の後、指静脈の記録が無かった人)。特定の段を飛ばす */
+  employee?: { id: string; name: string } | null
+}>()
 const emit = defineEmits<{ close: [] }>()
 
 const vein = useVeinEnroll()
-const employeeId = ref('')
-const employeeName = ref('')
+const employeeId = ref(props.employee?.id ?? '')
+const employeeName = ref(props.employee?.name ?? '')
 const lookupError = ref<string | null>(null)
 
 async function lookup(find: () => Promise<{ id: string; name: string }>, notFound: string) {
