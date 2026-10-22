@@ -1,5 +1,5 @@
 import type { BpUiState } from '~/composables/useBloodPressureSetting'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, computed } from 'vue'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -64,6 +64,7 @@ const vein = vi.hoisted(() => ({
   say: vi.fn(),
   capture: vi.fn(),
   identify: vi.fn(),
+  verify: vi.fn(),
   onFingerPlaced: vi.fn((cb: () => void) => { finger.cb = cb; return finger.off }),
 }))
 mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
@@ -82,6 +83,7 @@ vi.mock('~/utils/vein-identify', async importOriginal => ({
 const veinModule = vi.hoisted(() => ({
   usesVeinModule: vi.fn(() => false),
   identifyVeinModuleEmployee: vi.fn(),
+  prepareVeinModuleRecord: vi.fn(),
 }))
 vi.mock('~/utils/vein-module', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-module')>()),
@@ -955,5 +957,92 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(before)
       wrapper.unmount()
     })
+  })
+})
+
+describe('BloodPressureMeasurement — カード・社員番号で決まった人を指静脈 (1:1) で確かめる (Refs ippoan/alc-app#436)', () => {
+  beforeEach(() => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = true
+    employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }
+    getEmployeeByNfcIdMock.mockReset()
+    getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
+    getEmployeeByCodeMock.mockReset()
+    getEmployeeByCodeMock.mockImplementation(async () => employee.value)
+    veinModule.usesVeinModule.mockReturnValue(true)
+    veinModule.prepareVeinModuleRecord.mockReset()
+    veinModule.prepareVeinModuleRecord.mockResolvedValue(12)
+    vein.verify.mockReset()
+    vein.verify.mockResolvedValue(true)
+    vein.say.mockReset()
+    vein.say.mockResolvedValue(undefined)
+    startMeasurementMock.mockReset()
+    startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+  })
+  afterEach(() => {
+    veinModule.usesVeinModule.mockReturnValue(false)
+    veinIsConnected.value = false
+  })
+
+  it('カードの後、その人の記録をモジュールに用意して 1:1 で照合し、当たれば顔認証を挟まず測定へ', async () => {
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(veinModule.prepareVeinModuleRecord).toHaveBeenCalledWith(expect.anything(), 'emp-test-1')
+    expect(vein.say).toHaveBeenCalledWith('PLACE')
+    expect(vein.verify).toHaveBeenCalledWith(12, expect.any(Function))
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('社員番号の後も同じく 1:1 で照合する', async () => {
+    const wrapper = await mountBp()
+    for (const k of ['0', '4', '2', 'submit']) await wrapper.find(`[data-key="${k}"]`).trigger('click')
+    await flush(wrapper)
+    expect(vein.verify).toHaveBeenCalledWith(12, expect.any(Function))
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('指静脈の記録が無い人は、照合せずに顔認証へ', async () => {
+    veinModule.prepareVeinModuleRecord.mockResolvedValue(null)
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(vein.verify).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('外れたら失敗の音を鳴らし、知らせて顔認証へ', async () => {
+    vein.verify.mockResolvedValue(false)
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(vein.say).toHaveBeenCalledWith('FAILED')
+    expect(wrapper.text()).toContain('指静脈で確認できませんでした。顔認証で進みます')
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('記録を用意できない・照合で失敗したら、理由を添えて顔認証へ', async () => {
+    veinModule.prepareVeinModuleRecord.mockRejectedValue(new Error('WRITE_SEQ'))
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(wrapper.text()).toContain('指静脈を確かめられませんでした (WRITE_SEQ)。顔認証で進みます')
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('Vein Station がつながっていなければ、今までどおり顔認証へ', async () => {
+    veinIsConnected.value = false
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(veinModule.prepareVeinModuleRecord).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+    wrapper.unmount()
   })
 })

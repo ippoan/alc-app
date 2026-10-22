@@ -396,14 +396,19 @@ export function useVeinSerial() {
    * (`alc_serial_diag`) に残す — 毎回撮り直しになるときの切り分け用。理由の無い行 (ippoan/alc-app-s3#316
    * の版) も合図として受ける。古いファームはこの行を出さない (待ち時間だけ延びる)
    */
-  async function identify(onAgain?: () => void): Promise<number | null> {
-    const offAgain = lineDispatch.onEvent((name, args) => {
+  /** 照合の間、モジュールの撮り直しの合図 (`EVT VEIN AGAIN <理由>`) を拾う。戻り値で外す */
+  function watchAgain(onAgain?: () => void): () => void {
+    return lineDispatch.onEvent((name, args) => {
       if (name !== 'VEIN' || args[0] !== 'AGAIN' || args.length > 2) return
       const msg = `[vein] 照合でモジュールが撮り直しを求めた (理由 ${args[1] ?? '-'})`
       console.info(msg)
       appendDiag(msg)
       onAgain?.()
     })
+  }
+
+  async function identify(onAgain?: () => void): Promise<number | null> {
+    const offAgain = watchAgain(onAgain)
     let line: string
     try {
       line = await veinRequest('VEIN IDENTIFY', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
@@ -415,6 +420,21 @@ export function useVeinSerial() {
     const id = Number(line.slice('VEIN IDENTIFIED '.length).trim())
     if (!Number.isInteger(id)) throw new Error('IDENTIFY の応答が読めません')
     return id
+  }
+
+  /**
+   * モジュールの `id` (10〜100) と 1:1 で照合する (`VEIN VERIFY <id>`)。本人が免許証・社員番号で
+   * 先に決まっているときに使う。当たれば true、不一致は false。撮り直しの合図のたびに `onAgain`
+   */
+  async function verify(id: number, onAgain?: () => void): Promise<boolean> {
+    const offAgain = watchAgain(onAgain)
+    try {
+      const line = await veinRequest(`VEIN VERIFY ${id}`, [`VEIN VERIFIED ${id}`, 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+      return line.startsWith('VEIN VERIFIED')
+    }
+    finally {
+      offAgain()
+    }
   }
 
   /**
@@ -492,6 +512,7 @@ export function useVeinSerial() {
     say,
     enroll,
     identify,
+    verify,
     syncWrite,
     syncClear,
     request,
