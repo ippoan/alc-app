@@ -11,7 +11,7 @@
  * 手順は「案内 PLACE → 1 回目 → 案内 AGAIN → 2 回目 → 保存 → 案内 ENROLLED」。
  * 失敗したら案内 FAILED を鳴らし、理由を `error` に出す。
  *
- * **開発用の端末 (`usesVeinModule`) は、照合をモジュールに任せる経路で登録する** (M-b、
+ * **測定台以外の端末 (`usesVeinModule`) は、照合をモジュールに任せる経路で登録する** (M-b、
  * Refs ippoan/alc-app#436): 案内 PLACE → モジュールの ID (その人の ID、無ければ 10〜100 の空き) に
  * `VEIN ENROLL` (置き直しの案内は `notice` に出す) → 記録をサーバーへ預ける → 手元の対応表に
  * 「承認待ち」で入れる → 案内 ENROLLED。

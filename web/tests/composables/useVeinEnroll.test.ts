@@ -38,7 +38,7 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   putVeinModuleRecord: putVeinModuleRecordMock,
 }))
 
-// 開発用の端末の印と手元の対応表 (Refs ippoan/alc-app#436)。ID の割り振りは本物 (vein-module.test.ts)
+// モジュール経路の判定 (usesVeinModule) と手元の対応表 (Refs ippoan/alc-app#436)。ID の割り振りは本物 (vein-module.test.ts)
 const viaModule = vi.hoisted(() => ({ on: false }))
 vi.mock('~/utils/vein-module', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/vein-module')>()),
@@ -99,7 +99,7 @@ describe('useVeinEnroll', () => {
     expect(vein.error.value).toBeNull()
   })
 
-  describe('開発用の端末: モジュールに登録する (M-b、Refs ippoan/alc-app#436)', () => {
+  describe('測定台以外の端末: モジュールに登録する (M-b、Refs ippoan/alc-app#436)', () => {
     const RECORD = new Uint8Array([0xDE, 0xED, 0xDE, 0xED])
 
     beforeEach(() => {

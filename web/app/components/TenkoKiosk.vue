@@ -296,7 +296,7 @@ const veinDisabledReason = computed<string | null>(() =>
   veinSerial.isConnected.value ? null : 'Vein Station (指静脈読み取り端末) が接続されていません',
 )
 
-/** 開発用の端末だけ、あわせて端末のモジュールも揃える (`syncVeinModule`、Refs ippoan/alc-app#436) */
+/** あわせて端末のモジュールも揃える (`syncVeinModule`、Refs ippoan/alc-app#436) */
 function syncVein(opts: { ifOlderThanMs?: number } = {}) {
   return syncVeinTemplates({ ...opts, module: usesVeinModule() ? veinSerial : undefined })
 }
@@ -324,7 +324,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
   try {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
-    // 開発用の端末はモジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
+    // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
     read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
   }
   catch (e) {

@@ -76,7 +76,7 @@ vi.mock('~/utils/vein-identify', async importOriginal => ({
   ...veinIdentify,
 }))
 
-// 開発用の端末だけ照合をモジュールに任せる (Refs ippoan/alc-app#436)。対応表の引き方は vein-module.test.ts
+// 測定台以外は照合をモジュールに任せる (Refs ippoan/alc-app#436)。対応表の引き方は vein-module.test.ts
 const veinModule = vi.hoisted(() => ({
   usesVeinModule: vi.fn((_isBpStation?: boolean) => false),
   identifyVeinModuleEmployee: vi.fn(),
@@ -854,7 +854,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     })
   })
 
-  describe('開発用の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
+  describe('測定台以外の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
     beforeEach(() => {
       veinModule.usesVeinModule.mockReset().mockReturnValue(true)
       vein.identify.mockReset().mockResolvedValue(12)

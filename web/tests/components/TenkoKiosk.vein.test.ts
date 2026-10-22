@@ -37,7 +37,7 @@ const match = vi.hoisted(() => ({
 }))
 vi.mock('~/utils/vein-match', () => match)
 
-// 開発用の端末の印だけ差し替える (対応表の引き方は本物を通す、Refs ippoan/alc-app#436)
+// モジュール経路の判定 (usesVeinModule) だけ差し替える (対応表の引き方は本物を通す、Refs ippoan/alc-app#436)
 const viaModule = vi.hoisted(() => ({ on: false }))
 vi.mock('~/utils/vein-module', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-module')>()),
@@ -356,7 +356,7 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     })
   })
 
-  describe('開発用の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
+  describe('測定台以外の端末: 照合をモジュールに任せる (Refs ippoan/alc-app#436)', () => {
     beforeEach(() => {
       viaModule.on = true
       vein.identify.mockResolvedValue(12)

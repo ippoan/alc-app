@@ -44,7 +44,7 @@ const { latestBloodPressure } = useBleGateway()
 const veinSerial = useVeinSerial()
 // 測定台の鍵にはモジュールの記録の口が無いので、測定台では照合をモジュールに任せない (Refs ippoan/alc-app#436)
 const { isBpStation } = useBpStationMode()
-/** 開発用の端末だけ、あわせて端末のモジュールも揃える (`syncVeinModule`) */
+/** 測定台でなければ、あわせて端末のモジュールも揃える (`syncVeinModule`) */
 function syncVein(opts: { ifOlderThanMs?: number } = {}) {
   return syncVeinTemplates({ ...opts, module: usesVeinModule(isBpStation.value) ? veinSerial : undefined })
 }
@@ -145,7 +145,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
   try {
     // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
     if (prompt) await veinSerial.say('PLACE')
-    // 開発用の端末はモジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
+    // 測定台以外はモジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
     read = viaModule ? await veinSerial.identify() : await veinSerial.capture()
   } catch (e) {
     return `指静脈を読み取れませんでした (${(e as Error).message})`
