@@ -39,8 +39,12 @@ export function headersWithDev(request: Request, dev: boolean): Headers {
   return headers;
 }
 
-/** cam-room admin 接続を許可する role (Google ログイン JWT の role claim、Refs alc-app#129)。運行管理者 (manager) も視聴できる。 */
-export const CAM_ADMIN_ROLES: readonly string[] = ["admin", "manager"];
+/**
+ * cam-room admin 接続を許可する role (JWT の role claim、Refs alc-app#129)。
+ * `admin` = Google ログインの管理者、`device-tenko-manager` = 運行管理者席の鍵
+ * (device JWT。遠隔点呼の画面はこちらで動く。運行管理者の user role は存在しない)。
+ */
+export const CAM_ADMIN_ROLES: readonly string[] = ["admin", "device-tenko-manager"];
 
 /** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
 export async function resolveSecret(binding: unknown): Promise<string | null> {
@@ -80,7 +84,7 @@ export async function introspectToken(
 /**
  * introspect 結果から admin WS ハンドシェイクの可否を決める (純粋関数)。
  * - `active` でない (署名不正 / exp 切れ / env 不一致) → 401
- * - role が "admin" / "manager" でない (viewer 等) → 403
+ * - role が "admin" / "device-tenko-manager" でない (viewer・他の device 鍵等) → 403
  */
 export function decideCamAdminAuth(result: IntrospectResult | null | undefined): 401 | 403 | 101 {
   if (!result || result.active !== true) return 401;
