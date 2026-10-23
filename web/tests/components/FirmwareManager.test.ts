@@ -3,6 +3,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import type { FirmwareDevice } from '~/utils/api'
 import FirmwareManager from '~/components/FirmwareManager.vue'
 import AdminDashboard from '~/components/AdminDashboard.vue'
+import BpNotifyManager from '~/components/BpNotifyManager.vue'
 
 // 管理者の画面のタブ「端末のファーム」(Refs ippoan/alc-app#403)。
 // api の 2 関数は mock、manifest の fetch と confirm は stubGlobal。
@@ -15,6 +16,8 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   listFirmwareDevices,
   updateFirmware,
+  getBpNotifySettings: vi.fn(async () => ({ employees: [] })),
+  getLineworksUsers: vi.fn(async () => ({ users: [] })),
 }))
 
 const NOW = new Date('2026-10-01T03:00:00Z').getTime()
@@ -398,10 +401,10 @@ describe('FirmwareManager', () => {
 // AdminDashboard のタブ。専用のテストが無かったので、このタブの分だけ小さく見る。
 // 「端末のファーム」は更新できる端末が在るときだけ並びに出す (`?tab=firmware` では直接開ける)。
 describe('AdminDashboard — 端末のファームのタブ', () => {
-  // 変更前のタブの並び (12 個。端末の指静脈は Refs ippoan/alc-app#436)
+  // 変更前のタブの並び (13 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436)
   const TABS_BEFORE = [
     '乗務員', '免許証', '送信キュー', 'Webhook', '中間点呼', 'リモートカメラ',
-    '拠点カメラ', 'タイムカード', 'デバイス管理', '点呼', 'ハブ測定値', '端末の指静脈',
+    '拠点カメラ', 'タイムカード', 'デバイス管理', '点呼', 'ハブ測定値', '端末の指静脈', '血圧の通知',
   ]
   const TAB = '端末のファーム'
 
@@ -427,7 +430,7 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
   const labels = (w: Awaited<ReturnType<typeof mountAdmin>>) => w.findAll('button').map(b => b.text())
   const tabLabels = (w: Awaited<ReturnType<typeof mountAdmin>>) => labels(w).slice(0, labels(w).indexOf('ログアウト'))
 
-  it('更新できる端末が無いとき、並びに無い。既存の 12 個の並びは変わらない', async () => {
+  it('更新できる端末が無いとき、並びに無い。既存の 13 個の並びは変わらない', async () => {
     const wrapper = await mountAdmin()
     expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
     wrapper.unmount()
@@ -459,6 +462,17 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockRestore()
     wrapper.unmount()
+  })
+
+  it('「血圧の通知」のタブを押すと BpNotifyManager が描画される (?tab=bp_notify でも開ける)', async () => {
+    const wrapper = await mountAdmin()
+    expect(wrapper.findComponent(BpNotifyManager).exists()).toBe(false)
+    await wrapper.findAll('button').find(b => b.text() === '血圧の通知')!.trigger('click')
+    expect(wrapper.findComponent(BpNotifyManager).exists()).toBe(true)
+    wrapper.unmount()
+    const direct = await mountAdmin('bp_notify')
+    expect(direct.findComponent(BpNotifyManager).exists()).toBe(true)
+    direct.unmount()
   })
 
   it('?tab=firmware (initialTab) で開いたら、更新が無くてもタブが出ていて FirmwareManager が描画される', async () => {

@@ -81,6 +81,10 @@ import {
   getApprovedVeinTemplates,
   approveVeinTemplate,
   deleteVeinTemplate,
+  getBpNotifySettings,
+  updateBpNotifySetting,
+  getLineworksUsers,
+  linkBpNotifyByName,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -3037,6 +3041,53 @@ describe.skipIf(isLive)('指静脈の承認 (Refs ippoan/alc-app#436)', () => {
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toMatch(/\/vein\/templates\/emp%2F1$/)
     expect(init.method).toBe('DELETE')
+  })
+})
+
+// 血圧の通知の設定 (Refs ippoan/alc-app#436)。mock 専用
+describe.skipIf(isLive)('血圧の通知の設定 (#436)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('設定の一覧を GET で取る', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ employees: [] }))
+    await expect(getBpNotifySettings()).resolves.toEqual({ employees: [] })
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/bp-notify\/settings$/)
+  })
+
+  it('1 人分の更新は employee_id を encode して PUT する', async () => {
+    const row = { employee_id: 'emp/1', notify_self: true }
+    mockFetch.mockResolvedValueOnce(okJson(row))
+    await expect(updateBpNotifySetting('emp/1', { notify_self: true })).resolves.toEqual(row)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/bp-notify\/settings\/emp%2F1$/)
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({ notify_self: true })
+  })
+
+  it('更新の 409 は理由の本文つきで投げる', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(409, '{"error":"lineworks_user_taken"}'))
+    await expect(updateBpNotifySetting('e1', { lineworks_user_id: 'u1' })).rejects.toThrow('lineworks_user_taken')
+  })
+
+  it('LINE WORKS のユーザーの一覧を GET で取る', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ users: [] }))
+    await expect(getLineworksUsers()).resolves.toEqual({ users: [] })
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/bp-notify\/lineworks-users$/)
+  })
+
+  it('氏名での結び付けは dry_run を body に載せて POST する', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ dry_run: true, candidates: [], skipped: [], linked: 0 }))
+    await linkBpNotifyByName(true)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/bp-notify\/link-by-name$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ dry_run: true })
   })
 })
 

@@ -782,6 +782,79 @@ export async function deleteVeinTemplate(employeeId: string): Promise<void> {
   await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, { method: 'DELETE' }, 'admin')
 }
 
+/** 血圧の通知の設定 (社員 1 人分、Refs ippoan/alc-app#436) */
+export interface ApiBpNotifyEmployee {
+  employee_id: string
+  name: string
+  code: string
+  role: string[]
+  lineworks_user_id: string | null
+  lineworks_name: string | null
+  email: string | null
+  notify_self: boolean
+  daily_report: boolean
+}
+
+/** 血圧の通知の設定の更新 (省略した項目は変えない) */
+export interface ApiBpNotifyUpdate {
+  lineworks_user_id?: string | null
+  lineworks_name?: string | null
+  email?: string | null
+  notify_self?: boolean
+  daily_report?: boolean
+}
+
+/** LINE WORKS のユーザー (結び付け先の候補) */
+export interface ApiLineworksUser {
+  user_id: string
+  name: string
+  email: string | null
+}
+
+/** 氏名での結び付けの結果。`dry_run` なら候補を返すだけで何も変えない */
+export interface ApiBpNotifyLinkResult {
+  dry_run: boolean
+  candidates: {
+    employee_id: string
+    employee_name: string
+    lineworks_user_id: string
+    lineworks_name: string
+    email: string | null
+  }[]
+  skipped: {
+    employee_id: string
+    employee_name: string
+    reason: 'no_lineworks_user' | 'multiple_lineworks_users' | 'lineworks_user_taken'
+  }[]
+  linked: number
+}
+
+/** 血圧の通知の設定を全社員分取る (管理者だけ) */
+export async function getBpNotifySettings(): Promise<{ employees: ApiBpNotifyEmployee[] }> {
+  return request<{ employees: ApiBpNotifyEmployee[] }>('/api/bp-notify/settings', {}, 'admin')
+}
+
+/** 1 人分の血圧の通知の設定を更新する (管理者だけ)。LINE WORKS のユーザーが他の社員に結び付いていれば 409 */
+export async function updateBpNotifySetting(employeeId: string, body: ApiBpNotifyUpdate): Promise<ApiBpNotifyEmployee> {
+  return request<ApiBpNotifyEmployee>(`/api/bp-notify/settings/${encodeURIComponent(employeeId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }, 'admin')
+}
+
+/** 結び付け先にできる LINE WORKS のユーザーの一覧 (管理者だけ)。取れないときは 502/503 */
+export async function getLineworksUsers(): Promise<{ users: ApiLineworksUser[] }> {
+  return request<{ users: ApiLineworksUser[] }>('/api/bp-notify/lineworks-users', {}, 'admin')
+}
+
+/** 社員の氏名と LINE WORKS のユーザーの名前で結び付ける (管理者だけ)。`dryRun` なら候補を見るだけ */
+export async function linkBpNotifyByName(dryRun: boolean): Promise<ApiBpNotifyLinkResult> {
+  return request<ApiBpNotifyLinkResult>('/api/bp-notify/link-by-name', {
+    method: 'POST',
+    body: JSON.stringify({ dry_run: dryRun }),
+  }, 'admin')
+}
+
 /**
  * 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
  * rust-alc-api ではなく alc-app 自身の server route `/api/driver-master/run` を
