@@ -22,6 +22,7 @@ mockNuxtImport('useWebRtc', () => () => {
     isPeerConnected: ref(false),
     remoteStream: ref<unknown>(null),
     error: ref<string | null>(null),
+    ptzChannel: ref<unknown>(null),
     connect: vi.fn(async () => { inst.isConnected.value = true }),
     disconnect: vi.fn(),
   }
@@ -166,6 +167,94 @@ describe('CamLiveTile', () => {
     await w.setProps({ autoConnect: true })
     await flushPromises()
     expect(rtc.instances[0]!.connect).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('CamLiveTile の首振り (データチャネル ptz)', () => {
+  class FakeChannel {
+    readyState = 'open'
+    send = vi.fn()
+    listeners: Record<string, Array<(ev: any) => void>> = {}
+    addEventListener(type: string, fn: (ev: any) => void) { (this.listeners[type] ??= []).push(fn) }
+    removeEventListener(type: string, fn: (ev: any) => void) { this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn) }
+    emit(data: unknown) { for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(data) }) }
+    sent() { return this.send.mock.calls.map(c => JSON.parse(c[0])) }
+  }
+  const CAPS = { type: 'ptz', event: 'caps', dirs: ['up', 'down', 'left', 'right'], home: true, presets: [1, 2], zoom: false }
+
+  async function mountWithStream() {
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+    await flushPromises()
+    const inst = rtc.instances[0]!
+    inst.remoteStream.value = new MediaStream()
+    const ch = new FakeChannel()
+    inst.ptzChannel.value = ch
+    await nextTick()
+    return { w, ch }
+  }
+
+  it('古い host (チャネルが来ない・caps が来ない) ではボタンを出さない', async () => {
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+    await flushPromises()
+    rtc.instances[0]!.remoteStream.value = new MediaStream()
+    await nextTick()
+    expect(w.find(t('ptz')).exists()).toBe(false)
+    rtc.instances[0]!.ptzChannel.value = new FakeChannel()
+    await nextTick()
+    expect(w.find(t('ptz')).exists()).toBe(false)
+  })
+
+  it('caps が来たら方向・ホーム・プリセットを出し、押している間 move・離したら stop', async () => {
+    const { w, ch } = await mountWithStream()
+    ch.emit(CAPS)
+    await nextTick()
+    expect(w.find(t('ptz')).exists()).toBe(true)
+    for (const id of ['up', 'down', 'left', 'right', 'home', 'preset-1', 'preset-2']) expect(w.find(t(`ptz-${id}`)).exists()).toBe(true)
+    expect(w.find(t('ptz-zoom-in')).exists()).toBe(false)
+
+    const left = w.find(t('ptz-left'))
+    const capture = vi.fn()
+    ;(left.element as any).setPointerCapture = capture
+    await left.trigger('pointerdown', { pointerId: 7 })
+    expect(capture).toHaveBeenCalledWith(7)
+    expect(left.classes()).toContain('bg-blue-600/80')
+    await left.trigger('pointerup')
+    // setPointerCapture が無いブラウザでも動く
+    await w.find(t('ptz-up')).trigger('pointerdown')
+    await w.find(t('ptz-up')).trigger('pointercancel')
+    await w.find(t('ptz-down')).trigger('pointerdown')
+    await w.find(t('ptz-down')).trigger('lostpointercapture')
+    await w.find(t('ptz-home')).trigger('pointerdown')
+    await w.find(t('ptz-preset-2')).trigger('click')
+    expect(ch.sent()).toEqual([
+      { type: 'ptz', action: 'move', dir: 'left' },
+      { type: 'ptz', action: 'stop' },
+      { type: 'ptz', action: 'move', dir: 'up' },
+      { type: 'ptz', action: 'stop' },
+      { type: 'ptz', action: 'move', dir: 'down' },
+      { type: 'ptz', action: 'stop' },
+      { type: 'ptz', action: 'home' },
+      { type: 'ptz', action: 'preset', preset: 2 },
+    ])
+  })
+
+  it('caps に無いものは出さない。zoom があれば出す。失敗の文言を出す', async () => {
+    const { w, ch } = await mountWithStream()
+    ch.emit({ ...CAPS, dirs: ['left', 'right'], home: false, presets: [], zoom: true })
+    await nextTick()
+    expect(w.find(t('ptz-up')).exists()).toBe(false)
+    expect(w.find(t('ptz-home')).exists()).toBe(false)
+    expect(w.find(t('ptz-left')).exists()).toBe(true)
+    expect(w.find(t('ptz-preset-1')).exists()).toBe(false)
+    expect(w.find(t('ptz-zoom-in')).attributes('title')).toBe('ズームイン')
+    expect(w.find(t('ptz-zoom-out')).attributes('title')).toBe('ズームアウト')
+    await w.find(t('ptz-zoom-in')).trigger('click')
+    await w.find(t('ptz-zoom-out')).trigger('click')
+    expect(ch.sent()).toEqual([{ type: 'ptz', action: 'zoom', dir: 'in' }, { type: 'ptz', action: 'zoom', dir: 'out' }])
+    expect(w.find(t('ptz-message')).exists()).toBe(false)
+    ch.emit({ type: 'ptz', event: 'result', action: 'move', ok: false, message: 'カメラの認証に失敗しました' })
+    await nextTick()
+    expect(w.find(t('ptz-message')).text()).toBe('カメラの認証に失敗しました')
   })
 })
 

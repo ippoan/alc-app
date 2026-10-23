@@ -532,6 +532,31 @@ describe('useWebRtc', () => {
     expect(rtc.peerDeviceId.value).toBeNull()
   })
 
+  it('ondatachannel: ラベル ptz のチャネルだけ ptzChannel に出る。peer_left・failed・disconnect で null に戻る', async () => {
+    const rtc = useWebRtc('admin')
+    expect(rtc.ptzChannel.value).toBeNull()
+    await rtc.connect('wss://sig.example.com', 'cam-1', 'cam-room')
+    const ws = getWs()
+    const pc = getPc() as any
+    const ch = { label: 'ptz' }
+    pc.ondatachannel({ channel: { label: 'other' } })
+    expect(rtc.ptzChannel.value).toBeNull()
+    pc.ondatachannel({ channel: ch })
+    // Proxy に包まず元のチャネルを返す (send が呼べるように)
+    expect(rtc.ptzChannel.value).toBe(ch)
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_left' }) } as any)
+    expect(rtc.ptzChannel.value).toBeNull()
+
+    pc.ondatachannel({ channel: ch })
+    pc.connectionState = 'failed'
+    pc.onconnectionstatechange?.()
+    expect(rtc.ptzChannel.value).toBeNull()
+
+    pc.ondatachannel({ channel: ch })
+    rtc.disconnect()
+    expect(rtc.ptzChannel.value).toBeNull()
+  })
+
   it('peer_joined (role=device, device_id 無し) → peerDeviceId は null。role=admin の peer_joined では変わらない', async () => {
     const rtc = useWebRtc('admin')
     await rtc.connect('wss://sig.example.com', 'room-1')

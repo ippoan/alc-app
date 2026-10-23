@@ -45,6 +45,11 @@ export function useWebRtc(role: 'device' | 'admin') {
    * 申告が無い・相手が居ない・切断したら null
    */
   const peerDeviceId = ref<string | null>(null)
+  /**
+   * 拠点カメラ (alc-cam の host) が offer に入れてくる首振り用のデータチャネル `ptz`。admin の側だけで埋まる。
+   * 古い host・他の device は出さないので null のまま。読む側は `useCamPtz`
+   */
+  const ptzChannel = shallowRef<RTCDataChannel | null>(null)
 
   let ws: WebSocket | null = null
   let pc: RTCPeerConnection | null = null
@@ -140,12 +145,18 @@ export function useWebRtc(role: 'device' | 'admin') {
       startStatsLogging()
     }
 
+    pc.ondatachannel = (event) => {
+      log('ondatachannel:', event.channel.label)
+      if (event.channel.label === 'ptz') ptzChannel.value = event.channel
+    }
+
     pc.onconnectionstatechange = () => {
       log('connectionState:', pc?.connectionState)
       if (pc?.connectionState === 'failed' || pc?.connectionState === 'disconnected') {
         error.value = 'P2P 接続が切断されました'
         isPeerConnected.value = false
         remoteStream.value = null
+        ptzChannel.value = null
         stopStatsLogging()
       }
     }
@@ -247,6 +258,7 @@ export function useWebRtc(role: 'device' | 'admin') {
         isPeerConnected.value = false
         remoteStream.value = null
         peerDeviceId.value = null
+        ptzChannel.value = null
         break
       case 'error':
         log('server error:', data.message)
@@ -402,6 +414,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     isPeerConnected.value = false
     remoteStream.value = null
     peerDeviceId.value = null
+    ptzChannel.value = null
   }
 
   onUnmounted(() => disconnect())
@@ -413,6 +426,8 @@ export function useWebRtc(role: 'device' | 'admin') {
     error: readonly(error),
     endShareCount: readonly(endShareCount),
     peerDeviceId: readonly(peerDeviceId),
+    // readonly() は中身まで Proxy にして RTCDataChannel の send が呼べなくなるので computed で読み取り専用にする
+    ptzChannel: computed(() => ptzChannel.value),
     connect,
     startStreaming,
     sendEndShare,

@@ -135,6 +135,10 @@ path = "app/composables/useWebRtc.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useCamPtz.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useSerialArbiter.ts"
 branches = true
 

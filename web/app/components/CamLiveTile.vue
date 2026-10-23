@@ -3,7 +3,11 @@
  * 拠点カメラ 1 台ぶんのライブ表示タイル。`/cam-room/<roomId>` (roomId = alc_api.cameras.id) に
  * admin として繋ぎ、映像・接続状態・全画面を出す。カメラ一覧 (グリッド) と、単体の接続画面で共用する。
  * 切断は「切る」ボタン・unmount・`autoConnect` が false に戻ったとき。
+ * カメラ (alc-cam の host) が首振りのデータチャネル `ptz` を出していれば、映像の上に方向ボタン
+ * (押している間動く・離したら止まる) とプリセットを出す (`useCamPtz`)。出さない host ではボタンも出ない。
  */
+import type { PtzDir } from '~/composables/useCamPtz'
+
 const props = withDefaults(defineProps<{
   roomId: string
   /** タイルの見出し (カメラ名など)。無ければ roomId を出す */
@@ -22,6 +26,24 @@ const emit = defineEmits<{ 'update:active': [boolean] }>()
 const config = useRuntimeConfig()
 const { accessToken } = useAuth()
 const webRtc = useWebRtc('admin')
+const ptz = useCamPtz(webRtc.ptzChannel)
+
+/** 方向ボタンの並び (3x3、真ん中はホーム) */
+const PTZ_PAD: Array<PtzDir | 'home' | null> = [null, 'up', null, 'left', 'home', 'right', null, 'down', null]
+const PTZ_ICON: Record<PtzDir | 'home', string> = { up: '▲', down: '▼', left: '◀', right: '▶', home: '●' }
+const PTZ_LABEL: Record<PtzDir | 'home', string> = { up: '上へ', down: '下へ', left: '左へ', right: '右へ', home: 'ホームへ' }
+
+function ptzShown(cell: PtzDir | 'home') {
+  const caps = ptz.caps.value!
+  return cell === 'home' ? caps.home : caps.dirs.includes(cell)
+}
+
+/** 押している間は動かす。指が外へずれても離すまで追えるよう pointer を捕まえる */
+function onPtzPress(e: PointerEvent, cell: PtzDir | 'home') {
+  if (cell === 'home') return ptz.home()
+  ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+  ptz.move(cell)
+}
 
 const isActive = ref(false)
 const isConnecting = ref(false)
@@ -161,6 +183,65 @@ onUnmounted(() => {
         class="flex items-center justify-center h-40 text-gray-400 text-sm"
       >
         カメラ接続待ち...
+      </div>
+      <div
+        v-if="ptz.caps.value && webRtc.remoteStream.value"
+        class="absolute bottom-2 left-2 flex items-end gap-2 select-none touch-none"
+        data-testid="cam-tile-ptz"
+      >
+        <div class="grid grid-cols-3 gap-1">
+          <template v-for="(cell, i) in PTZ_PAD" :key="i">
+            <button
+              v-if="cell && ptzShown(cell)"
+              class="w-9 h-9 rounded-lg text-white text-sm"
+              :class="ptz.held.value === cell ? 'bg-blue-600/80' : 'bg-black/40 hover:bg-black/60'"
+              :title="PTZ_LABEL[cell]"
+              :aria-label="PTZ_LABEL[cell]"
+              :data-testid="`cam-tile-ptz-${cell}`"
+              @pointerdown.prevent="onPtzPress($event, cell)"
+              @pointerup="ptz.stop()"
+              @pointercancel="ptz.stop()"
+              @lostpointercapture="ptz.stop()"
+              @contextmenu.prevent
+            >
+              {{ PTZ_ICON[cell] }}
+            </button>
+            <span v-else class="w-9 h-9" />
+          </template>
+        </div>
+        <div class="flex flex-col gap-1">
+          <div v-if="ptz.caps.value.zoom" class="flex gap-1">
+            <button
+              v-for="z in (['in', 'out'] as const)"
+              :key="z"
+              class="w-9 h-9 rounded-lg bg-black/40 hover:bg-black/60 text-white text-sm"
+              :title="z === 'in' ? 'ズームイン' : 'ズームアウト'"
+              :data-testid="`cam-tile-ptz-zoom-${z}`"
+              @click="ptz.zoom(z)"
+            >
+              {{ z === 'in' ? '＋' : '－' }}
+            </button>
+          </div>
+          <div v-if="ptz.caps.value.presets.length" class="flex gap-1">
+            <button
+              v-for="n in ptz.caps.value.presets"
+              :key="n"
+              class="w-9 h-9 rounded-lg bg-black/40 hover:bg-black/60 text-white text-xs"
+              :title="`プリセット ${n} へ`"
+              :data-testid="`cam-tile-ptz-preset-${n}`"
+              @click="ptz.preset(n)"
+            >
+              P{{ n }}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        v-if="ptz.message.value"
+        class="absolute bottom-2 right-2 max-w-[60%] rounded bg-black/60 px-2 py-1 text-xs text-white"
+        data-testid="cam-tile-ptz-message"
+      >
+        {{ ptz.message.value }}
       </div>
       <button
         class="absolute top-2 right-2 p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
