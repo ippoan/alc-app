@@ -35,6 +35,8 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  * - **指静脈で特定したときは顔認証を飛ばして測定へ進む** (指静脈が本人確認そのもの)。顔の審査
  *   (`applyFaceApproval`) も通さないので、審査中・却下でも止めない。カードで特定したときは従来どおり顔認証。
  * - 血圧を受けたらすぐ完了の段へ進み、保存は裏で行う。保存中は次の人へ進ませず、失敗したら完了の段でやり直せる (Refs ippoan/alc-app#436)
+ * - 保存が済んだ完了の段は、結果の下に最初の画面 (指・カード・社員番号) も出し、{@link DONE_RETURN_SECONDS} 秒の
+ *   カウントダウンで最初の画面へ戻る。「次の人へ」を押さなくても、次の人が指を置く・カードをかざすとそのまま進む
  */
 
 type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble'
@@ -175,6 +177,7 @@ function proceedWithVeinEmployee(emp: { id: string; name: string }) {
 
 /** カード・社員番号で乗務員を引き、引けたら本人確認へ (どちらも同じ手順) */
 async function lookupEmployee(find: () => Promise<{ id: string; name: string; face_approval_status?: string }>, notFound: string) {
+  leaveDone()
   error.value = null
   employeeLookups.value += 1
   try {
@@ -220,6 +223,7 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
 
 async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
   if (veinBusy.value) return
+  leaveDone()
   veinBusy.value = true
   veinAgain.value = false
   veinError.value = null
@@ -236,7 +240,7 @@ async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
 // 指が置かれた合図 (EVT VEIN FINGER) で照合を始める。待機中 (カード待ちで、カードの照会も
 // 指静脈の読み取りも走っていない) のときだけ。ボタンは古いファーム向けに残す
 const isVeinIdle = computed(
-  () => step.value === 'nfc' && !veinBusy.value && employeeLookups.value === 0,
+  () => (step.value === 'nfc' || doneSettled.value) && !veinBusy.value && employeeLookups.value === 0,
 )
 const stopFingerWatch = veinSerial.onFingerPlaced(() => {
   if (isVeinIdle.value) void onVeinIdentify({ prompt: false })
@@ -315,6 +319,42 @@ function onMeasureNext() {
   measureNotice.value = '血圧がまだ測れていません。血圧計で測ってください'
 }
 
+/** 完了の段で、最初の画面へ戻るまでの秒数 */
+const DONE_RETURN_SECONDS = 10
+
+/** 完了の段で保存が済んだ (保存中でも失敗でもない)。このときだけ次の人の入口を出し、カウントダウンする */
+const doneSettled = computed(() => step.value === 'done' && !isSaving.value && !saveError.value)
+/** 最初の画面へ戻るまでの残り秒数。カウントダウンしていなければ null */
+const doneLeft = ref<number | null>(null)
+let doneTimer: ReturnType<typeof setInterval> | null = null
+
+function stopDoneCountdown() {
+  if (doneTimer) clearInterval(doneTimer)
+  doneTimer = null
+  doneLeft.value = null
+}
+
+watch(doneSettled, (settled) => {
+  stopDoneCountdown()
+  if (!settled) return
+  doneLeft.value = DONE_RETURN_SECONDS
+  doneTimer = setInterval(() => {
+    doneLeft.value = (doneLeft.value ?? 1) - 1
+    if (doneLeft.value <= 0) reset()
+  }, 1000)
+})
+onUnmounted(stopDoneCountdown)
+
+/** 完了の段のまま次の人が始めた (指・カード・社員番号)。前の人の結果を片付けて最初の段へ */
+function leaveDone() {
+  if (step.value !== 'done') return
+  step.value = 'nfc'
+  employeeId.value = ''
+  employeeName.value = ''
+  saveJob = null
+  savedReading.value = null
+}
+
 function reset() {
   step.value = 'nfc'
   employeeId.value = ''
@@ -365,8 +405,8 @@ function reset() {
         {{ error }}
       </div>
 
-      <!-- Step 1: 指を置く (主) / カードをかざす・社員番号を打つ (予備) -->
-      <div v-if="step === 'nfc'" class="bg-white rounded-2xl p-4 shadow-sm">
+      <!-- Step 1: 指を置く (主) / カードをかざす・社員番号を打つ (予備)。完了の段でも保存が済めば結果の下に出す -->
+      <div v-if="step === 'nfc' || doneSettled" data-testid="bp-entry" class="bg-white rounded-2xl p-4 shadow-sm" :class="{ 'order-last': doneSettled }">
         <h2 class="text-lg font-semibold text-gray-700 mb-4">乗務員ID</h2>
         <!-- 指静脈 (Refs ippoan/alc-app#436) とカードを横に並べる。Vein Station が無い端末ではカードだけ -->
         <div :class="veinReady ? 'grid grid-cols-2 gap-3' : ''">
@@ -388,7 +428,7 @@ function reset() {
       </div>
 
       <!-- Step 2: 顔認証 -->
-      <div v-else-if="step === 'face_auth'" class="bg-white rounded-2xl p-4 shadow-sm">
+      <div v-if="step === 'face_auth'" class="bg-white rounded-2xl p-4 shadow-sm">
         <h2 class="text-lg font-semibold text-gray-700 mb-4">顔認証</h2>
         <p class="text-sm text-gray-500 mb-2">{{ employeeName }}さん</p>
         <!-- 顔が未登録: 顔写真なしで進める (審査中・却下はここまで来ない) -->
@@ -420,7 +460,7 @@ function reset() {
       </div>
 
       <!-- Step 4: 完了 -->
-      <div v-else class="bg-white rounded-2xl p-4 shadow-sm text-center">
+      <div v-else-if="step === 'done'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
         <h2 class="text-lg font-semibold text-gray-700 mb-2">測定完了</h2>
         <p class="text-sm text-gray-500 mb-4">{{ employeeName }}さん</p>
         <p v-if="savedReading" class="text-3xl font-mono font-bold text-blue-700">
@@ -441,9 +481,12 @@ function reset() {
             もう一度保存
           </button>
         </template>
+        <p v-if="doneLeft !== null" data-testid="bp-done-countdown" class="mt-4 text-sm text-gray-500">
+          あと {{ doneLeft }} 秒で最初の画面に戻ります (下で次の人がそのまま始められます)
+        </p>
         <button
           :disabled="isSaving"
-          class="w-full mt-6 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+          class="w-full mt-3 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
           @click="reset"
         >
           次の人へ
