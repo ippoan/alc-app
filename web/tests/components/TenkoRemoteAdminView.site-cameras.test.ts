@@ -52,7 +52,7 @@ const FaceAuthStub = defineComponent({
 })
 const stubs = {
   FaceAuth: FaceAuthStub,
-  TenkoVideoCall: true,
+  TenkoVideoCall: { template: '<div />' },
   TenkoSiteCameras: { props: ['deviceId'], template: '<div data-testid="site-cameras-stub">{{ deviceId }}</div>' },
 }
 

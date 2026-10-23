@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { listCamClipsCamerasForTenko } from '~/utils/api'
+import { listCamClipsCamerasForTenko, MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
+import { selectSendToken } from '~/utils/token-selection'
 import type { CamClipsCameraSummary } from '~/utils/cam-clips'
 import { errorText } from '~/utils/cam-clips'
 
@@ -9,6 +10,19 @@ import { errorText } from '~/utils/cam-clips'
  * 通話を終えて外される (unmount) と、タイルごと切れる。端末 ID が変わったら引き直す。
  */
 const props = defineProps<{ deviceId: string }>()
+
+const { accessToken } = useAuth()
+const { getManagerJwt } = useManagerDeviceToken()
+
+/**
+ * cam-room への入室に付けるトークン。カメラ一覧 (`'manager-device'` の口) と同じ規則 —
+ * 管理者ログインがあればその JWT、無ければ運行管理者席の鍵 (期限・再取得は getManagerJwt が持つ)
+ */
+async function getSeatToken(): Promise<string> {
+  const token = await selectSendToken(accessToken.value, 'manager-device', getManagerJwt)
+  if (!token) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+  return token
+}
 
 const cameras = ref<CamClipsCameraSummary[]>([])
 const loading = ref(true)
@@ -51,6 +65,7 @@ watch(() => props.deviceId, id => load(id), { immediate: true })
         :room-id="c.id"
         :label="c.name"
         :auto-connect="true"
+        :get-token="getSeatToken"
         class="w-80 shrink-0"
       />
     </div>

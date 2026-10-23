@@ -1,8 +1,10 @@
 // 遠隔点呼の通話中に出す拠点カメラ (乗務員の端末が申告した端末 ID に紐づくカメラ)。
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoSiteCameras from '~/components/TenkoSiteCameras.vue'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 
 const api = vi.hoisted(() => ({ listCamClipsCamerasForTenko: vi.fn() }))
 vi.mock('~/utils/api', async importOriginal => ({
@@ -10,13 +12,17 @@ vi.mock('~/utils/api', async importOriginal => ({
   ...api,
 }))
 
+const auth = vi.hoisted(() => ({ adminJwt: null as string | null, getManagerJwt: vi.fn() }))
+mockNuxtImport('useAuth', () => () => ({ accessToken: ref(auth.adminJwt) }))
+mockNuxtImport('useManagerDeviceToken', () => () => ({ getManagerJwt: auth.getManagerJwt }))
+
 const CAMERAS = [
   { id: 'cam-1', name: '正門', device_ids: ['kiosk-1'] },
   { id: 'cam-2', name: '裏門', device_ids: ['kiosk-2'] },
   { id: 'cam-3', name: '車庫', device_ids: ['kiosk-1', 'kiosk-3'] },
 ]
 
-const stubs = { CamLiveTile: { props: ['roomId', 'label', 'autoConnect'], template: '<div data-testid="tile" :data-room="roomId" :data-auto="autoConnect">{{ label }}</div>' } }
+const stubs = { CamLiveTile: { name: 'CamLiveTile', props: ['roomId', 'label', 'autoConnect', 'getToken'], template: '<div data-testid="tile" :data-room="roomId" :data-auto="autoConnect">{{ label }}</div>' } }
 const mount = (deviceId: string) => mountSuspended(TenkoSiteCameras, { props: { deviceId }, global: { stubs } })
 const t = (id: string) => `[data-testid="site-cameras-${id}"]`
 
@@ -30,6 +36,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  auth.adminJwt = null
+  auth.getManagerJwt.mockResolvedValue('seat-jwt')
   api.listCamClipsCamerasForTenko.mockResolvedValue({ cameras: CAMERAS })
 })
 
@@ -95,5 +103,29 @@ describe('TenkoSiteCameras', () => {
     fourth.resolve({ cameras: CAMERAS })
     await flushPromises()
     expect(w.findAll('[data-testid="tile"]').map(x => x.attributes('data-room'))).toEqual(['cam-1', 'cam-3'])
+  })
+
+  describe('cam-room に付けるトークン (カメラ一覧と同じ規則)', () => {
+    async function tileGetToken() {
+      const w = await mount('kiosk-1')
+      await flushPromises()
+      return w.findComponent({ name: 'CamLiveTile' }).props('getToken') as () => Promise<string>
+    }
+
+    it('管理者ログインが無ければ運行管理者席の鍵', async () => {
+      await expect((await tileGetToken())()).resolves.toBe('seat-jwt')
+      expect(auth.getManagerJwt).toHaveBeenCalledTimes(1)
+    })
+
+    it('管理者ログインがあればその JWT (席の鍵は取らない)', async () => {
+      auth.adminJwt = 'admin-jwt'
+      await expect((await tileGetToken())()).resolves.toBe('admin-jwt')
+      expect(auth.getManagerJwt).not.toHaveBeenCalled()
+    })
+
+    it('席の鍵が取れなければ、席の端末を確かめる文言で投げる', async () => {
+      auth.getManagerJwt.mockResolvedValue(null)
+      await expect((await tileGetToken())()).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    })
   })
 })

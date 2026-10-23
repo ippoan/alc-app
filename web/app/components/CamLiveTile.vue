@@ -10,7 +10,12 @@ const props = withDefaults(defineProps<{
   label?: string
   /** true なら mount 時に自分で繋ぐ。false なら「接続」ボタンで繋ぐ */
   autoConnect?: boolean
-}>(), { label: undefined, autoConnect: false })
+  /**
+   * 入室に付けるトークンの取り方。繋ぐたびに呼ぶ (期限は getter の側で扱う)。投げたらその文言を出す。
+   * 無ければ管理者ログインの JWT (`useAuth().accessToken`)。遠隔点呼の画面は運行管理者席の鍵を渡す
+   */
+  getToken?: () => Promise<string | null>
+}>(), { label: undefined, autoConnect: false, getToken: undefined })
 
 const emit = defineEmits<{ 'update:active': [boolean] }>()
 
@@ -33,14 +38,24 @@ const SIGNALING_ERROR_HINT = '接続できませんでした。他の人が視�
 
 async function connect() {
   if (isActive.value || isConnecting.value) return
-  if (!accessToken.value) {
-    connectError.value = 'ログインセッションが見つかりません。再ログインしてください。'
-    return
-  }
   connectError.value = null
   isConnecting.value = true
+  let token: string | null
   try {
-    await webRtc.connect(signalingWsUrl, props.roomId, 'cam-room', accessToken.value)
+    token = props.getToken ? await props.getToken() : accessToken.value
+  }
+  catch (e) {
+    connectError.value = e instanceof Error ? e.message : '接続に必要な認証情報を取得できませんでした'
+    isConnecting.value = false
+    return
+  }
+  if (!token) {
+    connectError.value = 'ログインセッションが見つかりません。再ログインしてください。'
+    isConnecting.value = false
+    return
+  }
+  try {
+    await webRtc.connect(signalingWsUrl, props.roomId, 'cam-room', token)
     isActive.value = true
     emit('update:active', true)
   }
