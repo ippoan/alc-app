@@ -277,6 +277,8 @@ export interface SignalingInMessage {
   sdp?: string
   candidate?: RTCIceCandidateInit
   role?: 'device' | 'admin'
+  /** 遠隔点呼の部屋で、device (kiosk) が入室時に自己申告した端末 ID。admin への peer_joined にだけ載る */
+  device_id?: string
   message?: string
 }
 

@@ -500,6 +500,51 @@ describe('useWebRtc', () => {
     expect(rtc.remoteStream.value).toBeNull()
   })
 
+  // --- 遠隔点呼の端末 ID (device_id) ---
+
+  it('connect: deviceId 指定時は &device_id=... がURLに付与される (token より前)', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1', 'room', 'tok', 'kiosk 1')
+    expect(getWs().url).toBe('wss://sig.example.com/room/room-1?role=device&device_id=kiosk%201&token=tok')
+  })
+
+  it('connect: deviceId が null なら device_id は付かない', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-1', 'room', undefined, null)
+    expect(getWs().url).toBe('wss://sig.example.com/room/room-1?role=device')
+  })
+
+  it('peer_joined (role=device, device_id) → peerDeviceId に出る。peer_left・disconnect で null に戻る', async () => {
+    const rtc = useWebRtc('admin')
+    expect(rtc.peerDeviceId.value).toBeNull()
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const ws = getWs()
+    ws.onopen?.()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_joined', role: 'device', device_id: 'kiosk-1' }) } as any)
+    expect(rtc.peerDeviceId.value).toBe('kiosk-1')
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_left' }) } as any)
+    expect(rtc.peerDeviceId.value).toBeNull()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_joined', role: 'device', device_id: 'kiosk-2' }) } as any)
+    expect(rtc.peerDeviceId.value).toBe('kiosk-2')
+    rtc.disconnect()
+    expect(rtc.peerDeviceId.value).toBeNull()
+  })
+
+  it('peer_joined (role=device, device_id 無し) → peerDeviceId は null。role=admin の peer_joined では変わらない', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const ws = getWs()
+    ws.onopen?.()
+
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_joined', role: 'device', device_id: 'kiosk-1' }) } as any)
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_joined', role: 'admin' }) } as any)
+    expect(rtc.peerDeviceId.value).toBe('kiosk-1')
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_joined', role: 'device' }) } as any)
+    expect(rtc.peerDeviceId.value).toBeNull()
+  })
+
   // --- 画面共有の終了 (end_share) ---
 
   it('sendEndShare: end_share を送る', async () => {

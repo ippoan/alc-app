@@ -86,6 +86,7 @@ import {
   getLineworksUsers,
   linkBpNotifyByName,
   listCamClipsCameras,
+  listCamClipsCamerasForTenko,
   createCamClipsCamera,
   updateCamClipsCamera,
   listCamClipsDeviceCandidates,
@@ -3110,6 +3111,13 @@ describe.skipIf(isLive)('拠点カメラの録画 (alc-cam#2)', () => {
     mockFetch.mockResolvedValueOnce(okJson({ can_edit_destination: false, cameras: [] }))
     await expect(listCamClipsCameras()).resolves.toEqual({ can_edit_destination: false, cameras: [] })
     expect(mockFetch.mock.calls[0][0]).toMatch(/\/api\/proxy\/cam-clips\/cameras$/)
+  })
+
+  it('遠隔点呼の管理者画面向けの一覧も /cam-clips/cameras を GET する', async () => {
+    const cameras = [{ id: 'c1', name: '正門', device_ids: ['kiosk-1'] }]
+    mockFetch.mockResolvedValueOnce(okJson({ cameras }))
+    await expect(listCamClipsCamerasForTenko()).resolves.toEqual({ cameras })
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/cam-clips\/cameras$/)
   })
 
   it('追加は POST、更新は id を encode して PATCH する', async () => {

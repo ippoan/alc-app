@@ -17,6 +17,13 @@ export interface CamClipsCamera {
   rec_scanned_until: string | null
 }
 
+/** 運行管理者 (manager) に返るカメラ一覧の 1 件。読み取り専用で、録画・宛先の項目は載らない */
+export type CamClipsCameraSummary = Pick<CamClipsCamera, 'id' | 'name' | 'device_ids'>
+
+export interface CamClipsCameraSummaryList {
+  cameras: CamClipsCameraSummary[]
+}
+
 export interface CamClipsCameraList {
   /** 宛先 (vpc_binding) を書けるか (開発者の Google ログインのときだけ true) */
   can_edit_destination: boolean

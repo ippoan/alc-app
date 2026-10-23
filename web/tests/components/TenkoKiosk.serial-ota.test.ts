@@ -47,7 +47,7 @@ mockNuxtImport('useTimecardWatch', () => (options: TimecardWatchOptions) => {
 })
 
 const getDeviceJwt = vi.hoisted(() => vi.fn(async () => 'device-jwt'))
-mockNuxtImport('useDeviceToken', () => () => ({ getDeviceJwt }))
+mockNuxtImport('useDeviceToken', () => () => ({ getDeviceJwt, kioskDeviceId: ref(null) }))
 
 const step = ref<TenkoStep>('nfc')
 const error = ref<string | null>(null)

@@ -447,6 +447,11 @@ onUnmounted(() => {
       />
     </div>
 
+    <!-- 乗務員の端末が申告した端末 ID に紐づく拠点カメラ。通話を終えるとオーバーレイごと外れて切れる -->
+    <div v-if="webRtc.peerDeviceId.value" class="shrink-0 bg-gray-800 px-3 py-2">
+      <TenkoSiteCameras :device-id="webRtc.peerDeviceId.value" />
+    </div>
+
     <!-- 下: 点呼データテーブル -->
     <div v-if="liveSession" class="shrink-0 bg-white">
       <!-- ヘッダー -->

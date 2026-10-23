@@ -223,7 +223,23 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     expect(cameraStart).toHaveBeenCalled()
     expect(webRtcConnect).toHaveBeenCalledTimes(1)
     expect(webRtcConnect.mock.calls[0]![1]).toBe(SESSION_ID)
+    // 端末 ID が未登録の kiosk は申告しない
+    expect(webRtcConnect.mock.calls[0]![4]).toBeNull()
     wrapper.unmount()
+  })
+
+  it('端末 ID が登録済みの kiosk は、遠隔点呼の部屋に端末 ID を申告して入る', async () => {
+    const deviceToken = useDeviceToken()
+    deviceToken.storeKioskCredential('kiosk-dev-1', 'secret')
+    try {
+      const wrapper = await mountAtMedicalStep({ remoteMode: true })
+      expect(webRtcConnect).toHaveBeenCalledTimes(1)
+      expect(webRtcConnect.mock.calls[0]).toEqual([expect.any(String), SESSION_ID, 'room', undefined, 'kiosk-dev-1'])
+      wrapper.unmount()
+    }
+    finally {
+      deviceToken.clearKioskCredential()
+    }
   })
 
   it('遠隔に切り替えても段の数が変わらない', async () => {
