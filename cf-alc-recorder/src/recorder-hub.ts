@@ -266,6 +266,9 @@ const VEIN_MODULE_ID_MAX = 100;
 /** 乗務員の id の字種と長さ (UUID を想定)。 */
 const VEIN_EMPLOYEE_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
+/** 記録を登録した端末の id (端末の token の sub。`alarm:<鍵の指紋>` も有る) の字種と長さ。 */
+const VEIN_REGISTERED_DEVICE_RE = /^[A-Za-z0-9:_-]{1,64}$/;
+
 /** 版 (サーバーの `updated_at`) の長さ上限。 */
 const VEIN_VERSION_MAX_LEN = 64;
 
@@ -278,6 +281,8 @@ export interface VeinListEntry {
   employee_id: string;
   approved: boolean;
   version?: string;
+  /** 記録を登録した端末の id (サーバーの `registered_device_id`)。分からなければ持たない */
+  registered_device_id?: string;
 }
 
 /** 対応表の報告 1 件 (検査済み)。モジュールが答えなかった値は key ごと持たない。 */
@@ -322,6 +327,10 @@ function parseVeinListEntry(value: unknown): VeinListEntry | null {
   const entry: VeinListEntry = { module_id: moduleId, employee_id: employeeId, approved: src.approved };
   const version = src.version;
   if (typeof version === "string" && version.length <= VEIN_VERSION_MAX_LEN) entry.version = version;
+  const registered = src.registered_device_id;
+  if (typeof registered === "string" && VEIN_REGISTERED_DEVICE_RE.test(registered)) {
+    entry.registered_device_id = registered;
+  }
   return entry;
 }
 

@@ -126,7 +126,16 @@ describe('prepareVeinModuleRecord', () => {
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(11)
     expect(p.syncWrite).toHaveBeenCalledWith(11, expect.any(Uint8Array))
-    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true })
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true, registeredDeviceId: null })
+  })
+
+  it('登録した端末をサーバーの値で対応表に入れる', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([])
+    api.getVeinModuleTemplates.mockResolvedValue({
+      templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v3', registered_device_id: 'alarm:0123456789abcdef' }],
+    })
+    expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBe(10)
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith(expect.objectContaining({ registeredDeviceId: 'alarm:0123456789abcdef' }))
   })
 
   it('版が違えば (承認待ちで置いてあった場合も) 同じ ID に書き直す。古い対応は先に外す', async () => {
@@ -201,13 +210,34 @@ describe('syncVeinModule', () => {
       [13, new Uint8Array([0xDE, 0xED])],
     ])
     expect(db.putVeinModuleEntry.mock.calls).toEqual([
-      [entry('pending-approved', 10)],
-      [entry('changed', 12, { updatedAt: 'v2' })],
-      [entry('new', 13)],
+      [entry('pending-approved', 10, { registeredDeviceId: null })],
+      [entry('changed', 12, { updatedAt: 'v2', registeredDeviceId: null })],
+      [entry('new', 13, { registeredDeviceId: null })],
     ])
     // 書き直す前に古い版を外す (途中で落ちても古い版を承認済みとして引かない)
     expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('changed')
     expect(db.deleteVeinModuleEntry).not.toHaveBeenCalledWith('pending')
+  })
+
+  it('登録した端末をサーバーの値で持つ。版が同じでも端末が変われば書き直さずに対応表だけ合わせる', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([
+      entry('same', 10, { registeredDeviceId: 'alarm:0123456789abcdef' }),
+      entry('known', 11),
+    ])
+    api.getVeinModuleTemplates.mockResolvedValue({
+      templates: [
+        { employee_id: 'same', record: B64, updated_at: 'v1', registered_device_id: 'alarm:0123456789abcdef' },
+        { employee_id: 'known', record: B64, updated_at: 'v1', registered_device_id: 'kiosk-1' },
+        { employee_id: 'new', record: B64, updated_at: 'v1', registered_device_id: 'kiosk-2' },
+      ],
+    })
+    const p = port()
+    expect(await mod.syncVeinModule(p)).toBe(true)
+    expect(p.syncWrite.mock.calls.map(c => c[0])).toEqual([12])
+    expect(db.putVeinModuleEntry.mock.calls).toEqual([
+      [entry('known', 11, { registeredDeviceId: 'kiosk-1' })],
+      [entry('new', 12, { registeredDeviceId: 'kiosk-2' })],
+    ])
   })
 
   it('1 人の消す・書く失敗は飛ばして続ける (書けなかった人の ID は空きに戻る)', async () => {
@@ -226,7 +256,7 @@ describe('syncVeinModule', () => {
     expect(db.deleteVeinModuleEntry).not.toHaveBeenCalledWith('gone')
     expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('changed')
     expect(p.syncWrite.mock.calls.map(c => c[0])).toEqual([10, 10])
-    expect(db.putVeinModuleEntry.mock.calls).toEqual([[entry('new', 10)]])
+    expect(db.putVeinModuleEntry.mock.calls).toEqual([[entry('new', 10, { registeredDeviceId: null })]])
     expect(console.warn).toHaveBeenCalledTimes(2)
   })
 

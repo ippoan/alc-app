@@ -2093,6 +2093,20 @@ describe("parseVeinListReport", () => {
     });
   });
 
+  it("登録した端末の id は形が合えば残し、外れたら捨てる", () => {
+    const entries = [
+      { ...VEIN_ENTRY, registered_device_id: "alarm:0123456789abcdef" },
+      { ...VEIN_ENTRY, module_id: 11, registered_device_id: "a b" },
+      { ...VEIN_ENTRY, module_id: 12, registered_device_id: "x".repeat(65) },
+    ];
+    const parsed = parseVeinListReport({ device_id: "kiosk-1", entries });
+    expect(parsed.ok && parsed.report.entries.map((e) => e.registered_device_id)).toEqual([
+      "alarm:0123456789abcdef",
+      undefined,
+      undefined,
+    ]);
+  });
+
   it("任意の欄は形が外れたらその欄だけ捨てる", () => {
     expect(
       parseVeinListReport({

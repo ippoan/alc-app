@@ -1100,6 +1100,16 @@ describe('api', () => {
       })
     })
 
+    it.skipIf(isLive)('★ putVeinModuleRecord は端末の token があればそれで送る (管理者のログインがあっても。登録した端末を残すため)', async () => {
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')
+      mockFetch.mockResolvedValueOnce(okJson({ employee_id: TEST_EMPLOYEE_ID, updated_at: '2026-10-21T00:00:00Z' }))
+      await putVeinModuleRecord(TEST_EMPLOYEE_ID, new Uint8Array([0xDE, 0xED]))
+      const [url, init] = mockFetch.mock.calls.at(-1)!
+      expect(url).toContain(`/vein/templates/${TEST_EMPLOYEE_ID}/module`)
+      expect(init.method).toBe('PUT')
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+    })
+
     it.skipIf(isLive)('getVeinModuleTemplates は GET /api/vein/module-templates', async () => {
       stubOk({ templates: [] })
       await callApi(() => getVeinModuleTemplates())

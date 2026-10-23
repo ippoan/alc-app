@@ -120,7 +120,13 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
   // 書き込みが途中で落ちても、古い版を承認済みとして引かないよう先に外す
   if (own) await deleteVeinModuleEntry(employeeId)
   await port.syncWrite(id, base64ToBytes(template.record))
-  await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: template.updated_at, approved: true })
+  await putVeinModuleEntry({
+    employeeId,
+    moduleId: id,
+    updatedAt: template.updated_at,
+    approved: true,
+    registeredDeviceId: template.registered_device_id ?? null,
+  })
   return id
 }
 
@@ -162,8 +168,11 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     for (const t of templates) {
       const current = entries.get(t.employee_id)
       if (current?.updatedAt === t.updated_at) {
-        // この端末で登録した記録が承認された: モジュールには既に在る
-        if (!current.approved) await putVeinModuleEntry({ ...current, approved: true })
+        // この端末で登録した記録が承認された: モジュールには既に在る。登録した端末もサーバーの値に合わせる
+        const registeredDeviceId = t.registered_device_id ?? null
+        if (!current.approved || (current.registeredDeviceId ?? null) !== registeredDeviceId) {
+          await putVeinModuleEntry({ ...current, approved: true, registeredDeviceId })
+        }
         continue
       }
       const id = allocateVeinModuleId([...entries.values()], t.employee_id)
@@ -176,7 +185,13 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
         if (current) await deleteVeinModuleEntry(current.employeeId)
         entries.delete(t.employee_id)
         await port.syncWrite(id, base64ToBytes(t.record))
-        const entry = { employeeId: t.employee_id, moduleId: id, updatedAt: t.updated_at, approved: true }
+        const entry = {
+          employeeId: t.employee_id,
+          moduleId: id,
+          updatedAt: t.updated_at,
+          approved: true,
+          registeredDeviceId: t.registered_device_id ?? null,
+        }
         await putVeinModuleEntry(entry)
         entries.set(t.employee_id, entry)
       }

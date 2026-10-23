@@ -4,6 +4,8 @@ import { getEmployees } from '~/utils/api'
 import { loadVeinModuleEntries } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import { VEIN_MODULE_ID_MAX, VEIN_MODULE_ID_MIN } from '~/utils/vein-module'
+import { decodeJwtPayloadFromToken } from '@ippoan/auth-client'
+import { sameVeinDevice, veinDeviceLabel } from '~/utils/vein-device-label'
 
 /**
  * この端末の指静脈の一覧 (Refs ippoan/alc-app#436)。モジュールの ID (10〜100) ↔ 乗務員の対応表
@@ -20,6 +22,8 @@ const names = ref(new Map<string, string>())
 const moduleInfo = ref<{ users: number; max: number } | null>(null)
 const moduleError = ref<string | null>(null)
 const loading = ref(true)
+/** この端末の id (端末の token の sub)。取れなければ null。「この端末で登録した記録」の印に使う */
+const ownDeviceId = ref<string | null>(null)
 
 const capacity = VEIN_MODULE_ID_MAX - VEIN_MODULE_ID_MIN + 1
 const sorted = computed(() => [...entries.value].sort((a, b) => a.moduleId - b.moduleId))
@@ -37,6 +41,14 @@ async function load() {
   }
   catch {
     // 名前が引けなくても ID と対応は出す
+  }
+  try {
+    const token = await useDeviceToken().getDeviceJwt()
+    const sub = token ? (decodeJwtPayloadFromToken(token) as { sub?: unknown } | null)?.sub : null
+    ownDeviceId.value = typeof sub === 'string' ? sub : null
+  }
+  catch {
+    ownDeviceId.value = null
   }
   try {
     moduleInfo.value = await veinSerial.syncInfo()
@@ -58,6 +70,11 @@ function nameOf(entry: VeinModuleEntry): string {
 const latest = computed(() =>
   entries.value.reduce<VeinModuleEntry | null>((max, e) => (!max || e.updatedAt > max.updatedAt ? e : max), null),
 )
+
+function registeredOf(entry: VeinModuleEntry): string {
+  const label = veinDeviceLabel(entry.registeredDeviceId)
+  return sameVeinDevice(entry.registeredDeviceId, ownDeviceId.value) ? `${label} (この端末)` : label
+}
 
 function versionOf(entry: VeinModuleEntry): string {
   const d = new Date(entry.updatedAt)
@@ -89,6 +106,7 @@ function versionOf(entry: VeinModuleEntry): string {
             <th class="py-1 pr-2">ID</th>
             <th class="py-1 pr-2">乗務員</th>
             <th class="py-1 pr-2">状態</th>
+            <th class="py-1 pr-2">登録した端末</th>
             <th class="py-1">記録の版</th>
           </tr>
         </thead>
@@ -97,6 +115,7 @@ function versionOf(entry: VeinModuleEntry): string {
             <td class="py-1 pr-2 font-mono">{{ e.moduleId }}</td>
             <td class="py-1 pr-2">{{ nameOf(e) }}</td>
             <td class="py-1 pr-2">{{ e.approved ? '承認済み' : '承認待ち' }}</td>
+            <td class="py-1 pr-2" data-testid="vein-module-registered">{{ registeredOf(e) }}</td>
             <td class="py-1 text-gray-500">{{ versionOf(e) }}</td>
           </tr>
         </tbody>
