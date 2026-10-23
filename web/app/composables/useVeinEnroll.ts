@@ -21,15 +21,30 @@ import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage } f
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import { allocateVeinModuleId, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
+import { appendDiag } from '~/utils/serialDiagLog'
 
 /** モジュールの ID が空いていない / サーバーの上限 (409) */
 export const VEIN_ENROLL_FULL_MESSAGE = 'これ以上登録できません'
 /** 置き直しの照合が外れた (`ERR VEIN RETAKE`)。自動では繰り返さない */
 export const VEIN_ENROLL_RETAKE_MESSAGE = 'もう一度、最初から登録してください'
 
+/**
+ * モジュールが返した理由のコード (`RC=<hex2>`) のうち、意味が分かっているもの → 画面の文言。
+ * 11 / 09 は照合の撮り直しの理由 (`EVT VEIN AGAIN <理由>`) と同じコード
+ */
+const VEIN_RC_MESSAGES: Record<string, string> = {
+  '11': '静脈が写りませんでした。指を奥までまっすぐ置き、動かさずに、もう一度登録してください',
+  '09': '途中で違う指が置かれました。同じ指で、もう一度最初から登録してください',
+}
+
 /** ERR VEIN の理由 (useVeinSerial が message に載せる) / 422 の message (apiErrorMessage) を拾う */
-function veinErrorMessage(e: unknown): string {
-  return apiErrorMessage(e) ?? (e instanceof Error ? e.message : '指静脈登録エラー')
+export function veinErrorMessage(e: unknown): string {
+  const api = apiErrorMessage(e)
+  if (api) return api
+  const raw = e instanceof Error ? e.message : '指静脈登録エラー'
+  const rc = /^RC=([0-9A-Fa-f]{2})$/.exec(raw)?.[1]?.toUpperCase()
+  // 調べるときのためにコードは残す
+  return rc && VEIN_RC_MESSAGES[rc] ? `${VEIN_RC_MESSAGES[rc]} (RC=${rc})` : raw
 }
 
 export function useVeinEnroll() {
@@ -60,6 +75,11 @@ export function useVeinEnroll() {
       registered.value = true
     } catch (e) {
       error.value = veinErrorMessage(e)
+      // 画面の文言は次の操作で消えるので、調べられるよう残す (氏名・社員 id・記録の中身は出さない)。
+      // 診断ログ (`alc_serial_diag`) は現場の PC の localStorage で、後から読める
+      const msg = `[vein] 登録に失敗: ${e instanceof Error ? e.message : String(e)}`
+      console.warn(msg)
+      appendDiag(msg)
       try { await veinSerial.say('FAILED') } catch { /* 案内の失敗は握り潰す (登録失敗の表示が主) */ }
     } finally {
       notice.value = null
