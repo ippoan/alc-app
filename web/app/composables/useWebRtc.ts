@@ -40,6 +40,11 @@ export function useWebRtc(role: 'device' | 'admin') {
    * 読む側 (`useScreenShare`) がこの連番を watch する (`useAlarmDevice` の `buttonPressCount` と同じ作法)
    */
   const endShareCount = ref(0)
+  /**
+   * 相手の device (遠隔点呼の kiosk) が入室時に自己申告した端末 ID。admin の側だけで埋まる。
+   * 申告が無い・相手が居ない・切断したら null
+   */
+  const peerDeviceId = ref<string | null>(null)
 
   let ws: WebSocket | null = null
   let pc: RTCPeerConnection | null = null
@@ -231,6 +236,7 @@ export function useWebRtc(role: 'device' | 'admin') {
       case 'peer_joined':
         log('peer_joined')
         isPeerConnected.value = true
+        if (data.role === 'device') peerDeviceId.value = data.device_id ?? null
         // Device 側: peer(admin)が来たら offer を作成
         if (role === 'device' && pc) {
           createAndSendOffer()
@@ -240,6 +246,7 @@ export function useWebRtc(role: 'device' | 'admin') {
         log('peer_left')
         isPeerConnected.value = false
         remoteStream.value = null
+        peerDeviceId.value = null
         break
       case 'error':
         log('server error:', data.message)
@@ -269,8 +276,17 @@ export function useWebRtc(role: 'device' | 'admin') {
    * (fail-closed) — token なしで繋ぐと部屋が本番の側に登録されるため。
    * 印が無い端末・`cam-room`・token を明示した呼び出しは、この分岐に入らず今までどおり
    * (WebSocket は connect() の同期の流れの中で作られる)。
+   *
+   * `deviceId` は遠隔点呼の kiosk が自分の端末 ID を申告するときだけ渡す (`?device_id=`)。
+   * signaling は admin への `peer_joined` に載せ、管理者画面がその端末の拠点カメラを引く。
    */
-  async function connect(signalingUrl: string, roomId: string, path: 'room' | 'cam-room' = 'room', token?: string) {
+  async function connect(
+    signalingUrl: string,
+    roomId: string,
+    path: 'room' | 'cam-room' = 'room',
+    token?: string,
+    deviceId?: string | null,
+  ) {
     error.value = null
     const generation = ++connectGeneration
 
@@ -296,7 +312,8 @@ export function useWebRtc(role: 'device' | 'admin') {
     createPeerConnection()
 
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
-    const url = `${signalingUrl}/${path}/${roomId}?role=${role}${tokenParam}`
+    const deviceParam = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : ''
+    const url = `${signalingUrl}/${path}/${roomId}?role=${role}${deviceParam}${tokenParam}`
     log('connect:', `${signalingUrl}/${path}/${roomId}?role=${role}`, token ? '(token付き)' : '(token無し)')
     ws = new WebSocket(url)
 
@@ -384,6 +401,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     isConnected.value = false
     isPeerConnected.value = false
     remoteStream.value = null
+    peerDeviceId.value = null
   }
 
   onUnmounted(() => disconnect())
@@ -394,6 +412,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     remoteStream: readonly(remoteStream),
     error: readonly(error),
     endShareCount: readonly(endShareCount),
+    peerDeviceId: readonly(peerDeviceId),
     connect,
     startStreaming,
     sendEndShare,

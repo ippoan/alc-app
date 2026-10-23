@@ -28,7 +28,7 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import type {
-  CamClipsCameraList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip,
+  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip,
 } from '~/utils/cam-clips'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
@@ -1908,6 +1908,14 @@ export async function listHubMeasurements(filter: {
 
 export async function listCamClipsCameras(): Promise<CamClipsCameraList> {
   return request<CamClipsCameraList>('/api/cam-clips/cameras', {}, 'admin')
+}
+
+/**
+ * 遠隔点呼の管理者画面向けのカメラ一覧 (読み取りだけ)。予定の口と同じく運行管理者席の鍵
+ * (`device-tenko-manager`) で送る (管理者ログインがあればそちら)。返るのは id・name・device_ids だけ
+ */
+export async function listCamClipsCamerasForTenko(): Promise<CamClipsCameraSummaryList> {
+  return request<CamClipsCameraSummaryList>('/api/cam-clips/cameras', {}, 'manager-device')
 }
 
 export async function createCamClipsCamera(body: CamClipsCreateBody): Promise<CamClipsCamera> {

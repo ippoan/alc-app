@@ -100,6 +100,40 @@ describe('CamLiveTile', () => {
     expect(w.find(t('error')).text()).toContain('再ログイン')
   })
 
+  it('getToken を渡されたら、管理者ログインの JWT ではなくその戻り値で繋ぐ (繋ぐたびに呼ぶ)', async () => {
+    tokenRef.v = null
+    const getToken = vi.fn(async () => 'seat-jwt')
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true, getToken } })
+    await flushPromises()
+    expect(rtc.instances[0]!.connect).toHaveBeenCalledWith(expect.any(String), 'cam-1', 'cam-room', 'seat-jwt')
+    await w.find(t('disconnect')).trigger('click')
+    await w.find(t('connect')).trigger('click')
+    await flushPromises()
+    expect(getToken).toHaveBeenCalledTimes(2)
+  })
+
+  it('getToken が投げたら繋がずにその文言を出す (Error でなければ汎用の文言)', async () => {
+    const getToken = vi.fn().mockRejectedValueOnce(new Error('席の鍵が取れません')).mockRejectedValueOnce('x')
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', getToken } })
+    await w.find(t('connect')).trigger('click')
+    await flushPromises()
+    expect(w.find(t('error')).text()).toBe('席の鍵が取れません')
+    expect(w.find(t('connect')).attributes('disabled')).toBeUndefined()
+    await w.find(t('connect')).trigger('click')
+    await flushPromises()
+    expect(w.find(t('error')).text()).toBe('接続に必要な認証情報を取得できませんでした')
+    expect(rtc.instances[0]!.connect).not.toHaveBeenCalled()
+  })
+
+  it('getToken が null を返したら繋がずに文言を出す', async () => {
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', getToken: async () => null } })
+    await w.find(t('connect')).trigger('click')
+    await flushPromises()
+    expect(rtc.instances[0]!.connect).not.toHaveBeenCalled()
+    expect(w.find(t('error')).exists()).toBe(true)
+    expect(w.find(t('connect')).attributes('disabled')).toBeUndefined()
+  })
+
   it('映像が届いたら video に付け、全画面を切り替え、unmount で切る', async () => {
     const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true }, attachTo: document.body })
     await flushPromises()
