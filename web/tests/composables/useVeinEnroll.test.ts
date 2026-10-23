@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly, defineComponent, h } from 'vue'
 import { flushPromises } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
-import { useVeinEnroll, VEIN_ENROLL_FULL_MESSAGE, VEIN_ENROLL_RETAKE_MESSAGE } from '~/composables/useVeinEnroll'
+import { useVeinEnroll, veinErrorMessage, VEIN_ENROLL_FULL_MESSAGE, VEIN_ENROLL_RETAKE_MESSAGE } from '~/composables/useVeinEnroll'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
 
 /**
@@ -39,6 +39,12 @@ vi.mock('~/utils/api', async (importOriginal) => ({
 }))
 
 // モジュール経路の判定 (usesVeinModule) と手元の対応表 (Refs ippoan/alc-app#436)。ID の割り振りは本物 (vein-module.test.ts)
+const diag = vi.hoisted(() => ({ appendDiag: vi.fn() }))
+vi.mock('~/utils/serialDiagLog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/utils/serialDiagLog')>()),
+  ...diag,
+}))
+
 const viaModule = vi.hoisted(() => ({ on: false }))
 vi.mock('~/utils/vein-module', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/vein-module')>()),
@@ -180,6 +186,18 @@ describe('useVeinEnroll', () => {
       expect(putVeinModuleRecordMock).not.toHaveBeenCalled()
     })
 
+    it('★ 失敗は理由をコンソールと診断ログに残す。意味の分かる理由のコードは文言にする (コードは添える)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      diag.appendDiag.mockClear()
+      veinEnroll.mockRejectedValue(new Error('RC=11'))
+      const vein = await setup()
+      await vein.enroll('emp-test-1')
+      expect(vein.error.value).toBe('静脈が写りませんでした。指を奥までまっすぐ置き、動かさずに、もう一度登録してください (RC=11)')
+      expect(diag.appendDiag).toHaveBeenCalledWith('[vein] 登録に失敗: RC=11')
+      expect(warn).toHaveBeenCalledWith('[vein] 登録に失敗: RC=11')
+      warn.mockRestore()
+    })
+
     it('上限の 409 は「これ以上登録できません」。預からなかった記録はモジュールから消す', async () => {
       putVeinModuleRecordMock.mockRejectedValue(
         new Error('API エラー (409): {"error":"too_many_module_records","message":"上限です"}'),
@@ -200,5 +218,14 @@ describe('useVeinEnroll', () => {
       expect(veinSyncClear).toHaveBeenCalledWith(11)
       expect(vein.error.value).toBe('記録が空です')
     })
+  })
+})
+
+describe('veinErrorMessage', () => {
+  it('RC の既知のコードは文言 + コード、未知のコード・ほかの理由・Error でないものはそのまま', () => {
+    expect(veinErrorMessage(new Error('RC=09'))).toBe('途中で違う指が置かれました。同じ指で、もう一度最初から登録してください (RC=09)')
+    expect(veinErrorMessage(new Error('RC=0c'))).toBe('RC=0c')
+    expect(veinErrorMessage(new Error('NO_FINGER'))).toBe('NO_FINGER')
+    expect(veinErrorMessage('x')).toBe('指静脈登録エラー')
   })
 })

@@ -65,8 +65,12 @@ const IDENTIFY_TIMEOUT_MS = 55_000
 /** `VEIN SAY` は読み取り中でもすぐ鳴るので capture より短くてよい */
 const SAY_TIMEOUT_MS = 5000
 
-/** `VEIN ENROLL` は 3 回置く (1 回あたり指待ち 15 秒強) ので、最長 1 分弱に余裕を足す */
-const ENROLL_TIMEOUT_MS = 90_000
+/**
+ * `VEIN ENROLL` は 4 回置き、ファーム (ippoan/alc-app-s3#330) は 1 回置くごとに撮り直しを 5 回まで許す
+ * (撮り直しのたびに指を最長 15 秒待つ)。ふつうは 1 分ほどで終わるが、撮り直しが続いた回を途中で
+ * 打ち切らないよう 4 分にする
+ */
+const ENROLL_TIMEOUT_MS = 240_000
 
 /** `VEIN SYNC WRITE` の 1 行・`VEIN SYNC CLEAR` の応答上限 */
 const SYNC_STEP_TIMEOUT_MS = 5000
