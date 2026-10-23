@@ -39,8 +39,8 @@ export function headersWithDev(request: Request, dev: boolean): Headers {
   return headers;
 }
 
-/** cam-room admin 接続を許可する role (Google ログイン JWT の role claim、Refs alc-app#129)。 */
-export const CAM_ADMIN_ROLE = "admin";
+/** cam-room admin 接続を許可する role (Google ログイン JWT の role claim、Refs alc-app#129)。運行管理者 (manager) も視聴できる。 */
+export const CAM_ADMIN_ROLES: readonly string[] = ["admin", "manager"];
 
 /** Secrets Store binding (`.get()`) / 文字列 のいずれでも値を取り出す。 */
 export async function resolveSecret(binding: unknown): Promise<string | null> {
@@ -80,11 +80,11 @@ export async function introspectToken(
 /**
  * introspect 結果から admin WS ハンドシェイクの可否を決める (純粋関数)。
  * - `active` でない (署名不正 / exp 切れ / env 不一致) → 401
- * - role が "admin" でない (manager / viewer 等) → 403
+ * - role が "admin" / "manager" でない (viewer 等) → 403
  */
 export function decideCamAdminAuth(result: IntrospectResult | null | undefined): 401 | 403 | 101 {
   if (!result || result.active !== true) return 401;
-  if (result.role !== CAM_ADMIN_ROLE) return 403;
+  if (!result.role || !CAM_ADMIN_ROLES.includes(result.role)) return 403;
   return 101;
 }
 

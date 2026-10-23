@@ -22,6 +22,7 @@ interface ServerMessage {
   candidate?: IceCandidate;
   role?: ClientRole;
   message?: string;
+  device_id?: string;
 }
 
 interface Env {
@@ -32,6 +33,8 @@ interface Env {
 interface PeerAttachment {
   /** dev端末の鍵で入った接続か (worker が introspect の結果から決めた値)。 */
   dev: boolean;
+  /** device が自己申告した端末 ID (遠隔点呼の kiosk、`?device_id=`)。admin への peer_joined に載せる。 */
+  deviceId?: string;
   /** dev の device が入ってきて切られた admin。close の完了までの間、居ないものとして扱う。 */
   kicked?: true;
 }
@@ -71,13 +74,14 @@ export class SignalingRoom extends DurableObject<Env> {
     const pair = new WebSocketPair();
     // Accept with role tag for Hibernatable WebSockets
     this.ctx.acceptWebSocket(pair[1], [role]);
-    pair[1].serializeAttachment({ dev } satisfies PeerAttachment);
+    const deviceId = role === 'device' ? url.searchParams.get('device_id') || undefined : undefined;
+    pair[1].serializeAttachment({ dev, ...(deviceId ? { deviceId } : {}) } satisfies PeerAttachment);
 
     // admin が先に入っている部屋に dev の device が入ってきたら、dev でない admin を切る。
     if (role === 'device' && dev) {
       for (const admin of this.liveSockets('admin')) {
         if (this.getAttachment(admin).dev) continue;
-        admin.serializeAttachment({ dev: false, kicked: true } satisfies PeerAttachment);
+        admin.serializeAttachment({ ...this.getAttachment(admin), dev: false, kicked: true } satisfies PeerAttachment);
         try {
           admin.close(CLOSE_DEV_ROOM, 'dev room');
         } catch {
@@ -94,13 +98,14 @@ export class SignalingRoom extends DurableObject<Env> {
     }
 
     // Notify the other peer that a new participant joined
-    this.notifyPeer(role, { type: 'peer_joined', role });
+    this.notifyPeer(role, { type: 'peer_joined', role, ...(deviceId ? { device_id: deviceId } : {}) });
 
     // If the other peer is already connected, notify the newly joined client too
     const peerRole: ClientRole = role === 'device' ? 'admin' : 'device';
     const existingPeers = this.liveSockets(peerRole);
     if (existingPeers.length > 0) {
-      this.send(pair[1], { type: 'peer_joined', role: peerRole });
+      const peerDeviceId = peerRole === 'device' ? this.getAttachment(existingPeers[0]).deviceId : undefined;
+      this.send(pair[1], { type: 'peer_joined', role: peerRole, ...(peerDeviceId ? { device_id: peerDeviceId } : {}) });
     }
 
     return new Response(null, { status: 101, webSocket: pair[0] });
@@ -216,7 +221,11 @@ export class SignalingRoom extends DurableObject<Env> {
   /** attachment を読む。attachment の無い接続 (この変更より前に張られたもの) は dev でない。 */
   private getAttachment(ws: WebSocket): PeerAttachment {
     const att = ws.deserializeAttachment() as Partial<PeerAttachment> | null;
-    return { dev: att?.dev === true, ...(att?.kicked ? { kicked: true } : {}) };
+    return {
+      dev: att?.dev === true,
+      ...(att?.deviceId ? { deviceId: att.deviceId } : {}),
+      ...(att?.kicked ? { kicked: true } : {}),
+    };
   }
 
   /** その role の接続のうち、切られていないもの。 */
