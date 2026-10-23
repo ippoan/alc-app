@@ -4,8 +4,9 @@ import { getBpNotifySettings, getLineworksUsers, linkBpNotifyByName, updateBpNot
 import { failureStatus } from '~/utils/employee-lookup-messages'
 
 /**
- * 血圧の通知の管理 (Refs ippoan/alc-app#436)。測った本人への LINE WORKS と、毎朝 7:00 の管理者への
- * 日報メールの宛先を、社員ごとに決める。既存の通知 (宛先の画面) とは別。変更はその場で保存する。
+ * 血圧の通知の管理 (Refs ippoan/alc-app#436)。測った本人への LINE WORKS の結び付けと
+ * 本人への通知を、社員ごとに決める。毎朝 7:00 の日報メールの宛先はここではなく、通知の宛先の画面で選ぶ。
+ * 変更はその場で保存する。
  */
 
 const SKIP_REASONS: Record<string, string> = {
@@ -57,10 +58,6 @@ async function loadUsers() {
 }
 
 onMounted(() => Promise.all([loadEmployees(), loadUsers()]))
-
-function isManager(e: ApiBpNotifyEmployee): boolean {
-  return e.role.includes('manager') || e.role.includes('admin')
-}
 
 /**
  * LINE WORKS のユーザー → 結び付いている社員。表全体で 1 回だけ数える (行ごとに数え直すと、
@@ -130,9 +127,9 @@ function onSelect(e: ApiBpNotifyEmployee, ev: Event) {
   return save(e, body, () => { el.value = e.lineworks_user_id ?? '' })
 }
 
-function onCheck(e: ApiBpNotifyEmployee, field: 'notify_self' | 'daily_report', ev: Event) {
+function onCheckSelf(e: ApiBpNotifyEmployee, ev: Event) {
   const el = ev.target as HTMLInputElement
-  return save(e, { [field]: el.checked }, () => { el.checked = e[field] })
+  return save(e, { notify_self: el.checked }, () => { el.checked = e.notify_self })
 }
 
 async function previewLink() {
@@ -190,7 +187,7 @@ function cancelLink() {
   <div class="space-y-4" data-testid="bp-notify">
     <div class="bg-white rounded-xl p-4 shadow-sm space-y-3">
       <p class="text-sm text-gray-600" data-testid="bp-notify-description">
-        血圧を測ると、結び付けた LINE WORKS へ本人に結果が届きます。毎朝 7:00 に前日の記録の一覧が、日報を受け取る管理者へメールで届きます
+        血圧を測ると、結び付けた LINE WORKS へ本人に結果が届きます。毎朝 7:00 の日報メールの宛先は、通知の宛先の画面の「血圧の日報」で選びます
       </p>
 
       <div class="flex items-center gap-3">
@@ -264,15 +261,13 @@ function cancelLink() {
             <th class="py-1 pr-3">氏名</th>
             <th class="py-1 pr-3">コード</th>
             <th class="py-1 pr-3">LINE WORKS のユーザー</th>
-            <th class="py-1 pr-3">本人に通知</th>
-            <th class="py-1">日報を受け取る</th>
+            <th class="py-1">本人に通知</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="e in employees" :key="e.employee_id" class="border-t" data-testid="bp-notify-row">
             <td class="py-2 pr-3">
               {{ e.name }}
-              <span v-if="isManager(e)" class="ml-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800" data-testid="bp-notify-manager">管理者</span>
             </td>
             <td class="py-2 pr-3">{{ e.code }}</td>
             <td class="py-2 pr-3">
@@ -303,29 +298,14 @@ function cancelLink() {
               </template>
               <span v-if="e.lineworks_user_id && !e.email" class="ml-1 text-xs text-gray-500">メールなし</span>
             </td>
-            <td class="py-2 pr-3">
+            <td class="py-2">
               <input
                 type="checkbox"
                 data-testid="bp-notify-self"
                 :checked="e.notify_self"
                 :disabled="busy.has(e.employee_id)"
-                @change="onCheck(e, 'notify_self', $event)"
+                @change="onCheckSelf(e, $event)"
               >
-            </td>
-            <td class="py-2">
-              <span v-if="!isManager(e)" class="text-gray-400" data-testid="bp-notify-report-na">-</span>
-              <template v-else>
-                <input
-                  type="checkbox"
-                  data-testid="bp-notify-report"
-                  :checked="e.daily_report"
-                  :disabled="busy.has(e.employee_id) || !e.email"
-                  @change="onCheck(e, 'daily_report', $event)"
-                >
-                <span v-if="!e.email" class="ml-1 text-xs text-gray-500" data-testid="bp-notify-report-reason">
-                  メールが未設定のため選べません (メールのある LINE WORKS のユーザーを結び付けてください)
-                </span>
-              </template>
             </td>
           </tr>
         </tbody>
