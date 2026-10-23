@@ -35,6 +35,8 @@ export interface CamClipsDeviceCandidate {
   device_id: string
   counts: CamClipsDeviceCounts
   last_at: string
+  /** 開発端末か (ingest が返さない間は無い = false 扱い) */
+  is_dev?: boolean
 }
 
 /** `POST /clips` の応答 (使う項目だけ) */
@@ -192,9 +194,15 @@ export function summarizeCounts(c: CamClipsDeviceCounts): string {
   return parts.filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(' / ') || '件数なし'
 }
 
-/** 端末の登録簿 (ファームの一覧) と device_id が一致するときだけ表示名を返す。無ければ null */
-export function deviceDisplayName(deviceId: string, known: { device_id: string, label: string | null }[]): string | null {
-  return known.find(k => sameVeinDevice(k.device_id, deviceId))?.label ?? null
+/** 登録簿に名前が無い端末の表示名 */
+export const UNNAMED_DEVICE = '名前未登録の端末'
+
+/**
+ * 端末の表示名。登録簿 (ファームの一覧) と device_id が一致すればその名前、無ければ `UNNAMED_DEVICE`。
+ * device_id は付けない (画面で別の行に出す。くっつけると境目が見えない)
+ */
+export function deviceDisplayName(deviceId: string, known: { device_id: string, label: string | null }[]): string {
+  return known.find(k => sameVeinDevice(k.device_id, deviceId))?.label || UNNAMED_DEVICE
 }
 
 /**
