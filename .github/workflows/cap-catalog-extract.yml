@@ -6,7 +6,13 @@ on:
     branches: [main]
 
 # Per-job permission パターン (Refs ippoan/cap-catalog#29 retroactive 改善):
-# top-level は read のみ。auto-merge job 側で write を明示 elevate する。
+# top-level は read のみ。
+#
+# auto-merge job は置かない。merge の依頼は CI (test.yml) の frontend-ci 内蔵
+# Auto Merge だけが出す (test / typecheck / staging deploy を needs で待ち、
+# CI 開始時に一度 disable してから再 enable する)。ここにも置くと同じ PR に
+# `gh pr merge --auto` が 2 か所から出て、後の側が "Merge already in progress"
+# で赤くなる (Refs #488)。extract の結果は Auto Merge の全 check 待ちで見られる。
 permissions:
   contents: read
 
@@ -16,11 +22,3 @@ jobs:
     with:
       language: ts
       working_directory: web
-  auto-merge:
-    needs: [extract]
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: write
-      pull-requests: write
-    uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
-    secrets: inherit
