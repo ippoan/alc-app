@@ -52,7 +52,9 @@ describe('CamClipsManager 一覧', () => {
     expect(row).toContain('CAM_A')
     expect(row).toContain('admin')
     expect(row).toContain('設定済み')
-    expect(row).toContain('事務所の端末 (dev-1)')
+    expect(w.find(t('row-device-name')).text()).toBe('事務所の端末')
+    expect(w.find(t('row-device-id')).text()).toBe('dev-1')
+    expect(row).not.toContain('(dev-1)')
     expect(row).toContain('2026-10-23 12:58:00')
   })
   it('カメラが無い・取り込みを止めている・端末なし・パスワード未設定', async () => {
@@ -85,6 +87,7 @@ describe('CamClipsManager 追加', () => {
     expect(w.findAll(t('candidate'))).toHaveLength(2)
     expect(w.findAll(t('candidate'))[0]!.text()).toContain('事務所の端末')
     expect(w.findAll(t('candidate'))[0]!.text()).toContain('アルコール 3 / 打刻 1')
+    expect(w.find(t('candidates-help')).text()).toContain('前後 10 秒')
     expect(w.find(t('save')).attributes('disabled')).toBeDefined()
     await w.find(t('name')).setValue('裏門')
     await w.find(t('binding')).setValue('CAM_B')
@@ -154,6 +157,24 @@ describe('CamClipsManager 編集', () => {
     const w = await mountIt(true)
     await w.find(t('edit')).trigger('click')
     expect(w.find(t('candidate')).text()).toContain('直近 30 日のイベントなし')
+  })
+})
+
+describe('CamClipsManager 端末候補の表示', () => {
+  it('表示名と ID は別の要素。名前が無い端末は「名前未登録の端末」、is_dev=true だけ「開発端末」', async () => {
+    api.listCamClipsDeviceCandidates.mockResolvedValue([
+      CANDIDATES[0],
+      { ...CANDIDATES[1], is_dev: true },
+    ])
+    const w = await mountIt(true)
+    await w.find(t('add')).trigger('click')
+    const [first, second] = w.findAll(t('candidate'))
+    expect(first!.find(t('candidate-name')).text()).toBe('事務所の端末')
+    expect(first!.find(t('candidate-id')).text()).toBe('dev-1')
+    expect(first!.find(t('candidate-dev')).exists()).toBe(false)
+    expect(second!.find(t('candidate-name')).text()).toBe('名前未登録の端末')
+    expect(second!.find(t('candidate-id')).text()).toBe('dev-2')
+    expect(second!.find(t('candidate-dev')).text()).toBe('開発端末')
   })
 })
 

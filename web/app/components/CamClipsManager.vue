@@ -63,12 +63,12 @@ const deviceOptions = computed(() => {
   const seen = new Set(candidates.value.map(c => c.device_id))
   const extra = form.value.device_ids.filter(id => !seen.has(id))
   return [
-    ...candidates.value.map(c => ({ id: c.device_id, summary: summarizeCounts(c.counts), last: formatJst(c.last_at) })),
-    ...extra.map(id => ({ id, summary: '直近 30 日のイベントなし', last: '—' })),
+    ...candidates.value.map(c => ({ id: c.device_id, isDev: c.is_dev === true, summary: summarizeCounts(c.counts), last: formatJst(c.last_at) })),
+    ...extra.map(id => ({ id, isDev: false, summary: '直近 30 日のイベントなし', last: '—' })),
   ]
 })
 
-function nameOf(id: string): string | null {
+function nameOf(id: string): string {
   return deviceDisplayName(id, knownDevices.value)
 }
 
@@ -181,7 +181,8 @@ async function makeClip() {
               <td class="py-2 pr-3">
                 <span v-if="c.device_ids.length === 0" class="text-gray-400">—</span>
                 <span v-for="id in c.device_ids" :key="id" class="block" data-testid="cam-clips-row-device">
-                  {{ nameOf(id) ? `${nameOf(id)} (${id})` : id }}
+                  <span class="font-semibold" data-testid="cam-clips-row-device-name">{{ nameOf(id) }}</span>
+                  <span class="block text-xs text-gray-500 font-mono" data-testid="cam-clips-row-device-id">{{ id }}</span>
                 </span>
               </td>
               <td class="py-2 pr-3">{{ formatJst(c.rec_scanned_until) }}</td>
@@ -249,12 +250,22 @@ async function makeClip() {
 
       <fieldset class="text-sm">
         <legend>結び付ける端末 (直近 30 日にイベントを出した端末)</legend>
+        <p class="text-xs text-gray-500" data-testid="cam-clips-candidates-help">
+          このカメラに映る端末を選びます。選んだ端末で記録したアルコール・血圧・打刻・免許証・指静脈の登録の前後 10 秒が切り出されます。
+        </p>
         <p v-if="deviceOptions.length === 0" class="text-gray-500" data-testid="cam-clips-no-candidates">候補はありません</p>
         <label v-for="o in deviceOptions" :key="o.id" class="flex items-start gap-2 py-1" data-testid="cam-clips-candidate">
           <input type="checkbox" :checked="form.device_ids.includes(o.id)" @change="toggleDevice(o.id, $event)">
           <span>
-            <span v-if="nameOf(o.id)" class="font-semibold">{{ nameOf(o.id) }}</span>
-            <span class="text-gray-600">{{ o.id }}</span>
+            <span class="block">
+              <span class="font-semibold" data-testid="cam-clips-candidate-name">{{ nameOf(o.id) }}</span>
+              <span
+                v-if="o.isDev"
+                class="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
+                data-testid="cam-clips-candidate-dev"
+              >開発端末</span>
+            </span>
+            <span class="block text-xs text-gray-500 font-mono" data-testid="cam-clips-candidate-id">{{ o.id }}</span>
             <span class="block text-xs text-gray-500">{{ o.summary }} ・ 最終 {{ o.last }}</span>
           </span>
         </label>

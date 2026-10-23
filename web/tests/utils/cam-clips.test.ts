@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, jstInputToIso, summarizeCounts,
+  deviceDisplayName, EMPTY_FORM, errorText, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
@@ -121,11 +121,11 @@ describe('候補の表示', () => {
     expect(summarizeCounts({ alcohol: 0, blood_pressure: 4, timecard: 0, license: 5, vein_enroll: 0 })).toBe('血圧 4 / 免許証 5')
     expect(summarizeCounts({ alcohol: 0, blood_pressure: 0, timecard: 0, license: 0, vein_enroll: 0 })).toBe('件数なし')
   })
-  it('device_id が一致するときだけ表示名 (label が無ければ null)', () => {
+  it('device_id が一致するときだけ表示名 (label が無ければ「名前未登録の端末」。ID は付けない)', () => {
     const known = [{ device_id: 'd1', label: '事務所' }, { device_id: 'd2', label: null }]
     expect(deviceDisplayName('d1', known)).toBe('事務所')
-    expect(deviceDisplayName('d2', known)).toBeNull()
-    expect(deviceDisplayName('d9', known)).toBeNull()
+    expect(deviceDisplayName('d2', known)).toBe(UNNAMED_DEVICE)
+    expect(deviceDisplayName('d9', known)).toBe('名前未登録の端末')
   })
 })
 
