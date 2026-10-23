@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  deviceDisplayName, EMPTY_FORM, errorText, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts,
+  deviceDisplayName, EMPTY_FORM, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
@@ -120,6 +120,12 @@ describe('候補の表示', () => {
     expect(summarizeCounts({ alcohol: 3, blood_pressure: 0, timecard: 2, license: 0, vein_enroll: 1 })).toBe('アルコール 3 / 打刻 2 / 指静脈登録 1')
     expect(summarizeCounts({ alcohol: 0, blood_pressure: 4, timecard: 0, license: 5, vein_enroll: 0 })).toBe('血圧 4 / 免許証 5')
     expect(summarizeCounts({ alcohol: 0, blood_pressure: 0, timecard: 0, license: 0, vein_enroll: 0 })).toBe('件数なし')
+  })
+  it('イベントの種類の表示名 (知らない種類はそのまま)', () => {
+    expect(['alcohol', 'blood_pressure', 'timecard', 'license', 'vein_enroll'].map(eventKindLabel))
+      .toEqual(['アルコール', '血圧', '打刻', '免許証', '指静脈登録'])
+    expect(eventKindLabel('toString')).toBe('toString')
+    expect(eventKindLabel('future_kind')).toBe('future_kind')
   })
   it('device_id が一致するときだけ表示名 (label が無ければ「名前未登録の端末」。ID は付けない)', () => {
     const known = [{ device_id: 'd1', label: '事務所' }, { device_id: 'd2', label: null }]

@@ -57,6 +57,27 @@ export interface CamClipsClip {
   reused: boolean
 }
 
+/** イベントに付いた自動の切り出し。同じ clip が複数のイベントに付くことがある */
+export interface CamClipsEventClip {
+  clip_id: string
+  key: string
+  status: 'ready' | 'failed'
+  error: string | null
+}
+
+/** `GET /events?camera_id=&date=` の 1 件 (応答は配列そのもの・時刻順) */
+export interface CamClipsEvent {
+  source_table: 'hub_measurements' | 'vein_enroll_events'
+  source_id: string
+  kind: 'alcohol' | 'blood_pressure' | 'timecard' | 'license' | 'vein_enroll'
+  /** `+09:00` 付き */
+  occurred_at: string
+  device_id: string
+  is_dev: boolean
+  /** null = まだ切り出していない */
+  clip: CamClipsEventClip | null
+}
+
 /** `POST /cameras` の本文 */
 export interface CamClipsCreateBody {
   name: string
@@ -192,13 +213,20 @@ export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDes
   return patch
 }
 
+/** イベントの種類の表示名 (並びは候補の 1 行に出す順) */
+const KIND_LABELS: Record<keyof CamClipsDeviceCounts, string> = {
+  alcohol: 'アルコール', blood_pressure: '血圧', timecard: '打刻', license: '免許証', vein_enroll: '指静脈登録',
+}
+
 /** 候補の中身を 1 行にする (件数が 0 の種類は出さない) */
 export function summarizeCounts(c: CamClipsDeviceCounts): string {
-  const parts: [string, number][] = [
-    ['アルコール', c.alcohol], ['血圧', c.blood_pressure], ['打刻', c.timecard],
-    ['免許証', c.license], ['指静脈登録', c.vein_enroll],
-  ]
-  return parts.filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(' / ') || '件数なし'
+  return (Object.keys(KIND_LABELS) as (keyof CamClipsDeviceCounts)[])
+    .filter(k => c[k] > 0).map(k => `${KIND_LABELS[k]} ${c[k]}`).join(' / ') || '件数なし'
+}
+
+/** イベントの種類の表示名。知らない種類はそのまま */
+export function eventKindLabel(kind: string): string {
+  return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind as keyof CamClipsDeviceCounts] : kind
 }
 
 /** 登録簿に名前が無い端末の表示名 */
