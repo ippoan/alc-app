@@ -14,6 +14,9 @@ const TOKENS = {
   "dev-token": { active: true, tenant_id: "tenant-1", role: "admin", sub: "dev-1", dev_device: true },
   // 本番の鍵 (claim が無い = 応答に dev_device が載らない)
   "prod-token": { active: true, tenant_id: "tenant-1", role: "admin", sub: "prod-1" },
+  // 運行管理者 / 閲覧のみ (cam-room の role 判定用)
+  "manager-token": { active: true, tenant_id: "tenant-1", role: "manager", sub: "mgr-1" },
+  "viewer-token": { active: true, tenant_id: "tenant-1", role: "viewer", sub: "view-1" },
   // dev_device が true 以外の値 (文字列) — dev として扱ってはいけない
   "truthy-token": { active: true, tenant_id: "tenant-1", role: "admin", sub: "t-1", dev_device: "true" },
 };
