@@ -73,7 +73,7 @@ describe('VeinFleetManager', () => {
     expect(device.text()).toContain('2 人 (空き 89 / 91)')
     expect(device.text()).toContain('モジュール 2 人')
     const rows = wrapper.findAll('[data-testid="vein-fleet-row"]').map(r => r.text())
-    expect(rows).toEqual(['10山田承認済み', '12(名前不明 e2)承認待ち'])
+    expect(rows).toEqual(['10山田承認済み不明', '12(名前不明 e2)承認待ち不明'])
     expect(wrapper.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(false)
   })
 
@@ -91,6 +91,23 @@ describe('VeinFleetManager', () => {
     expect(devices[0]!.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(true)
     expect(devices[1]!.text()).toContain('モジュール -')
     expect(devices[1]!.find('[data-testid="vein-fleet-mismatch"]').exists()).toBe(false)
+  })
+
+  it('★ 記録を登録した端末を出し、報告した端末自身で登録した記録には印を付ける', async () => {
+    listVeinFleet.mockResolvedValue({
+      devices: [dev({
+        device_id: 'alarm-0123456789abcdef',
+        entries: [
+          { module_id: 10, employee_id: 'e1', approved: true, registered_device_id: 'alarm:0123456789abcdef' },
+          { module_id: 11, employee_id: 'e2', approved: true, registered_device_id: 'kiosk-123456789' },
+        ],
+      })],
+    })
+    const wrapper = await mountManager()
+    expect(wrapper.findAll('[data-testid="vein-fleet-registered"]').map(c => c.text())).toEqual([
+      'Vein Station 01234567 (この端末)',
+      'kiosk-12',
+    ])
   })
 
   it('鍵で端末になった機 (alarm-<指紋>) はラベルが無ければ Vein Station と指紋の頭で出す', async () => {

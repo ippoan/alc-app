@@ -79,6 +79,15 @@ describe('VeinFleetHost', () => {
     })
   })
 
+  it('登録した端末が分かる記録はそれも送る', async () => {
+    loadVeinModuleEntries.mockResolvedValue([{ ...ENTRY, registeredDeviceId: 'alarm:0123456789abcdef' }])
+    vein.isConnected.value = true
+    await mountSuspended(VeinFleetHost)
+    watchOptions().onVeinListRequest()
+    await flushPromises()
+    expect(reportVeinFleet.mock.calls[0]![0].entries[0].registered_device_id).toBe('alarm:0123456789abcdef')
+  })
+
   it('登録人数が読めない・Station が外れているときは対応表だけ送る', async () => {
     vein.syncInfo.mockRejectedValue(new Error('TIMEOUT'))
     vein.isConnected.value = true

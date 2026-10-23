@@ -35,6 +35,7 @@ async function report(): Promise<void> {
         employee_id: e.employeeId,
         approved: e.approved,
         version: e.updatedAt,
+        ...(e.registeredDeviceId ? { registered_device_id: e.registeredDeviceId } : {}),
       })),
       ...(info ? { module_users: info.users, module_max: info.max } : {}),
     })

@@ -44,6 +44,8 @@ export interface VeinModuleEntry {
   updatedAt: string
   /** 管理者が承認済みか。承認待ちの ID に当たっても本人確認にしない */
   approved: boolean
+  /** 記録を登録した端末の id (サーバーの `registered_device_id`)。分からなければ null / 無し */
+  registeredDeviceId?: string | null
 }
 
 const DB_NAME = 'alc-vein-db'

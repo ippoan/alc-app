@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { VeinFleetDevice } from '~/utils/api'
 import { getEmployees, listVeinFleet, requestVeinFleet } from '~/utils/api'
+import type { VeinFleetEntry } from '~/utils/api'
+import { sameVeinDevice, veinDeviceLabel } from '~/utils/vein-device-label'
 
 /**
  * 全端末の指静脈の一覧 (Refs ippoan/alc-app#436)。各キオスクのモジュールの ID ↔ 乗務員の対応表を並べる。
@@ -84,6 +86,12 @@ function latestVersion(d: VeinFleetDevice): string | null {
   return Number.isNaN(t.getTime()) ? max : t.toLocaleString('ja-JP')
 }
 
+/** 記録を登録した端末。報告した端末自身で登録した記録には印を付ける */
+function registeredOf(d: VeinFleetDevice, e: VeinFleetEntry): string {
+  const label = veinDeviceLabel(e.registered_device_id)
+  return sameVeinDevice(e.registered_device_id, d.device_id) ? `${label} (この端末)` : label
+}
+
 /** モジュールの登録人数と対応表の件数が違う */
 function mismatch(d: VeinFleetDevice): boolean {
   return d.module_users !== undefined && d.module_users !== d.entries.length
@@ -121,6 +129,7 @@ function mismatch(d: VeinFleetDevice): boolean {
             <th class="px-2 py-1 text-left w-16">ID</th>
             <th class="px-2 py-1 text-left">乗務員</th>
             <th class="px-2 py-1 text-left w-24">状態</th>
+            <th class="px-2 py-1 text-left">登録した端末</th>
           </tr>
         </thead>
         <tbody>
@@ -128,6 +137,7 @@ function mismatch(d: VeinFleetDevice): boolean {
             <td class="px-2 py-1 tabular-nums">{{ e.module_id }}</td>
             <td class="px-2 py-1">{{ nameOf(e.employee_id) }}</td>
             <td class="px-2 py-1">{{ e.approved ? '承認済み' : '承認待ち' }}</td>
+            <td class="px-2 py-1" data-testid="vein-fleet-registered">{{ registeredOf(d, e) }}</td>
           </tr>
         </tbody>
       </table>

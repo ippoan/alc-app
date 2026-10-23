@@ -682,10 +682,14 @@ export async function putVeinModuleRecord(
   employeeId: string,
   record: Uint8Array,
 ): Promise<{ employee_id: string; updated_at: string }> {
-  return request<{ employee_id: string; updated_at: string }>(`/api/vein/templates/${encodeURIComponent(employeeId)}/module`, {
-    method: 'PUT',
-    body: JSON.stringify({ record: bytesToBase64(record) }),
-  })
+  const path = `/api/vein/templates/${encodeURIComponent(employeeId)}/module`
+  const options: RequestInit = { method: 'PUT', body: JSON.stringify({ record: bytesToBase64(record) }) }
+  // **端末の token を先に使う** — サーバーは token の端末を「登録した端末」として記録に残す
+  // (`registered_device_id`)。管理者がログインしていても、管理者の token では端末が分からない。
+  // 端末の token が取れなければ今までどおり (`request` の規則)
+  const deviceJwt = await getKioskDeviceJwt?.()
+  if (deviceJwt) return proxyRequest<{ employee_id: string; updated_at: string }>(path, deviceJwt, options)
+  return request<{ employee_id: string; updated_at: string }>(path, options)
 }
 
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
@@ -693,6 +697,8 @@ export interface ApiVeinModuleRecord {
   employee_id: string
   record: string
   updated_at: string
+  /** 登録した端末の id (端末の token の sub)。分からなければ null / 無し (古いサーバー) */
+  registered_device_id?: string | null
 }
 
 /** 承認済みのモジュールの記録を全件取る (端末のモジュールへ書き戻す元、Refs ippoan/alc-app#436) */
@@ -839,6 +845,8 @@ export interface VeinFleetEntry {
   employee_id: string
   approved: boolean
   version?: string
+  /** 記録を登録した端末の id (サーバーの `registered_device_id`)。分からなければ無し */
+  registered_device_id?: string
 }
 
 /** キオスク 1 台が報告した対応表 */

@@ -20,6 +20,14 @@ vi.mock('~/utils/vein-db', async importOriginal => ({
 }))
 const vein = vi.hoisted(() => ({ syncInfo: vi.fn() }))
 mockNuxtImport('useVeinSerial', () => () => vein)
+const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn() }))
+mockNuxtImport('useDeviceToken', () => () => deviceToken)
+
+/** 署名はダミー (画面は sub を読むだけ) */
+function jwtWithSub(sub: unknown): string {
+  const seg = (v: unknown) => btoa(JSON.stringify(v)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+  return `${seg({ alg: 'none' })}.${seg({ sub })}.sig`
+}
 
 function entry(employeeId: string, moduleId: number, approved = true): VeinModuleEntry {
   return { employeeId, moduleId, updatedAt: '2026-10-22T00:00:00Z', approved }
@@ -36,6 +44,32 @@ describe('VeinModuleList', () => {
     loadEntriesMock.mockReset().mockResolvedValue([entry('emp-b', 12, false), entry('emp-a', 10)])
     getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }, { id: 'emp-b', name: '試験 二郎' }])
     vein.syncInfo.mockReset().mockResolvedValue({ users: 2, max: 100 })
+    deviceToken.getDeviceJwt.mockReset().mockResolvedValue(null)
+  })
+
+  it('★ 登録した端末を出し、この端末で登録した記録には印を付ける。分からなければ不明', async () => {
+    deviceToken.getDeviceJwt.mockResolvedValue(jwtWithSub('alarm:0123456789abcdef'))
+    loadEntriesMock.mockResolvedValue([
+      { ...entry('emp-a', 10), registeredDeviceId: 'alarm:0123456789abcdef' },
+      { ...entry('emp-b', 11), registeredDeviceId: 'kiosk-123456789' },
+      entry('emp-c', 12),
+    ])
+    const w = await mountList()
+    expect(w.findAll('[data-testid="vein-module-registered"]').map(c => c.text())).toEqual([
+      'Vein Station 01234567 (この端末)',
+      'kiosk-12',
+      '不明',
+    ])
+  })
+
+  it('この端末の token が取れない・sub が文字列でないなら印を付けない', async () => {
+    loadEntriesMock.mockResolvedValue([{ ...entry('emp-a', 10), registeredDeviceId: 'kiosk-1' }])
+    deviceToken.getDeviceJwt.mockRejectedValue(new Error('no key'))
+    const a = await mountList()
+    expect(a.find('[data-testid="vein-module-registered"]').text()).toBe('kiosk-1')
+    deviceToken.getDeviceJwt.mockResolvedValue(jwtWithSub(1))
+    const b = await mountList()
+    expect(b.find('[data-testid="vein-module-registered"]').text()).toBe('kiosk-1')
   })
 
   it('ID の順に乗務員・状態を並べ、対応表の人数・空き・モジュールの登録人数を出す', async () => {
