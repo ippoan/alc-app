@@ -401,10 +401,10 @@ describe('FirmwareManager', () => {
 // AdminDashboard のタブ。専用のテストが無かったので、このタブの分だけ小さく見る。
 // 「端末のファーム」は更新できる端末が在るときだけ並びに出す (`?tab=firmware` では直接開ける)。
 describe('AdminDashboard — 端末のファームのタブ', () => {
-  // 変更前のタブの並び (13 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436)
+  // 変更前のタブの並び (14 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436)
   const TABS_BEFORE = [
     '乗務員', '免許証', '送信キュー', 'Webhook', '中間点呼', 'リモートカメラ',
-    '拠点カメラ', 'タイムカード', 'デバイス管理', '点呼', 'ハブ測定値', '端末の指静脈', '血圧の通知',
+    '拠点カメラ', '拠点カメラの録画', 'タイムカード', 'デバイス管理', '点呼', 'ハブ測定値', '端末の指静脈', '血圧の通知',
   ]
   const TAB = '端末のファーム'
 
@@ -430,7 +430,7 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
   const labels = (w: Awaited<ReturnType<typeof mountAdmin>>) => w.findAll('button').map(b => b.text())
   const tabLabels = (w: Awaited<ReturnType<typeof mountAdmin>>) => labels(w).slice(0, labels(w).indexOf('ログアウト'))
 
-  it('更新できる端末が無いとき、並びに無い。既存の 13 個の並びは変わらない', async () => {
+  it('更新できる端末が無いとき、並びに無い。既存の 14 個の並びは変わらない', async () => {
     const wrapper = await mountAdmin()
     expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
     wrapper.unmount()

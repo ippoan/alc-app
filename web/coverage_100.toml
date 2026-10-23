@@ -354,3 +354,7 @@ branches = true
 [[files]]
 path = "app/composables/useVeinTest.ts"
 branches = true
+
+[[files]]
+path = "app/utils/cam-clips.ts"
+branches = true

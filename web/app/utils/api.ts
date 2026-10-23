@@ -27,6 +27,9 @@ import type {
   // Driver master sync (Refs ippoan/alc-app-s3#125)
   DriverMasterSyncResult,
 } from '~/types'
+import type {
+  CamClipsCameraList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip,
+} from '~/utils/cam-clips'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
@@ -1898,4 +1901,35 @@ export async function listHubMeasurements(filter: {
   offset?: number
 } = {}): Promise<HubMeasurementsResponse> {
   return request<HubMeasurementsResponse>(`/api/hub/measurements${toParams(filter)}`)
+}
+
+// --- 拠点カメラの録画 (Refs ippoan/alc-cam#2) ---
+// 口は alc-cam の Worker (auth-worker の /api/cam-clips/ → Service Binding)。admin JWT で same-origin proxy 経由
+
+export async function listCamClipsCameras(): Promise<CamClipsCameraList> {
+  return request<CamClipsCameraList>('/api/cam-clips/cameras', {}, 'admin')
+}
+
+export async function createCamClipsCamera(body: CamClipsCreateBody): Promise<CamClipsCamera> {
+  return request<CamClipsCamera>('/api/cam-clips/cameras', { method: 'POST', body: JSON.stringify(body) }, 'admin')
+}
+
+export async function updateCamClipsCamera(id: string, body: CamClipsPatchBody): Promise<CamClipsCamera> {
+  return request<CamClipsCamera>(`/api/cam-clips/cameras/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  }, 'admin')
+}
+
+export async function listCamClipsDeviceCandidates(days = 30): Promise<CamClipsDeviceCandidate[]> {
+  return request<CamClipsDeviceCandidate[]>(`/api/cam-clips/device-candidates?days=${days}`, {}, 'admin')
+}
+
+/** 手動の切り出し。カメラから元ファイルを取り込むので、通常の 30 秒では足りない (上限は UPLOAD と同じ 120 秒) */
+export async function createCamClipsClip(body: { camera_id: string, from: string, to: string }): Promise<CamClipsClip> {
+  return request<CamClipsClip>('/api/cam-clips/clips', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(UPLOAD_FETCH_TIMEOUT_MS),
+  }, 'admin')
 }
