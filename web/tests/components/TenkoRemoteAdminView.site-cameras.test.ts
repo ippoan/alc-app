@@ -31,6 +31,7 @@ mockNuxtImport('useWebRtc', () => () => ({
   remoteStream: ref(null),
   error: ref(null),
   peerDeviceId,
+  ptzChannel: ref(null),
   connect: vi.fn(async () => {}),
   startStreaming: vi.fn(),
   disconnect: vi.fn(() => { peerDeviceId.value = null }),
