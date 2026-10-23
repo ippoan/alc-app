@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { DEV_HEADER, isDevRequest } from './auth';
+import { setKeepaliveAutoResponse } from './keepalive';
 
 type ClientRole = 'device' | 'admin';
 
@@ -49,6 +50,12 @@ const CLOSE_DEV_ROOM = 1008;
 const SCREEN_SHARE_ROOM_PREFIX = 'screen-';
 
 export class SignalingRoom extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // web の useWebRtc は 30 秒ごとに KEEPALIVE_PING を送る。ping で DO を起こさない
+    setKeepaliveAutoResponse(ctx);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const role = url.searchParams.get('role') as ClientRole;
@@ -156,6 +163,7 @@ export class SignalingRoom extends DurableObject<Env> {
         break;
 
       case 'ping':
+        // KEEPALIVE_PING ちょうどは runtime が返すのでここに来ない。文字列の違う ping 向け
         this.send(ws, { type: 'pong' });
         break;
 
