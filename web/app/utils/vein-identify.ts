@@ -66,6 +66,11 @@ export async function syncVeinTemplates(opts: { ifOlderThanMs?: number; module?:
 export type VeinIdentifyOutcome =
   | { kind: 'hit'; employee: ApiEmployee }
   | { kind: 'miss' }
+  /**
+   * 一致したのは承認待ちの記録だった (モジュールの照合だけ。Refs ippoan/alc-app#436)。
+   * 本人確認にはしない。`name` は引けなければ null
+   */
+  | { kind: 'pending'; employeeId: string; name: string | null }
   /** 照合できなかった。`message` はそのまま画面に出す */
   | { kind: 'error'; message: string }
 

@@ -336,6 +336,9 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
     ? await identifyVeinModuleEmployee(read as number | null)
     : await identifyVeinEmployee(read as string)
   if (outcome.kind === 'miss') return VEIN_NO_MATCH_MESSAGE
+  if (outcome.kind === 'pending') {
+    return `${outcome.name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`
+  }
   if (outcome.kind === 'error') return outcome.message
   // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る
   if (!applyFaceApproval(outcome.employee)) return null

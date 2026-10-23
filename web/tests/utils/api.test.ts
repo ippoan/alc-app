@@ -66,6 +66,8 @@ import {
   listFirmwareDevices,
   updateFirmware,
   listVeinFleet,
+  getPendingVeinModuleTemplates,
+  approveVeinByEmployee,
   requestVeinFleet,
   reportVeinFleet,
   reportFirmware,
@@ -1108,6 +1110,26 @@ describe('api', () => {
       expect(url).toContain(`/vein/templates/${TEST_EMPLOYEE_ID}/module`)
       expect(init.method).toBe('PUT')
       expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+    })
+
+    it.skipIf(isLive)('getPendingVeinModuleTemplates は GET …/module-templates/pending の templates を返す', async () => {
+      stubOk({ templates: [{ employee_id: TEST_EMPLOYEE_ID, name: 'x', updated_at: 'v1' }] })
+      let got: unknown
+      await callApi(async () => { got = await getPendingVeinModuleTemplates() })
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/module-templates/pending')
+        expect(got).toEqual([{ employee_id: TEST_EMPLOYEE_ID, name: 'x', updated_at: 'v1' }])
+      })
+    })
+
+    it.skipIf(isLive)('approveVeinByEmployee は承認者と版を POST …/approve-by-employee へ送る', async () => {
+      stub204()
+      await callApi(() => approveVeinByEmployee(TEST_EMPLOYEE_ID, 'emp-mgr', 'v1'))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe(`https://api.example.com/api/vein/templates/${TEST_EMPLOYEE_ID}/approve-by-employee`)
+        expect(mockFetch.mock.calls[0][1].method).toBe('POST')
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ approver_employee_id: 'emp-mgr', updated_at: 'v1' })
+      })
     })
 
     it.skipIf(isLive)('getVeinModuleTemplates は GET /api/vein/module-templates', async () => {

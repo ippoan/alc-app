@@ -749,6 +749,34 @@ export async function approveVeinTemplate(employeeId: string, updatedAt: string)
   }, 'admin')
 }
 
+/** 承認待ちのモジュールの記録 (1 件分、記録の中身は持たない)。`updated_at` は承認するときの版 */
+export interface ApiVeinPendingModule {
+  employee_id: string
+  name: string
+  updated_at: string
+  registered_device_id?: string | null
+}
+
+/**
+ * 承認待ちのモジュールの記録の一覧 (端末の画面で運行管理者が承認する元、Refs ippoan/alc-app#436)。
+ * 端末の token でも呼べる (管理画面の `getPendingVeinTemplates` は管理者だけ)
+ */
+export async function getPendingVeinModuleTemplates(): Promise<ApiVeinPendingModule[]> {
+  return (await request<{ templates: ApiVeinPendingModule[] }>('/api/vein/module-templates/pending')).templates
+}
+
+/**
+ * 運行管理者が端末で自分の指静脈を照合してから承認する。承認者は照合で決まった社員。
+ * サーバーは承認者が運行管理者 (役割 manager / admin) で、自分の記録が承認済みで、自分自身でないことを確かめる。
+ * `updatedAt` は一覧で見た版 (登録し直されていたら 409)
+ */
+export async function approveVeinByEmployee(employeeId: string, approverEmployeeId: string, updatedAt: string): Promise<void> {
+  await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}/approve-by-employee`, {
+    method: 'POST',
+    body: JSON.stringify({ approver_employee_id: approverEmployeeId, updated_at: updatedAt }),
+  })
+}
+
 /** 指静脈の登録を消す (管理者の却下・承認済みの削除、Refs ippoan/alc-app#436) */
 export async function deleteVeinTemplate(employeeId: string): Promise<void> {
   await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, { method: 'DELETE' }, 'admin')

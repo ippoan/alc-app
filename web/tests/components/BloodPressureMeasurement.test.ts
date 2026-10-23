@@ -96,11 +96,12 @@ const BleStatusStub = { name: 'BleStatus', template: '<div class="ble-stub" />',
 const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="vein-stub" />', props: ['employee'], emits: ['close'] }
 const VeinModuleListStub = { name: 'VeinModuleList', template: '<div class="vein-list-stub" />', emits: ['close'] }
 const BpBluetoothSettingsStub = { name: 'BpBluetoothSettings', template: '<div class="bp-ble-stub" />', emits: ['close'] }
+const VeinPendingApprovalStub = { name: 'VeinPendingApproval', template: '<div class="vein-pending-stub" />', emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, EmployeeCodeKeypad: false } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, EmployeeCodeKeypad: false } },
   })
 }
 
@@ -995,6 +996,19 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       wrapper.unmount()
     })
 
+    it('★ 承認待ちの記録に当たったら、未承認と出して未承認の一覧へ案内する (名前が無ければ「この人」)', async () => {
+      veinModule.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'pending', employeeId: 'emp-new', name: '試験 新人' })
+      const wrapper = await mountBp()
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(veinErrorText(wrapper)).toBe('試験 新人さんの指静脈は未承認です。下の「未承認の指静脈」から運行管理者が承認してください')
+      veinModule.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'pending', employeeId: 'emp-new', name: null })
+      await veinButton(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(veinErrorText(wrapper)).toContain('この人さんの指静脈は未承認です')
+      wrapper.unmount()
+    })
+
     it('不一致・読み取りの失敗は今と同じ文言', async () => {
       veinModule.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'miss' })
       const wrapper = await mountBp()
@@ -1161,6 +1175,23 @@ describe('BloodPressureMeasurement — 血圧計 (Bluetooth) の設定・ペア�
     await w.findComponent(BpBluetoothSettingsStub).vm.$emit('close')
     await flush(w)
     expect(w.findComponent(BpBluetoothSettingsStub).exists()).toBe(false)
+    expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
+    w.unmount()
+    veinIsConnected.value = false
+  })
+})
+
+describe('BloodPressureMeasurement — 未承認の指静脈 (Refs ippoan/alc-app#436)', () => {
+  it('Vein Station がつながっているときだけ入口を出し、開いて閉じると入口へ戻る', async () => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = true
+    const w = await mountBp()
+    await w.find('[data-testid="vein-pending-open"]').trigger('click')
+    await flush(w)
+    expect(w.findComponent(VeinPendingApprovalStub).exists()).toBe(true)
+    await w.findComponent(VeinPendingApprovalStub).vm.$emit('close')
+    await flush(w)
+    expect(w.findComponent(VeinPendingApprovalStub).exists()).toBe(false)
     expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
     w.unmount()
     veinIsConnected.value = false
