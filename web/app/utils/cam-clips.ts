@@ -1,0 +1,215 @@
+import { sameVeinDevice } from '~/utils/vein-device-label'
+
+/**
+ * 管理者の画面のタブ「拠点カメラの録画」(Refs ippoan/alc-cam#2) の整形と入力の組み立て。
+ * 口は alc-cam の Worker `alc-cam-sd-ingest` (`/api/proxy/cam-clips/*`、中身は ingest/api/src/lib.rs)。
+ */
+
+/** `GET /cameras` の 1 台。パスワードは返らない (`has_password` だけ) */
+export interface CamClipsCamera {
+  id: string
+  name: string
+  vpc_binding: string | null
+  rec_username: string | null
+  has_password: boolean
+  recording: boolean
+  device_ids: string[]
+  rec_scanned_until: string | null
+}
+
+export interface CamClipsCameraList {
+  /** 宛先 (vpc_binding) を書けるか (開発者の Google ログインのときだけ true) */
+  can_edit_destination: boolean
+  cameras: CamClipsCamera[]
+}
+
+export interface CamClipsDeviceCounts {
+  alcohol: number
+  blood_pressure: number
+  timecard: number
+  license: number
+  vein_enroll: number
+}
+
+export interface CamClipsDeviceCandidate {
+  device_id: string
+  counts: CamClipsDeviceCounts
+  last_at: string
+}
+
+/** `POST /clips` の応答 (使う項目だけ) */
+export interface CamClipsClip {
+  clip_id: string
+  /** `clips/<tenant>/<camera_id>/<開始>_<終了>.mp4` */
+  key: string
+  size: number
+  actual_from: string
+  actual_to: string
+  reused: boolean
+}
+
+/** `POST /cameras` の本文 */
+export interface CamClipsCreateBody {
+  name: string
+  vpc_binding?: string
+  rec_username?: string
+  rec_password?: string
+  device_ids?: string[]
+}
+
+/** `PATCH /cameras/{id}` の本文 (省略 = 変えない) */
+export interface CamClipsPatchBody {
+  name?: string
+  vpc_binding?: string | null
+  rec_username?: string
+  rec_password?: string
+  device_ids?: string[]
+}
+
+/** 追加・編集フォームの値 */
+export interface CamClipsForm {
+  name: string
+  vpc_binding: string
+  rec_username: string
+  /** 書き込み専用。空なら送らない */
+  rec_password: string
+  device_ids: string[]
+  /** 「取り込みをやめる」(vpc_binding を null にする) */
+  stop: boolean
+}
+
+export const EMPTY_FORM: CamClipsForm = {
+  name: '', vpc_binding: '', rec_username: '', rec_password: '', device_ids: [], stop: false,
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000
+const pad = (n: number) => String(n).padStart(2, '0')
+
+/** 画面に出す JST の `YYYY-MM-DD HH:mm:ss`。無ければ「—」、読めなければそのまま */
+export function formatJst(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return iso
+  const d = new Date(ms + JST_OFFSET_MS)
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} `
+    + `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+}
+
+/**
+ * `<input type="datetime-local">` の値 (`YYYY-MM-DDTHH:mm`、秒は付くことがある) → `+09:00` 付きの ISO。
+ * 形が違えば null。**ブラウザのローカル時刻は使わない** (サーバーは時差が無ければ JST、画面も JST で揃える)
+ */
+export function jstInputToIso(local: string): string | null {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2}))?$/.exec(local)
+  if (!m) return null
+  const iso = `${m[1]}:${m[2] ?? '00'}+09:00`
+  return Number.isNaN(Date.parse(iso)) ? null : iso
+}
+
+/** 切り出しの初期値: 今の分までを終了、5 分前を開始にした datetime-local の値 (JST) */
+export function defaultClipRange(now: Date = new Date()): { from: string, to: string } {
+  const toLocal = (ms: number) => new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 16)
+  const end = Math.floor(now.getTime() / 60_000) * 60_000
+  return { from: toLocal(end - 5 * 60_000), to: toLocal(end) }
+}
+
+/** 切り出しの入力の検査。問題があれば画面に出す文、無ければ null */
+export function clipRangeError(cameraId: string, from: string, to: string): string | null {
+  if (!cameraId) return 'カメラを選んでください'
+  const f = jstInputToIso(from)
+  const t = jstInputToIso(to)
+  if (!f || !t) return '開始と終了の日時を入れてください'
+  if (Date.parse(f) >= Date.parse(t)) return '終了は開始より後にしてください'
+  return null
+}
+
+/** 切り出しの本文。`clipRangeError` が null のときだけ呼ぶ */
+export function buildClipBody(cameraId: string, from: string, to: string): { camera_id: string, from: string, to: string } {
+  return { camera_id: cameraId, from: jstInputToIso(from)!, to: jstInputToIso(to)! }
+}
+
+/** 再生の URL (cookie 認証。Range 対応なのでシークできる) */
+export function clipSrc(key: string): string {
+  return `/api/proxy/cam-clips/${key}`
+}
+
+/** カメラ 1 台のフォームの初期値 (パスワードは返らないので空) */
+export function formFromCamera(c: CamClipsCamera): CamClipsForm {
+  return {
+    name: c.name,
+    vpc_binding: c.vpc_binding ?? '',
+    rec_username: c.rec_username ?? '',
+    rec_password: '',
+    device_ids: [...c.device_ids],
+    stop: false,
+  }
+}
+
+/** 追加の本文。空の項目は送らない。宛先は `canEditDestination` のときだけ */
+export function buildCreateBody(f: CamClipsForm, canEditDestination: boolean): CamClipsCreateBody {
+  const body: CamClipsCreateBody = { name: f.name.trim() }
+  const binding = f.vpc_binding.trim()
+  if (canEditDestination && binding) body.vpc_binding = binding
+  if (f.rec_username.trim()) body.rec_username = f.rec_username.trim()
+  if (f.rec_password) body.rec_password = f.rec_password
+  if (f.device_ids.length > 0) body.device_ids = f.device_ids
+  return body
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i])
+}
+
+/**
+ * 編集の本文 = 元のカメラとの差分だけ。
+ * - 宛先は `canEditDestination` のときだけ。「取り込みをやめる」は null、空欄は変えない
+ * - パスワードは空なら送らない (サーバーも "" は変えない)
+ */
+export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDestination: boolean): CamClipsPatchBody {
+  const patch: CamClipsPatchBody = {}
+  if (f.name.trim() !== orig.name) patch.name = f.name.trim()
+  if (canEditDestination) {
+    const binding = f.vpc_binding.trim()
+    if (f.stop) {
+      if (orig.vpc_binding !== null) patch.vpc_binding = null
+    }
+    else if (binding && binding !== orig.vpc_binding) {
+      patch.vpc_binding = binding
+    }
+  }
+  if (f.rec_username.trim() !== (orig.rec_username ?? '')) patch.rec_username = f.rec_username.trim()
+  if (f.rec_password) patch.rec_password = f.rec_password
+  if (!sameSet(f.device_ids, orig.device_ids)) patch.device_ids = f.device_ids
+  return patch
+}
+
+/** 候補の中身を 1 行にする (件数が 0 の種類は出さない) */
+export function summarizeCounts(c: CamClipsDeviceCounts): string {
+  const parts: [string, number][] = [
+    ['アルコール', c.alcohol], ['血圧', c.blood_pressure], ['打刻', c.timecard],
+    ['免許証', c.license], ['指静脈登録', c.vein_enroll],
+  ]
+  return parts.filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(' / ') || '件数なし'
+}
+
+/** 端末の登録簿 (ファームの一覧) と device_id が一致するときだけ表示名を返す。無ければ null */
+export function deviceDisplayName(deviceId: string, known: { device_id: string, label: string | null }[]): string | null {
+  return known.find(k => sameVeinDevice(k.device_id, deviceId))?.label ?? null
+}
+
+/**
+ * 失敗の文言。api.ts は `API エラー (409): {"error":"…"}` の形で投げるので、本文の `error` を取り出す。
+ * 読めなければ Error の文言をそのまま、それも無ければ fallback
+ */
+export function errorText(e: unknown, fallback: string): string {
+  const text = e instanceof Error ? e.message : ''
+  const start = text.indexOf('{')
+  if (start >= 0) {
+    try {
+      const err = (JSON.parse(text.slice(start)) as { error?: unknown }).error
+      if (typeof err === 'string' && err) return err
+    }
+    catch { /* 本文が JSON でなければ下へ */ }
+  }
+  return text || fallback
+}

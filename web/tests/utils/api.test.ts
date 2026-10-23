@@ -85,6 +85,11 @@ import {
   updateBpNotifySetting,
   getLineworksUsers,
   linkBpNotifyByName,
+  listCamClipsCameras,
+  createCamClipsCamera,
+  updateCamClipsCamera,
+  listCamClipsDeviceCandidates,
+  createCamClipsClip,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -3088,6 +3093,64 @@ describe.skipIf(isLive)('血圧の通知の設定 (#436)', () => {
     expect(url).toMatch(/\/bp-notify\/link-by-name$/)
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body)).toEqual({ dry_run: true })
+  })
+})
+
+// 拠点カメラの録画 (Refs ippoan/alc-cam#2)。mock 専用 (口は alc-cam の Worker)
+describe.skipIf(isLive)('拠点カメラの録画 (alc-cam#2)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('一覧は /cam-clips/cameras を GET する', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ can_edit_destination: false, cameras: [] }))
+    await expect(listCamClipsCameras()).resolves.toEqual({ can_edit_destination: false, cameras: [] })
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/api\/proxy\/cam-clips\/cameras$/)
+  })
+
+  it('追加は POST、更新は id を encode して PATCH する', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ id: 'c1' }))
+    await createCamClipsCamera({ name: '正門' })
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/cam-clips\/cameras$/)
+    expect(mockFetch.mock.calls[0][1].method).toBe('POST')
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ name: '正門' })
+
+    mockFetch.mockResolvedValueOnce(okJson({ id: 'c/1' }))
+    await updateCamClipsCamera('c/1', { vpc_binding: null })
+    const [url, init] = mockFetch.mock.calls[1]
+    expect(url).toMatch(/\/cam-clips\/cameras\/c%2F1$/)
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body)).toEqual({ vpc_binding: null })
+  })
+
+  it('409 は本文つきで投げる', async () => {
+    mockFetch.mockResolvedValueOnce(errResponse(409, '{"error":"その VPC binding は既に使われています"}'))
+    await expect(createCamClipsCamera({ name: 'x' })).rejects.toThrow('既に使われています')
+  })
+
+  it('端末の候補は days を付けて GET する', async () => {
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await listCamClipsDeviceCandidates()
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/cam-clips\/device-candidates\?days=30$/)
+    mockFetch.mockResolvedValueOnce(okJson([]))
+    await listCamClipsDeviceCandidates(7)
+    expect(mockFetch.mock.calls[1][0]).toMatch(/days=7$/)
+  })
+
+  it('切り出しは POST で、120 秒の上限を自分で持つ', async () => {
+    const clip = { clip_id: 'k', key: 'clips/t/c/a_b.mp4' }
+    mockFetch.mockResolvedValueOnce(okJson(clip))
+    const body = { camera_id: 'c1', from: '2026-10-23T12:58:00+09:00', to: '2026-10-23T12:59:00+09:00' }
+    await expect(createCamClipsClip(body)).resolves.toEqual(clip)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/cam-clips\/clips$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual(body)
+    expect(init.signal).toBeInstanceOf(AbortSignal)
   })
 })
 
