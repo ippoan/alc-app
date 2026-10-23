@@ -47,16 +47,15 @@ beforeEach(() => {
 })
 
 describe('BpNotifyManager 一覧', () => {
-  it('説明の一文と、氏名・コード・管理者の印を出す', async () => {
+  it('説明の一文と、氏名・コードを出す', async () => {
     const w = await mountIt([emp(), emp({ employee_id: 'e2', name: '試験 次郎', code: '002', role: ['manager'], email: 'j@example.test' })])
     expect(w.find('[data-testid="bp-notify-description"]').text()).toBe(
-      '血圧を測ると、結び付けた LINE WORKS へ本人に結果が届きます。毎朝 7:00 に前日の記録の一覧が、日報を受け取る管理者へメールで届きます',
+      '血圧を測ると、結び付けた LINE WORKS へ本人に結果が届きます。毎朝 7:00 の日報メールの宛先は、通知の宛先の画面の「血圧の日報」で選びます',
     )
     expect(rows(w)).toHaveLength(2)
     expect(rows(w)[0]!.text()).toContain('試験 太郎')
     expect(rows(w)[0]!.text()).toContain('001')
-    expect(rows(w)[0]!.find('[data-testid="bp-notify-manager"]').exists()).toBe(false)
-    expect(rows(w)[1]!.find('[data-testid="bp-notify-manager"]').exists()).toBe(true)
+    expect(w.find('[data-testid="bp-notify-manager"]').exists()).toBe(false)
   })
 
   it('社員がいなければ空の文言、設定の取得に失敗したら理由を出す', async () => {
@@ -68,19 +67,10 @@ describe('BpNotifyManager 一覧', () => {
     expect(w2.find('[data-testid="bp-notify-list-error"]').text()).toContain('403')
   })
 
-  it('日報の列は管理者 (manager/admin) だけ操作でき、ほかは「-」。メールが無ければ disabled で理由を出す', async () => {
-    const w = await mountIt([
-      emp({ employee_id: 'a', role: ['driver'] }),
-      emp({ employee_id: 'b', role: ['admin'], email: null }),
-      emp({ employee_id: 'c', role: ['manager'], email: 'c@example.test' }),
-    ])
-    const [a, b, c] = rows(w)
-    expect(a!.find('[data-testid="bp-notify-report-na"]').text()).toBe('-')
-    expect(a!.find('[data-testid="bp-notify-report"]').exists()).toBe(false)
-    expect((b!.find('[data-testid="bp-notify-report"]').element as HTMLInputElement).disabled).toBe(true)
-    expect(b!.find('[data-testid="bp-notify-report-reason"]').text()).toContain('メールが未設定')
-    expect((c!.find('[data-testid="bp-notify-report"]').element as HTMLInputElement).disabled).toBe(false)
-    expect(c!.find('[data-testid="bp-notify-report-reason"]').exists()).toBe(false)
+  it('日報を受け取る列は無い (宛先は通知の宛先の画面で選ぶ)', async () => {
+    const w = await mountIt([emp({ role: ['manager'], email: 'm@example.test' })])
+    expect(w.text()).not.toContain('日報を受け取る')
+    expect(w.find('[data-testid="bp-notify-report"]').exists()).toBe(false)
   })
 })
 
@@ -173,19 +163,19 @@ describe('BpNotifyManager 選択とチェック', () => {
     expect(linked(w, 0)).toBe('(未設定)')
   })
 
-  it('本人に通知・日報のチェックを PUT し、失敗したら戻して理由を出す', async () => {
-    const w = await mountIt([emp({ role: ['manager'], email: 'm@example.test' })])
-    api.updateBpNotifySetting.mockResolvedValueOnce(emp({ role: ['manager'], email: 'm@example.test', daily_report: true }))
-    await rows(w)[0]!.find('[data-testid="bp-notify-report"]').setValue(true)
+  it('本人に通知のチェックを PUT し、失敗したら戻して理由を出す', async () => {
+    const w = await mountIt([emp()])
+    api.updateBpNotifySetting.mockResolvedValueOnce(emp({ notify_self: true }))
+    await rows(w)[0]!.find('[data-testid="bp-notify-self"]').setValue(true)
     await flushPromises()
-    expect(api.updateBpNotifySetting).toHaveBeenCalledWith('e1', { daily_report: true })
+    expect(api.updateBpNotifySetting).toHaveBeenCalledWith('e1', { notify_self: true })
     expect(w.find('[data-testid="bp-notify-save-error"]').exists()).toBe(false)
 
     api.updateBpNotifySetting.mockRejectedValueOnce(new Error('API エラー (500): boom'))
-    await rows(w)[0]!.find('[data-testid="bp-notify-self"]').setValue(true)
+    await rows(w)[0]!.find('[data-testid="bp-notify-self"]').setValue(false)
     await flushPromises()
     expect(w.find('[data-testid="bp-notify-save-error"]').text()).toContain('試験 太郎 さんの設定を保存できませんでした')
-    expect((rows(w)[0]!.find('[data-testid="bp-notify-self"]').element as HTMLInputElement).checked).toBe(false)
+    expect((rows(w)[0]!.find('[data-testid="bp-notify-self"]').element as HTMLInputElement).checked).toBe(true)
   })
 })
 

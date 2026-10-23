@@ -801,7 +801,6 @@ export interface ApiBpNotifyUpdate {
   lineworks_name?: string | null
   email?: string | null
   notify_self?: boolean
-  daily_report?: boolean
 }
 
 /** LINE WORKS のユーザー (結び付け先の候補) */
