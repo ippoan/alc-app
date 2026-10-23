@@ -40,6 +40,7 @@ const TABS = [
   { key: 'tenko_call', label: '中間点呼' },
   { key: 'camera', label: 'リモートカメラ' },
   { key: 'site_camera', label: '拠点カメラ' },
+  { key: 'cam_live', label: 'カメラ一覧' },
   { key: 'cam_clips', label: '拠点カメラの録画' },
   { key: 'timecard', label: 'タイムカード' },
   { key: 'devices', label: 'デバイス管理' },
@@ -146,6 +147,10 @@ const visibleTabs = computed(() => TABS.filter(t =>
 
       <div v-if="activeTab === 'site_camera'">
         <TenkoCameraView />
+      </div>
+
+      <div v-if="activeTab === 'cam_live'">
+        <CamLiveGrid />
       </div>
 
       <div v-if="activeTab === 'cam_clips'">
