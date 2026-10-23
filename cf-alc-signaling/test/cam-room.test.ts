@@ -46,19 +46,22 @@ afterEach(() => {
 });
 
 describe("decideCamAdminAuth", () => {
-  it("admin と manager は通し、viewer 等は 403、非 active は 401", () => {
+  it("admin と運行管理者席の鍵は通し、viewer・他の device 鍵等は 403、非 active は 401", () => {
     expect(decideCamAdminAuth({ active: true, role: "admin" })).toBe(101);
-    expect(decideCamAdminAuth({ active: true, role: "manager" })).toBe(101);
+    expect(decideCamAdminAuth({ active: true, role: "device-tenko-manager" })).toBe(101);
+    expect(decideCamAdminAuth({ active: true, role: "device-kiosk" })).toBe(403);
+    expect(decideCamAdminAuth({ active: true, role: "manager" })).toBe(403);
     expect(decideCamAdminAuth({ active: true, role: "viewer" })).toBe(403);
     expect(decideCamAdminAuth({ active: true })).toBe(403);
     expect(decideCamAdminAuth({ active: false })).toBe(401);
     expect(decideCamAdminAuth(null)).toBe(401);
   });
 
-  it("WS ハンドシェイクでも manager は入れ、viewer は 403", async () => {
+  it("WS ハンドシェイクでも席の鍵は入れ、viewer・他の device 鍵は 403", async () => {
     const room = newRoom("cam-auth");
-    expect((await camAdmin(room, "manager-token")).res.status).toBe(101);
+    expect((await camAdmin(room, "seat-token")).res.status).toBe(101);
     expect((await camAdmin(room, "viewer-token")).res.status).toBe(403);
+    expect((await camAdmin(room, "kiosk-token")).res.status).toBe(403);
   });
 });
 
@@ -67,7 +70,7 @@ describe("cam-room proto=2 (複数 viewer)", () => {
     const room = newRoom("cam-v2");
     const device = (await camDevice(room)).q!;
     const a1 = (await camAdmin(room)).q!;
-    const a2 = (await camAdmin(room, "manager-token")).q!;
+    const a2 = (await camAdmin(room, "seat-token")).q!;
     await sleep(50);
 
     const joined = device.all.filter((m) => m.type === "peer_joined" && m.role === "admin");
