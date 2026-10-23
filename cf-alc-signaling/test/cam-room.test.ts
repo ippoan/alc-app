@@ -123,9 +123,7 @@ describe("cam-room proto=2 (複数 viewer)", () => {
 
   it("device が後から入ると、既に居る admin ごとに peer_joined が届く (hibernation 後も同じ viewer_id)", async () => {
     const room = newRoom("cam-late");
-    // device が居ない間は v1 と同じ 1 本だけ (proto が分からない)
     const a1 = (await camAdmin(room)).q!;
-    expect((await camAdmin(room)).res.status).toBe(409);
 
     const device = (await camDevice(room)).q!;
     await sleep(50);
@@ -168,6 +166,55 @@ describe("cam-room proto=2 (複数 viewer)", () => {
     const room = newRoom("cam-dev2");
     await camDevice(room);
     expect((await camDevice(room)).res.status).toBe(409);
+  });
+});
+
+describe("cam-room device 不在の部屋", () => {
+  it(`admin は ${MAX_VIEWERS} 本まで入れ、超えると 409 "viewer limit"`, async () => {
+    const room = newRoom("cam-absent");
+    for (let i = 0; i < MAX_VIEWERS; i++) expect((await camAdmin(room)).res.status).toBe(101);
+    const over = await camAdmin(room);
+    expect(over.res.status).toBe(409);
+    expect(await over.res.text()).toBe("viewer limit");
+  });
+
+  it("3 人居る部屋に v1 device が入ると、最初の 1 本だけ残り 2 本が 4009 で切られる", async () => {
+    const room = newRoom("cam-absent-v1");
+    const admins: Array<{ q: Queue; closed: Promise<number> }> = [];
+    for (let i = 0; i < 3; i++) {
+      const q = (await camAdmin(room)).q!;
+      admins.push({ q, closed: new Promise((r) => q.ws.addEventListener("close", (e) => r((e as CloseEvent).code))) });
+    }
+    const device = (await camDevice(room, "")).q!;
+    await sleep(100);
+
+    expect(await Promise.race([admins[1].closed, sleep(1000).then(() => 0)])).toBe(4009);
+    expect(await Promise.race([admins[2].closed, sleep(1000).then(() => 0)])).toBe(4009);
+    expect(device.all.filter((m) => m.type === "peer_joined")).toEqual([{ type: "peer_joined", role: "admin" }]);
+    expect(admins[0].q.all).toContainEqual({ type: "peer_joined", role: "device" });
+    // 切られた分の peer_left は device に出ない
+    expect(device.all.some((m) => m.type === "peer_left")).toBe(false);
+
+    // 残った 1 本とは従来どおり中継できる
+    send(device, { type: "sdp_offer", sdp: "o" });
+    await sleep(50);
+    expect(admins[0].q.all).toContainEqual({ type: "sdp_offer", sdp: "o" });
+    expect(admins[1].q.all.some((m) => m.type === "sdp_offer")).toBe(false);
+    // v1 device の部屋は 1 本制限に戻る
+    expect((await camAdmin(room)).res.status).toBe(409);
+  });
+
+  it("3 人居る部屋に v2 device が入ると、3 人とも peer_joined が届く", async () => {
+    const room = newRoom("cam-absent-v2");
+    const admins: Queue[] = [];
+    for (let i = 0; i < 3; i++) admins.push((await camAdmin(room)).q!);
+    const device = (await camDevice(room)).q!;
+    await sleep(100);
+
+    const ids = device.all.filter((m) => m.type === "peer_joined").map((m) => m.viewer_id as string);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    for (const a of admins) expect(a.all).toContainEqual({ type: "peer_joined", role: "device" });
   });
 });
 

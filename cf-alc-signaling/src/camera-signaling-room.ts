@@ -34,10 +34,15 @@ interface PeerAttachment {
   proto?: number;
   /** admin: DO が発行した viewer_id (proto=2 の部屋でだけ使う) */
   viewerId?: string;
+  /** admin: v1 の device が入って切られた。close の完了までの間、居ないものとして扱う。 */
+  kicked?: true;
 }
 
 /** proto=2 の部屋で同時に受け入れる admin (viewer) の上限。上り帯域 = 人数 × stream2 のため。 */
 export const MAX_VIEWERS = 4;
+
+/** v1 の device が入って、2 本目以降の admin を切るときの close code。 */
+const CLOSE_V1_SINGLE_VIEWER = 4009;
 
 interface ServerMessage {
   type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'peer_joined' | 'peer_left' | 'error' | 'pong';
@@ -62,10 +67,11 @@ export class CameraSignalingRoom extends DurableObject {
       });
     }
 
-    // proto=2 を宣言した device の部屋は admin 複数 (上限 MAX_VIEWERS)。それ以外は 1ルーム = device 1本 + admin 1本
-    const multi = this.isMultiViewerRoom();
-    const existing = this.ctx.getWebSockets(role);
-    if (role === 'admin' && multi) {
+    // device が居ない部屋と proto=2 の device の部屋は admin 複数 (上限 MAX_VIEWERS)。
+    // proto 無し (v1) の device が居る部屋だけ 1ルーム = device 1本 + admin 1本
+    const v1Device = this.liveSockets('device').some(d => this.getAttachment(d).proto !== 2);
+    const existing = this.liveSockets(role);
+    if (role === 'admin' && !v1Device) {
       if (existing.length >= MAX_VIEWERS) {
         return new Response('viewer limit', { status: 409 });
       }
@@ -75,35 +81,43 @@ export class CameraSignalingRoom extends DurableObject {
 
     const attachment: PeerAttachment = {};
     if (role === 'device' && url.searchParams.get('proto') === '2') attachment.proto = 2;
-    if (role === 'admin' && multi) attachment.viewerId = crypto.randomUUID();
+    if (role === 'admin') attachment.viewerId = crypto.randomUUID();
 
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], [role]);
     pair[1].serializeAttachment(attachment);
 
-    if (role === 'device' && attachment.proto === 2) {
-      this.notifyPeer(role, { type: 'peer_joined', role });
-      // 後から入った proto=2 の device へ、既に居る admin を 1 人ずつ知らせる
-      for (const admin of this.ctx.getWebSockets('admin')) {
-        // device より先に入っていた admin はまだ viewer_id を持たないので、ここで発行する
+    if (role === 'device') {
+      let admins = this.liveSockets('admin');
+      if (attachment.proto !== 2 && admins.length > 1) {
+        // v1 の device は viewer を 1 人しか扱えない。最初に入った 1 本だけ残して他は切る
+        for (const extra of admins.slice(1)) {
+          extra.serializeAttachment({ ...this.getAttachment(extra), kicked: true } satisfies PeerAttachment);
+          try {
+            extra.close(CLOSE_V1_SINGLE_VIEWER, 'v1 device: single viewer');
+          } catch {
+            // WebSocket already closed
+          }
+        }
+        admins = admins.slice(0, 1);
+      }
+      for (const admin of admins) {
+        // device より前の接続は viewer_id を持たないことがあるので、ここで発行する
         const att = this.getAttachment(admin);
         const viewerId = att.viewerId ?? crypto.randomUUID();
         if (!att.viewerId) admin.serializeAttachment({ ...att, viewerId } satisfies PeerAttachment);
-        this.send(pair[1], { type: 'peer_joined', role: 'admin', viewer_id: viewerId });
-      }
-    } else if (role === 'admin' && multi) {
-      // 新しい viewer を device に知らせ、device が居れば admin 側にも伝える
-      this.notifyPeer(role, { type: 'peer_joined', role, viewer_id: attachment.viewerId });
-      if (this.ctx.getWebSockets('device').length > 0) {
-        this.send(pair[1], { type: 'peer_joined', role: 'device' });
+        this.send(admin, { type: 'peer_joined', role: 'device' });
+        this.send(pair[1], {
+          type: 'peer_joined',
+          role: 'admin',
+          ...(attachment.proto === 2 ? { viewer_id: viewerId } : {}),
+        });
       }
     } else {
-      // v1: 新規参加を相手役に通知
-      this.notifyPeer(role, { type: 'peer_joined', role });
-      // 相手役が既に接続済みなら、今接続した側にもそれを伝える
-      const peerRole: ClientRole = role === 'device' ? 'admin' : 'device';
-      if (this.ctx.getWebSockets(peerRole).length > 0) {
-        this.send(pair[1], { type: 'peer_joined', role: peerRole });
+      // 新しい viewer を device に知らせ、device が居れば admin 側にも伝える
+      this.toDevices({ type: 'peer_joined', role }, attachment.viewerId);
+      if (this.liveSockets('device').length > 0) {
+        this.send(pair[1], { type: 'peer_joined', role: 'device' });
       }
     }
 
@@ -120,6 +134,8 @@ export class CameraSignalingRoom extends DurableObject {
       this.send(ws, { type: 'error', message: 'Invalid JSON' });
       return;
     }
+
+    if (this.getAttachment(ws).kicked) return;
 
     const senderRole = this.getRole(ws);
     if (!senderRole) {
@@ -183,12 +199,25 @@ export class CameraSignalingRoom extends DurableObject {
 
   private notifyLeft(ws: WebSocket): void {
     const role = this.getRole(ws);
-    if (!role) return;
-    const viewerId = this.getAttachment(ws).viewerId;
-    if (role === 'admin' && viewerId) {
-      this.notifyPeer(role, { type: 'peer_left', role, viewer_id: viewerId });
+    // 切られた admin は device に peer_joined を出していないので、peer_left も出さない
+    if (!role || this.getAttachment(ws).kicked) return;
+    if (role === 'admin') {
+      this.toDevices({ type: 'peer_left', role }, this.getAttachment(ws).viewerId);
     } else {
       this.notifyPeer(role, { type: 'peer_left', role });
+    }
+  }
+
+  /** その role の接続のうち、切られていないもの。 */
+  private liveSockets(role: ClientRole): WebSocket[] {
+    return this.ctx.getWebSockets(role).filter(ws => !this.getAttachment(ws).kicked);
+  }
+
+  /** admin 発の通知を device へ送る。proto=2 の device にだけ viewer_id を付ける。 */
+  private toDevices(message: ServerMessage, viewerId: string | undefined): void {
+    for (const device of this.liveSockets('device')) {
+      const v2 = this.getAttachment(device).proto === 2 && viewerId;
+      this.send(device, v2 ? { ...message, viewer_id: viewerId } : message);
     }
   }
 
@@ -198,13 +227,13 @@ export class CameraSignalingRoom extends DurableObject {
 
   /** proto=2 を宣言した device が居る部屋か (admin 複数を受け入れる部屋)。 */
   private isMultiViewerRoom(): boolean {
-    return this.ctx.getWebSockets('device').some(d => this.getAttachment(d).proto === 2);
+    return this.liveSockets('device').some(d => this.getAttachment(d).proto === 2);
   }
 
   /** device → 指定 viewer の admin だけへ中継する。未知の viewer_id は捨てる。 */
   private relayToViewer(viewerId: string | undefined, message: ServerMessage): void {
     if (!viewerId) return;
-    for (const admin of this.ctx.getWebSockets('admin')) {
+    for (const admin of this.liveSockets('admin')) {
       if (this.getAttachment(admin).viewerId === viewerId) this.send(admin, message);
     }
   }
@@ -216,13 +245,14 @@ export class CameraSignalingRoom extends DurableObject {
     return null;
   }
 
-  /** 相手役の全員へ送る。sender を渡すと、送り主の viewer_id を付ける (admin → proto=2 の device)。 */
+  /** 相手役の全員へ送る。sender (admin) を渡すと、proto=2 の device には送り主の viewer_id を付ける。 */
   private notifyPeer(senderRole: ClientRole, message: ServerMessage, sender?: WebSocket): void {
-    const peerRole: ClientRole = senderRole === 'device' ? 'admin' : 'device';
-    const viewerId = sender ? this.getAttachment(sender).viewerId : undefined;
-    const out = viewerId ? { ...message, viewer_id: viewerId } : message;
-    for (const peer of this.ctx.getWebSockets(peerRole)) {
-      this.send(peer, out);
+    if (senderRole === 'admin') {
+      this.toDevices(message, sender ? this.getAttachment(sender).viewerId : undefined);
+      return;
+    }
+    for (const peer of this.liveSockets('admin')) {
+      this.send(peer, message);
     }
   }
 
