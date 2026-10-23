@@ -290,6 +290,55 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
       return wrapper
     }
 
+    it('★ 保存が済むと結果の下に最初の画面を出し、10 秒のカウントダウンで最初の画面へ戻る', async () => {
+      const wrapper = await toMeasure()
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      try {
+        latestBloodPressure.value = reading
+        await flush(wrapper)
+        expect(wrapper.text()).toContain('測定完了')
+        expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(true)
+        expect(wrapper.find('[data-testid="bp-done-countdown"]').text()).toContain('あと 10 秒')
+        vi.advanceTimersByTime(3000)
+        await wrapper.vm.$nextTick()
+        expect(wrapper.find('[data-testid="bp-done-countdown"]').text()).toContain('あと 7 秒')
+        vi.advanceTimersByTime(7000)
+        await wrapper.vm.$nextTick()
+        expect(wrapper.text()).not.toContain('測定完了')
+        expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(true)
+        expect(wrapper.find('[data-testid="bp-done-countdown"]').exists()).toBe(false)
+      }
+      finally {
+        vi.useRealTimers()
+        wrapper.unmount()
+      }
+    })
+
+    it('★ 完了の段のまま次の人がカードをかざすと、前の人の結果を片付けてそのまま進む', async () => {
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(wrapper.text()).toContain('測定完了')
+      employee.value = { id: 'emp-test-2', name: '次の人', face_approval_status: 'approved' }
+      await tapCard(wrapper, 'test-card-0002')
+      expect(wrapper.text()).not.toContain('測定完了')
+      expect(wrapper.text()).not.toContain('124')
+      expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(true)
+      expect(wrapper.text()).toContain('次の人')
+      wrapper.unmount()
+    })
+
+    it('保存中・保存の失敗中は最初の画面もカウントダウンも出さない', async () => {
+      startMeasurementMock.mockImplementation(() => new Promise(() => {}))
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(wrapper.text()).toContain('保存中...')
+      expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="bp-done-countdown"]').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
     it('保存の応答を待たずに完了の段と値が出る。保存中は「次の人へ」が押せず、終わると押せる', async () => {
       let finishStart!: (v: { id: string }) => void
       startMeasurementMock.mockImplementation(() => new Promise((resolve) => { finishStart = resolve }))
@@ -827,6 +876,22 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(vein.capture).toHaveBeenCalledTimes(1)
       expect(veinIdentify.identifyVeinEmployee).toHaveBeenCalledWith('chara-hex')
       expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('★ 完了の段 (保存済み) のまま指を置くと、前の人の結果を片付けて照合を始める', async () => {
+      const wrapper = await mountBp()
+      finger.cb!()
+      await flush(wrapper)
+      latestBloodPressure.value = { systolic: 124, diastolic: 78, pulse: 66, measuredAt: new Date('2026-09-16T01:02:03.000Z') }
+      await flush(wrapper)
+      expect(wrapper.text()).toContain('測定完了')
+      vein.capture.mockClear()
+      finger.cb!()
+      await flush(wrapper)
+      expect(vein.capture).toHaveBeenCalledTimes(1)
+      expect(wrapper.text()).not.toContain('測定完了')
       expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
       wrapper.unmount()
     })
