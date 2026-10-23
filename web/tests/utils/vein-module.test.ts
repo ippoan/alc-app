@@ -74,12 +74,19 @@ describe('allocateVeinModuleId', () => {
 })
 
 describe('identifyVeinModuleEmployee', () => {
-  it('不一致 (null)・対応表に無い ID・承認待ちの ID は miss', async () => {
+  it('不一致 (null)・対応表に無い ID は miss', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 10, { approved: false })])
     expect(await mod.identifyVeinModuleEmployee(null)).toEqual({ kind: 'miss' })
     expect(await mod.identifyVeinModuleEmployee(11)).toEqual({ kind: 'miss' })
-    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'miss' })
     expect(api.getEmployeeById).not.toHaveBeenCalled()
+  })
+
+  it('★ 承認待ちの ID は pending (本人確認にしない)。名前が引けなければ null', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 10, { approved: false })])
+    api.getEmployeeById.mockResolvedValue(EMP)
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'pending', employeeId: 'emp-1', name: EMP.name })
+    api.getEmployeeById.mockRejectedValue(new Error('500'))
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'pending', employeeId: 'emp-1', name: null })
   })
 
   it('承認済みの ID は乗務員を引いて hit', async () => {

@@ -69,22 +69,20 @@ function messageOf(e: unknown): string {
 
 /**
  * モジュールが返した ID (`VEIN IDENTIFY`、不一致は null) から乗務員を引く。
- * 対応表に無い ID・承認待ちの ID は不一致。社員の情報はオンラインは `GET /api/employees/{id}`、
- * ネットワークで失敗したら `getEmployees()` (Service Worker のキャッシュ) から引く
+ * 対応表に無い ID は不一致、承認待ちの ID は `pending` (本人確認にはしない)。社員の情報はオンラインは
+ * `GET /api/employees/{id}`、ネットワークで失敗したら `getEmployees()` (Service Worker のキャッシュ) から引く
  */
 export async function identifyVeinModuleEmployee(moduleId: number | null): Promise<VeinIdentifyOutcome> {
   if (moduleId === null) return { kind: 'miss' }
   try {
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === moduleId)
-    if (!entry?.approved) return { kind: 'miss' }
-    let employee: ApiEmployee | undefined
-    try {
-      employee = await getEmployeeById(entry.employeeId)
+    if (!entry) return { kind: 'miss' }
+    if (!entry.approved) {
+      // 名前は飾り (「○○さんは未承認」)。引けなくても未承認であることは伝える
+      const pending = await findEmployee(entry.employeeId).catch(() => undefined)
+      return { kind: 'pending', employeeId: entry.employeeId, name: pending?.name ?? null }
     }
-    catch (e) {
-      if (!(e instanceof TypeError)) throw e
-      employee = (await getEmployees()).find(emp => emp.id === entry.employeeId)
-    }
+    const employee = await findEmployee(entry.employeeId)
     if (!employee) {
       return { kind: 'error', message: '指静脈は一致しましたが、乗務員の情報が手元にありません。NFC か社員番号で進んでください' }
     }
@@ -92,6 +90,17 @@ export async function identifyVeinModuleEmployee(moduleId: number | null): Promi
   }
   catch (e) {
     return { kind: 'error', message: `指静脈の照合に失敗しました: ${messageOf(e)}` }
+  }
+}
+
+/** 社員を引く。オンラインは `GET /api/employees/{id}`、ネットワークの失敗は `getEmployees()` (キャッシュ) から */
+async function findEmployee(employeeId: string): Promise<ApiEmployee | undefined> {
+  try {
+    return await getEmployeeById(employeeId)
+  }
+  catch (e) {
+    if (!(e instanceof TypeError)) throw e
+    return (await getEmployees()).find(emp => emp.id === employeeId)
   }
 }
 

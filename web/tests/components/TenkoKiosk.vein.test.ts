@@ -378,13 +378,13 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       wrapper.unmount()
     })
 
-    it('★ 承認待ちの ID に当たっても本人確認にしない (不一致の文言)', async () => {
+    it('★ 承認待ちの ID に当たっても本人確認にしない (未承認と出す)', async () => {
       vein.identify.mockResolvedValue(13)
+      api.getEmployeeById.mockRejectedValueOnce(new Error('500'))
       const wrapper = await mountKiosk()
       await pressVein(wrapper)
-      expect(api.getEmployeeById).not.toHaveBeenCalled()
       expect(identifyEmployeeMock).not.toHaveBeenCalled()
-      expect(wrapper.text()).toContain(VEIN_NO_MATCH_MESSAGE)
+      expect(wrapper.text()).toContain('この人さんの指静脈は未承認です')
       wrapper.unmount()
     })
 

@@ -39,7 +39,7 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  *   カウントダウンで最初の画面へ戻る。「次の人へ」を押さなくても、次の人が指を置く・カードをかざすとそのまま進む
  */
 
-type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble'
+type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble' | 'vein_pending'
 
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
@@ -216,6 +216,9 @@ async function identifyByVein(prompt: boolean): Promise<string | null> {
     ? await identifyVeinModuleEmployee(read as number | null)
     : await identifyVeinEmployee(read as string)
   if (outcome.kind === 'miss') return '照合できませんでした。もう一度置くか、下のカードか社員番号で進んでください'
+  if (outcome.kind === 'pending') {
+    return `${outcome.name ?? 'この人'}さんの指静脈は未承認です。下の「未承認の指静脈」から運行管理者が承認してください`
+  }
   if (outcome.kind === 'error') return outcome.message
   proceedWithVeinEmployee(outcome.employee)
   return null
@@ -379,6 +382,7 @@ function reset() {
     <!-- この端末の指静脈の一覧 (ID ↔ 乗務員、空き、モジュールの人数) -->
     <VeinModuleList v-else-if="step === 'vein_list'" @close="step = 'nfc'" />
     <BpBluetoothSettings v-else-if="step === 'bp_ble'" @close="step = 'nfc'" />
+    <VeinPendingApproval v-else-if="step === 'vein_pending'" @close="step = 'nfc'" />
 
     <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
     <div v-else-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
@@ -507,6 +511,13 @@ function reset() {
         @click="step = 'vein_list'; error = null"
       >
         この端末の指静脈の一覧
+      </button>
+      <button
+        data-testid="vein-pending-open"
+        class="col-span-2 w-full px-4 py-3 bg-white border border-amber-500 text-amber-700 rounded-xl font-medium hover:bg-amber-50 transition-colors"
+        @click="step = 'vein_pending'; error = null"
+      >
+        未承認の指静脈 (運行管理者の指で承認)
       </button>
       <button
         data-testid="bp-ble-open"
