@@ -28,7 +28,7 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import type {
-  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip,
+  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent,
 } from '~/utils/cam-clips'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
@@ -1931,6 +1931,13 @@ export async function updateCamClipsCamera(id: string, body: CamClipsPatchBody):
 
 export async function listCamClipsDeviceCandidates(days = 30): Promise<CamClipsDeviceCandidate[]> {
   return request<CamClipsDeviceCandidate[]>(`/api/cam-clips/device-candidates?days=${days}`, {}, 'admin')
+}
+
+/** カメラ 1 台の、JST の暦日 (`YYYY-MM-DD`) 1 日ぶんのイベントと自動切り出しの結果 (時刻順) */
+export async function listCamClipsEvents(cameraId: string, date: string): Promise<CamClipsEvent[]> {
+  return request<CamClipsEvent[]>(
+    `/api/cam-clips/events?camera_id=${encodeURIComponent(cameraId)}&date=${encodeURIComponent(date)}`, {}, 'admin',
+  )
 }
 
 /** 手動の切り出し。カメラから元ファイルを取り込むので、通常の 30 秒では足りない (上限は UPLOAD と同じ 120 秒) */

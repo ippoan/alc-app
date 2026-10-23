@@ -155,6 +155,7 @@ const visibleTabs = computed(() => TABS.filter(t =>
 
       <div v-if="activeTab === 'cam_clips'">
         <CamClipsManager />
+        <CamClipEvents />
       </div>
 
       <div v-if="activeTab === 'timecard'">

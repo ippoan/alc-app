@@ -90,6 +90,7 @@ import {
   createCamClipsCamera,
   updateCamClipsCamera,
   listCamClipsDeviceCandidates,
+  listCamClipsEvents,
   createCamClipsClip,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
@@ -3147,6 +3148,15 @@ describe.skipIf(isLive)('拠点カメラの録画 (alc-cam#2)', () => {
     mockFetch.mockResolvedValueOnce(okJson([]))
     await listCamClipsDeviceCandidates(7)
     expect(mockFetch.mock.calls[1][0]).toMatch(/days=7$/)
+  })
+
+  it('自動切り出しの一覧は camera_id と date を encode して GET する', async () => {
+    const events = [{ source_id: 's1', kind: 'alcohol', clip: null }]
+    mockFetch.mockResolvedValueOnce(okJson(events))
+    await expect(listCamClipsEvents('c/1', '2026-10-23')).resolves.toEqual(events)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/cam-clips\/events\?camera_id=c%2F1&date=2026-10-23$/)
+    expect(init.method).toBeUndefined()
   })
 
   it('切り出しは POST で、120 秒の上限を自分で持つ', async () => {
