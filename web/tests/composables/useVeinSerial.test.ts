@@ -143,6 +143,57 @@ describe('useVeinSerial', () => {
     })
   })
 
+  // ---------- 血圧計の設定・ペアリング・再起動 (血圧の画面から、Refs ippoan/alc-app#436) ----------
+
+  describe('setOmronBp / startPairing / restart', () => {
+    it('setOmronBp は OMRON BP ON を送り、応答の値で omronBp を合わせる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=0\n')
+      const p = vein.setOmronBp(true)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('OMRON BP ON\n')
+      dev.emit('OK OMRON BP=1\n')
+      await p
+      expect(vein.omronBp.value).toBe(true)
+    })
+
+    it('setOmronBp は応答の値が頼んだ値と違えば Error で、omronBp を変えない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev, 'OMRON BP=1\n')
+      const p = vein.setOmronBp(false)
+      const caught = p.catch(e => e as Error)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('OMRON BP OFF\n')
+      dev.emit('OK OMRON BP=1\n')
+      expect((await caught as Error).message).toBe('血圧計の設定を書けませんでした')
+      expect(vein.omronBp.value).toBe(true)
+    })
+
+    it('startPairing は PAIR を送り OK PAIR を待つ', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p = vein.startPairing()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('PAIR\n')
+      dev.emit('OK PAIR\n')
+      await expect(p).resolves.toBeUndefined()
+    })
+
+    it('★ restart は RTS を上げてから DTR を落とす (ESP32-S3 の chip reset の条件)', async () => {
+      const dev = createMockPort()
+      const signals: unknown[] = []
+      dev.port.setSignals = vi.fn(async (s: unknown) => { signals.push(s) })
+      await connectDevice(dev)
+      await vein.restart()
+      expect(signals).toEqual([{ requestToSend: true }, { dataTerminalReady: false }])
+    })
+
+    it('restart は未接続なら Error', async () => {
+      await load()
+      await expect(vein.restart()).rejects.toThrow('Vein Station がつながっていません')
+    })
+  })
+
   // ---------- omronBp (機体の設定で血圧計を使うか、Refs ippoan/alc-app#436) ----------
 
   describe('omronBp', () => {

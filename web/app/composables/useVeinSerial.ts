@@ -105,6 +105,9 @@ const deviceInfo = ref<DeviceLine | null>(null)
  */
 const omronBp = ref<boolean | null>(null)
 
+/** 掴んでいるポート (機体の再起動 {@link restart} に使う)。未接続は null */
+let openPort: SerialPort | null = null
+
 /** 接続の世代。切断・再接続をまたいで、古い問い合わせが呼び直しを続けないための印 */
 let connectionEpoch = 0
 
@@ -113,6 +116,9 @@ const OMRON_STATUS_TIMEOUT_MS = 3000
 const OMRON_STATUS_RETRY_MS = 300
 const OMRON_STATUS_RETRY_LIMIT = 40
 const OMRON_STATUS_PREFIX = 'OMRON BP='
+/** `OMRON BP ON|OFF` の応答 (`OK OMRON BP=<0|1>`) と `PAIR` の応答 (`OK PAIR`) */
+const OMRON_SET_PREFIX = 'OK OMRON BP='
+const PAIR_REPLY = 'OK PAIR'
 
 /**
  * ファームの書き込み中の錠。機体は `OTA SERIAL` の後、イメージを受け切るまで受けたバイトを
@@ -203,7 +209,8 @@ export function useVeinSerial() {
   // `{` でも始まらないので、dispatchLine の接頭辞で落ちて二重には配られない。
 
   const claimant: SerialClaimant = {
-    onOpen(_port, _reader, _writer, lines) {
+    onOpen(port, _reader, _writer, lines) {
+      openPort = port
       // 利用側が配られた行の cb から読めるように、配る前に入れる (useCoreS3Serial と同じ)
       deviceInfo.value = findDeviceLine(lines)
       isConnected.value = true
@@ -224,6 +231,7 @@ export function useVeinSerial() {
     },
 
     onClose() {
+      openPort = null
       connectionEpoch++
       omronBp.value = null
       deviceInfo.value = null
@@ -246,6 +254,44 @@ export function useVeinSerial() {
     catch {
       // 旧ファーム・時間切れ・抜線: 分からないまま (null)。画面は従来の判定に任せる
     }
+  }
+
+  /**
+   * 機体に「血圧計 (Omron) を拾うか」を書く (`OMRON BP ON|OFF`、NVS に保存)。
+   * **反映は機体の再起動の後** ({@link restart})。応答の値が頼んだ値と違えば Error
+   */
+  async function setOmronBp(enabled: boolean): Promise<void> {
+    const reply = await requestWhenFree(
+      () => request(enabled ? 'OMRON BP ON' : 'OMRON BP OFF', OMRON_SET_PREFIX, OMRON_STATUS_TIMEOUT_MS),
+      { intervalMs: OMRON_STATUS_RETRY_MS, maxRetries: OMRON_STATUS_RETRY_LIMIT },
+    )
+    if (reply.slice(OMRON_SET_PREFIX.length).trim() !== (enabled ? '1' : '0')) {
+      throw new Error('血圧計の設定を書けませんでした')
+    }
+    omronBp.value = enabled
+  }
+
+  /**
+   * 血圧計のペアリングの受付を開く (`PAIR`)。**機体の BLE のボンドを全部消してから**受け付ける。
+   * 受付の後に血圧計をペアリング待ち (`-P-` 点滅) にすると、機体がつなぎに行く
+   */
+  async function startPairing(): Promise<void> {
+    await requestWhenFree(
+      () => request('PAIR', PAIR_REPLY, OMRON_STATUS_TIMEOUT_MS),
+      { intervalMs: OMRON_STATUS_RETRY_MS, maxRetries: OMRON_STATUS_RETRY_LIMIT },
+    )
+  }
+
+  /**
+   * 機体を再起動する。ESP32-S3 の USB-Serial-JTAG は「DTR=0 かつ RTS=1」で chip reset が
+   * かかる (useSerialArbiter の closePortQuietly が避けている条件を、ここではわざと踏む)。
+   * RTS を先に上げてから DTR を落とす。再起動で接続はいったん切れ、arbiter が掴み直す
+   */
+  async function restart(): Promise<void> {
+    const port = openPort
+    if (!port) throw new Error('Vein Station がつながっていません')
+    await port.setSignals({ requestToSend: true })
+    await port.setSignals({ dataTerminalReady: false })
   }
 
   /** 端末設定で `OMRON BP ON/OFF` が通ったときに、機体の設定の値を合わせる */
@@ -530,6 +576,9 @@ export function useVeinSerial() {
     request,
     omronBp: readonly(omronBp),
     noteOmronBp,
+    setOmronBp,
+    startPairing,
+    restart,
     ota: { begin: otaBegin, end: otaEnd, request: otaRequest },
     onClose,
     onEvent: lineDispatch.onEvent,
