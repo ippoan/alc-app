@@ -1,4 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
+import { setKeepaliveAutoResponse } from './keepalive';
+
+export { KEEPALIVE_PING, KEEPALIVE_PONG } from './keepalive';
 
 // 拠点カメラ (C212) の全景映像を管理者へ中継するための signaling room。
 // SignalingRoom (遠隔点呼用) と同じ device/admin 1:1 リレーだが、こちらは
@@ -54,6 +57,12 @@ interface ServerMessage {
 }
 
 export class CameraSignalingRoom extends DurableObject {
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    super(ctx, env);
+    // 拠点カメラは常時接続 + 20 秒ごとの ping。ping で DO を起こさない
+    setKeepaliveAutoResponse(ctx);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const role = url.searchParams.get('role') as ClientRole;
@@ -175,6 +184,7 @@ export class CameraSignalingRoom extends DurableObject {
         break;
 
       case 'ping':
+        // KEEPALIVE_PING ちょうどは runtime が返すのでここに来ない。文字列の違う ping 向け
         this.send(ws, { type: 'pong' });
         break;
 
