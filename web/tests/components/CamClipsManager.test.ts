@@ -216,3 +216,23 @@ describe('CamClipsManager 切り出し', () => {
     expect(w.find(t('video')).exists()).toBe(false)
   })
 })
+
+describe('CamClipsManager カメラ ID', () => {
+  it('拡張の設定に入れる camera.id を出し、コピーできる', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const w = await mountIt()
+    expect(w.find(t('row-id')).text()).toBe('c1')
+    await w.find(t('copy-id')).trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('c1')
+    expect(w.find(t('copy-id')).text()).toBe('コピーしました')
+  })
+  it('クリップボードが使えなければ表示のまま (選択コピー)', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('x')) }, configurable: true })
+    const w = await mountIt()
+    await w.find(t('copy-id')).trigger('click')
+    await flushPromises()
+    expect(w.find(t('copy-id')).text()).toBe('コピー')
+  })
+})

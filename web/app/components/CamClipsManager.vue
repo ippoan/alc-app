@@ -72,6 +72,18 @@ function nameOf(id: string): string {
   return deviceDisplayName(id, knownDevices.value)
 }
 
+/** 拡張の設定 (siteId) に入れる値。クリップボードが使えない環境では選択コピーに任せる (select-all) */
+const copiedId = ref('')
+async function copyId(id: string) {
+  try {
+    await navigator.clipboard.writeText(id)
+    copiedId.value = id
+  }
+  catch {
+    copiedId.value = ''
+  }
+}
+
 function openAdd() {
   editing.value = null
   form.value = { ...EMPTY_FORM, device_ids: [] }
@@ -173,7 +185,16 @@ async function makeClip() {
           </thead>
           <tbody>
             <tr v-for="c in cameras" :key="c.id" class="border-t" data-testid="cam-clips-row">
-              <td class="py-2 pr-3">{{ c.name }}</td>
+              <td class="py-2 pr-3">
+                {{ c.name }}
+                <span class="block text-xs text-gray-500">
+                  カメラ ID:
+                  <span class="font-mono select-all" data-testid="cam-clips-row-id">{{ c.id }}</span>
+                  <button class="ml-1 text-blue-700 underline" data-testid="cam-clips-copy-id" @click="copyId(c.id)">
+                    {{ copiedId === c.id ? 'コピーしました' : 'コピー' }}
+                  </button>
+                </span>
+              </td>
               <td class="py-2 pr-3" data-testid="cam-clips-recording">{{ c.recording ? '取り込み中' : '止めている' }}</td>
               <td class="py-2 pr-3">{{ c.vpc_binding ?? '—' }}</td>
               <td class="py-2 pr-3">{{ c.rec_username ?? '—' }}</td>
