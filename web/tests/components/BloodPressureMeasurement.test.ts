@@ -95,11 +95,12 @@ const FaceAuthStub = { name: 'FaceAuth', template: '<div class="face-stub" />', 
 const BleStatusStub = { name: 'BleStatus', template: '<div class="ble-stub" />', emits: ['next', 'skip'] }
 const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="vein-stub" />', props: ['employee'], emits: ['close'] }
 const VeinModuleListStub = { name: 'VeinModuleList', template: '<div class="vein-list-stub" />', emits: ['close'] }
+const BpBluetoothSettingsStub = { name: 'BpBluetoothSettings', template: '<div class="bp-ble-stub" />', emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, EmployeeCodeKeypad: false } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, EmployeeCodeKeypad: false } },
   })
 }
 
@@ -1074,6 +1075,27 @@ describe('BloodPressureMeasurement — この端末の指静脈の一覧 (Refs i
     await w.findComponent(VeinModuleListStub).vm.$emit('close')
     await flush(w)
     expect(w.findComponent(VeinModuleListStub).exists()).toBe(false)
+    expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
+    w.unmount()
+    veinIsConnected.value = false
+  })
+})
+
+describe('BloodPressureMeasurement — 血圧計 (Bluetooth) の設定・ペアリング (Refs ippoan/alc-app#436)', () => {
+  it('Vein Station がつながっているときだけ入口を出し、開いて閉じると入口へ戻る', async () => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = false
+    const off = await mountBp()
+    expect(off.find('[data-testid="bp-ble-open"]').exists()).toBe(false)
+    off.unmount()
+    veinIsConnected.value = true
+    const w = await mountBp()
+    await w.find('[data-testid="bp-ble-open"]').trigger('click')
+    await flush(w)
+    expect(w.findComponent(BpBluetoothSettingsStub).exists()).toBe(true)
+    await w.findComponent(BpBluetoothSettingsStub).vm.$emit('close')
+    await flush(w)
+    expect(w.findComponent(BpBluetoothSettingsStub).exists()).toBe(false)
     expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
     w.unmount()
     veinIsConnected.value = false
