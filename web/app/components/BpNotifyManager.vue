@@ -62,14 +62,35 @@ function isManager(e: ApiBpNotifyEmployee): boolean {
   return e.role.includes('manager') || e.role.includes('admin')
 }
 
+/**
+ * LINE WORKS のユーザー → 結び付いている社員。表全体で 1 回だけ数える (行ごとに数え直すと、
+ * 400 行 × 400 人で描き直しのたびに重くなる)
+ */
+const takenBy = computed(() => {
+  const m = new Map<string, string>()
+  for (const o of employees.value) if (o.lineworks_user_id) m.set(o.lineworks_user_id, o.employee_id)
+  return m
+})
+
 /** 他の社員に結び付いている LINE WORKS のユーザーを除いた選択肢 (自分の結び付きは残す) */
 function optionsFor(e: ApiBpNotifyEmployee): ApiLineworksUser[] {
-  const taken = new Set(
-    employees.value
-      .filter(o => o.employee_id !== e.employee_id && o.lineworks_user_id)
-      .map(o => o.lineworks_user_id),
-  )
-  return users.value.filter(u => !taken.has(u.user_id))
+  return users.value.filter((u) => {
+    const owner = takenBy.value.get(u.user_id)
+    return !owner || owner === e.employee_id
+  })
+}
+
+/**
+ * LINE WORKS のユーザーを選び直している社員 (1 人だけ)。**選択肢はこの行にだけ出す** —
+ * 全行 (400) に全ユーザー (約 200) の選択肢を置くと 8 万個近い要素になり、確認の欄を出すなどの
+ * 描き直しのたびにブラウザが固まっていた (Refs ippoan/alc-app#436)
+ */
+const editingId = ref<string | null>(null)
+
+/** 表示用: 結び付いている LINE WORKS のユーザーの名前 */
+function linkedName(e: ApiBpNotifyEmployee): string {
+  if (!e.lineworks_user_id) return '(未設定)'
+  return users.value.find(u => u.user_id === e.lineworks_user_id)?.name ?? e.lineworks_name ?? e.lineworks_user_id
 }
 
 /** 一覧に無い (取得できない・消えた) ユーザーに結び付いているとき、選択肢に出す名前 */
@@ -101,6 +122,7 @@ async function save(e: ApiBpNotifyEmployee, body: ApiBpNotifyUpdate, restore: ()
 
 function onSelect(e: ApiBpNotifyEmployee, ev: Event) {
   const el = ev.target as HTMLSelectElement
+  editingId.value = null
   const user = users.value.find(u => u.user_id === el.value)
   const body: ApiBpNotifyUpdate = user
     ? { lineworks_user_id: user.user_id, lineworks_name: user.name, email: user.email }
@@ -254,17 +276,31 @@ function cancelLink() {
             </td>
             <td class="py-2 pr-3">{{ e.code }}</td>
             <td class="py-2 pr-3">
-              <select
-                class="border rounded px-2 py-1"
-                data-testid="bp-notify-select"
-                :value="e.lineworks_user_id ?? ''"
-                :disabled="busy.has(e.employee_id)"
-                @change="onSelect(e, $event)"
-              >
-                <option value="">(未設定)</option>
-                <option v-if="orphanName(e)" :value="e.lineworks_user_id ?? ''">{{ orphanName(e) }}</option>
-                <option v-for="u in optionsFor(e)" :key="u.user_id" :value="u.user_id">{{ u.name }}</option>
-              </select>
+              <template v-if="editingId === e.employee_id">
+                <select
+                  class="border rounded px-2 py-1"
+                  data-testid="bp-notify-select"
+                  :value="e.lineworks_user_id ?? ''"
+                  :disabled="busy.has(e.employee_id)"
+                  @change="onSelect(e, $event)"
+                >
+                  <option value="">(未設定)</option>
+                  <option v-if="orphanName(e)" :value="e.lineworks_user_id ?? ''">{{ orphanName(e) }}</option>
+                  <option v-for="u in optionsFor(e)" :key="u.user_id" :value="u.user_id">{{ u.name }}</option>
+                </select>
+                <button class="ml-1 text-xs text-gray-500 underline" data-testid="bp-notify-edit-cancel" @click="editingId = null">やめる</button>
+              </template>
+              <template v-else>
+                <span data-testid="bp-notify-linked" :class="e.lineworks_user_id ? '' : 'text-gray-400'">{{ linkedName(e) }}</span>
+                <button
+                  class="ml-2 text-xs text-blue-700 underline disabled:opacity-50"
+                  data-testid="bp-notify-edit"
+                  :disabled="busy.has(e.employee_id)"
+                  @click="editingId = e.employee_id"
+                >
+                  変更
+                </button>
+              </template>
               <span v-if="e.lineworks_user_id && !e.email" class="ml-1 text-xs text-gray-500">メールなし</span>
             </td>
             <td class="py-2 pr-3">

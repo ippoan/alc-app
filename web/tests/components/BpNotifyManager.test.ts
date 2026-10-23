@@ -35,6 +35,11 @@ async function mountIt(employees: ApiBpNotifyEmployee[] = [emp()]) {
   return w
 }
 const rows = (w: Awaited<ReturnType<typeof mountIt>>) => w.findAll('[data-testid="bp-notify-row"]')
+/** i 行目の「変更」を押して選択肢を出す (選択肢は編集中の 1 行にだけ出る) */
+async function edit(w: Awaited<ReturnType<typeof mountIt>>, i: number) {
+  await rows(w)[i]!.find('[data-testid="bp-notify-edit"]').trigger('click')
+}
+const linked = (w: Awaited<ReturnType<typeof mountIt>>, i: number) => rows(w)[i]!.find('[data-testid="bp-notify-linked"]').text()
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -80,20 +85,40 @@ describe('BpNotifyManager 一覧', () => {
 })
 
 describe('BpNotifyManager 選択とチェック', () => {
+  it('★ 社員 400 人・ユーザー 200 人でも、選択肢は編集中の 1 行の分しか置かない (全行に置くと画面が固まった)', async () => {
+    api.getLineworksUsers.mockResolvedValue({
+      users: Array.from({ length: 200 }, (_, i) => ({ user_id: `u${i}`, name: `試験 ${i}`, email: null })),
+    })
+    const w = await mountIt(Array.from({ length: 400 }, (_, i) => emp({ employee_id: `e${i}`, code: String(i) })))
+    expect(rows(w)).toHaveLength(400)
+    expect(w.findAll('option')).toHaveLength(0)
+    await edit(w, 7)
+    expect(w.findAll('select')).toHaveLength(1)
+    expect(w.findAll('option')).toHaveLength(201)
+  })
+
   it('他の社員に結び付いたユーザーは選べず、自分の結び付きは残る', async () => {
     const w = await mountIt([
       emp({ employee_id: 'a', lineworks_user_id: 'u1', lineworks_name: '試験 太郎' }),
       emp({ employee_id: 'b', name: '試験 花子' }),
     ])
     const opts = (i: number) => rows(w)[i]!.findAll('option').map(o => o.text())
+    await edit(w, 0)
     expect(opts(0)).toEqual(['(未設定)', '試験 太郎', '試験 花子'])
+    await edit(w, 1)
+    // 選択肢は編集中の 1 行にだけ出る
+    expect(rows(w)[0]!.find('select').exists()).toBe(false)
     expect(opts(1)).toEqual(['(未設定)', '試験 花子'])
+    await rows(w)[1]!.find('[data-testid="bp-notify-edit-cancel"]').trigger('click')
+    expect(w.find('select').exists()).toBe(false)
   })
 
   it('ユーザー一覧が取れないとき理由を出し、結び付き済みの名前は選択肢に残り、ほかの操作は使える', async () => {
     api.getLineworksUsers.mockRejectedValue(new Error('API エラー (503): {"error":"lineworks_unavailable"}'))
     const w = await mountIt([emp({ lineworks_user_id: 'u1', lineworks_name: '試験 太郎', email: 'x@example.test' })])
     expect(w.find('[data-testid="bp-notify-users-error"]').text()).toContain('LINE WORKS に接続できません')
+    expect(linked(w, 0)).toBe('試験 太郎')
+    await edit(w, 0)
     expect(rows(w)[0]!.findAll('option').map(o => o.text())).toEqual(['(未設定)', '試験 太郎'])
     api.updateBpNotifySetting.mockResolvedValue(emp({ notify_self: true, lineworks_user_id: 'u1' }))
     await rows(w)[0]!.find('[data-testid="bp-notify-self"]').setValue(true)
@@ -104,27 +129,35 @@ describe('BpNotifyManager 選択とチェック', () => {
   it('名前が無い結び付きは user_id を出す', async () => {
     api.getLineworksUsers.mockResolvedValue({ users: [] })
     const w = await mountIt([emp({ lineworks_user_id: 'zz', lineworks_name: null })])
+    expect(linked(w, 0)).toBe('zz')
+    await edit(w, 0)
     expect(rows(w)[0]!.findAll('option').map(o => o.text())).toEqual(['(未設定)', 'zz'])
   })
 
   it('ユーザーを選ぶと名前とメールも送り、返ってきた行で置き換える', async () => {
     const w = await mountIt()
+    expect(linked(w, 0)).toBe('(未設定)')
     api.updateBpNotifySetting.mockResolvedValue(emp({ lineworks_user_id: 'u1', lineworks_name: '試験 太郎', email: 'taro@example.test' }))
+    await edit(w, 0)
     await rows(w)[0]!.find('select').setValue('u1')
     await flushPromises()
     expect(api.updateBpNotifySetting).toHaveBeenCalledWith('e1', {
       lineworks_user_id: 'u1', lineworks_name: '試験 太郎', email: 'taro@example.test',
     })
-    expect((rows(w)[0]!.find('select').element as HTMLSelectElement).value).toBe('u1')
+    // 選び終えたら選択肢を閉じ、結び付いた名前を出す
+    expect(rows(w)[0]!.find('select').exists()).toBe(false)
+    expect(linked(w, 0)).toBe('試験 太郎')
   })
 
   it('メールの無いユーザーを選んだら「メールなし」を出す。「(未設定)」で外す', async () => {
     const w = await mountIt()
     api.updateBpNotifySetting.mockResolvedValueOnce(emp({ lineworks_user_id: 'u2', lineworks_name: '試験 花子' }))
+    await edit(w, 0)
     await rows(w)[0]!.find('select').setValue('u2')
     await flushPromises()
     expect(rows(w)[0]!.text()).toContain('メールなし')
     api.updateBpNotifySetting.mockResolvedValueOnce(emp())
+    await edit(w, 0)
     await rows(w)[0]!.find('select').setValue('')
     await flushPromises()
     expect(api.updateBpNotifySetting).toHaveBeenLastCalledWith('e1', { lineworks_user_id: null, lineworks_name: null, email: null })
@@ -133,10 +166,11 @@ describe('BpNotifyManager 選択とチェック', () => {
   it('選択の保存が 409 なら理由を出し、選択を元に戻す', async () => {
     const w = await mountIt()
     api.updateBpNotifySetting.mockRejectedValue(new Error('API エラー (409): {"error":"lineworks_user_taken"}'))
+    await edit(w, 0)
     await rows(w)[0]!.find('select').setValue('u1')
     await flushPromises()
     expect(w.find('[data-testid="bp-notify-save-error"]').text()).toContain('別の社員に結び付いています')
-    expect((rows(w)[0]!.find('select').element as HTMLSelectElement).value).toBe('')
+    expect(linked(w, 0)).toBe('(未設定)')
   })
 
   it('本人に通知・日報のチェックを PUT し、失敗したら戻して理由を出す', async () => {
