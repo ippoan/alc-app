@@ -257,6 +257,7 @@ export default {
       // device (拠点 PC の拡張) は token を付けて来たら role=device-cam-host を要求し、
       // token 無しは CAM_DEVICE_TOKEN_REQUIRED が false の間 (拡張の入れ替えまで) だけ通す。
       const token = url.searchParams.get('token');
+      let deviceSub: string | undefined;
       if (role === 'admin' && !token) {
         return new Response('Missing token query param for role=admin', { status: 401 });
       }
@@ -274,11 +275,16 @@ export default {
         if (status !== 101) {
           return new Response('Unauthorized', { status });
         }
+        if (role === 'device') deviceSub = result?.sub;
       }
 
       const id = env.CAMERA_SIGNALING_ROOM.idFromName(roomId);
       const stub = env.CAMERA_SIGNALING_ROOM.get(id);
-      return stub.fetch(request);
+      // 鍵の sub を DO へ (配信担当の順位と一緒に attachment に残す)。client が付けた同名のヘッダは消す
+      const headers = new Headers(request.headers);
+      headers.delete(DEVICE_SUB_HEADER);
+      if (deviceSub) headers.set(DEVICE_SUB_HEADER, deviceSub);
+      return stub.fetch(new Request(request, { headers }));
     }
 
     // WebSocket endpoint: /room/:roomId

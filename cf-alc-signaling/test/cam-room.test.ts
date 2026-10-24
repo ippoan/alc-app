@@ -1,7 +1,16 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { SELF } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { decideCamAdminAuth, decideCamDeviceAuth, decideCamDeviceWithoutToken, CAM_DEVICE_TOKEN_REQUIRED } from "../src/auth";
-import { MAX_VIEWERS } from "../src/camera-signaling-room";
+import {
+  CLOSE_PREEMPTED,
+  CLOSE_STANDBY,
+  DEVICE_STALE_MS,
+  MAX_VIEWERS,
+  decideDeviceEntry,
+  isStaleDevice,
+  parseRank,
+  type CameraSignalingRoom,
+} from "../src/camera-signaling-room";
 
 /**
  * 拠点カメラ中継 (cam-room) の複数 viewer 対応 (protocol v2) と、
@@ -202,6 +211,183 @@ describe("cam-room proto=2 (複数 viewer)", () => {
     const room = newRoom("cam-dev2");
     await camDevice(room);
     expect((await camDevice(room)).res.status).toBe(409);
+  });
+});
+
+/** close の code (届かなければ 0) */
+const closedCode = (q: Queue, ms = 1000) =>
+  Promise.race([
+    new Promise<number>((r) => q.ws.addEventListener("close", (e) => r((e as CloseEvent).code))),
+    sleep(ms).then(() => 0),
+  ]);
+const rankedDevice = (room: string, rank: number, token = "cam-host-token") =>
+  camDevice(room, `&proto=2&rank=${rank}&token=${token}`);
+
+const camRoomStub = (room: string) =>
+  env.CAMERA_SIGNALING_ROOM.get(env.CAMERA_SIGNALING_ROOM.idFromName(room)) as DurableObjectStub<CameraSignalingRoom>;
+
+/** 部屋の device の attachment (tag device のもの。入れ替えで切った close 待ちの device は除く) */
+async function deviceAttachments(room: string): Promise<Array<Record<string, unknown>>> {
+  return runInDurableObject(camRoomStub(room), (_obj, state) =>
+    state
+      .getWebSockets("device")
+      .map((ws) => ws.deserializeAttachment() as Record<string, unknown>)
+      .filter((a) => !a.kicked),
+  );
+}
+
+describe("cam-room 配信担当の順位 (?rank=)", () => {
+  it("parseRank / decideDeviceEntry / isStaleDevice (純粋関数)", () => {
+    expect(parseRank("1")).toBe(1);
+    expect(parseRank("99")).toBe(99);
+    for (const bad of ["0", "100", "-1", "1.5", "01", "", "a", " 1"]) expect(parseRank(bad)).toBeNull();
+
+    expect(decideDeviceEntry(undefined, 1, false)).toBe("reject");
+    expect(decideDeviceEntry(undefined, undefined, true)).toBe("reject");
+    expect(decideDeviceEntry(1, 2, false)).toBe("preempt");
+    expect(decideDeviceEntry(2, undefined, false)).toBe("preempt");
+    expect(decideDeviceEntry(3, 1, true)).toBe("preempt");
+    expect(decideDeviceEntry(1, 1, false)).toBe("standby");
+    expect(decideDeviceEntry(2, 1, false)).toBe("standby");
+
+    const now = 1_000_000;
+    expect(isStaleDevice(now - DEVICE_STALE_MS - 1, undefined, now)).toBe(true);
+    expect(isStaleDevice(now - DEVICE_STALE_MS, undefined, now)).toBe(false);
+    expect(isStaleDevice(now - 10 * DEVICE_STALE_MS, now - 1000, now)).toBe(false);
+    expect(isStaleDevice(undefined, undefined, now)).toBe(false);
+  });
+
+  it("rank が数でなければ 400", async () => {
+    expect((await camDevice(newRoom("cam-rank-bad"), "&proto=2&rank=0")).res.status).toBe(400);
+    expect((await camDevice(newRoom("cam-rank-bad"), "&proto=2&rank=x")).res.status).toBe(400);
+  });
+
+  it("rank と鍵の sub を attachment に持つ (client が付けた sub のヘッダは捨てる)", async () => {
+    const room = newRoom("cam-rank-att");
+    const res = await SELF.fetch(`${BASE}/cam-room/${room}?role=device&proto=2&rank=2&token=cam-host-token`, {
+      headers: { Upgrade: "websocket", "X-Alc-Signaling-Device-Sub": "alarm:forged" },
+    });
+    expect(res.status).toBe(101);
+    opened.push(res.webSocket!);
+    res.webSocket!.accept();
+    const [att] = await deviceAttachments(room);
+    expect(att).toMatchObject({ proto: 2, rank: 2, sub: "alarm:fp-1" });
+    expect(typeof att.joinedAt).toBe("number");
+
+    // token 無し (移行期間) は sub を持たない。client のヘッダも信じない
+    const room2 = newRoom("cam-rank-att-none");
+    const res2 = await SELF.fetch(`${BASE}/cam-room/${room2}?role=device&proto=2&rank=1`, {
+      headers: { Upgrade: "websocket", "X-Alc-Signaling-Device-Sub": "alarm:forged" },
+    });
+    opened.push(res2.webSocket!);
+    res2.webSocket!.accept();
+    const [att2] = await deviceAttachments(room2);
+    expect(att2.sub).toBeUndefined();
+    expect(att2.rank).toBe(1);
+  });
+
+  it("同位・下位は一度受け入れて 4011 で閉じ、配信中の device と見る人には何も起きない", async () => {
+    const room = newRoom("cam-rank-standby");
+    const primary = (await rankedDevice(room, 1)).q!;
+    const viewer = (await camAdmin(room)).q!;
+    await sleep(50);
+    const viewerBefore = viewer.all.length;
+
+    for (const rank of [2, 1]) {
+      const sub = await rankedDevice(room, rank, "cam-host-token-2");
+      expect(sub.res.status).toBe(101);
+      expect(await closedCode(sub.q!)).toBe(CLOSE_STANDBY);
+    }
+    await sleep(50);
+    expect(viewer.all.length).toBe(viewerBefore);
+    expect(primary.all.filter((m) => m.type === "peer_joined")).toHaveLength(1);
+    // 配信中の device はそのまま中継できる
+    const viewerId = primary.all.find((m) => m.type === "peer_joined")!.viewer_id;
+    send(primary, { type: "sdp_offer", viewer_id: viewerId, sdp: "still-primary" });
+    await sleep(50);
+    expect(viewer.all).toContainEqual({ type: "sdp_offer", sdp: "still-primary" });
+    expect(await deviceAttachments(room)).toHaveLength(1);
+  });
+
+  it("見る人が居る最中に上位が来ると、下位を 4010 で切り、見る人に peer_left → peer_joined、新しい device から offer が届く", async () => {
+    const room = newRoom("cam-rank-preempt");
+    const backup = (await rankedDevice(room, 2, "cam-host-token-2")).q!;
+    const backupClosed = closedCode(backup);
+    const viewer = (await camAdmin(room)).q!;
+    await sleep(50);
+    expect(viewer.all).toEqual([{ type: "peer_joined", role: "device" }]);
+
+    const primary = (await rankedDevice(room, 1)).q!;
+    expect(await backupClosed).toBe(CLOSE_PREEMPTED);
+    await sleep(50);
+    // 見る人へ: 入れ替えの peer_left → 新しい device の peer_joined (切られた device の close で二重に出ない)
+    expect(viewer.all).toEqual([
+      { type: "peer_joined", role: "device" },
+      { type: "peer_left", role: "device" },
+      { type: "peer_joined", role: "device" },
+    ]);
+    const joined = primary.all.filter((m) => m.type === "peer_joined" && m.role === "admin");
+    expect(joined).toHaveLength(1);
+    send(primary, { type: "sdp_offer", viewer_id: joined[0].viewer_id, sdp: "from-primary" });
+    send(viewer, { type: "sdp_answer", sdp: "answer-primary" });
+    await sleep(50);
+    expect(viewer.all).toContainEqual({ type: "sdp_offer", sdp: "from-primary" });
+    expect(primary.all).toContainEqual({ type: "sdp_answer", sdp: "answer-primary", viewer_id: joined[0].viewer_id });
+    // 切られた device の answer は届かない (送れても捨てる)
+    expect(backup.all.some((m) => m.type === "sdp_answer")).toBe(false);
+    expect((await deviceAttachments(room)).map((a) => a.rank)).toEqual([1]);
+
+    // 下位は待機に回り、入り直しても 4011
+    const again = (await rankedDevice(room, 2, "cam-host-token-2")).q!;
+    expect(await closedCode(again)).toBe(CLOSE_STANDBY);
+  });
+
+  it("上位が抜けると、待機していた下位が入れる (入り直しで引き継ぐ)", async () => {
+    const room = newRoom("cam-rank-takeover");
+    const primary = (await rankedDevice(room, 1)).q!;
+    const viewer = (await camAdmin(room)).q!;
+    const waiting = (await rankedDevice(room, 2, "cam-host-token-2")).q!;
+    expect(await closedCode(waiting)).toBe(CLOSE_STANDBY);
+
+    primary.ws.close(1000, "down");
+    await sleep(50);
+    const backup = (await rankedDevice(room, 2, "cam-host-token-2")).q!;
+    await sleep(50);
+    expect(await closedCode(backup, 200)).toBe(0);
+    expect(viewer.all).toEqual([
+      { type: "peer_joined", role: "device" },
+      { type: "peer_left", role: "device" },
+      { type: "peer_joined", role: "device" },
+    ]);
+    expect(backup.all.filter((m) => m.type === "peer_joined" && m.role === "admin")).toHaveLength(1);
+  });
+
+  it("rank の無い古い拡張: 居る device がいれば 409 (今まで通り)、rank 付きの device には入れ替えられる", async () => {
+    const room = newRoom("cam-rank-legacy");
+    const legacy = (await camDevice(room)).q!;
+    const legacyClosed = closedCode(legacy);
+    expect((await camDevice(room)).res.status).toBe(409);
+    await rankedDevice(room, 3);
+    expect(await legacyClosed).toBe(CLOSE_PREEMPTED);
+    // rank 付きが居る部屋に古い拡張は 409
+    expect((await camDevice(room)).res.status).toBe(409);
+  });
+
+  it("応答の無い (keepalive が途絶えた) device は、下位の device にも入れ替えられる", async () => {
+    const room = newRoom("cam-rank-stale");
+    const primary = (await rankedDevice(room, 1)).q!;
+    const primaryClosed = closedCode(primary);
+    // 入った時刻を昔にする (ping の自動応答も無い = 電源断などで TCP だけ残った device)
+    await runInDurableObject(camRoomStub(room), (_obj, state) => {
+      for (const ws of state.getWebSockets("device")) {
+        const att = ws.deserializeAttachment() as Record<string, unknown>;
+        ws.serializeAttachment({ ...att, joinedAt: Date.now() - DEVICE_STALE_MS - 1000 });
+      }
+    });
+    const backup = (await rankedDevice(room, 2, "cam-host-token-2")).q!;
+    expect(await primaryClosed).toBe(CLOSE_PREEMPTED);
+    expect(await closedCode(backup, 200)).toBe(0);
+    expect((await deviceAttachments(room)).map((a) => a.rank)).toEqual([2]);
   });
 });
 
