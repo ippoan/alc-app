@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import CamExtensionStatus from '~/components/CamExtensionStatus.vue'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, nextTick } from 'vue'
 import { POLL_MS, jstMinuteLabel, summaryLabel, useCamExtension, parseStatusReply, tokenLabel, updateLabel, viewersLabel, type CamExtensionStatus } from '~/composables/useCamExtension'
 import { ALC_CAM_EXTENSION_ID } from '~/utils/alc-cam-extension'
 
@@ -72,7 +72,9 @@ describe('CamExtensionStatus', () => {
     expect(body).toContain('alarm:fp1')
     expect(body).toContain('本社 (site-1)')
     expect(body).toContain('1 人: 接続 (P2P) 1 人')
-    expect(body).toContain('(10/24 09:00)')
+    // latest は拡張の文言に確認の時刻が入っているので、時刻を足さない (二重に出さない)
+    expect(body).toContain('最新')
+    expect(body).not.toContain('(10/24 09:00)')
     expect(text(w, 'cam-ext-toggle').text()).toBe('停止')
     expect(text(w, 'cam-ext-error').exists()).toBe(false)
 
@@ -94,6 +96,38 @@ describe('CamExtensionStatus', () => {
     const w = await mountSuspended(CamExtensionStatus)
     await flushPromises()
     expect(text(w, 'cam-ext-status').exists()).toBe(false)
+  })
+
+  it('外側のクリック・Esc・× でも閉じる (中のクリックでは閉じない)', async () => {
+    const w = await mountSuspended(CamExtensionStatus, { attachTo: document.body })
+    await flushPromises()
+    const open = async () => {
+      await text(w, 'cam-ext-summary').trigger('click')
+      expect(text(w, 'cam-ext-detail').exists()).toBe(true)
+    }
+
+    await open()
+    text(w, 'cam-ext-detail').element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+    expect(text(w, 'cam-ext-detail').exists()).toBe(true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+    expect(text(w, 'cam-ext-detail').exists()).toBe(false)
+
+    // 閉じている間の外側のクリック・Esc 以外のキーは何もしない
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await open()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await nextTick()
+    expect(text(w, 'cam-ext-detail').exists()).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(text(w, 'cam-ext-detail').exists()).toBe(false)
+
+    await open()
+    await text(w, 'cam-ext-close').trigger('click')
+    expect(text(w, 'cam-ext-detail').exists()).toBe(false)
+    w.unmount()
   })
 
   it('もう一度押すと閉じる', async () => {
@@ -228,5 +262,6 @@ describe('useCamExtension', () => {
 
   it('host 更新: 未確認は時刻を付けない', () => {
     expect(updateLabel(makeStatus({ updateAt: 0, update: ['-', ''] }))).toEqual(['-', ''])
+    expect(updateLabel(makeStatus({ updateState: 'error', update: ['更新に失敗', 'warn'] }))).toEqual([`更新に失敗 (${jstMinuteLabel(NOW)})`, 'warn'])
   })
 })
