@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { DEVICE_SUB_HEADER } from './auth';
 import { setKeepaliveAutoResponse } from './keepalive';
 
 export { KEEPALIVE_PING, KEEPALIVE_PONG } from './keepalive';
@@ -13,6 +14,10 @@ export { KEEPALIVE_PING, KEEPALIVE_PONG } from './keepalive';
 // 繋ぎっぱなしにする想定 (「常時接続」)。admin が接続してきた時点で SDP
 // offer/answer/ICE candidate をこのチャネル越しに中継し、確立後は DO を
 // 経由しない直接 P2P (STUN のみ) に移行する。
+//
+// 配信担当の順位 (alc-cam ingest の /cameras/mine の rank、1 = 主): 拠点 PC の拡張は `?rank=N` を付けて入る。
+// 部屋に device が居れば decideDeviceEntry で、上位なら入れ替え (居た方を 4010)、同位・下位なら一度受け入れて
+// 4011 で閉じる (拡張は待機に回り、間を空けて入り直す)。rank を付けない古い拡張は今までどおり 409。
 
 type ClientRole = 'device' | 'admin';
 
@@ -37,8 +42,14 @@ interface PeerAttachment {
   proto?: number;
   /** admin: DO が発行した viewer_id (proto=2 の部屋でだけ使う) */
   viewerId?: string;
-  /** admin: v1 の device が入って切られた。close の完了までの間、居ないものとして扱う。 */
+  /** admin: v1 の device が入って切られた / device: 上位の device に入れ替えられた。close の完了までの間、居ないものとして扱う。 */
   kicked?: true;
+  /** device: 配信担当の順位 (1 = 主)。無ければ順位を知らない古い拡張 */
+  rank?: number;
+  /** device: 鍵の sub (`alarm:<fp>`。token 無しの移行期間は無い) */
+  sub?: string;
+  /** device: 入った時刻 (ms)。応答の無い device の判定に使う */
+  joinedAt?: number;
 }
 
 /** proto=2 の部屋で同時に受け入れる admin (viewer) の上限。上り帯域 = 人数 × stream2 のため。 */
@@ -46,6 +57,43 @@ export const MAX_VIEWERS = 4;
 
 /** v1 の device が入って、2 本目以降の admin を切るときの close code。 */
 const CLOSE_V1_SINGLE_VIEWER = 4009;
+/** 上位の device が来て、居た device を切るときの close code (拡張は待機に回る)。 */
+export const CLOSE_PREEMPTED = 4010;
+/** 上位か同位の device が配信中なので、来た device を受け入れてすぐ閉じるときの close code。 */
+export const CLOSE_STANDBY = 4011;
+/** device の keepalive (20 秒ごと) がこれだけ無ければ、居ないものとして下位の device にも入れ替えさせる。 */
+export const DEVICE_STALE_MS = 60_000;
+/** 順位として受け付ける値 (`?rank=`)。 */
+export const MAX_RANK = 99;
+
+/** `?rank=` の値。1〜MAX_RANK の整数でなければ null。 */
+export function parseRank(value: string): number | null {
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const n = Number(value);
+  return n <= MAX_RANK ? n : null;
+}
+
+/**
+ * 部屋に device が居るとき、来た device をどうするか (純粋関数)。
+ * - 来た方に rank が無い (古い拡張) → reject (409。受け入れると古い拡張の backoff が戻り、すぐ来続けるため)
+ * - 居る方が応答しない・rank を知らない・来た方より下位 → preempt (居た方を 4010 で切って入れ替える)
+ * - それ以外 (居る方が同位か上位) → standby (受け入れて 4011 で閉じる。先着を優先して入れ替わり続けない)
+ */
+export function decideDeviceEntry(
+  incomingRank: number | undefined,
+  currentRank: number | undefined,
+  currentStale: boolean,
+): 'reject' | 'preempt' | 'standby' {
+  if (incomingRank === undefined) return 'reject';
+  if (currentStale || currentRank === undefined || incomingRank < currentRank) return 'preempt';
+  return 'standby';
+}
+
+/** device の最後の生存の印 (入った時刻か、keepalive の自動応答の時刻) が DEVICE_STALE_MS より前か (純粋関数)。 */
+export function isStaleDevice(joinedAt: number | undefined, lastPingAt: number | undefined, now: number): boolean {
+  const last = Math.max(joinedAt ?? 0, lastPingAt ?? 0);
+  return last > 0 && now - last > DEVICE_STALE_MS;
+}
 
 interface ServerMessage {
   type: 'sdp_offer' | 'sdp_answer' | 'ice_candidate' | 'peer_joined' | 'peer_left' | 'error' | 'pong';
@@ -76,6 +124,31 @@ export class CameraSignalingRoom extends DurableObject {
       });
     }
 
+    let rank: number | undefined;
+    const rankParam = url.searchParams.get('rank');
+    if (role === 'device' && rankParam !== null) {
+      const parsed = parseRank(rankParam);
+      if (parsed === null) {
+        return new Response(`Invalid rank query param. Use ?rank=1..${MAX_RANK}`, { status: 400 });
+      }
+      rank = parsed;
+    }
+
+    // 配信担当の順位: 居る device と比べて、入れ替える・待機させる・断る
+    const current = role === 'device' ? this.liveSockets('device')[0] : undefined;
+    if (current) {
+      const att = this.getAttachment(current);
+      const decision = decideDeviceEntry(rank, att.rank, this.isStale(current, att));
+      if (decision === 'standby') {
+        // tag を device にしないので、部屋の device に数えず close の通知も出ない
+        const pair = new WebSocketPair();
+        this.ctx.acceptWebSocket(pair[1], ['standby']);
+        pair[1].close(CLOSE_STANDBY, 'standby: higher rank streaming');
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      if (decision === 'preempt') this.preempt(current, att);
+    }
+
     // device が居ない部屋と proto=2 の device の部屋は admin 複数 (上限 MAX_VIEWERS)。
     // proto 無し (v1) の device が居る部屋だけ 1ルーム = device 1本 + admin 1本
     const v1Device = this.liveSockets('device').some(d => this.getAttachment(d).proto !== 2);
@@ -89,7 +162,14 @@ export class CameraSignalingRoom extends DurableObject {
     }
 
     const attachment: PeerAttachment = {};
-    if (role === 'device' && url.searchParams.get('proto') === '2') attachment.proto = 2;
+    if (role === 'device') {
+      if (url.searchParams.get('proto') === '2') attachment.proto = 2;
+      if (rank !== undefined) attachment.rank = rank;
+      // worker が鍵の sub を付け直したヘッダ (client の同名ヘッダは worker が消す)
+      const sub = request.headers.get(DEVICE_SUB_HEADER);
+      if (sub) attachment.sub = sub;
+      attachment.joinedAt = Date.now();
+    }
     if (role === 'admin') attachment.viewerId = crypto.randomUUID();
 
     const pair = new WebSocketPair();
@@ -216,6 +296,26 @@ export class CameraSignalingRoom extends DurableObject {
     } else {
       this.notifyPeer(role, { type: 'peer_left', role });
     }
+  }
+
+  /**
+   * 居る device を上位の device に入れ替える。切った device の close では peer_left を出さない (kicked) ので、
+   * ここで見る人全員に peer_left を出す。この後の device の参加で peer_joined が届き、新しい device が offer する。
+   */
+  private preempt(device: WebSocket, att: PeerAttachment): void {
+    device.serializeAttachment({ ...att, kicked: true } satisfies PeerAttachment);
+    try {
+      device.close(CLOSE_PREEMPTED, 'preempted by higher rank');
+    } catch {
+      // WebSocket already closed
+    }
+    for (const admin of this.liveSockets('admin')) this.send(admin, { type: 'peer_left', role: 'device' });
+  }
+
+  /** device が応答しなくなっているか (keepalive の ping は auto response なので、その時刻を runtime から読む)。 */
+  private isStale(device: WebSocket, att: PeerAttachment): boolean {
+    const ping = this.ctx.getWebSocketAutoResponseTimestamp(device);
+    return isStaleDevice(att.joinedAt, ping?.getTime(), Date.now());
   }
 
   /** その role の接続のうち、切られていないもの。 */

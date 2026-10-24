@@ -134,7 +134,7 @@ export function decideCamDeviceAuth(result: IntrospectResult | null | undefined)
 }
 
 /**
- * worker が `/room` の device の鍵から取り出した sub を DO へ渡すヘッダ。DEV_HEADER と同じく
+ * worker が `/room` と `/cam-room` の device の鍵から取り出した sub を DO へ渡すヘッダ。DEV_HEADER と同じく
  * client が付けてきた同名のヘッダは worker が必ず消す / 上書きするので、DO はこの値だけを信じてよい。
  */
 export const DEVICE_SUB_HEADER = "X-Alc-Signaling-Device-Sub";

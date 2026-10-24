@@ -19,6 +19,8 @@ const TOKENS = {
   "kiosk-token": { active: true, tenant_id: "tenant-1", role: "device-kiosk", sub: "kiosk-1" },
   // 拠点 PC の拡張の鍵 (CoreS3 署名の cam-host。sub は alarm:<fingerprint>)
   "cam-host-token": { active: true, tenant_id: "tenant-1", role: "device-cam-host", sub: "alarm:fp-1" },
+  // 同じカメラの配信担当の 2 台目 (順位の入れ替えのテスト)
+  "cam-host-token-2": { active: true, tenant_id: "tenant-1", role: "device-cam-host", sub: "alarm:fp-3" },
   // kiosk の鍵 (遠隔点呼 /room の device_id 用。sub は CoreS3 の鍵と同じ形)
   "kiosk-alarm-token": { active: true, tenant_id: "tenant-1", role: "device-kiosk", sub: "alarm:fp-2" },
   "viewer-token": { active: true, tenant_id: "tenant-1", role: "viewer", sub: "view-1" },

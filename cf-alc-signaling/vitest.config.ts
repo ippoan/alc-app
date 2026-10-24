@@ -14,8 +14,11 @@ import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
  */
 export default defineWorkersConfig({
   test: {
+    // backend の FCM の記録 (test/mocks/backend.mjs) は全ファイルで共有なので、ファイルを並べて流すと
+    // cam-room.test.ts の /room が叩いた着信通知を dev-rooms.test.ts が数えてしまう。ファイルは 1 本ずつ流す
     poolOptions: {
       workers: {
+        singleWorker: true,
         main: "./src/index.ts",
         // RoomRegistry は singleton なので test 間で state が残る。テスト間の干渉は
         // 部屋 id の分離と後始末で避ける (cf-alc-recorder と同判断)。
