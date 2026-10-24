@@ -418,14 +418,14 @@ async function makeClip() {
             {{ form.stream_device_ids.length + 1 }} 位に追加
           </button>
         </div>
-        <!-- 追加の行を出せないときは、黙って消さずに理由を出す -->
-        <p v-else-if="form.stream_device_ids.length >= MAX_STREAM_DEVICES" class="text-xs text-gray-500" data-testid="cam-clips-stream-full">
+        <!-- 追加の行を出せないときは、黙って消さずに理由を出す (薄い黄色の帯。他の画面の注意表示と同じ amber) -->
+        <p v-else-if="form.stream_device_ids.length >= MAX_STREAM_DEVICES" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="cam-clips-stream-full">
           配信担当は {{ MAX_STREAM_DEVICES }} 台までです (これ以上は足せません)
         </p>
-        <p v-else-if="form.stream_device_ids.length === 0" class="text-xs text-gray-500" data-testid="cam-clips-stream-no-keys">
+        <p v-else-if="form.stream_device_ids.length === 0" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="cam-clips-stream-no-keys">
           上の「結び付ける端末」で機体の鍵 (alarm:…) をチェックすると選べます
         </p>
-        <p v-else class="text-xs text-gray-500" data-testid="cam-clips-stream-all-in">
+        <p v-else class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="cam-clips-stream-all-in">
           上で結び付けた機体の鍵はすべて順位に入っています。足すには上の「結び付ける端末」で機体の鍵をチェックしてください
         </p>
       </fieldset>

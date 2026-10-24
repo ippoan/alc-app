@@ -287,6 +287,7 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     // 何もチェックしていなければ選ぶ欄は無く、チェックを促す
     expect(w.find(t('stream-pick')).exists()).toBe(false)
     expect(w.find(t('stream-no-keys')).text()).toContain('チェックすると選べます')
+    expect(w.find(t('stream-no-keys')).classes()).toContain('bg-amber-50')
     await check(w, 'dev-1')
     expect(w.find(t('stream-pick')).exists()).toBe(false)
     await check(w, 'alarm:pc-2')
@@ -310,6 +311,8 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     expect(w.find(t('stream-pick')).exists()).toBe(false)
     expect(w.find(t('stream-no-keys')).exists()).toBe(false)
     expect(w.find(t('stream-all-in')).text()).toContain('すべて順位に入っています')
+    // 足せない理由は薄い黄色の帯 (0 件の案内・上限も同じ見た目)
+    expect(w.find(t('stream-all-in')).classes()).toEqual(expect.arrayContaining(['bg-amber-50', 'border-amber-200', 'text-amber-800']))
     expect(w.findAll(t('stream-rank')).map(n => n.text())).toEqual(['1 位', '2 位', '3 位'])
     expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 1', '帯広 PC 2', 'Vein Station'])
     const ups = w.findAll(t('stream-up'))
@@ -365,6 +368,7 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     // 結び付けた鍵が 1 つ余っていても、上限の理由を出す
     expect(w.find(t('stream-all-in')).exists()).toBe(false)
     expect(w.find(t('stream-full')).text()).toBe('配信担当は 10 台までです (これ以上は足せません)')
+    expect(w.find(t('stream-full')).classes()).toContain('bg-amber-50')
   })
 })
 
