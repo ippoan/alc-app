@@ -274,10 +274,32 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     expect(cells[2]!.find(t('row-stream-more')).exists()).toBe(false)
   })
 
-  it('追加: 機体の鍵を順に足し、上下で並べ替え・外して、並びのまま送る', async () => {
+  /** 候補の行 (結び付ける端末) のうち、その device_id の行のチェックを付け外しする */
+  async function check(w: Awaited<ReturnType<typeof mountIt>>, id: string, on = true) {
+    const row = w.findAll(t('candidate')).find(r => r.find(t('candidate-id')).text() === id)!
+    await row.find('input').setValue(on)
+  }
+
+  it('選べるのは上でチェックした機体の鍵だけ (イベントの端末・未チェックの鍵は出ない)', async () => {
     api.listCamHostKeys.mockResolvedValue(KEYS)
     const w = await mountIt(true)
     await w.find(t('add')).trigger('click')
+    // 何もチェックしていなければ選ぶ欄は無く、チェックを促す
+    expect(w.find(t('stream-pick')).exists()).toBe(false)
+    expect(w.find(t('stream-no-keys')).text()).toContain('チェックすると選べます')
+    await check(w, 'dev-1')
+    expect(w.find(t('stream-pick')).exists()).toBe(false)
+    await check(w, 'alarm:pc-2')
+    await check(w, 'alarm:vein')
+    const options = w.find(t('stream-pick')).findAll('option').map(o => o.attributes('value'))
+    expect(options).toEqual(['', 'alarm:pc-2', 'alarm:vein'])
+  })
+
+  it('追加: チェックした鍵を順に足し、上下で並べ替え・外して、並びのまま送る', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true)
+    await w.find(t('add')).trigger('click')
+    for (const id of ['alarm:pc-1', 'alarm:pc-2', 'alarm:vein']) await check(w, id)
     expect(w.find(t('stream-empty')).exists()).toBe(true)
     expect((w.find(t('stream-add')).element as HTMLButtonElement).disabled).toBe(true)
     for (const id of ['alarm:pc-1', 'alarm:pc-2', 'alarm:vein']) {
@@ -286,6 +308,7 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     }
     // 足した鍵は選択肢から消え、全部足すと選ぶ欄も消える
     expect(w.find(t('stream-pick')).exists()).toBe(false)
+    expect(w.find(t('stream-no-keys')).exists()).toBe(false)
     expect(w.findAll(t('stream-rank')).map(n => n.text())).toEqual(['1 位', '2 位', '3 位'])
     expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 1', '帯広 PC 2', 'Vein Station'])
     const ups = w.findAll(t('stream-up'))
@@ -296,16 +319,30 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     await w.findAll(t('stream-down'))[1]!.trigger('click')
     expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 2', 'Vein Station', '帯広 PC 1'])
     await w.findAll(t('stream-remove'))[1]!.trigger('click')
-    expect(w.findAll(t('stream-pick')).length).toBe(1)
+    // 外した鍵は結び付けたままなので、選択肢に戻る
+    expect(w.find(t('stream-pick')).findAll('option').map(o => o.attributes('value'))).toEqual(['', 'alarm:vein'])
     await w.find(t('name')).setValue('裏門')
     await w.find(t('form')).trigger('submit')
     await flushPromises()
-    expect(api.createCamClipsCamera).toHaveBeenCalledWith({ name: '裏門', stream_device_ids: ['alarm:pc-2', 'alarm:pc-1'] })
+    expect(api.createCamClipsCamera).toHaveBeenCalledWith({
+      name: '裏門', device_ids: ['alarm:pc-1', 'alarm:pc-2', 'alarm:vein'], stream_device_ids: ['alarm:pc-2', 'alarm:pc-1'],
+    })
+  })
+
+  it('結び付けのチェックを外すと配信担当からも外れる', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true, [{ ...CAM, device_ids: ['alarm:pc-1', 'alarm:pc-2'], stream_device_ids: ['alarm:pc-1', 'alarm:pc-2'] }])
+    await w.find(t('edit')).trigger('click')
+    await check(w, 'alarm:pc-1', false)
+    expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 2'])
+    await w.find(t('form')).trigger('submit')
+    await flushPromises()
+    expect(api.updateCamClipsCamera).toHaveBeenCalledWith('c1', { device_ids: ['alarm:pc-2'], stream_device_ids: ['alarm:pc-2'] })
   })
 
   it('編集: 今の並びを出し、並べ替えたら全部を送る', async () => {
     api.listCamHostKeys.mockResolvedValue(KEYS)
-    const w = await mountIt(true, [{ ...CAM, stream_device_ids: ['alarm:pc-1', 'alarm:gone'] }])
+    const w = await mountIt(true, [{ ...CAM, device_ids: ['alarm:pc-1', 'alarm:gone'], stream_device_ids: ['alarm:pc-1', 'alarm:gone'] }])
     await w.find(t('edit')).trigger('click')
     // 鍵の一覧に無い (失効した等) 端末も並びに残り、名前は「名前未登録の端末」
     expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 1', '名前未登録の端末'])
@@ -315,17 +352,11 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     expect(api.updateCamClipsCamera).toHaveBeenCalledWith('c1', { stream_device_ids: ['alarm:gone', 'alarm:pc-1'] })
   })
 
-  it('機体の鍵が無ければ足す欄の代わりに文言', async () => {
-    const w = await mountIt(true)
-    await w.find(t('add')).trigger('click')
-    expect(w.find(t('stream-pick')).exists()).toBe(false)
-    expect(w.find(t('stream-no-keys')).exists()).toBe(true)
-  })
-
   it('10 台まで (上限で足す欄が消える)', async () => {
     const keys = Array.from({ length: 11 }, (_, i) => ({ device_id: `alarm:k${i}`, label: `PC ${i}` }))
     api.listCamHostKeys.mockResolvedValue({ keys })
-    const w = await mountIt(true, [{ ...CAM, stream_device_ids: keys.slice(0, 10).map(k => k.device_id) }])
+    const ids = keys.map(k => k.device_id)
+    const w = await mountIt(true, [{ ...CAM, device_ids: ids, stream_device_ids: ids.slice(0, 10) }])
     await w.find(t('edit')).trigger('click')
     expect(w.findAll(t('stream-item'))).toHaveLength(10)
     expect(w.find(t('stream-pick')).exists()).toBe(false)

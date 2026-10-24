@@ -174,6 +174,11 @@ export const EMPTY_FORM: CamClipsForm = {
 /** 配信担当の上限 (ingest と migration 189 の CHECK と同じ) */
 export const MAX_STREAM_DEVICES = 10
 
+/** 拠点 PC の配信の鍵になれる端末 id か (機体の鍵の sub `alarm:<fingerprint>`。イベントの `alarm-…` 形や browser は違う) */
+export function isCamHostKeyId(id: string): boolean {
+  return id.startsWith('alarm:')
+}
+
 /** 配信担当の 1 位 (順位が無ければ null) */
 export function streamPrimary(c: Pick<CamClipsCamera, 'stream_device_ids'>): string | null {
   return c.stream_device_ids?.[0] ?? null
