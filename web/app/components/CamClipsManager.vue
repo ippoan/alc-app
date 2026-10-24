@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {
   createCamClipsCamera, createCamClipsClip, listCamClipsCameras, listCamClipsDeviceCandidates,
-  listFirmwareDevices, updateCamClipsCamera,
+  listDeviceLabels, updateCamClipsCamera,
 } from '~/utils/api'
 import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm } from '~/utils/cam-clips'
 import {
@@ -51,9 +51,9 @@ async function loadCameras() {
 
 /** 端末の候補と表示名。取れなくても登録はできる (候補が選べないだけ) */
 async function loadDevices() {
-  const [cand, fw] = await Promise.allSettled([listCamClipsDeviceCandidates(30), listFirmwareDevices()])
+  const [cand, labels] = await Promise.allSettled([listCamClipsDeviceCandidates(30), listDeviceLabels()])
   candidates.value = cand.status === 'fulfilled' ? cand.value : []
-  knownDevices.value = fw.status === 'fulfilled' ? fw.value.devices : []
+  knownDevices.value = labels.status === 'fulfilled' ? labels.value.devices : []
 }
 
 onMounted(() => Promise.all([loadCameras(), loadDevices()]))

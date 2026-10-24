@@ -38,6 +38,7 @@ type Handler = (event: H3Event) => Promise<unknown>
 let report: Handler
 let devices: Handler
 let update: Handler
+let deviceLabels: Handler
 
 let authWorkerFetch: ReturnType<typeof vi.fn>
 let recorderFetch: ReturnType<typeof vi.fn>
@@ -64,6 +65,7 @@ beforeAll(async () => {
   report = (await import('../../server/api/firmware/report.post')).default as unknown as Handler
   devices = (await import('../../server/api/firmware/devices.get')).default as unknown as Handler
   update = (await import('../../server/api/firmware/update.post')).default as unknown as Handler
+  deviceLabels = (await import('../../server/api/device-labels.get')).default as unknown as Handler
 })
 
 afterAll(() => {
@@ -112,6 +114,7 @@ type Opts = Parameters<typeof makeEvent>[2]
 const reportEvent = (opts?: Opts) => makeEvent('POST', '/api/firmware/report', opts)
 const devicesEvent = (opts?: Opts) => makeEvent('GET', '/api/firmware/devices', { bearer: ADMIN_JWT, ...opts })
 const updateEvent = (opts?: Opts) => makeEvent('POST', '/api/firmware/update', { bearer: ADMIN_JWT, ...opts })
+const deviceLabelsEvent = (opts?: Opts) => makeEvent('GET', '/api/device-labels', { bearer: ADMIN_JWT, ...opts })
 
 /** RECORDER binding の fetch に届いた要求 (1 回だけ)。 */
 function forwarded(): { method: string, pathname: string, headers: Record<string, string>, body: string | undefined } {
@@ -470,5 +473,56 @@ describe('POST /api/firmware/update', () => {
     const event = updateEvent()
     expect(await update(event)).toBe(JSON.stringify({ error: 'invalid_device_id' }))
     expect(getResponseStatus(event)).toBe(400)
+  })
+})
+
+describe('GET /api/device-labels (Refs ippoan/alc-cam#2)', () => {
+  beforeEach(() => {
+    introspect = { claims: ADMIN_CLAIMS, status: 200 }
+  })
+
+  it('★ admin → 登録簿 (tenant_id は introspect の値) のラベルを配列で返し、recorder は呼ばない', async () => {
+    introspect = { claims: { ...ADMIN_CLAIMS, tenant_id: 't9' }, status: 200 }
+    const event = deviceLabelsEvent({ headers: { 'x-tenant-id': 'evil' } })
+    const res = await deviceLabels(event)
+
+    expect(res).toEqual({ devices: [{ device_id: 'd1', label: '事務所' }, { device_id: 'd2', label: null }] })
+    const calls = labelsCalls()
+    expect(calls).toHaveLength(1)
+    const [url, init] = calls[0]!
+    expect(url).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t9')
+    expect(init).toEqual({ method: 'GET', headers: { Authorization: SECRET } })
+    expect(recorderFetch).not.toHaveBeenCalled()
+    expectNoStore(event)
+  })
+
+  it('★ token 無しは 401 で auth-worker を呼ばない', async () => {
+    await expect(deviceLabels(deviceLabelsEvent({ bearer: undefined }))).rejects.toMatchObject({ statusCode: 401 })
+    expect(authWorkerFetch).not.toHaveBeenCalled()
+  })
+
+  it('★ introspect が inactive なら 401、admin 以外 (member / viewer / 端末の token) は 403。どちらも登録簿を引かない', async () => {
+    introspect = { claims: { active: false }, status: 200 }
+    await expect(deviceLabels(deviceLabelsEvent())).rejects.toMatchObject({ statusCode: 401 })
+    for (const role of ['member', 'viewer', 'device-kiosk']) {
+      introspect = { claims: { active: true, tenant_id: 't1', role, sub: 'u1' }, status: 200 }
+      await expect(deviceLabels(deviceLabelsEvent({ bearer: KIOSK_JWT }))).rejects.toMatchObject({ statusCode: 403 })
+    }
+    expect(labelsCalls()).toHaveLength(0)
+  })
+
+  it('★ 登録簿が取れない (非 200・形違い・例外) なら 200 {devices: []}', async () => {
+    const failures: Array<typeof labels> = [
+      { json: { error: 'server_error' }, status: 503 },
+      { json: {}, status: 200 },
+      () => { throw new Error('network') },
+    ]
+    for (const f of failures) {
+      labels = f
+      const event = deviceLabelsEvent()
+      expect(await deviceLabels(event)).toEqual({ devices: [] })
+      expect(getResponseStatus(event)).toBe(200)
+      expectNoStore(event)
+    }
   })
 })

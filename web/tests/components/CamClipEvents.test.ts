@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   listCamClipsCameras: vi.fn(),
   listCamClipsEvents: vi.fn(),
   runCamClipsAuto: vi.fn(),
+  listDeviceLabels: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -44,6 +45,7 @@ async function mountIt(cameras = [cam('c1', '正門')]) {
 beforeEach(() => {
   vi.clearAllMocks()
   api.listCamClipsEvents.mockResolvedValue(EVENTS)
+  api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
 })
 
 describe('CamClipEvents', () => {
@@ -67,6 +69,7 @@ describe('CamClipEvents', () => {
     expect(rows[0]!.find(t('time')).text()).toBe('2026-10-23 09:05:00')
     expect(rows[0]!.find(t('kind')).text()).toBe('アルコール')
     expect(rows[0]!.find(t('device')).text()).toBe('dev-1')
+    expect(rows[0]!.find(t('device-name')).text()).toBe('事務所の端末')
     expect(rows[0]!.find(t('dev')).exists()).toBe(false)
     expect(rows[0]!.find(t('none')).text()).toBe('未切り出し')
     expect(rows[1]!.find(t('dev')).text()).toBe('開発端末')
@@ -216,5 +219,22 @@ describe('CamClipEvents', () => {
       await flushPromises()
       expect(w.find(t('error')).text()).toBe('時間がかかっています。裏で続いている可能性があるので、少し後に一覧を更新してください')
     })
+  })
+})
+
+describe('CamClipEvents 端末の表示名', () => {
+  it('鍵の登録簿にラベルが無い端末は「名前未登録の端末」+ 2 行目に device_id', async () => {
+    api.listCamClipsEvents.mockResolvedValue([ev({ source_id: 'a', device_id: 'dev-9' })])
+    const w = await mountIt()
+    expect(api.listDeviceLabels).toHaveBeenCalledTimes(1)
+    expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
+    expect(w.find(t('device')).text()).toBe('dev-9')
+  })
+  it('ラベルの取得に失敗しても一覧は出る (名前は「名前未登録の端末」)', async () => {
+    api.listDeviceLabels.mockRejectedValue(new Error('403'))
+    const w = await mountIt()
+    expect(w.findAll(t('row'))).toHaveLength(4)
+    expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
+    expect(w.find(t('error')).exists()).toBe(false)
   })
 })
