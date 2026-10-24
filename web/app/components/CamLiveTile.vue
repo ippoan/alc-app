@@ -7,6 +7,7 @@
  * (押している間動く・離したら止まる) とプリセットを出す (`useCamPtz`)。出さない host ではボタンも出ない。
  * 音声 (alc-cam の host 0.4.4〜): カメラのマイクの音は既定でミュート、ボタンで鳴らす。「押して話す」は押している間だけ
  * 自分のマイクの声をカメラのスピーカーへ送る (`useCamTalk`)。音声を出さない host ではどちらのボタンも出ない。
+ * 自己更新 (alc-cam の host 0.4.5〜): 拠点 PC の host と拡張の版を出し、「更新を確認」で拠点 PC に確認させる (`useCamUpdate`)。
  */
 import type { PtzDir } from '~/composables/useCamPtz'
 
@@ -30,6 +31,7 @@ const { accessToken } = useAuth()
 const webRtc = useWebRtc('admin')
 const ptz = useCamPtz(webRtc.ptzChannel)
 const talk = useCamTalk(webRtc.ptzChannel, webRtc.camAudioSender)
+const hostUpdate = useCamUpdate(webRtc.ptzChannel)
 
 /** カメラの音を鳴らす (既定はミュート。自動再生の制限もあるのでボタンで解除する) */
 const soundOn = ref(false)
@@ -210,6 +212,31 @@ onUnmounted(() => {
 
     <div v-if="connectError" class="rounded-lg bg-red-50 border border-red-200 px-2 py-1 text-xs text-red-700" data-testid="cam-tile-error">
       {{ connectError }}
+    </div>
+
+    <div
+      v-if="isActive && hostUpdate.caps.value"
+      class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500"
+      data-testid="cam-tile-update"
+    >
+      <span data-testid="cam-tile-update-versions">
+        拠点 PC: host v{{ hostUpdate.caps.value.host }}・拡張 {{ hostUpdate.caps.value.extension ? `v${hostUpdate.caps.value.extension}` : '(不明)' }}
+      </span>
+      <button
+        class="px-2 py-0.5 rounded border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+        :disabled="hostUpdate.state.value === 'checking'"
+        data-testid="cam-tile-update-check"
+        @click="hostUpdate.check()"
+      >
+        更新を確認
+      </button>
+      <span
+        v-if="hostUpdate.message.value"
+        :class="hostUpdate.state.value === 'failed' ? 'text-red-600' : 'text-gray-600'"
+        data-testid="cam-tile-update-message"
+      >
+        {{ hostUpdate.message.value }}
+      </span>
     </div>
 
     <div v-if="isActive" ref="videoContainer" class="relative group bg-black rounded-lg overflow-hidden">
