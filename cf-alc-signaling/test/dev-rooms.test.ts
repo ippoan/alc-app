@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { SELF, env, runInDurableObject } from "cloudflare:test";
-import type { Env } from "../src/index";
 import { decideDevDevice, DEV_HEADER } from "../src/auth";
 
 /**
@@ -12,10 +11,6 @@ import { decideDevDevice, DEV_HEADER } from "../src/auth";
 
 const BASE = "https://alc-signaling.test";
 const BACKEND = "https://backend.test";
-
-declare module "cloudflare:test" {
-  interface ProvidedEnv extends Env {}
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

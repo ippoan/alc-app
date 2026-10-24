@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { SELF, env, runInDurableObject } from "cloudflare:test";
-import type { Env } from "../src/index";
 import { KEEPALIVE_PING, KEEPALIVE_PONG } from "../src/camera-signaling-room";
 
 /**
@@ -9,10 +8,6 @@ import { KEEPALIVE_PING, KEEPALIVE_PONG } from "../src/camera-signaling-room";
  * 拠点カメラは常時接続のまま 20 秒ごとに ping を送るので、KEEPALIVE_PING ちょうどの
  * ping では webSocketMessage が呼ばれない (= hibernate したまま) ことを確かめる。
  */
-
-declare module "cloudflare:test" {
-  interface ProvidedEnv extends Env {}
-}
 
 const BASE = "https://alc-signaling.test";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
