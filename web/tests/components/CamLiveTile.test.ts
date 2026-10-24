@@ -381,6 +381,43 @@ describe('CamLiveTile の音声 (カメラのマイクとスピーカー)', () =
   })
 })
 
+describe('CamLiveTile の自己更新 (拠点 PC の host と拡張)', () => {
+  class FakeChannel {
+    readyState = 'open'
+    send = vi.fn()
+    listeners: Record<string, Array<(ev: any) => void>> = {}
+    addEventListener(type: string, fn: (ev: any) => void) { (this.listeners[type] ??= []).push(fn) }
+    removeEventListener(type: string, fn: (ev: any) => void) { this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn) }
+    emit(data: unknown) { for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(data) }) }
+  }
+
+  it('caps が来たら版と「更新を確認」を出し、押すと頼んで結果を出す。古い host では出さない', async () => {
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+    await flushPromises()
+    const ch = new FakeChannel()
+    rtc.instances[0]!.ptzChannel.value = ch
+    await nextTick()
+    expect(w.find(t('update')).exists()).toBe(false)
+    ch.emit({ type: 'update', event: 'caps', host: '0.4.5', extension: '0.4.5' })
+    await nextTick()
+    expect(w.find(t('update-versions')).text()).toBe('拠点 PC: host v0.4.5・拡張 v0.4.5')
+    await w.find(t('update-check')).trigger('click')
+    expect(ch.send).toHaveBeenCalledWith(JSON.stringify({ type: 'update', action: 'check' }))
+    expect(w.find(t('update-check')).attributes('disabled')).toBeDefined()
+    expect(w.find(t('update-message')).text()).toBe('確認中...')
+    ch.emit({ type: 'update', event: 'state', state: 'failed', message: 'v0.4.6 の alc-cam-host.exe の SHA256 が合わないので入れ替えません' })
+    await nextTick()
+    expect(w.find(t('update-message')).classes()).toContain('text-red-600')
+    ch.emit({ type: 'update', event: 'caps', host: '0.4.5', extension: null })
+    await nextTick()
+    expect(w.find(t('update-versions')).text()).toBe('拠点 PC: host v0.4.5・拡張 (不明)')
+    expect(w.find(t('update-message')).classes()).toContain('text-red-600')
+    ch.emit({ type: 'update', event: 'state', state: 'latest' })
+    await nextTick()
+    expect(w.find(t('update-message')).classes()).toContain('text-gray-600')
+  })
+})
+
 describe('CamLiveGrid', () => {
   it('カメラ全部をタイルにして、それぞれ camera.id で繋ぐ。外れたら全部切る', async () => {
     const w = await mountSuspended(CamLiveGrid)
