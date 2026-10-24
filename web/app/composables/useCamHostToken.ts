@@ -13,7 +13,9 @@
  * - 署名はその PC に挿さった機体 (`AUTH SIGN <nonce>`)。cam-host は専用の鍵を持たず、機体の鍵の
  *   署名で出る (auth-worker 側で sub を `alarm:<fp>` に揃え、録画の設定の紐づけ ID にするため)。
  *   署名を頼む相手は繋がっているうちの先頭 1 台 ({@link CAM_HOST_SIGNERS} の順):
- *   CoreS3 (用途 kiosk) → Vein Station (用途 kiosk) → 測定台の ATOM S3 (用途 bp-station)。
+ *   Vein Station (用途 kiosk) → CoreS3 (用途 kiosk) → 測定台の ATOM S3 (用途 bp-station)。
+ *   Vein Station が先なのは、拠点 PC の署名機を CoreS3 から Vein Station へ移していくため
+ *   (キオスクの鍵も Vein Station が繋がっていればその鍵だけで取る。`useDeviceToken` の doc)。
  *   `AUTH SIGNBP` は使わない (ボンド状態は cam-host の鍵に関係ない。全機種のファームが `AUTH SIGN` に答える)。
  * - 機体ごとの鍵 (キオスク = `useDeviceToken`、測定台 = `useBpStationDeviceToken`) の取得と
  *   署名要求がぶつからないよう、先にそちらを済ませてから署名を頼む (どちらも single-flight)。
@@ -55,7 +57,7 @@ let current: CamHostSignerName | null = null
 /** 署名を頼む機体の名前 (優先順は {@link CAM_HOST_SIGNERS}) */
 export type CamHostSignerName = 'coreS3' | 'vein' | 'atom'
 /** 署名を頼む順。先頭から見て最初に繋がっている 1 台に頼む */
-export const CAM_HOST_SIGNERS: ReadonlyArray<CamHostSignerName> = ['coreS3', 'vein', 'atom']
+export const CAM_HOST_SIGNERS: ReadonlyArray<CamHostSignerName> = ['vein', 'coreS3', 'atom']
 
 function clearTimer(): void {
   if (timer !== null) clearTimeout(timer)
