@@ -1,5 +1,5 @@
 /**
- * 録画タブの端末候補に出す **CoreS3 の鍵** (拠点 PC の拡張に渡す cam-host の鍵の元)。
+ * 録画タブの端末候補に出す **拠点 PC の機体の鍵** (拠点 PC の拡張に渡す cam-host の鍵の元)。
  *
  * auth-worker の `GET /device/setup/alarm-keys` (operator の tenant に登録済みの鍵の一覧。
  * `sub` = その鍵で出る端末 JWT の sub `alarm:<fingerprint>`) を、管理者の JWT で引く。
@@ -7,14 +7,15 @@
  * ブラウザからは直接呼べない (別 origin)。server route が同じ JWT を cookie に載せて
  * service binding で中継する。
  *
- * cam-host の鍵は用途 `kiosk` の鍵 (CoreS3) の署名でだけ出るので、候補はその用途だけに絞る。
+ * cam-host の鍵は用途 `kiosk` (CoreS3 / Vein Station) か `bp-station` (測定台の ATOM S3) の鍵の
+ * 署名でだけ出る (auth-worker の `CAM_HOST_SIGNER_USAGES`) ので、候補はその用途だけに絞る。
  */
 import { AUTH_COOKIE_NAME } from './proxy-target'
 
 const AUTH_WORKER_BASE = 'https://auth-worker.internal'
 
-/** CoreS3 の鍵の用途 (auth-worker の `AlarmKeyUsage`) */
-export const CAM_HOST_SIGNER_USAGE = 'kiosk'
+/** cam-host の鍵を出せる鍵の用途 (auth-worker の `CAM_HOST_SIGNER_USAGES` と揃える) */
+export const CAM_HOST_SIGNER_USAGES: ReadonlyArray<string> = ['kiosk', 'bp-station']
 
 export interface CamHostKey {
   /** cam_camera_devices.device_id に入れる値 (`alarm:<fingerprint>`) */
@@ -61,9 +62,9 @@ export function parseAlarmKeyNames(json: unknown): AlarmKeyName[] {
   return parseAlarmKeys(json).map(({ device_id, label, revoked }) => ({ device_id, label, revoked }))
 }
 
-/** 担当付け用: CoreS3 (kiosk) の鍵だけ。 */
+/** 担当付け用: cam-host の鍵を出せる用途 (kiosk / bp-station) の鍵だけ。 */
 export function parseCamHostKeys(json: unknown): CamHostKey[] {
   return parseAlarmKeys(json)
-    .filter(k => k.usage === CAM_HOST_SIGNER_USAGE)
+    .filter(k => CAM_HOST_SIGNER_USAGES.includes(k.usage))
     .map(({ device_id, label }) => ({ device_id, label }))
 }

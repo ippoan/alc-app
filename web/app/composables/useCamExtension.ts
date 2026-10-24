@@ -55,7 +55,7 @@ export function jstMinuteLabel(ms: number): string {
 
 /** 鍵の表示 (期限切れでも配信は写しで続く) */
 export function tokenLabel(st: CamExtensionStatus): CamLabel {
-  if (!st.tokenExp) return ['なし (CoreS3 が繋がると届きます)', 'warn']
+  if (!st.tokenExp) return ['なし (CoreS3・Vein Station・測定台の ATOM S3 のどれかが繋がると届きます)', 'warn']
   const sub = st.tokenSub ? `、${st.tokenSub}` : ''
   return st.tokenLive ? [`あり (${jstMinuteLabel(st.tokenExp)} まで${sub})`, 'ok'] : [`期限切れ (${jstMinuteLabel(st.tokenExp)}${sub})`, '']
 }

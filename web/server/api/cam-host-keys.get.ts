@@ -1,5 +1,5 @@
 /**
- * 録画タブの端末候補: テナントに登録済みの CoreS3 の鍵 (label と `alarm:<fingerprint>`)。
+ * 録画タブの端末候補: テナントに登録済みの機体の鍵 (用途 kiosk / bp-station。label と `alarm:<fingerprint>`)。
  *
  * 経路: 管理者 (browser JWT を Bearer)
  *   → 本 route: introspect → **role が `admin` の token だけ**通す

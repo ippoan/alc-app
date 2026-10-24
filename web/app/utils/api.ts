@@ -1941,7 +1941,7 @@ export async function listCamClipsDeviceCandidates(days = 30): Promise<CamClipsD
 }
 
 /**
- * 録画タブの端末候補に出す CoreS3 の鍵 (拠点 PC の拡張に渡す cam-host の鍵の元)。admin の token が要る。
+ * 録画タブの端末候補に出す機体の鍵 (CoreS3・Vein Station・測定台の ATOM S3。拠点 PC の拡張に渡す cam-host の鍵の元)。admin の token が要る。
  * 中身は auth-worker の鍵の一覧 (`server/api/cam-host-keys.get.ts` が中継する)。
  * `keys` = 担当付けの候補 (kiosk だけ) / `names` = 名前付け用 (全用途・失効済み)
  */
