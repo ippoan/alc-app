@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import {
   createCamClipsCamera, createCamClipsClip, listCamClipsCameras, listCamClipsDeviceCandidates,
-  listDeviceLabels, updateCamClipsCamera,
+  listCamHostKeys, listDeviceLabels, updateCamClipsCamera,
 } from '~/utils/api'
-import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm } from '~/utils/cam-clips'
+import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm, CamHostKey } from '~/utils/cam-clips'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, summarizeCounts,
+  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, rtspLabel, rtspPortError,
+  summarizeCounts,
 } from '~/utils/cam-clips'
 
 /**
@@ -19,6 +20,8 @@ const cameras = ref<CamClipsCamera[]>([])
 const canEditDestination = ref(false)
 const candidates = ref<CamClipsDeviceCandidate[]>([])
 const knownDevices = ref<{ device_id: string, label: string | null }[]>([])
+/** CoreS3 の鍵 (拠点 PC の拡張の鍵の元)。device_id = `alarm:<fingerprint>` */
+const camHostKeys = ref<CamHostKey[]>([])
 const listError = ref('')
 
 /** 編集中のカメラ (null = 追加) とフォーム。`formOpen` が false なら閉じている */
@@ -51,25 +54,32 @@ async function loadCameras() {
 
 /** 端末の候補と表示名。取れなくても登録はできる (候補が選べないだけ) */
 async function loadDevices() {
-  const [cand, labels] = await Promise.allSettled([listCamClipsDeviceCandidates(30), listDeviceLabels()])
+  const [cand, labels, keys] = await Promise.allSettled([listCamClipsDeviceCandidates(30), listDeviceLabels(), listCamHostKeys()])
   candidates.value = cand.status === 'fulfilled' ? cand.value : []
   knownDevices.value = labels.status === 'fulfilled' ? labels.value.devices : []
+  camHostKeys.value = keys.status === 'fulfilled' ? keys.value.keys : []
 }
 
 onMounted(() => Promise.all([loadCameras(), loadDevices()]))
 
-/** 候補に無い (30 日イベントが無い) が結び付いている端末も、選択肢に残す */
+/**
+ * 選択肢 = 直近 30 日にイベントを出した端末 + CoreS3 の鍵 (拠点 PC の配信の紐づけ先) +
+ * どちらにも無いが結び付いている端末
+ */
 const deviceOptions = computed(() => {
   const seen = new Set(candidates.value.map(c => c.device_id))
+  const keys = camHostKeys.value.filter(k => !seen.has(k.device_id))
+  for (const k of keys) seen.add(k.device_id)
   const extra = form.value.device_ids.filter(id => !seen.has(id))
   return [
     ...candidates.value.map(c => ({ id: c.device_id, isDev: c.is_dev === true, summary: summarizeCounts(c.counts), last: formatJst(c.last_at) })),
+    ...keys.map(k => ({ id: k.device_id, isDev: false, summary: 'CoreS3 の鍵 (拠点 PC のカメラ配信)', last: '—' })),
     ...extra.map(id => ({ id, isDev: false, summary: '直近 30 日のイベントなし', last: '—' })),
   ]
 })
 
 function nameOf(id: string): string {
-  return deviceDisplayName(id, knownDevices.value)
+  return deviceDisplayName(id, [...knownDevices.value, ...camHostKeys.value])
 }
 
 /** 拡張の設定 (siteId) に入れる値。クリップボードが使えない環境では選択コピーに任せる (select-all) */
@@ -109,6 +119,11 @@ function toggleDevice(id: string, ev: Event) {
 }
 
 async function save() {
+  const portProblem = rtspPortError(form.value.rtsp_port)
+  if (portProblem) {
+    saveError.value = portProblem
+    return
+  }
   saving.value = true
   saveError.value = ''
   notice.value = ''
@@ -178,6 +193,7 @@ async function makeClip() {
               <th class="py-1 pr-3">VPC binding</th>
               <th class="py-1 pr-3">ユーザー名</th>
               <th class="py-1 pr-3">パスワード</th>
+              <th class="py-1 pr-3">RTSP</th>
               <th class="py-1 pr-3">結び付けた端末</th>
               <th class="py-1 pr-3">走査済み</th>
               <th class="py-1" />
@@ -199,6 +215,7 @@ async function makeClip() {
               <td class="py-2 pr-3">{{ c.vpc_binding ?? '—' }}</td>
               <td class="py-2 pr-3">{{ c.rec_username ?? '—' }}</td>
               <td class="py-2 pr-3">{{ c.has_password ? '設定済み' : '未設定' }}</td>
+              <td class="py-2 pr-3 font-mono text-xs" data-testid="cam-clips-row-rtsp">{{ rtspLabel(c) }}</td>
               <td class="py-2 pr-3">
                 <span v-if="c.device_ids.length === 0" class="text-gray-400">—</span>
                 <span v-for="id in c.device_ids" :key="id" class="block" data-testid="cam-clips-row-device">
@@ -269,10 +286,38 @@ async function makeClip() {
         <span v-if="editing?.has_password" class="block text-xs text-gray-500" data-testid="cam-clips-password-set">設定済み・変えるときだけ入力</span>
       </label>
 
+      <fieldset class="text-sm space-y-2" data-testid="cam-clips-rtsp">
+        <legend>RTSP の接続先 (拠点 PC の配信が繋ぐ先)</legend>
+        <p class="text-xs text-gray-500">
+          拠点 PC から見たカメラの LAN の IP とパス。アカウントは上のユーザー名・パスワードを使います。IP とパスが揃うと結び付けた拠点 PC に配られます。
+        </p>
+        <div class="flex flex-wrap gap-3">
+          <label class="block">
+            LAN の IP
+            <input v-model="form.lan_ip" class="mt-1 block border rounded px-2 py-1" data-testid="cam-clips-lan-ip" autocomplete="off" inputmode="decimal">
+          </label>
+          <label class="block">
+            ポート
+            <input
+              v-model="form.rtsp_port"
+              class="mt-1 block w-24 border rounded px-2 py-1"
+              data-testid="cam-clips-rtsp-port"
+              inputmode="numeric"
+              :placeholder="String(DEFAULT_RTSP_PORT)"
+            >
+          </label>
+          <label class="block flex-1 min-w-48">
+            パス
+            <input v-model="form.rtsp_path" class="mt-1 block w-full border rounded px-2 py-1" data-testid="cam-clips-rtsp-path" autocomplete="off" placeholder="stream1">
+          </label>
+        </div>
+      </fieldset>
+
       <fieldset class="text-sm">
-        <legend>結び付ける端末 (直近 30 日にイベントを出した端末)</legend>
+        <legend>結び付ける端末 (直近 30 日にイベントを出した端末・CoreS3 の鍵)</legend>
         <p class="text-xs text-gray-500" data-testid="cam-clips-candidates-help">
           このカメラに映る端末を選びます。選んだ端末で記録したアルコール・血圧・打刻・免許証・指静脈の登録の前後 10 秒が切り出されます。
+          CoreS3 の鍵を選ぶと、その CoreS3 を挿した拠点 PC がこのカメラを配信し、その端末の遠隔点呼にこのカメラが出ます。
         </p>
         <p v-if="deviceOptions.length === 0" class="text-gray-500" data-testid="cam-clips-no-candidates">候補はありません</p>
         <label v-for="o in deviceOptions" :key="o.id" class="flex items-start gap-2 py-1" data-testid="cam-clips-candidate">

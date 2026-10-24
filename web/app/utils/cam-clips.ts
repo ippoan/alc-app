@@ -13,6 +13,10 @@ export interface CamClipsCamera {
   rec_username: string | null
   has_password: boolean
   recording: boolean
+  /** RTSP の接続先 (拠点 PC の配信が繋ぐ先。アカウントは rec_username / パスワードを使い回す) */
+  lan_ip: string | null
+  rtsp_port: number
+  rtsp_path: string | null
   device_ids: string[]
   rec_scanned_until: string | null
 }
@@ -36,6 +40,12 @@ export interface CamClipsDeviceCounts {
   timecard: number
   license: number
   vein_enroll: number
+}
+
+/** 録画タブの端末候補に出す CoreS3 の鍵 (`GET /api/cam-host-keys`)。device_id は `alarm:<fingerprint>` */
+export interface CamHostKey {
+  device_id: string
+  label: string | null
 }
 
 export interface CamClipsDeviceCandidate {
@@ -102,6 +112,9 @@ export interface CamClipsCreateBody {
   vpc_binding?: string
   rec_username?: string
   rec_password?: string
+  lan_ip?: string
+  rtsp_port?: number
+  rtsp_path?: string
   device_ids?: string[]
 }
 
@@ -111,6 +124,12 @@ export interface CamClipsPatchBody {
   vpc_binding?: string | null
   rec_username?: string
   rec_password?: string
+  /** null = 消す */
+  lan_ip?: string | null
+  /** null = 既定 (554) に戻す */
+  rtsp_port?: number | null
+  /** null = 消す */
+  rtsp_path?: string | null
   device_ids?: string[]
 }
 
@@ -121,13 +140,33 @@ export interface CamClipsForm {
   rec_username: string
   /** 書き込み専用。空なら送らない */
   rec_password: string
+  lan_ip: string
+  /** 空 = 既定 (554) */
+  rtsp_port: string
+  rtsp_path: string
   device_ids: string[]
   /** 「取り込みをやめる」(vpc_binding を null にする) */
   stop: boolean
 }
 
 export const EMPTY_FORM: CamClipsForm = {
-  name: '', vpc_binding: '', rec_username: '', rec_password: '', device_ids: [], stop: false,
+  name: '', vpc_binding: '', rec_username: '', rec_password: '', lan_ip: '', rtsp_port: '', rtsp_path: '', device_ids: [], stop: false,
+}
+
+/** RTSP の既定のポート (サーバーも null をこの値にする) */
+export const DEFAULT_RTSP_PORT = 554
+
+/** RTSP のポートの入力の検査。空 (= 既定) か 1〜65535 の整数なら null、違えば画面に出す文 */
+export function rtspPortError(port: string): string | null {
+  const p = port.trim()
+  if (!p) return null
+  return /^\d+$/.test(p) && Number(p) >= 1 && Number(p) <= 65535 ? null : 'RTSP のポートは 1〜65535 にしてください'
+}
+
+/** 一覧に出す RTSP の接続先。IP とパスが揃っていなければ「未設定」 */
+export function rtspLabel(c: Pick<CamClipsCamera, 'lan_ip' | 'rtsp_port' | 'rtsp_path'>): string {
+  if (!c.lan_ip || !c.rtsp_path) return '未設定'
+  return `${c.lan_ip}:${c.rtsp_port}/${c.rtsp_path.replace(/^\//, '')}`
 }
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000
@@ -188,6 +227,9 @@ export function formFromCamera(c: CamClipsCamera): CamClipsForm {
     vpc_binding: c.vpc_binding ?? '',
     rec_username: c.rec_username ?? '',
     rec_password: '',
+    lan_ip: c.lan_ip ?? '',
+    rtsp_port: String(c.rtsp_port),
+    rtsp_path: c.rtsp_path ?? '',
     device_ids: [...c.device_ids],
     stop: false,
   }
@@ -200,6 +242,9 @@ export function buildCreateBody(f: CamClipsForm, canEditDestination: boolean): C
   if (canEditDestination && binding) body.vpc_binding = binding
   if (f.rec_username.trim()) body.rec_username = f.rec_username.trim()
   if (f.rec_password) body.rec_password = f.rec_password
+  if (f.lan_ip.trim()) body.lan_ip = f.lan_ip.trim()
+  if (f.rtsp_port.trim()) body.rtsp_port = Number(f.rtsp_port.trim())
+  if (f.rtsp_path.trim()) body.rtsp_path = f.rtsp_path.trim()
   if (f.device_ids.length > 0) body.device_ids = f.device_ids
   return body
 }
@@ -212,6 +257,7 @@ function sameSet(a: string[], b: string[]): boolean {
  * 編集の本文 = 元のカメラとの差分だけ。
  * - 宛先は `canEditDestination` のときだけ。「取り込みをやめる」は null、空欄は変えない
  * - パスワードは空なら送らない (サーバーも "" は変えない)
+ * - RTSP の IP・パスは空にしたら null (消す)、ポートは空にしたら null (既定の 554 に戻す)
  */
 export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDestination: boolean): CamClipsPatchBody {
   const patch: CamClipsPatchBody = {}
@@ -227,6 +273,17 @@ export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDes
   }
   if (f.rec_username.trim() !== (orig.rec_username ?? '')) patch.rec_username = f.rec_username.trim()
   if (f.rec_password) patch.rec_password = f.rec_password
+  const lanIp = f.lan_ip.trim()
+  if (lanIp !== (orig.lan_ip ?? '')) patch.lan_ip = lanIp || null
+  const port = f.rtsp_port.trim()
+  if (!port) {
+    if (orig.rtsp_port !== DEFAULT_RTSP_PORT) patch.rtsp_port = null
+  }
+  else if (Number(port) !== orig.rtsp_port) {
+    patch.rtsp_port = Number(port)
+  }
+  const path = f.rtsp_path.trim()
+  if (path !== (orig.rtsp_path ?? '')) patch.rtsp_path = path || null
   if (!sameSet(f.device_ids, orig.device_ids)) patch.device_ids = f.device_ids
   return patch
 }

@@ -21,7 +21,7 @@ vi.mock('~/utils/api', async (importOriginal) => ({
 
 const cam = (id: string, name: string): CamClipsCamera => ({
   id, name, vpc_binding: null, rec_username: null, has_password: false,
-  recording: false, device_ids: [], rec_scanned_until: null,
+  recording: false, lan_ip: null, rtsp_port: 554, rtsp_path: null, device_ids: [], rec_scanned_until: null,
 })
 const ev = (over: Partial<CamClipsEvent>): CamClipsEvent => ({
   source_table: 'hub_measurements', source_id: 's', kind: 'alcohol',

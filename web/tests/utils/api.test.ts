@@ -64,6 +64,7 @@ import {
   runDriverMasterSync,
   // CoreS3 のファームの更新 (Refs ippoan/alc-app#403)
   listFirmwareDevices,
+  listCamHostKeys,
   listDeviceLabels,
   updateFirmware,
   listVeinFleet,
@@ -2481,6 +2482,20 @@ describe.skipIf(isLive)('ファームの更新 (#403)', () => {
     const h = new Headers(init.headers)
     expect(h.get('Authorization')).toBe('Bearer admin-jwt')
     expect(h.get('X-Tenant-ID')).toBeNull()
+  })
+
+  it('listCamHostKeys: admin JWT を Bearer に載せて /api/cam-host-keys を GET。JWT が無ければ投げる', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const payload = { keys: [{ device_id: 'alarm:fp-1', label: '拠点 PC' }] }
+    mockFetch.mockResolvedValueOnce(okJson(payload))
+    expect(await listCamHostKeys()).toEqual(payload)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/cam-host-keys')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer admin-jwt')
+
+    initApi(API_BASE, () => null, () => 'tid')
+    await expect(listCamHostKeys()).rejects.toThrow('ログインが必要です')
   })
 
   it('listDeviceLabels: admin JWT を Bearer に載せて /api/device-labels を GET。JWT が無ければ fetch せずに throw', async () => {

@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   listCamClipsDeviceCandidates: vi.fn(),
   createCamClipsClip: vi.fn(),
   listDeviceLabels: vi.fn(),
+  listCamHostKeys: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -20,7 +21,8 @@ vi.mock('~/utils/api', async (importOriginal) => ({
 
 const CAM: CamClipsCamera = {
   id: 'c1', name: '正門', vpc_binding: 'CAM_A', rec_username: 'admin', has_password: true,
-  recording: true, device_ids: ['dev-1'], rec_scanned_until: '2026-10-23T12:58:00.000+09:00',
+  recording: true, lan_ip: null, rtsp_port: 554, rtsp_path: null,
+  device_ids: ['dev-1'], rec_scanned_until: '2026-10-23T12:58:00.000+09:00',
 }
 const CANDIDATES = [
   { device_id: 'dev-1', counts: { alcohol: 3, blood_pressure: 0, timecard: 1, license: 0, vein_enroll: 0 }, last_at: '2026-10-23T12:00:00.000+09:00' },
@@ -41,6 +43,7 @@ beforeEach(() => {
   api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
   api.updateCamClipsCamera.mockResolvedValue(CAM)
   api.createCamClipsCamera.mockResolvedValue(CAM)
+  api.listCamHostKeys.mockResolvedValue({ keys: [] })
 })
 
 describe('CamClipsManager 一覧', () => {
@@ -175,6 +178,75 @@ describe('CamClipsManager 端末候補の表示', () => {
     expect(second!.find(t('candidate-name')).text()).toBe('名前未登録の端末')
     expect(second!.find(t('candidate-id')).text()).toBe('dev-2')
     expect(second!.find(t('candidate-dev')).text()).toBe('開発端末')
+  })
+})
+
+describe('CamClipsManager RTSP の接続先と CoreS3 の鍵', () => {
+  const KEYS = { keys: [
+    { device_id: 'alarm:fp-1', label: '帯広の拠点 PC' },
+    { device_id: 'dev-2', label: null },
+  ] }
+
+  it('一覧に RTSP の接続先を出す (未設定なら「未設定」)', async () => {
+    const w = await mountIt(true, [{ ...CAM, lan_ip: '192.168.1.64', rtsp_path: 'stream1' }, { ...CAM, id: 'c2' }])
+    const cells = w.findAll(t('row-rtsp'))
+    expect(cells[0]!.text()).toBe('192.168.1.64:554/stream1')
+    expect(cells[1]!.text()).toBe('未設定')
+  })
+
+  it('追加: IP・ポート・パスを送る。CoreS3 の鍵は候補に label 付きで出て、選べる (イベントの候補と重なる鍵は 1 行)', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true)
+    await w.find(t('add')).trigger('click')
+    const rows = w.findAll(t('candidate'))
+    expect(rows).toHaveLength(3)
+    expect(rows[2]!.find(t('candidate-name')).text()).toBe('帯広の拠点 PC')
+    expect(rows[2]!.find(t('candidate-id')).text()).toBe('alarm:fp-1')
+    expect(rows[2]!.text()).toContain('CoreS3 の鍵 (拠点 PC のカメラ配信)')
+    expect(w.find(t('rtsp-port')).attributes('placeholder')).toBe('554')
+    await w.find(t('name')).setValue('裏門')
+    await w.find(t('lan-ip')).setValue('192.168.1.64')
+    await w.find(t('rtsp-port')).setValue('8554')
+    await w.find(t('rtsp-path')).setValue('stream1')
+    await rows[2]!.find('input').setValue(true)
+    await w.find(t('form')).trigger('submit')
+    await flushPromises()
+    expect(api.createCamClipsCamera).toHaveBeenCalledWith({
+      name: '裏門', lan_ip: '192.168.1.64', rtsp_port: 8554, rtsp_path: 'stream1', device_ids: ['alarm:fp-1'],
+    })
+  })
+
+  it('結び付けた鍵は一覧でも label で出る', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true, [{ ...CAM, device_ids: ['alarm:fp-1'] }])
+    expect(w.find(t('row-device-name')).text()).toBe('帯広の拠点 PC')
+  })
+
+  it('ポートが不正なら送らずに文言を出す', async () => {
+    const w = await mountIt(true)
+    await w.find(t('edit')).trigger('click')
+    await w.find(t('rtsp-port')).setValue('70000')
+    await w.find(t('form')).trigger('submit')
+    await flushPromises()
+    expect(api.updateCamClipsCamera).not.toHaveBeenCalled()
+    expect(w.find(t('save-error')).text()).toBe('RTSP のポートは 1〜65535 にしてください')
+  })
+
+  it('編集: RTSP の項目の差分だけ送る', async () => {
+    const w = await mountIt(true, [{ ...CAM, lan_ip: '192.168.1.64', rtsp_path: 'stream1' }])
+    await w.find(t('edit')).trigger('click')
+    expect((w.find(t('lan-ip')).element as HTMLInputElement).value).toBe('192.168.1.64')
+    await w.find(t('rtsp-path')).setValue('stream2')
+    await w.find(t('form')).trigger('submit')
+    await flushPromises()
+    expect(api.updateCamClipsCamera).toHaveBeenCalledWith('c1', { rtsp_path: 'stream2' })
+  })
+
+  it('鍵の一覧が取れなくても候補はイベントの端末だけで出る', async () => {
+    api.listCamHostKeys.mockRejectedValue(new Error('403'))
+    const w = await mountIt(true)
+    await w.find(t('add')).trigger('click')
+    expect(w.findAll(t('candidate'))).toHaveLength(2)
   })
 })
 

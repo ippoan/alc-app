@@ -186,6 +186,9 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   isStartupProbing: ref(false),
 }))
 
+// 拡張への鍵の受け渡しは本体のテスト (useCamHostToken.test.ts) で見る
+mockNuxtImport('useCamHostToken', () => () => {})
+
 // IC カードで測定を始める口 (`useHubTimecardPunch` の 2 つ目の引数) を捕まえる。実物はそのまま動かす
 // (Refs ippoan/alc-app#436)
 const hubPunch = vi.hoisted(() => ({

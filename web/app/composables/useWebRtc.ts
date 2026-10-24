@@ -289,15 +289,14 @@ export function useWebRtc(role: 'device' | 'admin') {
    * 印が無い端末・`cam-room`・token を明示した呼び出しは、この分岐に入らず今までどおり
    * (WebSocket は connect() の同期の流れの中で作られる)。
    *
-   * `deviceId` は遠隔点呼の kiosk が自分の端末 ID を申告するときだけ渡す (`?device_id=`)。
-   * signaling は admin への `peer_joined` に載せ、管理者画面がその端末の拠点カメラを引く。
+   * 遠隔点呼の kiosk は端末の鍵を `token` に渡す。signaling は鍵の sub (`alarm:<fingerprint>`) を
+   * admin への `peer_joined` の `device_id` に載せ、管理者画面がその端末の拠点カメラを引く。
    */
   async function connect(
     signalingUrl: string,
     roomId: string,
     path: 'room' | 'cam-room' = 'room',
     token?: string,
-    deviceId?: string | null,
   ) {
     error.value = null
     const generation = ++connectGeneration
@@ -324,8 +323,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     createPeerConnection()
 
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
-    const deviceParam = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : ''
-    const url = `${signalingUrl}/${path}/${roomId}?role=${role}${deviceParam}${tokenParam}`
+    const url = `${signalingUrl}/${path}/${roomId}?role=${role}${tokenParam}`
     log('connect:', `${signalingUrl}/${path}/${roomId}?role=${role}`, token ? '(token付き)' : '(token無し)')
     ws = new WebSocket(url)
 

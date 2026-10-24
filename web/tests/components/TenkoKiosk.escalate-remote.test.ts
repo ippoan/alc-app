@@ -48,6 +48,10 @@ mockNuxtImport('useWebRtc', () => () => ({
   disconnect: webRtcDisconnect,
 }))
 
+// 遠隔点呼の部屋に付ける端末の鍵 (それ以外は本物の useDeviceToken)
+const getDeviceJwtMock = vi.fn(async (): Promise<string | null> => null)
+mockNuxtImport('useDeviceToken', original => () => ({ ...original(), getDeviceJwt: getDeviceJwtMock }))
+
 const cameraStart = vi.fn(async () => {})
 mockNuxtImport('useCamera', () => () => ({
   stream: ref(null), videoRef: ref(null), isActive: ref(false),
@@ -173,6 +177,7 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
   beforeEach(() => {
     vi.clearAllMocks()
     getEmployeeByNfcId.mockResolvedValue(EMPLOYEE)
+    getDeviceJwtMock.mockResolvedValue(null)
     getPendingSchedules.mockResolvedValue([makeSchedule()])
     startTenkoSession.mockResolvedValue(makeSession())
     escalateTenkoSessionToRemote.mockResolvedValue({ ...makeSession(), escalated_to_remote_at: '2026-09-16T08:05:00Z' })
@@ -223,23 +228,25 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     expect(cameraStart).toHaveBeenCalled()
     expect(webRtcConnect).toHaveBeenCalledTimes(1)
     expect(webRtcConnect.mock.calls[0]![1]).toBe(SESSION_ID)
-    // 端末 ID が未登録の kiosk は申告しない
-    expect(webRtcConnect.mock.calls[0]![4]).toBeNull()
+    // 端末の鍵が取れない kiosk は token を付けない (従来どおり)
+    expect(webRtcConnect.mock.calls[0]![3]).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('端末 ID が登録済みの kiosk は、遠隔点呼の部屋に端末 ID を申告して入る', async () => {
-    const deviceToken = useDeviceToken()
-    deviceToken.storeKioskCredential('kiosk-dev-1', 'secret')
-    try {
-      const wrapper = await mountAtMedicalStep({ remoteMode: true })
-      expect(webRtcConnect).toHaveBeenCalledTimes(1)
-      expect(webRtcConnect.mock.calls[0]).toEqual([expect.any(String), SESSION_ID, 'room', undefined, 'kiosk-dev-1'])
-      wrapper.unmount()
-    }
-    finally {
-      deviceToken.clearKioskCredential()
-    }
+  it('端末の鍵が取れる kiosk は、遠隔点呼の部屋に鍵を付けて入る (自己申告の端末 ID は付けない)', async () => {
+    getDeviceJwtMock.mockResolvedValue('kiosk.jwt.token')
+    const wrapper = await mountAtMedicalStep({ remoteMode: true })
+    expect(webRtcConnect).toHaveBeenCalledTimes(1)
+    expect(webRtcConnect.mock.calls[0]).toEqual([expect.any(String), SESSION_ID, 'room', 'kiosk.jwt.token'])
+    wrapper.unmount()
+  })
+
+  it('端末の鍵の取得が throw しても token 無しで部屋に入る', async () => {
+    getDeviceJwtMock.mockRejectedValue(new Error('boom'))
+    const wrapper = await mountAtMedicalStep({ remoteMode: true })
+    expect(webRtcConnect).toHaveBeenCalledTimes(1)
+    expect(webRtcConnect.mock.calls[0]).toEqual([expect.any(String), SESSION_ID, 'room', undefined])
+    wrapper.unmount()
   })
 
   it('遠隔に切り替えても段の数が変わらない', async () => {

@@ -502,16 +502,10 @@ describe('useWebRtc', () => {
 
   // --- 遠隔点呼の端末 ID (device_id) ---
 
-  it('connect: deviceId 指定時は &device_id=... がURLに付与される (token より前)', async () => {
+  it('connect: 端末の鍵は &token= で付き、device_id は付けない', async () => {
     const rtc = useWebRtc('device')
-    await rtc.connect('wss://sig.example.com', 'room-1', 'room', 'tok', 'kiosk 1')
-    expect(getWs().url).toBe('wss://sig.example.com/room/room-1?role=device&device_id=kiosk%201&token=tok')
-  })
-
-  it('connect: deviceId が null なら device_id は付かない', async () => {
-    const rtc = useWebRtc('device')
-    await rtc.connect('wss://sig.example.com', 'room-1', 'room', undefined, null)
-    expect(getWs().url).toBe('wss://sig.example.com/room/room-1?role=device')
+    await rtc.connect('wss://sig.example.com', 'room-1', 'room', 'tok')
+    expect(getWs().url).toBe('wss://sig.example.com/room/room-1?role=device&token=tok')
   })
 
   it('peer_joined (role=device, device_id) → peerDeviceId に出る。peer_left・disconnect で null に戻る', async () => {
