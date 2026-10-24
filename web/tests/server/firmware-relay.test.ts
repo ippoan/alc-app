@@ -9,6 +9,8 @@ import {
   decideFirmwareReportAccess,
   isFirmwareDeviceId,
   loadDeviceLabels,
+  loadDeviceLabelRows,
+  parseDeviceLabelRows,
   mergeFirmwareDevices,
   parseDeviceLabels,
 } from '../../server/utils/firmware-relay'
@@ -91,6 +93,32 @@ describe('buildDeviceLabelsForward', () => {
     const fwd = buildDeviceLabelsForward({ sharedSecret: SECRET, tenantId: 't 1/&x' })
     expect(fwd.url).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t%201%2F%26x')
     expect(fwd.init).toEqual({ method: 'GET', headers: { Authorization: SECRET } })
+  })
+})
+
+describe('buildDeviceLabelsForward の all', () => {
+  it('all=true のときだけ &all=1 が付く (既定は付けない)', () => {
+    const input = { sharedSecret: SECRET, tenantId: 't1' }
+    expect(buildDeviceLabelsForward(input).url).not.toContain('all=')
+    expect(buildDeviceLabelsForward(input, false).url).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t1')
+    expect(buildDeviceLabelsForward(input, true).url).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t1&all=1')
+  })
+})
+
+describe('parseDeviceLabelRows / loadDeviceLabelRows', () => {
+  it('revoked は true のときだけ true。形が違えば null', () => {
+    expect(parseDeviceLabelRows({ devices: [{ device_id: 'a', label: 'L', revoked: true }, { device_id: 'b', revoked: 'yes' }, { device_id: 'c', label: 3 }] }))
+      .toEqual([{ device_id: 'a', label: 'L', revoked: true }, { device_id: 'b', label: null, revoked: false }, { device_id: 'c', label: null, revoked: false }])
+    expect(parseDeviceLabelRows({})).toBeNull()
+  })
+
+  it('loadDeviceLabelRows(all) は &all=1 で引く。loadDeviceLabels も all を渡せる', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ devices: [{ device_id: 'd1', label: 'L', revoked: true }] })))
+    const aw = { fetch: fetch as unknown as typeof globalThis.fetch }
+    const input = { sharedSecret: SECRET, tenantId: 't1' }
+    expect(await loadDeviceLabelRows(aw, input, true)).toEqual([{ device_id: 'd1', label: 'L', revoked: true }])
+    expect([...(await loadDeviceLabels(aw, input, true))!]).toEqual([['d1', 'L']])
+    expect((fetch.mock.calls[1] as unknown[])[0]).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t1&all=1')
   })
 })
 

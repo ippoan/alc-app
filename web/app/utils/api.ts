@@ -28,7 +28,7 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import type {
-  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey,
+  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey, KnownDeviceName,
 } from '~/utils/cam-clips'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
@@ -915,10 +915,10 @@ export async function listFirmwareDevices(): Promise<{ devices: FirmwareDevice[]
 }
 
 /** 端末の登録簿 (鍵) のラベル。画面で端末に名前を付ける用。admin の token が要る。 */
-export async function listDeviceLabels(): Promise<{ devices: { device_id: string, label: string | null }[] }> {
+export async function listDeviceLabels(): Promise<{ devices: { device_id: string, label: string | null, revoked?: boolean }[] }> {
   const jwt = getAccessToken?.()
   if (!jwt) throw new Error('ログインが必要です')
-  return bearerRequest<{ devices: { device_id: string, label: string | null }[] }>('/api/device-labels', jwt, { method: 'GET' })
+  return bearerRequest<{ devices: { device_id: string, label: string | null, revoked?: boolean }[] }>('/api/device-labels', jwt, { method: 'GET' })
 }
 
 /**
@@ -1942,12 +1942,13 @@ export async function listCamClipsDeviceCandidates(days = 30): Promise<CamClipsD
 
 /**
  * 録画タブの端末候補に出す CoreS3 の鍵 (拠点 PC の拡張に渡す cam-host の鍵の元)。admin の token が要る。
- * 中身は auth-worker の鍵の一覧 (`server/api/cam-host-keys.get.ts` が中継する)
+ * 中身は auth-worker の鍵の一覧 (`server/api/cam-host-keys.get.ts` が中継する)。
+ * `keys` = 担当付けの候補 (kiosk だけ) / `names` = 名前付け用 (全用途・失効済み)
  */
-export async function listCamHostKeys(): Promise<{ keys: CamHostKey[] }> {
+export async function listCamHostKeys(): Promise<{ keys: CamHostKey[], names?: KnownDeviceName[] }> {
   const jwt = getAccessToken?.()
   if (!jwt) throw new Error('ログインが必要です')
-  return bearerRequest<{ keys: CamHostKey[] }>('/api/cam-host-keys', jwt, { method: 'GET' })
+  return bearerRequest<{ keys: CamHostKey[], names?: KnownDeviceName[] }>('/api/cam-host-keys', jwt, { method: 'GET' })
 }
 
 /** カメラ 1 台の、JST の暦日 (`YYYY-MM-DD`) 1 日ぶんのイベントと自動切り出しの結果 (時刻順) */

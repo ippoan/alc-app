@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { listCamClipsCameras, listCamClipsEvents, listDeviceLabels, runCamClipsAuto } from '~/utils/api'
-import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
+import { listCamClipsCameras, listCamClipsEvents, listCamHostKeys, listDeviceLabels, runCamClipsAuto } from '~/utils/api'
+import type { CamClipsCamera, CamClipsEvent, KnownDeviceName } from '~/utils/cam-clips'
 import { clipSrc, deviceDisplayName, errorText, eventKindLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { jstTodayDate } from '~/utils/jst'
@@ -21,16 +21,15 @@ const error = ref('')
 const running = ref(false)
 const runResult = ref('')
 const playing = ref<{ sourceId: string, key: string, occurredAt: string, kind: CamClipsEvent['kind'] } | null>(null)
-const labels = ref<{ device_id: string, label: string | null }[]>([])
+const labels = ref<KnownDeviceName[]>([])
 
 /** 端末の表示名。取れなくても一覧は出す (名前が「名前未登録の端末」になるだけ) */
 onMounted(async () => {
-  try {
-    labels.value = (await listDeviceLabels()).devices
-  }
-  catch {
-    labels.value = []
-  }
+  const [reg, keys] = await Promise.allSettled([listDeviceLabels(), listCamHostKeys()])
+  labels.value = [
+    ...(reg.status === 'fulfilled' ? reg.value.devices : []),
+    ...(keys.status === 'fulfilled' ? keys.value.names ?? [] : []),
+  ]
 })
 
 async function loadEvents() {

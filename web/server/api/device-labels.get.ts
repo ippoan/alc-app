@@ -11,7 +11,7 @@
  *
  * ★ tenant_id は introspect の結果だけを使う。
  */
-import { decideFirmwareAdminAccess, loadDeviceLabels } from '../utils/firmware-relay'
+import { decideFirmwareAdminAccess, loadDeviceLabelRows } from '../utils/firmware-relay'
 import { introspectCaller } from '../utils/introspect-route'
 
 export default defineEventHandler(async (event) => {
@@ -21,10 +21,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: access.status, statusMessage: access.message })
   }
 
-  const labels = await loadDeviceLabels(authWorker, { sharedSecret, tenantId: access.tenantId })
+  // 名前を引くだけの画面なので、失効済みの鍵も返させる (`revoked` で印を付ける)
+  const rows = await loadDeviceLabelRows(authWorker, { sharedSecret, tenantId: access.tenantId }, true)
   setResponseHeader(event, 'Content-Type', 'application/json')
   setResponseHeader(event, 'Cache-Control', 'no-store')
-  return {
-    devices: [...(labels ?? new Map<string, string | null>())].map(([device_id, label]) => ({ device_id, label })),
-  }
+  return { devices: rows ?? [] }
 })

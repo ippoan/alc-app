@@ -65,10 +65,13 @@ export function isFirmwareDeviceId(v: unknown): v is string {
   return typeof v === 'string' && FIRMWARE_DEVICE_ID_RE.test(v)
 }
 
-/** auth-worker の登録簿 (テナントの未失効の端末とラベル) への forward request を組む。 */
-export function buildDeviceLabelsForward(input: { sharedSecret: string, tenantId: string }): Forward {
+/**
+ * auth-worker の登録簿 (テナントの未失効の端末とラベル) への forward request を組む。
+ * `all` = true で失効済みの鍵も返させる (`all=1`。名前を引くだけの画面用。照合には使わない)。
+ */
+export function buildDeviceLabelsForward(input: { sharedSecret: string, tenantId: string }, all = false): Forward {
   return {
-    url: `${AUTH_WORKER_BASE}/internal/device-labels?tenant_id=${encodeURIComponent(input.tenantId)}`,
+    url: `${AUTH_WORKER_BASE}/internal/device-labels?tenant_id=${encodeURIComponent(input.tenantId)}${all ? '&all=1' : ''}`,
     init: { method: 'GET', headers: { Authorization: input.sharedSecret } },
   }
 }
@@ -78,33 +81,57 @@ export function buildDeviceLabelsForward(input: { sharedSecret: string, tenantId
  * 形が違えば null (呼び元が「取れなかった」と区別できるように、空の Map にしない)。
  */
 export function parseDeviceLabels(json: unknown): Map<string, string | null> | null {
+  const rows = parseDeviceLabelRows(json)
+  return rows && new Map(rows.map(r => [r.device_id, r.label]))
+}
+
+export interface DeviceLabelRow {
+  device_id: string
+  label: string | null
+  /** 失効済みの鍵 (`all=1` のときだけ返る。無ければ false) */
+  revoked: boolean
+}
+
+/** {@link parseDeviceLabels} の行のまま版。形が違えば null。 */
+export function parseDeviceLabelRows(json: unknown): DeviceLabelRow[] | null {
   const devices = (json as { devices?: unknown } | null | undefined)?.devices
   if (!Array.isArray(devices)) return null
-  const labels = new Map<string, string | null>()
-  for (const d of devices as Array<{ device_id?: unknown, label?: unknown } | null>) {
+  const rows: DeviceLabelRow[] = []
+  for (const d of devices as Array<{ device_id?: unknown, label?: unknown, revoked?: unknown } | null>) {
     if (typeof d?.device_id !== 'string') continue
-    labels.set(d.device_id, typeof d.label === 'string' ? d.label : null)
+    rows.push({ device_id: d.device_id, label: typeof d.label === 'string' ? d.label : null, revoked: d.revoked === true })
   }
-  return labels
+  return rows
 }
 
 /**
  * 登録簿を引く。**取れなかったら (非 200・形違い・例外) null** — どう倒すかは呼び元が決める
  * (報告は fail-closed で 503、一覧はラベル無しで出す)。
  */
-export async function loadDeviceLabels(
+export async function loadDeviceLabelRows(
   authWorker: { fetch: typeof fetch },
   input: { sharedSecret: string, tenantId: string },
-): Promise<Map<string, string | null> | null> {
-  const fwd = buildDeviceLabelsForward(input)
+  all = false,
+): Promise<DeviceLabelRow[] | null> {
+  const fwd = buildDeviceLabelsForward(input, all)
   try {
     const res = await authWorker.fetch(fwd.url, fwd.init)
     if (res.status !== 200) return null
-    return parseDeviceLabels(await res.json())
+    return parseDeviceLabelRows(await res.json())
   }
   catch {
     return null
   }
+}
+
+/** {@link loadDeviceLabelRows} を `device_id → label` にしたもの。`all` の既定は false (照合の呼び元は変えない)。 */
+export async function loadDeviceLabels(
+  authWorker: { fetch: typeof fetch },
+  input: { sharedSecret: string, tenantId: string },
+  all = false,
+): Promise<Map<string, string | null> | null> {
+  const rows = await loadDeviceLabelRows(authWorker, input, all)
+  return rows && new Map(rows.map(r => [r.device_id, r.label]))
 }
 
 function recorderTenantUrl(tenantId: string, leaf: string): string {

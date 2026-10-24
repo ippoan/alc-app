@@ -8,7 +8,7 @@
  * 一覧の失敗は status をそのまま返す (画面は候補が出ないだけで、カメラの登録はできる)。
  */
 import { setResponseStatus } from 'h3'
-import { buildAlarmKeysForward, parseCamHostKeys } from '../utils/cam-host-keys'
+import { buildAlarmKeysForward, parseAlarmKeyNames, parseCamHostKeys } from '../utils/cam-host-keys'
 import { decideFirmwareAdminAccess } from '../utils/firmware-relay'
 import { introspectCaller } from '../utils/introspect-route'
 
@@ -27,5 +27,7 @@ export default defineEventHandler(async (event) => {
     setResponseStatus(event, res.status)
     return await res.text()
   }
-  return { keys: parseCamHostKeys(await res.json()) }
+  const json = await res.json()
+  // keys = カメラの担当付けの候補 (kiosk だけ) / names = 名前付け用 (全用途・失効済み)
+  return { keys: parseCamHostKeys(json), names: parseAlarmKeyNames(json) }
 })

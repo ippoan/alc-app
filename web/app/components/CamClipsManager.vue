@@ -3,7 +3,7 @@ import {
   createCamClipsCamera, createCamClipsClip, listCamClipsCameras, listCamClipsDeviceCandidates,
   listCamHostKeys, listDeviceLabels, updateCamClipsCamera,
 } from '~/utils/api'
-import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm, CamHostKey } from '~/utils/cam-clips'
+import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm, CamHostKey, KnownDeviceName } from '~/utils/cam-clips'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
   DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, rtspLabel, rtspPortError,
@@ -19,9 +19,10 @@ import {
 const cameras = ref<CamClipsCamera[]>([])
 const canEditDestination = ref(false)
 const candidates = ref<CamClipsDeviceCandidate[]>([])
-const knownDevices = ref<{ device_id: string, label: string | null }[]>([])
+const knownDevices = ref<KnownDeviceName[]>([])
 /** CoreS3 の鍵 (拠点 PC の拡張の鍵の元)。device_id = `alarm:<fingerprint>` */
 const camHostKeys = ref<CamHostKey[]>([])
+const keyNames = ref<KnownDeviceName[]>([])
 const listError = ref('')
 
 /** 編集中のカメラ (null = 追加) とフォーム。`formOpen` が false なら閉じている */
@@ -58,6 +59,7 @@ async function loadDevices() {
   candidates.value = cand.status === 'fulfilled' ? cand.value : []
   knownDevices.value = labels.status === 'fulfilled' ? labels.value.devices : []
   camHostKeys.value = keys.status === 'fulfilled' ? keys.value.keys : []
+  keyNames.value = keys.status === 'fulfilled' ? keys.value.names ?? [] : []
 }
 
 onMounted(() => Promise.all([loadCameras(), loadDevices()]))
@@ -79,7 +81,7 @@ const deviceOptions = computed(() => {
 })
 
 function nameOf(id: string): string {
-  return deviceDisplayName(id, [...knownDevices.value, ...camHostKeys.value])
+  return deviceDisplayName(id, [...knownDevices.value, ...keyNames.value, ...camHostKeys.value])
 }
 
 /** 拡張の設定 (siteId) に入れる値。クリップボードが使えない環境では選択コピーに任せる (select-all) */
