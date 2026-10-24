@@ -22,9 +22,18 @@ const props = withDefaults(defineProps<{
    * 無ければ管理者ログインの JWT (`useAuth().accessToken`)。遠隔点呼の画面は運行管理者席の鍵を渡す
    */
   getToken?: () => Promise<string | null>
-}>(), { label: undefined, autoConnect: false, getToken: undefined })
+  /**
+   * 一斉更新の合図 (連番)。増えたら、拠点 PC が対応していれば (`useCamUpdate` の caps が来ていれば) 更新を確認させる。
+   * カメラ一覧 (`CamLiveGrid`) の「一斉に更新を確認」が渡す
+   */
+  updateAllCount?: number
+}>(), { label: undefined, autoConnect: false, getToken: undefined, updateAllCount: 0 })
 
-const emit = defineEmits<{ 'update:active': [boolean] }>()
+const emit = defineEmits<{
+  'update:active': [boolean]
+  /** 拠点 PC が「更新を確認」に対応しているか (caps が来た / 消えた) */
+  'update:updatable': [boolean]
+}>()
 
 const config = useRuntimeConfig()
 const { accessToken } = useAuth()
@@ -32,6 +41,11 @@ const webRtc = useWebRtc('admin')
 const ptz = useCamPtz(webRtc.ptzChannel)
 const talk = useCamTalk(webRtc.ptzChannel, webRtc.camAudioSender)
 const hostUpdate = useCamUpdate(webRtc.ptzChannel)
+
+watch(() => !!hostUpdate.caps.value, v => emit('update:updatable', v))
+watch(() => props.updateAllCount, () => {
+  if (hostUpdate.caps.value) hostUpdate.check()
+})
 
 /** カメラの音を鳴らす (既定はミュート。自動再生の制限もあるのでボタンで解除する) */
 const soundOn = ref(false)
