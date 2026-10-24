@@ -306,6 +306,49 @@ describe('CamLiveTile の音声 (カメラのマイクとスピーカー)', () =
     expect(video().muted).toBe(true)
   })
 
+  it('音ありの間だけ音量のスライダーを出し、video の音量に効かせてこのブラウザに覚える', async () => {
+    localStorage.removeItem('alc_cam_volume')
+    const { w } = await mountWithAudio()
+    const video = () => w.find('video').element as HTMLVideoElement
+    expect(video().volume).toBe(1) // 既定 100%
+    expect(w.find(t('volume')).exists()).toBe(false)
+    await w.find(t('sound')).trigger('click')
+    const slider = w.find(t('volume'))
+    expect((slider.element as HTMLInputElement).value).toBe('100')
+    await slider.setValue('40')
+    expect(video().volume).toBeCloseTo(0.4)
+    expect(slider.attributes('title')).toBe('音量 40%')
+    expect(localStorage.getItem('alc_cam_volume')).toBe('40')
+    w.unmount()
+
+    // 次に開いたタイルは覚えた音量。範囲外・読めない値は丸める / 既定に戻す
+    rtc.instances.length = 0
+    const again = await mountWithAudio()
+    expect((again.w.find('video').element as HTMLVideoElement).volume).toBeCloseTo(0.4)
+    again.w.unmount()
+    for (const [saved, want] of [['250', 1], ['abc', 1], ['-5', 0]] as const) {
+      localStorage.setItem('alc_cam_volume', saved)
+      rtc.instances.length = 0
+      const m = await mountWithAudio()
+      expect((m.w.find('video').element as HTMLVideoElement).volume).toBeCloseTo(want)
+      m.w.unmount()
+    }
+    localStorage.removeItem('alc_cam_volume')
+  })
+
+  it('localStorage が使えなくても音量は既定 100% で、変えれば効く', async () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
+    const { w } = await mountWithAudio()
+    const video = w.find('video').element as HTMLVideoElement
+    expect(video.volume).toBe(1)
+    await w.find(t('sound')).trigger('click')
+    await w.find(t('volume')).setValue('20')
+    expect(video.volume).toBeCloseTo(0.2)
+    get.mockRestore()
+    set.mockRestore()
+  })
+
   it('押して話す: 押している間だけ start、離したら stop。話している・他の人・失敗の表示', async () => {
     const { w, ch } = await mountWithAudio()
     ch.emit({ type: 'talk', event: 'caps', speak: true })
