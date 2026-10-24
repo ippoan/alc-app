@@ -51,13 +51,21 @@
 import {
   bearerToken,
   constantTimeEquals,
+  decideRecordIdentity,
   decideRecorderAuth,
   decideWatcherAuth,
   DEVICE_DEV_HEADER,
   DEV_HEADER_VALUE,
   introspectToken,
+  type IntrospectResult,
   isDevIntrospect,
+  MACHINE_TOKEN_HEADER,
+  machineTokenMissing,
   RECORDER_DEV_HEADER,
+  RECORDER_MACHINE_MISSING_HEADER,
+  RECORDER_RECORD_DEVICE_HEADER,
+  RECORDER_VIA_DEVICE_HEADER,
+  type RecordIdentity,
   resolveSecret,
 } from "./auth";
 import {
@@ -88,6 +96,11 @@ export interface Env {
   NOTIFY_EMAIL_TO?: string;
   /** バッテリー snapshot cron の保存先 (7日 lifecycle rule はバケット側で設定、Refs #121) */
   BATTERY_HISTORY: R2Bucket;
+  /**
+   * `"1"` のとき、機体の鍵の証明 (`X-Machine-Token`) の無い CoreS3 の測定を受け付けない
+   * (接続は受ける。Refs ippoan/alc-cam#2)。全台のファームが証明を送るようになってから立てる。既定は無し
+   */
+  REQUIRE_MACHINE_TOKEN?: string;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -118,6 +131,10 @@ interface DeviceAuth {
   sharedSecret: string;
   /** dev端末か (introspect の `dev_device === true` のみ、Refs ippoan/alc-app#387)。 */
   dev: boolean;
+  /** 記録に書く端末の ID と、あれば接続の hub の ID (Refs ippoan/alc-cam#2)。 */
+  record: RecordIdentity;
+  /** 鍵の証明が要る段なのに無い ({@link machineTokenMissing})。測定を受け付けない */
+  machineMissing: boolean;
 }
 
 /**
@@ -159,12 +176,39 @@ async function authenticateDevice(
   if (decision.status !== 101) {
     return json({ error: decision.status === 403 ? "forbidden_role" : "invalid_token" }, decision.status);
   }
+  // 機体の鍵の証明 (任意、Refs ippoan/alc-cam#2)。あれば同じ introspect で確かめる
+  const machineToken = request.headers.get(MACHINE_TOKEN_HEADER);
+  let machine: IntrospectResult | null | undefined;
+  if (machineToken) {
+    machine = await introspectToken(env.AUTH_WORKER, sharedSecret, machineToken, origin);
+  }
+  const record = decideRecordIdentity(result, machine);
+  if (!record) {
+    return json({ error: "invalid_machine_token" }, 401);
+  }
   return {
     tenantId: decision.tenantId,
     deviceId: decision.deviceId,
     sharedSecret,
     dev: isDevIntrospect(result),
+    record,
+    machineMissing: machineTokenMissing(env.REQUIRE_MACHINE_TOKEN, result.role, record),
   };
+}
+
+/**
+ * DO へ渡す内部リクエストに記録の ID を載せる (Refs ippoan/alc-cam#2)。`setRecorderDev` と同じく
+ * **無いときは必ず消す** — クライアントが同名ヘッダーを付けていても DO には届かない。
+ */
+function setRecorderRecord(fwd: Request, auth: DeviceAuth): void {
+  fwd.headers.set(RECORDER_RECORD_DEVICE_HEADER, auth.record.recordDeviceId);
+  if (auth.record.viaDeviceId !== undefined) {
+    fwd.headers.set(RECORDER_VIA_DEVICE_HEADER, auth.record.viaDeviceId);
+  } else {
+    fwd.headers.delete(RECORDER_VIA_DEVICE_HEADER);
+  }
+  if (auth.machineMissing) fwd.headers.set(RECORDER_MACHINE_MISSING_HEADER, DEV_HEADER_VALUE);
+  else fwd.headers.delete(RECORDER_MACHINE_MISSING_HEADER);
 }
 
 /** WS ハンドシェイク: introspect → role/tenant 判定 → DO routing。 */
@@ -183,6 +227,7 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   fwd.headers.set("X-Recorder-Tenant-Id", auth.tenantId);
   fwd.headers.set("X-Recorder-Device-Id", auth.deviceId);
   setRecorderDev(fwd, auth.dev);
+  setRecorderRecord(fwd, auth);
   return hubStub(env, auth.tenantId).fetch(fwd);
 }
 
@@ -259,6 +304,9 @@ const SERIAL_OTA_TARGETS: ReadonlySet<string> = new Set(["timecard-station", "co
 async function handleMeasurementsPost(request: Request, env: Env, url: URL): Promise<Response> {
   const auth = await authenticateDevice(request, env, url.origin);
   if (auth instanceof Response) return auth;
+  if (auth.machineMissing) {
+    return json({ error: "machine_token_required" }, 403);
+  }
 
   let body: unknown;
   try {
@@ -312,9 +360,10 @@ async function handleMeasurementsPost(request: Request, env: Env, url: URL): Pro
       env.AUTH_WORKER,
       auth.sharedSecret,
       auth.tenantId,
-      auth.deviceId,
+      auth.record.recordDeviceId,
       forwardItems,
       auth.dev,
+      auth.record.viaDeviceId,
     );
     if (!result.ok) {
       // 詳細 (上流 body) は echo しない。端末は同じ batch を再送できる。

@@ -203,6 +203,44 @@ const TOKENS = {
     email: "",
     exp: 9999999999,
   },
+  // 機体の鍵の証明 (用途 hub-record、Refs ippoan/alc-cam#2)。WS の X-Machine-Token に添える。
+  // 接続の主 (hub-token-1) と同じ tenant-1・本番
+  "hub-record-token-1": {
+    active: true,
+    tenant_id: "tenant-1",
+    role: "device-hub-record",
+    sub: "alarm:0123456789abcdef",
+    email: "",
+    exp: 9999999999,
+  },
+  // 別テナントの鍵の証明 (tenant-1 の接続に添えると 401)
+  "hub-record-token-other-tenant": {
+    active: true,
+    tenant_id: "tenant-cmd",
+    role: "device-hub-record",
+    sub: "alarm:fedcba9876543210",
+    email: "",
+    exp: 9999999999,
+  },
+  // dev の鍵の証明 (本番の接続に添えると 401、dev の接続 hub-token-dev には通る)
+  "hub-record-token-dev": {
+    active: true,
+    tenant_id: "tenant-dev",
+    role: "device-hub-record",
+    sub: "alarm:00000000000000aa",
+    email: "",
+    exp: 9999999999,
+    dev_device: true,
+  },
+  // sub が alarm: で始まらない (role は合っていても 401)
+  "hub-record-token-bad-sub": {
+    active: true,
+    tenant_id: "tenant-1",
+    role: "device-hub-record",
+    sub: "device-9",
+    email: "",
+    exp: 9999999999,
+  },
   // 期限切れ / 署名不正 / ACL 不許可テナントは実物では区別なく active:false になる。
   "expired-token": { active: false },
 };

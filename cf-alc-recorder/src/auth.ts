@@ -49,6 +49,15 @@ export const DEVICE_DEV_HEADER = "X-Device-Dev";
 /** worker → DO の内部ヘッダー名 (`X-Recorder-Tenant-Id` と同じく worker が必ず上書きする)。 */
 export const RECORDER_DEV_HEADER = "X-Recorder-Dev";
 
+/** worker → DO: 記録に書く端末の ID (`RecordIdentity.recordDeviceId`)。worker が必ず上書きする。 */
+export const RECORDER_RECORD_DEVICE_HEADER = "X-Recorder-Record-Device-Id";
+
+/** worker → DO: 接続の hub の ID (`RecordIdentity.viaDeviceId`)。無いときは worker が必ず消す。 */
+export const RECORDER_VIA_DEVICE_HEADER = "X-Recorder-Via-Device-Id";
+
+/** worker → DO: 鍵の証明が要るのに無い接続なら `"1"` (`machineTokenMissing`)。無いときは worker が必ず消す。 */
+export const RECORDER_MACHINE_MISSING_HEADER = "X-Recorder-Machine-Missing";
+
 /** WS ハンドシェイクの判定結果。`status === 101` の時だけ DO に routing する。 */
 export interface RecorderAuthDecision {
   /** 101 = accept / 401 = token invalid / 403 = role 不許可 */
@@ -88,6 +97,79 @@ export const RECORDER_DEVICE_ROLES: ReadonlySet<string> = new Set([
   DEVICE_ROLE_GATEWAY,
   DEVICE_ROLE_TIMECARD,
 ]);
+
+/**
+ * CoreS3 が測定の記録を機体の鍵の ID で残すための証明の role (auth-worker の用途 `hub-record`、
+ * Refs ippoan/alc-cam#2)。CoreS3 が自分の鍵 (用途 kiosk) で取り、WS 接続に hub の JWT と並べて
+ * {@link MACHINE_TOKEN_HEADER} で添える。**`RECORDER_DEVICE_ROLES` には入れない** — この JWT 単独では
+ * 接続できない (証明としてだけ読む)。
+ */
+export const DEVICE_ROLE_HUB_RECORD = "device-hub-record";
+
+/** 機体の鍵の証明 (hub-record の JWT) を運ぶヘッダー。接続の主の JWT は従来どおり `Authorization`。 */
+export const MACHINE_TOKEN_HEADER = "X-Machine-Token";
+
+/** 機体の鍵の証明を受け付ける接続 role (いまは CoreS3 = device-hub だけ)。 */
+export const MACHINE_TOKEN_ROLES: ReadonlySet<string> = new Set([DEVICE_ROLE_HUB]);
+
+/** 記録に書く端末の ID。証明が無ければ接続の ID のまま (`viaDeviceId` なし)。 */
+export interface RecordIdentity {
+  /** `hub_measurements.device_id` に書く値 (鍵の証明があれば `alarm:<fingerprint>`)。 */
+  recordDeviceId: string;
+  /** 証明があったときだけ: 接続に使った hub の ID (`hub_measurements.via_device_id`)。 */
+  viaDeviceId?: string;
+}
+
+/**
+ * 記録に書く端末の ID を決める (純粋関数、Refs ippoan/alc-cam#2)。`primary` は
+ * {@link decideRecorderAuth} が 101 を返した introspect の結果。
+ *
+ * - `machine` が `undefined` (ヘッダー無し) か、接続 role が {@link MACHINE_TOKEN_ROLES} に無い → 接続の ID のまま
+ * - `machine` が次を全部満たす → 記録の ID = 鍵の sub、`viaDeviceId` = 接続の sub:
+ *   active / role が {@link DEVICE_ROLE_HUB_RECORD} / sub が `alarm:` で始まる /
+ *   tenant_id が接続と同じ / dev かどうか ({@link isDevIntrospect}) が接続と同じ
+ * - それ以外 (`null` = 読めない を含む) → `null` (呼び出し側が 401 にする。**黙って接続の ID に倒さない** —
+ *   混ざると録画の切り出しが静かに外れる)
+ */
+export function decideRecordIdentity(
+  primary: IntrospectResult,
+  machine: IntrospectResult | null | undefined,
+): RecordIdentity | null {
+  const deviceId = primary.sub ?? "";
+  if (machine === undefined || typeof primary.role !== "string" || !MACHINE_TOKEN_ROLES.has(primary.role)) {
+    return { recordDeviceId: deviceId };
+  }
+  if (
+    !machine ||
+    machine.active !== true ||
+    machine.role !== DEVICE_ROLE_HUB_RECORD ||
+    typeof machine.sub !== "string" ||
+    !machine.sub.startsWith("alarm:") ||
+    machine.tenant_id !== primary.tenant_id ||
+    isDevIntrospect(machine) !== isDevIntrospect(primary)
+  ) {
+    return null;
+  }
+  return { recordDeviceId: machine.sub, viaDeviceId: deviceId };
+}
+
+/**
+ * 鍵の証明の無い記録を受け付けない段か (Refs ippoan/alc-cam#2)。vars `REQUIRE_MACHINE_TOKEN` が
+ * ちょうど `"1"` で、接続 role が {@link MACHINE_TOKEN_ROLES} にあり、証明が無いとき true。
+ * **接続そのものは受ける** (下り command・OTA を生かす) — 測定を ack しないだけ。
+ */
+export function machineTokenMissing(
+  requireFlag: string | undefined,
+  role: string | undefined,
+  identity: RecordIdentity,
+): boolean {
+  return (
+    requireFlag === "1" &&
+    typeof role === "string" &&
+    MACHINE_TOKEN_ROLES.has(role) &&
+    identity.viaDeviceId === undefined
+  );
+}
 
 /**
  * キオスク端末 role。管理画面から self-pair して端末に保存する device credential

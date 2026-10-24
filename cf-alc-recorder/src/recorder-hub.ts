@@ -1,6 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
-import { DEV_HEADER_VALUE, RECORDER_DEV_HEADER, resolveSecret } from "./auth";
+import {
+  DEV_HEADER_VALUE,
+  RECORDER_DEV_HEADER,
+  RECORDER_MACHINE_MISSING_HEADER,
+  RECORDER_RECORD_DEVICE_HEADER,
+  RECORDER_VIA_DEVICE_HEADER,
+  resolveSecret,
+} from "./auth";
 import {
   buildTimecardPunch,
   CRASH_LOG_KIND,
@@ -74,14 +81,38 @@ interface WsAttachment {
    * 値は worker が introspect の結果から立てたもので、接続の間は変わらない。
    */
   dev?: true;
+  /**
+   * 記録に書く端末の ID (機体の鍵の証明があれば `alarm:<fingerprint>`、Refs ippoan/alc-cam#2)。
+   * 無ければ `deviceId` で記録する (この欄より前に張られた接続・購読)。
+   */
+  recordDeviceId?: string;
+  /** 証明があったときだけ: 接続の hub の ID (`hub_measurements.via_device_id`)。 */
+  viaDeviceId?: string;
+  /** 鍵の証明が要る段なのに無い接続なら `true`。測定を ack しない (接続・下りは生かす)。 */
+  machineMissing?: true;
 }
 
-/** attachment を組み立てる (dev は true のときだけ欄を作る)。 */
-function buildAttachment(tenantId: string, deviceId: string | undefined, dev: boolean): WsAttachment {
+/** device 接続だけが持つ記録の欄 (購読は持たない)。 */
+interface RecordFields {
+  recordDeviceId?: string;
+  viaDeviceId?: string;
+  machineMissing?: boolean;
+}
+
+/** attachment を組み立てる (dev・記録の欄は在るときだけ欄を作る)。 */
+function buildAttachment(
+  tenantId: string,
+  deviceId: string | undefined,
+  dev: boolean,
+  record: RecordFields = {},
+): WsAttachment {
   return {
     tenantId,
     ...(deviceId !== undefined ? { deviceId } : {}),
     ...(dev ? { dev: true as const } : {}),
+    ...(record.recordDeviceId !== undefined ? { recordDeviceId: record.recordDeviceId } : {}),
+    ...(record.viaDeviceId !== undefined ? { viaDeviceId: record.viaDeviceId } : {}),
+    ...(record.machineMissing ? { machineMissing: true as const } : {}),
   };
 }
 
@@ -608,7 +639,15 @@ export class RecorderHub extends DurableObject<Env> {
     this.ctx.acceptWebSocket(pair[1], [DEVICE_TAG_PREFIX + deviceId]);
     // identity は attachment に載せ、hibernation 復帰後も deserializeAttachment で読む。
     const dev = request.headers.get(RECORDER_DEV_HEADER) === DEV_HEADER_VALUE;
-    pair[1].serializeAttachment(buildAttachment(tenantId, deviceId, dev));
+    // 記録の ID は接続の ID と違うときだけ持つ (証明の無い接続の attachment は従来の形のまま)
+    const recordDeviceId = request.headers.get(RECORDER_RECORD_DEVICE_HEADER) || undefined;
+    pair[1].serializeAttachment(
+      buildAttachment(tenantId, deviceId, dev, {
+        recordDeviceId: recordDeviceId !== deviceId ? recordDeviceId : undefined,
+        viaDeviceId: request.headers.get(RECORDER_VIA_DEVICE_HEADER) || undefined,
+        machineMissing: request.headers.get(RECORDER_MACHINE_MISSING_HEADER) === DEV_HEADER_VALUE,
+      }),
+    );
     this.send(pair[1], { type: "connected" });
     this.broadcastDevices();
 
@@ -645,6 +684,9 @@ export class RecorderHub extends DurableObject<Env> {
       tenantId: raw.tenantId,
       deviceId: raw.deviceId,
       ...(raw.dev === true ? { dev: true as const } : {}),
+      ...(raw.recordDeviceId ? { recordDeviceId: raw.recordDeviceId } : {}),
+      ...(raw.viaDeviceId ? { viaDeviceId: raw.viaDeviceId } : {}),
+      ...(raw.machineMissing === true ? { machineMissing: true as const } : {}),
     };
 
     switch (msg.type) {
@@ -801,6 +843,12 @@ export class RecorderHub extends DurableObject<Env> {
       return;
     }
 
+    // 鍵の証明が要る段なのに無い接続 (Refs ippoan/alc-cam#2)。ack しないので端末はキューに残して再送する
+    if (attachment.machineMissing === true) {
+      this.send(ws, { type: "error", seq, message: "machine_token_required" });
+      return;
+    }
+
     const sharedSecret = await resolveSecret(this.env.INTERNAL_SHARED_SECRET);
     if (!sharedSecret) {
       this.send(ws, { type: "error", seq, message: "server_error" });
@@ -809,14 +857,16 @@ export class RecorderHub extends DurableObject<Env> {
 
     // tenant_id / device_id / dev は WS attachment (= introspect 済み JWT claims) から注入。
     // **frame の中身で dev を決めない** (Refs ippoan/alc-app#387)。
+    // device_id は記録の ID (機体の鍵の証明があれば鍵の sub)、via_device_id は接続の hub の ID (Refs ippoan/alc-cam#2)
     const dev = attachment.dev === true;
     const result = await forwardMeasurements(
       this.env.AUTH_WORKER,
       sharedSecret,
       attachment.tenantId,
-      attachment.deviceId,
+      attachment.recordDeviceId ?? attachment.deviceId,
       [parsed.item],
       dev,
+      attachment.viaDeviceId,
     );
     if (!result.ok) {
       // 詳細 (body) は response に echo しない。status のみ端末へ返し log に残す。

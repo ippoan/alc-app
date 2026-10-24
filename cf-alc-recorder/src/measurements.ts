@@ -282,7 +282,7 @@ export type ForwardResult = { ok: true } | { ok: false; error: string };
 /**
  * 検証済み measurement を auth-worker `/alc-internal-proxy` 経由で rust-alc-api
  * `POST /api/hub/measurements` へ転送する。tenant_id は X-Tenant-ID ヘッダー、
- * device_id は item に注入する。
+ * device_id (記録の ID) と via_device_id (あれば接続の hub の ID) は item に注入する。
  * 失敗時の詳細 (body) は caller の response に echo しない。log にのみ残す。
  *
  * `dev` が true のときだけ `X-Device-Dev: 1` を付ける (Refs ippoan/alc-app#387)。
@@ -297,9 +297,12 @@ export async function forwardMeasurements(
   deviceId: string,
   items: ParsedMeasurement[],
   dev: boolean,
+  viaDeviceId?: string,
 ): Promise<ForwardResult> {
+  // via_device_id (接続の hub の ID) は機体の鍵の証明があったときだけ載せる (Refs ippoan/alc-cam#2)
   const body = items.map((item) => ({
     device_id: deviceId,
+    ...(viaDeviceId !== undefined ? { via_device_id: viaDeviceId } : {}),
     kind: item.kind,
     seq: item.seq,
     recorded_at_ms: item.recorded_at_ms,
