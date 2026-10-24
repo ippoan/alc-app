@@ -90,7 +90,8 @@ export interface CamClipsEvent {
   /** `measurements` = PC・測定台のアルコール、`measurements_bp` = 同じ行の血圧 (同じ source_id が 2 イベントになりうる) */
   source_table: 'hub_measurements' | 'vein_enroll_events' | 'measurements' | 'measurements_bp'
   source_id: string
-  kind: 'alcohol' | 'blood_pressure' | 'timecard' | 'license' | 'vein_enroll'
+  /** `test` = MCP で機体に作らせた開発用の試験記録 (いつも is_dev = true) */
+  kind: 'alcohol' | 'blood_pressure' | 'timecard' | 'license' | 'vein_enroll' | 'test'
   /** `+09:00` 付き */
   occurred_at: string
   device_id: string
@@ -347,6 +348,8 @@ export function summarizeCounts(c: CamClipsDeviceCounts): string {
 
 /** イベントの種類の表示名。知らない種類はそのまま */
 export function eventKindLabel(kind: string): string {
+  // 試験記録は候補の件数 (KIND_LABELS) には数えないので、表示名だけここで持つ
+  if (kind === 'test') return '試験'
   return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind as keyof CamClipsDeviceCounts] : kind
 }
 

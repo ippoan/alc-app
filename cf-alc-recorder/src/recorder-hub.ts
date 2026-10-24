@@ -15,6 +15,7 @@ import {
   notifyCrashByEmail,
   parseMeasurementItem,
   storeCrashLog,
+  TEST_KIND,
   TIMECARD_KIND,
   type TimecardPunchInput,
 } from "./measurements";
@@ -856,9 +857,11 @@ export class RecorderHub extends DurableObject<Env> {
     }
 
     // tenant_id / device_id / dev は WS attachment (= introspect 済み JWT claims) から注入。
-    // **frame の中身で dev を決めない** (Refs ippoan/alc-app#387)。
+    // **frame の中身で dev を決めない** (Refs ippoan/alc-app#387)。例外は試験記録 (kind = test) だけで、
+    // これは接続に関わらず開発の軸へ倒す。frame で動かせるのは本番 → 開発の向きだけで、
+    // 開発の記録を本番に入れる向きは今どおり introspect だけで決まる。
     // device_id は記録の ID (機体の鍵の証明があれば鍵の sub)、via_device_id は接続の hub の ID (Refs ippoan/alc-cam#2)
-    const dev = attachment.dev === true;
+    const dev = attachment.dev === true || parsed.item.kind === TEST_KIND;
     const result = await forwardMeasurements(
       this.env.AUTH_WORKER,
       sharedSecret,
