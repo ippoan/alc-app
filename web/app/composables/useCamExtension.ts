@@ -1,7 +1,7 @@
 /**
- * この端末のカメラ配信の拡張 (ippoan/alc-cam) の状態を読み、操作する (メンテナンス画面の「カメラ配信 (拡張)」)。
+ * この端末のカメラ配信の拡張 (ippoan/alc-cam) の状態を読み、操作する (点呼画面の「カメラ配信」の 1 行 = CamExtensionStatus)。
  *
- * 拠点 PC では点呼の画面を PWA で開いているので拡張のサイドパネルが見えない。代わりに同じ origin から
+ * 拠点 PC では点呼の画面を PWA で開いているので拡張のサイドパネルが見えない (メンテナンスは端末の鍵では入れない)。代わりに同じ origin から
  * `{ type: 'cam_status' }` を `POLL_MS` ごとに送って状態を出し、`{ type: 'cam_control', action }` で
  * 停止/開始・更新確認・担当カメラの取り直しをする。形は alc-cam の `docs/extension-messages.md`。
  *
@@ -68,6 +68,16 @@ export function viewersLabel(st: CamExtensionStatus): CamLabel {
   const other = [...new Set(vs.filter(v => !v.ok).map(v => v.message))]
   const text = [ok ? `接続 (P2P) ${ok} 人` : '', ...other].filter(Boolean).join(' / ')
   return [`${vs.length} 人: ${text}`, ok === vs.length ? 'ok' : '']
+}
+
+/** 点呼画面の 1 行: 「配信中・担当カメラ・見る人 N」。止まっている・繋がらないときは warn */
+export function summaryLabel(st: CamExtensionStatus): CamLabel {
+  if (!st.enabled) return ['停止中', 'warn']
+  if (!st.assigned) return [st.config[0], 'warn']
+  if (st.signal[1] !== 'ok') return [`${st.assigned.name}・${st.signal[0]}`, 'warn']
+  // host が落ちた・カメラ (RTSP) に繋がらない
+  const tone = st.host[1] === 'warn' || st.camera[1] === 'warn' ? 'warn' : 'ok'
+  return [`配信中・${st.assigned.name}・見る人 ${st.viewers.length}`, tone]
 }
 
 /** 最後の更新確認の表示 */
