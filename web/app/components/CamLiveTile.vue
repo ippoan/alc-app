@@ -5,6 +5,8 @@
  * 切断は「切る」ボタン・unmount・`autoConnect` が false に戻ったとき。
  * カメラ (alc-cam の host) が首振りのデータチャネル `ptz` を出していれば、映像の上に方向ボタン
  * (押している間動く・離したら止まる) とプリセットを出す (`useCamPtz`)。出さない host ではボタンも出ない。
+ * 音声 (alc-cam の host 0.4.4〜): カメラのマイクの音は既定でミュート、ボタンで鳴らす。「押して話す」は押している間だけ
+ * 自分のマイクの声をカメラのスピーカーへ送る (`useCamTalk`)。音声を出さない host ではどちらのボタンも出ない。
  */
 import type { PtzDir } from '~/composables/useCamPtz'
 
@@ -27,6 +29,10 @@ const config = useRuntimeConfig()
 const { accessToken } = useAuth()
 const webRtc = useWebRtc('admin')
 const ptz = useCamPtz(webRtc.ptzChannel)
+const talk = useCamTalk(webRtc.ptzChannel, webRtc.camAudioSender)
+
+/** カメラの音を鳴らす (既定はミュート。自動再生の制限もあるのでボタンで解除する) */
+const soundOn = ref(false)
 
 /** 方向ボタンの並び (3x3、真ん中はホーム) */
 const PTZ_PAD: Array<PtzDir | 'home' | null> = [null, 'up', null, 'left', 'home', 'right', null, 'down', null]
@@ -44,6 +50,14 @@ function onPtzPress(e: PointerEvent, cell: PtzDir | 'home') {
   ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   ptz.move(cell)
 }
+
+/** 押して話す: 首振りと同じく、指がずれても離すまで追う */
+function onTalkPress(e: PointerEvent) {
+  ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+  talk.press()
+}
+
+const talkLabel = computed(() => talk.talking.value ? '話しています' : talk.holding.value ? '接続中...' : '押して話す')
 
 const isActive = ref(false)
 const isConnecting = ref(false)
@@ -175,7 +189,7 @@ onUnmounted(() => {
         ref="videoRef"
         autoplay
         playsinline
-        muted
+        :muted="!soundOn"
         class="w-full max-h-[70vh] object-contain mx-auto"
       />
       <div
@@ -236,12 +250,54 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-      <div
-        v-if="ptz.message.value"
-        class="absolute bottom-2 right-2 max-w-[60%] rounded bg-black/60 px-2 py-1 text-xs text-white"
-        data-testid="cam-tile-ptz-message"
-      >
-        {{ ptz.message.value }}
+      <div class="absolute bottom-2 right-2 max-w-[60%] flex flex-col items-end gap-1">
+        <div
+          v-if="ptz.message.value"
+          class="rounded bg-black/60 px-2 py-1 text-xs text-white"
+          data-testid="cam-tile-ptz-message"
+        >
+          {{ ptz.message.value }}
+        </div>
+        <div
+          v-if="talk.message.value"
+          class="rounded bg-black/60 px-2 py-1 text-xs text-white"
+          data-testid="cam-tile-talk-message"
+        >
+          {{ talk.message.value }}
+        </div>
+        <div
+          v-if="talk.othersTalking.value"
+          class="rounded bg-black/60 px-2 py-1 text-xs text-white"
+          data-testid="cam-tile-talk-others"
+        >
+          他の人が話しています
+        </div>
+        <div v-if="webRtc.camAudioSender.value && webRtc.remoteStream.value" class="flex gap-1 select-none touch-none">
+          <button
+            class="h-9 px-2 rounded-lg text-white text-xs"
+            :class="soundOn ? 'bg-blue-600/80' : 'bg-black/40 hover:bg-black/60'"
+            :title="soundOn ? 'カメラの音を消す' : 'カメラの音を聞く'"
+            :aria-pressed="soundOn"
+            data-testid="cam-tile-sound"
+            @click="soundOn = !soundOn"
+          >
+            {{ soundOn ? '🔊 音あり' : '🔇 音なし' }}
+          </button>
+          <button
+            v-if="talk.canTalk.value"
+            class="h-9 px-3 rounded-lg text-white text-xs"
+            :class="talk.talking.value ? 'bg-red-600/90' : talk.holding.value ? 'bg-red-400/80' : 'bg-black/40 hover:bg-black/60'"
+            title="押している間、カメラのスピーカーから自分の声が出ます"
+            data-testid="cam-tile-talk"
+            @pointerdown.prevent="onTalkPress"
+            @pointerup="talk.release()"
+            @pointercancel="talk.release()"
+            @lostpointercapture="talk.release()"
+            @contextmenu.prevent
+          >
+            🎙 {{ talkLabel }}
+          </button>
+        </div>
       </div>
       <button
         class="absolute top-2 right-2 p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"

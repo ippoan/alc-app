@@ -23,6 +23,7 @@ mockNuxtImport('useWebRtc', () => () => {
     remoteStream: ref<unknown>(null),
     error: ref<string | null>(null),
     ptzChannel: ref<unknown>(null),
+    camAudioSender: ref<unknown>(null),
     connect: vi.fn(async () => { inst.isConnected.value = true }),
     disconnect: vi.fn(),
   }
@@ -255,6 +256,85 @@ describe('CamLiveTile の首振り (データチャネル ptz)', () => {
     ch.emit({ type: 'ptz', event: 'result', action: 'move', ok: false, message: 'カメラの認証に失敗しました' })
     await nextTick()
     expect(w.find(t('ptz-message')).text()).toBe('カメラの認証に失敗しました')
+  })
+})
+
+describe('CamLiveTile の音声 (カメラのマイクとスピーカー)', () => {
+  class FakeChannel {
+    readyState = 'open'
+    send = vi.fn()
+    listeners: Record<string, Array<(ev: any) => void>> = {}
+    addEventListener(type: string, fn: (ev: any) => void) { (this.listeners[type] ??= []).push(fn) }
+    removeEventListener(type: string, fn: (ev: any) => void) { this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn) }
+    emit(data: unknown) { for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(data) }) }
+    sent() { return this.send.mock.calls.map(c => JSON.parse(c[0])) }
+  }
+  const gum = vi.fn()
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: gum } })
+
+  async function mountWithAudio(sender: unknown = { replaceTrack: vi.fn().mockResolvedValue(undefined) }) {
+    const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+    await flushPromises()
+    const inst = rtc.instances[0]!
+    inst.remoteStream.value = new MediaStream()
+    inst.camAudioSender.value = sender
+    const ch = new FakeChannel()
+    inst.ptzChannel.value = ch
+    await nextTick()
+    return { w, ch }
+  }
+
+  it('音声の無い host ではどちらのボタンも出さない', async () => {
+    const { w, ch } = await mountWithAudio(null)
+    ch.emit({ type: 'talk', event: 'caps', speak: true })
+    await nextTick()
+    expect(w.find(t('sound')).exists()).toBe(false)
+    expect(w.find(t('talk')).exists()).toBe(false)
+  })
+
+  it('カメラの音は既定でミュート、ボタンで鳴らす・消す', async () => {
+    const { w } = await mountWithAudio()
+    const video = () => w.find('video').element as HTMLVideoElement
+    expect(video().muted).toBe(true)
+    expect(w.find(t('sound')).text()).toContain('音なし')
+    expect(w.find(t('talk')).exists()).toBe(false) // caps が来るまで出さない
+    await w.find(t('sound')).trigger('click')
+    expect(video().muted).toBe(false)
+    expect(w.find(t('sound')).attributes('aria-pressed')).toBe('true')
+    expect(w.find(t('sound')).text()).toContain('音あり')
+    await w.find(t('sound')).trigger('click')
+    expect(video().muted).toBe(true)
+  })
+
+  it('押して話す: 押している間だけ start、離したら stop。話している・他の人・失敗の表示', async () => {
+    const { w, ch } = await mountWithAudio()
+    ch.emit({ type: 'talk', event: 'caps', speak: true })
+    await nextTick()
+    const btn = () => w.find(t('talk'))
+    expect(btn().text()).toContain('押して話す')
+    const track = { stop: vi.fn() }
+    gum.mockResolvedValue({ getTracks: () => [track], getAudioTracks: () => [track] })
+    await btn().trigger('pointerdown')
+    expect(btn().text()).toContain('接続中...')
+    await flushPromises()
+    ch.emit({ type: 'talk', event: 'state', talking: true, mine: true })
+    await nextTick()
+    expect(btn().text()).toContain('話しています')
+    await btn().trigger('pointerup')
+    expect(ch.sent()).toEqual([{ type: 'talk', action: 'start' }, { type: 'talk', action: 'stop' }])
+
+    ch.emit({ type: 'talk', event: 'state', talking: true, mine: false })
+    await nextTick()
+    expect(w.find(t('talk-others')).text()).toBe('他の人が話しています')
+    ch.emit({ type: 'talk', event: 'result', ok: false, message: '他の人がカメラで通話中です' })
+    await nextTick()
+    expect(w.find(t('talk-message')).text()).toBe('他の人がカメラで通話中です')
+    for (const ev of ['pointercancel', 'lostpointercapture']) {
+      await btn().trigger('pointerdown')
+      await flushPromises()
+      await btn().trigger(ev)
+    }
+    expect(ch.sent().filter(m => m.action === 'stop')).toHaveLength(3)
   })
 })
 

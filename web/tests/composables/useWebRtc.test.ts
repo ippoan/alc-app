@@ -73,6 +73,7 @@ class MockRTCPeerConnection {
   addIceCandidate = vi.fn().mockResolvedValue(undefined)
   addTrack = vi.fn()
   getSenders = vi.fn().mockReturnValue([])
+  getTransceivers = vi.fn().mockReturnValue([])
   getStats = vi.fn().mockResolvedValue(new Map())
   close = vi.fn()
 
@@ -549,6 +550,48 @@ describe('useWebRtc', () => {
     pc.ondatachannel({ channel: ch })
     rtc.disconnect()
     expect(rtc.ptzChannel.value).toBeNull()
+  })
+
+  it('cam-room の offer に音声があれば sendrecv で答えて camAudioSender に出す。peer_left・failed・disconnect で null に戻る', async () => {
+    const rtc = useWebRtc('admin')
+    expect(rtc.camAudioSender.value).toBeNull()
+    await rtc.connect('wss://sig.example.com', 'cam-1', 'cam-room')
+    const ws = getWs()
+    const pc = getPc() as any
+    const sender = { replaceTrack: vi.fn() }
+    const audio = { receiver: { track: { kind: 'audio' } }, direction: 'recvonly', sender }
+    const offer = async () => {
+      pc.getTransceivers.mockReturnValue([{ receiver: { track: { kind: 'video' } }, direction: 'recvonly', sender: {} }, audio])
+      ws.onmessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'offer' }) } as any)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    await offer()
+    expect(audio.direction).toBe('sendrecv')
+    // answer を作る前に向きを変えている
+    expect(pc.getTransceivers.mock.invocationCallOrder[0]).toBeLessThan(pc.createAnswer.mock.invocationCallOrder[0])
+    expect(rtc.camAudioSender.value).toBe(sender)
+    ws.onmessage?.({ data: JSON.stringify({ type: 'peer_left' }) } as any)
+    expect(rtc.camAudioSender.value).toBeNull()
+
+    await offer()
+    pc.connectionState = 'failed'
+    pc.onconnectionstatechange?.()
+    expect(rtc.camAudioSender.value).toBeNull()
+
+    await offer()
+    rtc.disconnect()
+    expect(rtc.camAudioSender.value).toBeNull()
+  })
+
+  it('/room (遠隔点呼) の offer では音声の向きを変えない', async () => {
+    const rtc = useWebRtc('admin')
+    await rtc.connect('wss://sig.example.com', 'room-1')
+    const ws = getWs()
+    const pc = getPc() as any
+    ws.onmessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'offer' }) } as any)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(pc.getTransceivers).not.toHaveBeenCalled()
+    expect(rtc.camAudioSender.value).toBeNull()
   })
 
   it('peer_joined (role=device, device_id 無し) → peerDeviceId は null。role=admin の peer_joined では変わらない', async () => {

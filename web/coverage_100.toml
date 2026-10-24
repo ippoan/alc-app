@@ -139,6 +139,10 @@ path = "app/composables/useCamPtz.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useCamTalk.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useSerialArbiter.ts"
 branches = true
 
