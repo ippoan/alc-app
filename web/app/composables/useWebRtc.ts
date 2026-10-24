@@ -50,6 +50,12 @@ export function useWebRtc(role: 'device' | 'admin') {
    * 古い host・他の device は出さないので null のまま。読む側は `useCamPtz`
    */
   const ptzChannel = shallowRef<RTCDataChannel | null>(null)
+  /**
+   * 拠点カメラ (alc-cam の host 0.4.4〜) が offer に入れてくる音声 (カメラのマイクとスピーカー) の送り口。
+   * cam-room のときだけ answer を sendrecv にして埋める (送るトラックは押して話す間だけ `replaceTrack` で付ける)。
+   * 音声を出さない古い host では null のまま。読む側は `useCamTalk`
+   */
+  const camAudioSender = shallowRef<RTCRtpSender | null>(null)
 
   let ws: WebSocket | null = null
   let pc: RTCPeerConnection | null = null
@@ -63,6 +69,8 @@ export function useWebRtc(role: 'device' | 'admin') {
   // そのため admin 側は answer を即送信せず、ICE gathering 完了を待って全候補を
   // answer SDP 本体に埋め込んでから送る必要がある (path='cam-room' の時のみ)。
   let waitForGatheringBeforeAnswer = false
+  // cam-room (拠点カメラ) に繋いでいる。音声を送受信で答えるのはこのときだけ
+  let camRoom = false
   const ICE_GATHERING_TIMEOUT_MS = 5000
 
   const rtcConfig: RTCConfiguration = {
@@ -157,6 +165,7 @@ export function useWebRtc(role: 'device' | 'admin') {
         isPeerConnected.value = false
         remoteStream.value = null
         ptzChannel.value = null
+        camAudioSender.value = null
         stopStatsLogging()
       }
     }
@@ -196,6 +205,14 @@ export function useWebRtc(role: 'device' | 'admin') {
     log('handleOffer: sdp received, length=', sdp.length)
     if (!pc) createPeerConnection()
     await pc!.setRemoteDescription({ type: 'offer', sdp })
+    if (camRoom) {
+      // カメラの音を受け、押して話す間だけ声を送る (sendrecv で答えておけば付け外しに再ネゴシエーションは要らない)
+      const audio = pc!.getTransceivers().find(t => t.receiver.track.kind === 'audio')
+      if (audio) {
+        audio.direction = 'sendrecv'
+        camAudioSender.value = audio.sender
+      }
+    }
     const answer = await pc!.createAnswer()
     await pc!.setLocalDescription(answer)
     log('handleOffer: answer created, length=', answer.sdp?.length)
@@ -259,6 +276,7 @@ export function useWebRtc(role: 'device' | 'admin') {
         remoteStream.value = null
         peerDeviceId.value = null
         ptzChannel.value = null
+        camAudioSender.value = null
         break
       case 'error':
         log('server error:', data.message)
@@ -319,7 +337,8 @@ export function useWebRtc(role: 'device' | 'admin') {
 
     disconnect()
 
-    waitForGatheringBeforeAnswer = path === 'cam-room'
+    camRoom = path === 'cam-room'
+    waitForGatheringBeforeAnswer = camRoom
     createPeerConnection()
 
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
@@ -413,6 +432,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     remoteStream.value = null
     peerDeviceId.value = null
     ptzChannel.value = null
+    camAudioSender.value = null
   }
 
   onUnmounted(() => disconnect())
@@ -426,6 +446,7 @@ export function useWebRtc(role: 'device' | 'admin') {
     peerDeviceId: readonly(peerDeviceId),
     // readonly() は中身まで Proxy にして RTCDataChannel の send が呼べなくなるので computed で読み取り専用にする
     ptzChannel: computed(() => ptzChannel.value),
+    camAudioSender: computed(() => camAudioSender.value),
     connect,
     startStreaming,
     sendEndShare,
