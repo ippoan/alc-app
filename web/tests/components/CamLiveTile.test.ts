@@ -427,6 +427,45 @@ describe('CamLiveGrid', () => {
     w.unmount()
     expect(rtc.instances.every(i => i.disconnect.mock.calls.length > 0)).toBe(true)
   })
+  it('一斉に更新を確認: 対応している拠点 PC の数を出し、押すとそれぞれに確認を頼む (古い・切れたものは対象外)', async () => {
+    class Ch {
+      readyState = 'open'
+      send = vi.fn()
+      listeners: Record<string, Array<(ev: any) => void>> = {}
+      addEventListener(type: string, fn: (ev: any) => void) { (this.listeners[type] ??= []).push(fn) }
+      removeEventListener(type: string, fn: (ev: any) => void) { this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn) }
+      emit(data: unknown) { for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(data) }) }
+    }
+    const w = await mountSuspended(CamLiveGrid)
+    await flushPromises()
+    const btn = () => w.find('[data-testid="cam-grid-update-all"]')
+    expect(btn().text()).toBe('一斉に更新を確認 (0 台)')
+    expect(btn().attributes('disabled')).toBeDefined()
+    const [a, b] = [new Ch(), new Ch()]
+    rtc.instances[0]!.ptzChannel.value = a
+    rtc.instances[1]!.ptzChannel.value = b
+    await nextTick()
+    a.emit({ type: 'update', event: 'caps', host: '0.4.5', extension: '0.4.5' }) // 正門だけ 0.4.5
+    await nextTick()
+    expect(btn().text()).toBe('一斉に更新を確認 (1 台)')
+    await btn().trigger('click')
+    expect(a.send).toHaveBeenCalledWith(JSON.stringify({ type: 'update', action: 'check' }))
+    expect(b.send).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="cam-grid-update-note"]').text()).toBe('1 台の拠点 PC に更新の確認を頼みました。結果は各カメラに出ます (繋がっていない・古い 1 台は対象外)')
+
+    // 両方対応・片方の確認中は重ねない
+    b.emit({ type: 'update', event: 'caps', host: '0.4.5', extension: null })
+    await nextTick()
+    await btn().trigger('click')
+    expect(a.send).toHaveBeenCalledTimes(1)
+    expect(b.send).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="cam-grid-update-note"]').text()).toBe('2 台の拠点 PC に更新の確認を頼みました。結果は各カメラに出ます')
+    // 切れたら数から外す
+    a.listeners.close?.forEach(fn => fn({}))
+    await nextTick()
+    expect(btn().text()).toBe('一斉に更新を確認 (1 台)')
+  })
+
   it('0 件・失敗の文言', async () => {
     api.listCamClipsCameras.mockResolvedValueOnce({ can_edit_destination: false, cameras: [] })
     let w = await mountSuspended(CamLiveGrid)
