@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, isCamHostKeyId, moveStreamDevice, streamPrimary, rtspLabel, rtspPortError, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
+  allDeviceIds, DEFAULT_RTSP_PORT, EMPTY_FORM, eventSourceLabel, pendingDeviceIds, isCamHostKeyId, moveStreamDevice, streamPrimary, rtspLabel, rtspPortError, errorText, eventKindLabel, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
@@ -206,28 +206,34 @@ describe('候補の表示', () => {
     expect(eventKindLabel('toString')).toBe('toString')
     expect(eventKindLabel('future_kind')).toBe('future_kind')
   })
-  it('device_id が一致するときだけ表示名 (label が無ければ「名前未登録の端末」。ID は付けない)', () => {
-    const known = [{ device_id: 'd1', label: '事務所' }, { device_id: 'd2', label: null }]
-    expect(deviceDisplayName('d1', known)).toBe('事務所')
-    expect(deviceDisplayName('d2', known)).toBe(UNNAMED_DEVICE)
-    expect(deviceDisplayName('d9', known)).toBe('名前未登録の端末')
+  it('出どころ (source_table) の表示名。測定台のアルコール・血圧は表から決まる', () => {
+    expect(eventSourceLabel({ source_table: 'measurements', kind: 'alcohol' })).toBe('アルコール')
+    expect(eventSourceLabel({ source_table: 'measurements_bp', kind: 'blood_pressure' })).toBe('血圧')
+    expect(eventSourceLabel({ source_table: 'hub_measurements', kind: 'timecard' })).toBe('打刻')
+    expect(eventSourceLabel({ source_table: 'vein_enroll_events', kind: 'vein_enroll' })).toBe('指静脈登録')
   })
+})
 
-  it('失効済みの鍵は名前の後ろに「 (失効)」。revoked が無い・false は付けない', () => {
-    const known = [{ device_id: 'alarm:a', label: '旧機', revoked: true }, { device_id: 'alarm:b', label: '現役', revoked: false }, { device_id: 'alarm:c', label: '無印' }]
-    expect(deviceDisplayName('alarm:a', known)).toBe('旧機 (失効)')
-    expect(deviceDisplayName('alarm:b', known)).toBe('現役')
-    expect(deviceDisplayName('alarm:c', known)).toBe('無印')
+describe('置き換え待ちの結び付き', () => {
+  it('pending_device_ids が無い (古い応答) は空', () => {
+    expect(pendingDeviceIds(CAM)).toEqual([])
+    expect(pendingDeviceIds({ pending_device_ids: ['hub-1'] })).toEqual(['hub-1'])
   })
-
-  it('browser は鍵ではない固定 ID。鍵の有無に関わらず固定の名前', () => {
-    expect(deviceDisplayName('browser', [])).toBe('ブラウザ (ログイン利用者の打刻)')
-    expect(deviceDisplayName('browser', [{ device_id: 'browser', label: '別名' }])).toBe('ブラウザ (ログイン利用者の打刻)')
+  it('全部の結び付き = device_ids + 置き換え待ち (重複なし)。device_ids の外で返っても落とさない', () => {
+    expect(allDeviceIds({ device_ids: ['alarm:a', 'hub-1'], pending_device_ids: ['hub-1'] })).toEqual(['alarm:a', 'hub-1'])
+    expect(allDeviceIds({ device_ids: ['alarm:a'], pending_device_ids: ['hub-1'] })).toEqual(['alarm:a', 'hub-1'])
+    expect(allDeviceIds({ device_ids: ['alarm:a'] })).toEqual(['alarm:a'])
   })
-
-  it('alarm: と alarm- の違いを吸収して別用途の鍵の名前が出る。label 無しの行は飛ばして次の名前を使う', () => {
-    const fp = '0666000000000000'
-    expect(deviceDisplayName(`alarm-${fp}`, [{ device_id: `alarm:${fp}`, label: null }, { device_id: `alarm:${fp}`, label: 'VoiceS3R' }])).toBe('VoiceS3R')
+  it('フォームは置き換え待ちも持ち、触らずに保存すると device_ids は送らない (黙って消えない)', () => {
+    const cam = { ...CAM, device_ids: ['alarm:a', 'hub-1'], pending_device_ids: ['hub-1'] }
+    const form = formFromCamera(cam)
+    expect(form.device_ids).toEqual(['alarm:a', 'hub-1'])
+    expect(buildPatchBody(cam, form, false)).toEqual({})
+  })
+  it('置き換え待ちを外すと device_ids を送る (外したものだけ消える)。鍵を足しても置き換え待ちは残る', () => {
+    const cam = { ...CAM, device_ids: ['alarm:a', 'hub-1'], pending_device_ids: ['hub-1'] }
+    expect(buildPatchBody(cam, { ...formFromCamera(cam), device_ids: ['alarm:a'] }, false)).toEqual({ device_ids: ['alarm:a'] })
+    expect(buildPatchBody(cam, { ...formFromCamera(cam), device_ids: ['alarm:a', 'hub-1', 'alarm:b'] }, false)).toEqual({ device_ids: ['alarm:a', 'hub-1', 'alarm:b'] })
   })
 })
 

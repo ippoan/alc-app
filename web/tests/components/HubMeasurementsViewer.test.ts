@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import HubMeasurementsViewer from '~/components/HubMeasurementsViewer.vue'
+import { resetDeviceNames } from '~/composables/useDeviceNames'
 
 // 点呼タブ (システム管理者「点呼」) から測定詳細を開く (Refs #238, ippoan/alc-app-s3#135)。
 // hub_measurements には PC 側の measurements への直接のキーが無いので、
@@ -11,6 +12,8 @@ const getEmployeesMock = vi.fn(async () => [] as any[])
 const getMeasurementsMock = vi.fn(async () => ({ measurements: [] as any[], total: 0, page: 1, per_page: 20 }))
 const fetchFacePhotoMock = vi.fn(async () => null as string | null)
 const fetchMeasurementVideoMock = vi.fn(async () => null as string | null)
+const listCamHostKeysMock = vi.fn(async () => ({ keys: [] as any[], names: [] as any[] }))
+const listDeviceLabelsMock = vi.fn(async () => ({ devices: [] as any[] }))
 
 vi.mock('~/utils/api', () => ({
   listHubMeasurements: (...args: any[]) => listHubMeasurementsMock(...args),
@@ -18,6 +21,8 @@ vi.mock('~/utils/api', () => ({
   getMeasurements: (...args: any[]) => getMeasurementsMock(...args),
   fetchFacePhoto: (...args: any[]) => fetchFacePhotoMock(...args),
   fetchMeasurementVideo: (...args: any[]) => fetchMeasurementVideoMock(...args),
+  listCamHostKeys: () => listCamHostKeysMock(),
+  listDeviceLabels: () => listDeviceLabelsMock(),
 }))
 
 /** onMounted の await 群を流し切る */
@@ -147,6 +152,65 @@ describe('HubMeasurementsViewer — 点呼タブから測定詳細を開く', ()
     await wrapper.vm.$nextTick()
 
     expect(rows[0]!.text()).toContain('測定を取得できませんでした')
+    wrapper.unmount()
+  })
+})
+
+describe('HubMeasurementsViewer — 端末は名前 (ID はツールチップ)', () => {
+  const NAMES = [
+    { device_id: 'alarm:fp-1', label: '事務所の機体', revoked: false },
+    { device_id: 'alarm:old', label: '旧機', revoked: true },
+    { device_id: 'alarm:nolabel', label: null, revoked: false },
+  ]
+
+  beforeEach(() => {
+    resetDeviceNames()
+    listHubMeasurementsMock.mockClear()
+    getEmployeesMock.mockResolvedValue([])
+    listCamHostKeysMock.mockResolvedValue({ keys: [], names: NAMES })
+    listDeviceLabelsMock.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '旧ハブ' }] })
+  })
+
+  it('★ 「端末」列は machine_id (鍵に畳んだ ID) から引いた名前。ID は title。machine_id が無い古い応答は device_id から引く', async () => {
+    listHubMeasurementsMock.mockResolvedValue({
+      items: [
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'a', session_id: 'sa', device_id: 'cores3-a', via_device_id: 'cores3-a', machine_id: 'alarm:fp-1' },
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'b', session_id: 'sb', device_id: 'dev-1' },
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'c', session_id: 'sc', device_id: 'dev-9', machine_id: null },
+      ],
+      limit: 50, offset: 0, has_more: false,
+    })
+    const wrapper = await mountViewer()
+    const cells = wrapper.findAll('[data-testid="hub-device"]')
+    expect(cells.map(c => c.text())).toEqual(['事務所の機体', '旧ハブ (鍵の ID 未登録)', '名前未登録の端末'])
+    expect(cells.map(c => c.attributes('title'))).toEqual(['alarm:fp-1', 'dev-1', 'dev-9'])
+    wrapper.unmount()
+  })
+
+  it('★ 絞り込みは名前の選択肢 (中身は鍵の ID)。選んで検索すると鍵の ID で絞る。名前が無い鍵・鍵でない ID は選択肢に出ない', async () => {
+    listHubMeasurementsMock.mockResolvedValue({ items: [], limit: 50, offset: 0, has_more: false })
+    const wrapper = await mountViewer()
+    const select = wrapper.find('[data-testid="hub-device-filter"]')
+    expect(select.findAll('option').map(o => [o.attributes('value'), o.text()])).toEqual([
+      ['', 'すべて'], ['alarm:fp-1', '事務所の機体'], ['alarm:old', '旧機 (失効)'],
+    ])
+    await select.setValue('alarm:fp-1')
+    await wrapper.findAll('button').find(b => b.text() === '検索')!.trigger('click')
+    await flush()
+    expect(listHubMeasurementsMock).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: 'alarm:fp-1' }))
+    await wrapper.findAll('button').find(b => b.text() === '条件クリア')!.trigger('click')
+    await flush()
+    expect(listHubMeasurementsMock).toHaveBeenLastCalledWith(expect.objectContaining({ device_id: undefined }))
+    wrapper.unmount()
+  })
+
+  it('名前の表が取れなくても一覧は出る (選択肢は「すべて」だけ・名前は名前未登録の端末)', async () => {
+    listCamHostKeysMock.mockRejectedValue(new Error('403'))
+    listDeviceLabelsMock.mockRejectedValue(new Error('403'))
+    listHubMeasurementsMock.mockResolvedValue({ items: [{ ...ROW_WITHOUT_EMPLOYEE, machine_id: 'alarm:fp-1' }], limit: 50, offset: 0, has_more: false })
+    const wrapper = await mountViewer()
+    expect(wrapper.find('[data-testid="hub-device-filter"]').findAll('option')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="hub-device"]').text()).toBe('名前未登録の端末')
     wrapper.unmount()
   })
 })

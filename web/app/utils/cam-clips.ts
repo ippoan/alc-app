@@ -1,4 +1,3 @@
-import { sameVeinDevice } from '~/utils/vein-device-label'
 
 /**
  * 管理者の画面のタブ「拠点カメラの録画」(Refs ippoan/alc-cam#2) の整形と入力の組み立て。
@@ -17,7 +16,13 @@ export interface CamClipsCamera {
   lan_ip: string | null
   rtsp_port: number
   rtsp_path: string | null
+  /** 結び付けた端末。機体の鍵 (`alarm:<fp>`) に畳んだ ID で、`pending_device_ids` の hub の ID も含む */
   device_ids: string[]
+  /**
+   * `device_ids` のうち機体の鍵に結び付いていない hub の ID (= 鍵への置き換え待ち)。
+   * ingest が返さない間 (古い応答) は無い = 空扱い
+   */
+  pending_device_ids?: string[]
   /**
    * 配信担当の端末 (機体の鍵の device_id)。並び = 順位で、先頭が 1 位 (主)。1 位が配信し、居なければ次が引き継ぐ。
    * 空なら `device_ids` の全員が 1 位 (先着が配信)。ingest が返さない間は無い = 空扱い
@@ -53,14 +58,6 @@ export interface CamHostKey {
   label: string | null
 }
 
-/** 名前付け用の鍵 (全用途・失効済みを含む。`GET /api/cam-host-keys` の `names`) */
-export interface KnownDeviceName {
-  device_id: string
-  label: string | null
-  /** 失効済みの鍵 (無ければ false) */
-  revoked?: boolean
-}
-
 export interface CamClipsDeviceCandidate {
   device_id: string
   counts: CamClipsDeviceCounts
@@ -90,7 +87,8 @@ export interface CamClipsEventClip {
 
 /** `GET /events?camera_id=&date=` の 1 件 (応答は配列そのもの・時刻順) */
 export interface CamClipsEvent {
-  source_table: 'hub_measurements' | 'vein_enroll_events'
+  /** `measurements` = PC・測定台のアルコール、`measurements_bp` = 同じ行の血圧 (同じ source_id が 2 イベントになりうる) */
+  source_table: 'hub_measurements' | 'vein_enroll_events' | 'measurements' | 'measurements_bp'
   source_id: string
   kind: 'alcohol' | 'blood_pressure' | 'timecard' | 'license' | 'vein_enroll'
   /** `+09:00` 付き */
@@ -270,7 +268,7 @@ export function formFromCamera(c: CamClipsCamera): CamClipsForm {
     lan_ip: c.lan_ip ?? '',
     rtsp_port: String(c.rtsp_port),
     rtsp_path: c.rtsp_path ?? '',
-    device_ids: [...c.device_ids],
+    device_ids: allDeviceIds(c),
     stream_device_ids: [...(c.stream_device_ids ?? [])],
     stop: false,
   }
@@ -327,7 +325,7 @@ export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDes
   }
   const path = f.rtsp_path.trim()
   if (path !== (orig.rtsp_path ?? '')) patch.rtsp_path = path || null
-  if (!sameSet(f.device_ids, orig.device_ids)) patch.device_ids = f.device_ids
+  if (!sameSet(f.device_ids, allDeviceIds(orig))) patch.device_ids = f.device_ids
   // 配信担当は並びが順位なので、並べ替えだけでも送る
   const stream = orig.stream_device_ids ?? []
   if (f.stream_device_ids.length !== stream.length || f.stream_device_ids.some((id, i) => id !== stream[i])) {
@@ -352,29 +350,31 @@ export function eventKindLabel(kind: string): string {
   return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind as keyof CamClipsDeviceCounts] : kind
 }
 
+/** イベントの種類の表示名。`measurements` / `measurements_bp` は出どころの表から決まる (kind と一致する) */
+export function eventSourceLabel(ev: Pick<CamClipsEvent, 'source_table' | 'kind'>): string {
+  if (ev.source_table === 'measurements') return KIND_LABELS.alcohol
+  if (ev.source_table === 'measurements_bp') return KIND_LABELS.blood_pressure
+  return eventKindLabel(ev.kind)
+}
+
+/** カメラの結び付けのうち、機体の鍵への置き換え待ちの ID (選択肢には出さない・外せる・新しくは選べない) */
+export function pendingDeviceIds(c: Pick<CamClipsCamera, 'pending_device_ids'>): string[] {
+  return c.pending_device_ids ?? []
+}
+
+/**
+ * カメラに結び付いている ID 全部 (畳んだ `device_ids` + 置き換え待ちの hub の ID。重複なし)。
+ * 置き換え待ちが `device_ids` の外で返っても、フォームと差分判定からこぼさない
+ * (こぼすと、結び付けを 1 つ変えて保存しただけで置き換え待ちの結び付きが黙って消える)
+ */
+export function allDeviceIds(c: Pick<CamClipsCamera, 'device_ids' | 'pending_device_ids'>): string[] {
+  return [...new Set([...c.device_ids, ...pendingDeviceIds(c)])]
+}
+
 /** 「今すぐ切り出す」の結果 1 行 */
 export function summarizeAutoRun(r: CamClipsAutoRunCamera): string {
   if (!r.ok) return `実行できませんでした: ${r.error}`
   return `切り出し ${r.ready} 本 / 失敗 ${r.failed} / 次回へ ${r.deferred}${r.listing_failed ? ' (SD の一覧が取れず)' : ''}`
-}
-
-/** 登録簿に名前が無い端末の表示名 */
-export const UNNAMED_DEVICE = '名前未登録の端末'
-
-/** ログイン利用者のブラウザ打刻の固定 ID (`server/utils/timecard-relay.ts` の `BROWSER_DEVICE_ID`)。鍵ではない */
-export const BROWSER_DEVICE_ID = 'browser'
-export const BROWSER_DEVICE_NAME = 'ブラウザ (ログイン利用者の打刻)'
-
-/**
- * 端末の表示名。登録簿 (ファームの一覧) と device_id が一致すればその名前、無ければ `UNNAMED_DEVICE`。
- * 失効済みの鍵は名前の後ろに「 (失効)」。`browser` は鍵ではないので、鍵の有無に関わらず固定の名前。
- * device_id は付けない (画面で別の行に出す。くっつけると境目が見えない)
- */
-export function deviceDisplayName(deviceId: string, known: KnownDeviceName[]): string {
-  if (deviceId === BROWSER_DEVICE_ID) return BROWSER_DEVICE_NAME
-  const hit = known.find(k => k.label && sameVeinDevice(k.device_id, deviceId))
-  if (!hit) return UNNAMED_DEVICE
-  return hit.revoked ? `${hit.label} (失効)` : hit.label!
 }
 
 /**

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { listCamClipsCameras, listCamClipsEvents, listCamHostKeys, listDeviceLabels, runCamClipsAuto } from '~/utils/api'
-import type { CamClipsCamera, CamClipsEvent, KnownDeviceName } from '~/utils/cam-clips'
-import { clipSrc, deviceDisplayName, errorText, eventKindLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
+import { listCamClipsCameras, listCamClipsEvents, runCamClipsAuto } from '~/utils/api'
+import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
+import { clipSrc, errorText, eventKindLabel, eventSourceLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { jstTodayDate } from '~/utils/jst'
 
@@ -21,16 +21,13 @@ const error = ref('')
 const running = ref(false)
 const runResult = ref('')
 const playing = ref<{ sourceId: string, key: string, occurredAt: string, kind: CamClipsEvent['kind'] } | null>(null)
-const labels = ref<KnownDeviceName[]>([])
+/** 端末の表示名 (機体の鍵のラベル)。取れなくても一覧は出す (名前が「名前未登録の端末」になるだけ) */
+const { nameOf } = useDeviceNames()
 
-/** 端末の表示名。取れなくても一覧は出す (名前が「名前未登録の端末」になるだけ) */
-onMounted(async () => {
-  const [reg, keys] = await Promise.allSettled([listDeviceLabels(), listCamHostKeys()])
-  labels.value = [
-    ...(reg.status === 'fulfilled' ? reg.value.devices : []),
-    ...(keys.status === 'fulfilled' ? keys.value.names ?? [] : []),
-  ]
-})
+/** 同じ source_id が アルコール・血圧の 2 イベントになりうる (source_table が違う) ので、行の key は 3 つで組む */
+function rowKey(ev: CamClipsEvent): string {
+  return `${ev.source_table}:${ev.source_id}:${ev.kind}`
+}
 
 async function loadEvents() {
   playing.value = null
@@ -139,17 +136,16 @@ onUnmounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="ev in events" :key="ev.source_id" class="border-t" data-testid="cam-clips-events-row">
+          <tr v-for="ev in events" :key="rowKey(ev)" class="border-t" data-testid="cam-clips-events-row">
             <td class="py-2 pr-3" data-testid="cam-clips-events-time">{{ formatJst(ev.occurred_at) }}</td>
-            <td class="py-2 pr-3" data-testid="cam-clips-events-kind">{{ eventKindLabel(ev.kind) }}</td>
-            <td class="py-2 pr-3">
-              <span class="font-semibold" data-testid="cam-clips-events-device-name">{{ deviceDisplayName(ev.device_id, labels) }}</span>
+            <td class="py-2 pr-3" data-testid="cam-clips-events-kind">{{ eventSourceLabel(ev) }}</td>
+            <td class="py-2 pr-3" :title="ev.device_id" data-testid="cam-clips-events-device">
+              <span class="font-semibold" data-testid="cam-clips-events-device-name">{{ nameOf(ev.device_id) }}</span>
               <span
                 v-if="ev.is_dev"
                 class="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
                 data-testid="cam-clips-events-dev"
               >開発端末</span>
-              <span class="block text-xs text-gray-500 font-mono" data-testid="cam-clips-events-device">{{ ev.device_id }}</span>
             </td>
             <td class="py-2">
               <span v-if="ev.clip === null" class="text-gray-500" data-testid="cam-clips-events-none">未切り出し</span>

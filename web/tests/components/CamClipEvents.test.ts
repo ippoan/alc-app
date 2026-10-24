@@ -6,6 +6,7 @@ import CamClipEvents from '~/components/CamClipEvents.vue'
 import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
 import { clipSrc } from '~/utils/cam-clips'
 import { jstTodayDate } from '~/utils/jst'
+import { resetDeviceNames } from '~/composables/useDeviceNames'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 
 const api = vi.hoisted(() => ({
@@ -45,9 +46,10 @@ async function mountIt(cameras = [cam('c1', '正門')]) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetDeviceNames()
   api.listCamClipsEvents.mockResolvedValue(EVENTS)
-  api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
-  api.listCamHostKeys.mockResolvedValue({ keys: [], names: [] })
+  api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '旧ハブ' }] })
+  api.listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:dev1', label: '事務所の機体', revoked: false }] })
 })
 
 describe('CamClipEvents', () => {
@@ -70,8 +72,10 @@ describe('CamClipEvents', () => {
     expect(rows).toHaveLength(4)
     expect(rows[0]!.find(t('time')).text()).toBe('2026-10-23 09:05:00')
     expect(rows[0]!.find(t('kind')).text()).toBe('アルコール')
-    expect(rows[0]!.find(t('device')).text()).toBe('dev-1')
-    expect(rows[0]!.find(t('device-name')).text()).toBe('事務所の端末')
+    // 2 行目の生の ID はやめてツールチップ (title) に。結び付きの無い hub は登録簿の名前 + 印
+    expect(rows[0]!.find(t('device')).attributes('title')).toBe('dev-1')
+    expect(rows[0]!.find(t('device-name')).text()).toBe('旧ハブ (鍵の ID 未登録)')
+    expect(rows[0]!.find(t('device')).text()).not.toContain('dev-1')
     expect(rows[0]!.find(t('dev')).exists()).toBe(false)
     expect(rows[0]!.find(t('none')).text()).toBe('未切り出し')
     expect(rows[1]!.find(t('dev')).text()).toBe('開発端末')
@@ -225,23 +229,31 @@ describe('CamClipEvents', () => {
 })
 
 describe('CamClipEvents 端末の表示名', () => {
-  it('鍵の登録簿にラベルが無い端末は「名前未登録の端末」+ 2 行目に device_id', async () => {
-    api.listCamClipsEvents.mockResolvedValue([ev({ source_id: 'a', device_id: 'dev-9' })])
+  it('機体の鍵 (畳まれた ID) は鍵のラベル。ID は title に', async () => {
+    api.listCamClipsEvents.mockResolvedValue([ev({ source_id: 'a', device_id: 'alarm:dev1' })])
     const w = await mountIt()
     expect(api.listDeviceLabels).toHaveBeenCalledTimes(1)
-    expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
-    expect(w.find(t('device')).text()).toBe('dev-9')
+    expect(w.find(t('device-name')).text()).toBe('事務所の機体')
+    expect(w.find(t('device')).attributes('title')).toBe('alarm:dev1')
   })
-  it('ラベルの取得に失敗しても一覧は出る (名前は「名前未登録の端末」)', async () => {
+  it('どの表にも無い端末は「名前未登録の端末」', async () => {
+    api.listCamClipsEvents.mockResolvedValue([ev({ source_id: 'a', device_id: 'dev-9' }), ev({ source_id: 'b', device_id: 'alarm:zzz' })])
+    const w = await mountIt()
+    expect(w.findAll(t('device-name')).map(n => n.text())).toEqual(['名前未登録の端末', '名前未登録の端末'])
+  })
+  it('名前の取得に失敗しても一覧は出る (名前は「名前未登録の端末」)', async () => {
     api.listDeviceLabels.mockRejectedValue(new Error('403'))
+    api.listCamHostKeys.mockRejectedValue(new Error('403'))
     const w = await mountIt()
     expect(w.findAll(t('row'))).toHaveLength(4)
     expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
     expect(w.find(t('error')).exists()).toBe(false)
   })
   it('鍵の名前を全部出す: 別用途の鍵 (alarm-)・失効済み (失効)・browser', async () => {
-    api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'alarm:dead', label: '旧機', revoked: true }] })
-    api.listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0666000000000000', label: 'VoiceS3R', revoked: false }] })
+    api.listCamHostKeys.mockResolvedValue({ keys: [], names: [
+      { device_id: 'alarm:0666000000000000', label: 'VoiceS3R', revoked: false },
+      { device_id: 'alarm:dead', label: '旧機', revoked: true },
+    ] })
     api.listCamClipsEvents.mockResolvedValue([
       ev({ source_id: 'a', device_id: 'alarm-0666000000000000' }),
       ev({ source_id: 'b', device_id: 'alarm-dead' }),
@@ -250,10 +262,21 @@ describe('CamClipEvents 端末の表示名', () => {
     const w = await mountIt()
     expect(w.findAll(t('device-name')).map(n => n.text())).toEqual(['VoiceS3R', '旧機 (失効)', 'ブラウザ (ログイン利用者の打刻)'])
   })
-  it('鍵の一覧が取れなくても登録簿の名前で出る (names が無い古い応答も同じ)', async () => {
-    api.listCamHostKeys.mockRejectedValue(new Error('403'))
-    expect((await mountIt()).find(t('device-name')).text()).toBe('事務所の端末')
+  it('names が無い古い応答でも壊れない (鍵は名前未登録・hub は登録簿の名前)', async () => {
     api.listCamHostKeys.mockResolvedValue({ keys: [] })
-    expect((await mountIt()).find(t('device-name')).text()).toBe('事務所の端末')
+    api.listCamClipsEvents.mockResolvedValue([ev({ source_id: 'a', device_id: 'alarm:dev1' }), ev({ source_id: 'b', device_id: 'dev-1' })])
+    const w = await mountIt()
+    expect(w.findAll(t('device-name')).map(n => n.text())).toEqual(['名前未登録の端末', '旧ハブ (鍵の ID 未登録)'])
+  })
+})
+
+describe('CamClipEvents 測定台のイベント (source_table)', () => {
+  it('measurements / measurements_bp を出どころのラベルで出し、同じ source_id の 2 イベントを両方出す', async () => {
+    api.listCamClipsEvents.mockResolvedValue([
+      ev({ source_table: 'measurements', source_id: 'm1', kind: 'alcohol', device_id: 'alarm:dev1' }),
+      ev({ source_table: 'measurements_bp', source_id: 'm1', kind: 'blood_pressure', device_id: 'alarm:dev1' }),
+    ])
+    const w = await mountIt()
+    expect(w.findAll(t('kind')).map(n => n.text())).toEqual(['アルコール', '血圧'])
   })
 })

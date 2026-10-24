@@ -3,16 +3,21 @@ import { flushPromises } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import VeinModuleList from '~/components/VeinModuleList.vue'
 import type { VeinModuleEntry } from '~/utils/vein-db'
+import { resetDeviceNames } from '~/composables/useDeviceNames'
 
 // この端末の指静脈の一覧 (Refs ippoan/alc-app#436)。乗務員はすべて合成値
 
-const { getEmployeesMock, loadEntriesMock } = vi.hoisted(() => ({
+const { getEmployeesMock, loadEntriesMock, listCamHostKeysMock, listDeviceLabelsMock } = vi.hoisted(() => ({
+  listCamHostKeysMock: vi.fn(),
+  listDeviceLabelsMock: vi.fn(),
   getEmployeesMock: vi.fn(),
   loadEntriesMock: vi.fn(),
 }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   getEmployees: getEmployeesMock,
+  listCamHostKeys: listCamHostKeysMock,
+  listDeviceLabels: listDeviceLabelsMock,
 }))
 vi.mock('~/utils/vein-db', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-db')>()),
@@ -41,6 +46,10 @@ async function mountList() {
 
 describe('VeinModuleList', () => {
   beforeEach(() => {
+    resetDeviceNames()
+    // 名前の表は既定で取れない (今の短い表記)
+    listCamHostKeysMock.mockReset().mockRejectedValue(new Error('403'))
+    listDeviceLabelsMock.mockReset().mockRejectedValue(new Error('403'))
     loadEntriesMock.mockReset().mockResolvedValue([entry('emp-b', 12, false), entry('emp-a', 10)])
     getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }, { id: 'emp-b', name: '試験 二郎' }])
     vein.syncInfo.mockReset().mockResolvedValue({ users: 2, max: 100 })
@@ -59,6 +68,20 @@ describe('VeinModuleList', () => {
       'Vein Station 01234567 (この端末)',
       'kiosk-12',
       '不明',
+    ])
+  })
+
+  it('★ 鍵のラベルが引けた端末はそのラベルで出す。引けない端末は今の短い表記', async () => {
+    deviceToken.getDeviceJwt.mockResolvedValue(jwtWithSub('alarm:0123456789abcdef'))
+    listCamHostKeysMock.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0123456789abcdef', label: '帯広の Vein Station', revoked: false }] })
+    loadEntriesMock.mockResolvedValue([
+      { ...entry('emp-a', 10), registeredDeviceId: 'alarm:0123456789abcdef' },
+      { ...entry('emp-b', 11), registeredDeviceId: 'kiosk-123456789' },
+    ])
+    const w = await mountList()
+    expect(w.findAll('[data-testid="vein-module-registered"]').map(c => c.text())).toEqual([
+      '帯広の Vein Station (この端末)',
+      'kiosk-12',
     ])
   })
 

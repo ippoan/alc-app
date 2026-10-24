@@ -17,6 +17,8 @@ import { sameVeinDevice, veinDeviceLabel } from '~/utils/vein-device-label'
 const emit = defineEmits<{ close: [] }>()
 
 const veinSerial = useVeinSerial()
+/** 登録した端末の名前 (機体の鍵のラベル)。引けなければ短い表記 */
+const { keyLabelOf } = useDeviceNames()
 const entries = ref<VeinModuleEntry[]>([])
 const names = ref(new Map<string, string>())
 const moduleInfo = ref<{ users: number; max: number } | null>(null)
@@ -72,7 +74,7 @@ const latest = computed(() =>
 )
 
 function registeredOf(entry: VeinModuleEntry): string {
-  const label = veinDeviceLabel(entry.registeredDeviceId)
+  const label = veinDeviceLabel(entry.registeredDeviceId, keyLabelOf(entry.registeredDeviceId))
   return sameVeinDevice(entry.registeredDeviceId, ownDeviceId.value) ? `${label} (この端末)` : label
 }
 

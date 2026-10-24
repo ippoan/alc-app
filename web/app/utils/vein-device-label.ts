@@ -9,9 +9,14 @@
  * 見比べるときは {@link sameVeinDevice} を使う。
  */
 
-/** 端末の id を画面の短い名前にする。分からなければ「不明」 */
-export function veinDeviceLabel(id: string | null | undefined): string {
+/**
+ * 端末の id を画面の名前にする。分からなければ「不明」。
+ * `keyLabel` = 機体の鍵のラベル (`useDeviceNames().keyLabelOf(id)`。失効は「(失効)」付き)。引けていればそれを出し、
+ * 引けなければ (null / 未指定) 今の短い表記 (`Vein Station <指紋 8 字>` / id の先頭 8 字)
+ */
+export function veinDeviceLabel(id: string | null | undefined, keyLabel?: string | null): string {
   if (!id) return '不明'
+  if (keyLabel) return keyLabel
   const key = /^alarm[:-]([0-9a-f]{16})$/.exec(id)?.[1]
   if (key) return `Vein Station ${key.slice(0, 8)}`
   return id.slice(0, 8)

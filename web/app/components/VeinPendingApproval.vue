@@ -17,6 +17,8 @@ import { veinDeviceLabel } from '~/utils/vein-device-label'
 const emit = defineEmits<{ close: [] }>()
 
 const veinSerial = useVeinSerial()
+/** 登録した端末の名前 (機体の鍵のラベル)。引けなければ短い表記 */
+const { keyLabelOf } = useDeviceNames()
 const pending = ref<ApiVeinPendingModule[]>([])
 const loading = ref(true)
 const listError = ref<string | null>(null)
@@ -119,7 +121,7 @@ function versionOf(p: ApiVeinPendingModule): string {
             @click="select(p)"
           >
             <span class="font-medium">{{ p.name }}</span>
-            <span class="ml-2 text-gray-500">{{ versionOf(p) }} 登録 / {{ veinDeviceLabel(p.registered_device_id) }}</span>
+            <span class="ml-2 text-gray-500">{{ versionOf(p) }} 登録 / {{ veinDeviceLabel(p.registered_device_id, keyLabelOf(p.registered_device_id)) }}</span>
           </button>
         </li>
       </ul>

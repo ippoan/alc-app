@@ -15,6 +15,8 @@ import { sameVeinDevice, veinDeviceLabel } from '~/utils/vein-device-label'
 /** モジュールの ID の数 (10〜100) */
 const CAPACITY = 91
 
+/** 登録した端末の名前 (機体の鍵のラベル)。引けなければ短い表記 */
+const { keyLabelOf } = useDeviceNames()
 const devices = ref<VeinFleetDevice[]>([])
 const names = ref(new Map<string, string>())
 const listError = ref('')
@@ -88,7 +90,7 @@ function latestVersion(d: VeinFleetDevice): string | null {
 
 /** 記録を登録した端末。報告した端末自身で登録した記録には印を付ける */
 function registeredOf(d: VeinFleetDevice, e: VeinFleetEntry): string {
-  const label = veinDeviceLabel(e.registered_device_id)
+  const label = veinDeviceLabel(e.registered_device_id, keyLabelOf(e.registered_device_id))
   return sameVeinDevice(e.registered_device_id, d.device_id) ? `${label} (この端末)` : label
 }
 

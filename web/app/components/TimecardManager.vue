@@ -11,6 +11,9 @@ import { punchTenkoOf } from '~/utils/alcohol'
 
 type SubTab = 'cards' | 'punches'
 
+/** 端末が記録されていない打刻の表示 */
+const NO_DEVICE = '-'
+
 /**
  * **既定は打刻履歴。** カード登録は最初の 1 回しか使わないのに対し、打刻履歴は
  * 毎日見るため (ユーザー要望)。`?sub=cards` で登録側を直接開ける。
@@ -34,6 +37,13 @@ const cardError = ref('')
 const nfcCardId = ref<string | null>(null)
 
 const nfc = useNfcWebSocket()
+/** 打刻の「端末」列に出す名前 (機体の鍵のラベル)。ID はツールチップ */
+const { nameOf: deviceNameOf } = useDeviceNames()
+
+/** 端末の ID が無い行 (`-`) はそのまま、あれば名前にする */
+function deviceLabel(id: string): string {
+  return id === NO_DEVICE ? id : deviceNameOf(id)
+}
 
 const employeeMap = computed(() => {
   const map: Record<string, ApiEmployee> = {}
@@ -149,7 +159,7 @@ const historyRows = computed<HistoryRow[]>(() =>
       key: `p:${p.id}`,
       at: p.punched_at,
       employeeName: displayName(p),
-      deviceName: p.device_name ?? '-',
+      deviceName: p.device_name ?? NO_DEVICE,
       // 打刻から点呼に移った行 (measurement_id で結ばれた行) も点呼として出す (Refs ippoan/alc-app#436)
       origin: p.kind === 'license' || p.measurement_id ? ('tenko' as const) : ('punch' as const),
       cardKind: cardKindOf(p.card_kind),
@@ -408,7 +418,7 @@ async function exportCsv() {
                 <span v-else-if="row.cardKind === 'other'" class="text-gray-500">ICカード</span>
                 <span v-else class="text-gray-400">—</span>
               </td>
-              <td class="px-4 py-2 text-gray-500">{{ row.deviceName }}</td>
+              <td class="px-4 py-2 text-gray-500" :title="row.deviceName === NO_DEVICE ? undefined : row.deviceName" data-testid="punch-device">{{ deviceLabel(row.deviceName) }}</td>
             </tr>
           </tbody>
         </table>

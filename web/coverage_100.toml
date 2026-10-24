@@ -382,3 +382,11 @@ branches = true
 [[files]]
 path = "app/utils/cam-clips.ts"
 branches = true
+
+[[files]]
+path = "app/utils/device-name.ts"
+branches = true
+
+[[files]]
+path = "app/composables/useDeviceNames.ts"
+branches = true
