@@ -40,6 +40,7 @@ import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
 import { devTiming } from '~/utils/dev-timing'
 import { findDeviceLine } from '~/utils/device-line'
+import { onGpsLine } from '~/composables/useGpsFix'
 import { appendDiag } from '~/utils/serialDiagLog'
 import type { DeviceLine } from '~/utils/device-line'
 
@@ -194,7 +195,8 @@ function extractVeinErrReason(message: string): string {
 /** 血圧の遅れの切り分け用 (開発用の端末だけ出る)。本文は EVT 行のみ・JSON は type だけ */
 const TIMING_JSON_TYPES = ['found', 'connected', 'disconnected', 'blood_pressure']
 function tapTiming(line: string): void {
-  if (line.startsWith('EVT OMRON') || line.startsWith('EVT BP')) devTiming('vein.evt', { line })
+  if (line.startsWith('EVT GPS ')) onGpsLine(line)
+  else if (line.startsWith('EVT OMRON') || line.startsWith('EVT BP')) devTiming('vein.evt', { line })
   else if (line.startsWith('{')) {
     const type = TIMING_JSON_TYPES.find(t => line.includes(`"type":"${t}"`))
     if (type) devTiming('vein.json', { type })

@@ -45,6 +45,8 @@ export const FIRMWARE_TARGETS: Readonly<Record<string, FirmwareTarget>> = {
       'timecard-station': image('manifest-timecard-station.json', 'alc-hub-atoms3-timecard-station-app.bin'),
       // 指静脈の読み取りを持つ版 (`--features vein`)。書き直しのページは vein.html
       'timecard-vein': image('manifest-timecard-vein-r12-b.json', 'alc-hub-atoms3-timecard-vein-app.bin', 'vein.html'),
+      // 指静脈 + Unit GPS (Grove PORT.A) を持つ版 (Refs ippoan/alc-app#514)
+      'timecard-vein-gps': image('manifest-timecard-vein-gps.json', 'alc-hub-atoms3-timecard-vein-gps-app.bin', 'vein.html'),
     },
   },
   // CoreS3 (統合ハブ)。CoreS3 SE も同じイメージで更新する

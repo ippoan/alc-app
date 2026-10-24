@@ -234,6 +234,7 @@ describe('DeviceFirmwareNotice', () => {
 
   it.each([
     ['timecard-vein', 'vein.html'],
+    ['timecard-vein-gps', 'vein.html'],
     ['timecard-station', ''],
     ['timecard-unknown', ''],
   ])('★ Vein Station の案内先は flavor の書き直しのページ → 無ければ target の入口 (flavor=%s, Refs ippoan/alc-app#436)', async (flavor, page) => {

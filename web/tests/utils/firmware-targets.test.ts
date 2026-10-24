@@ -9,7 +9,7 @@ describe('FIRMWARE_TARGETS', () => {
     expect(Object.keys(FIRMWARE_TARGETS).sort()).toEqual(['alarm', 'cores3', 'timecard-station'])
   })
 
-  it('timecard-station は flavor 2 件 (station と vein) で、vein だけ書き直しのページを持つ (BOARD は見ない)', () => {
+  it('timecard-station は flavor 3 件 (station と vein と vein-gps) で、vein だけ書き直しのページを持つ (BOARD は見ない)', () => {
     expect(FIRMWARE_TARGETS['timecard-station']).toEqual({
       installerUrl: BASE,
       flavors: {
@@ -21,6 +21,12 @@ describe('FIRMWARE_TARGETS', () => {
         'timecard-vein': {
           manifestUrl: `${BASE}manifest-timecard-vein-r12-b.json`,
           appUrl: `${BASE}firmware/alc-hub-atoms3-timecard-vein-app.bin`,
+          installerUrl: `${BASE}vein.html`,
+        },
+        // Unit GPS 付き (Refs ippoan/alc-app#514)
+        'timecard-vein-gps': {
+          manifestUrl: `${BASE}manifest-timecard-vein-gps.json`,
+          appUrl: `${BASE}firmware/alc-hub-atoms3-timecard-vein-gps-app.bin`,
           installerUrl: `${BASE}vein.html`,
         },
       },
@@ -52,7 +58,7 @@ describe('FIRMWARE_TARGETS', () => {
     const urls = Object.values(FIRMWARE_TARGETS)
       .flatMap(target => Object.values(target.flavors))
       .flatMap(image => [image.manifestUrl, image.appUrl])
-    expect(urls).toHaveLength(12)
+    expect(urls).toHaveLength(14)
     for (const url of urls) expect(url.startsWith(BASE)).toBe(true)
     // 同じ URL を 2 つの flavor が指していない
     expect(new Set(urls).size).toBe(urls.length)
