@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  deviceDisplayName, EMPTY_FORM, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts,
+  deviceDisplayName, EMPTY_FORM, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
@@ -144,5 +144,21 @@ describe('errorText', () => {
     expect(errorText(new Error('API エラー (500): {broken'), 'x')).toBe('API エラー (500): {broken')
     expect(errorText(new Error('API エラー (500): {"error":3}'), 'x')).toBe('API エラー (500): {"error":3}')
     expect(errorText('文字列', 'fallback')).toBe('fallback')
+  })
+})
+
+describe('summarizeAutoRun', () => {
+  const base = {
+    camera_id: 'c1', ok: true, events: 5, groups: 3, ready: 2, failed: 1, deferred: 0,
+    fetched: 2, listing_failed: false, error: null,
+  }
+  it('ok なら切り出し・失敗・次回への件数', () => {
+    expect(summarizeAutoRun(base)).toBe('切り出し 2 本 / 失敗 1 / 次回へ 0')
+  })
+  it('SD の一覧が取れなかったときは末尾に添える', () => {
+    expect(summarizeAutoRun({ ...base, listing_failed: true })).toBe('切り出し 2 本 / 失敗 1 / 次回へ 0 (SD の一覧が取れず)')
+  })
+  it('ok でなければ error を出す', () => {
+    expect(summarizeAutoRun({ ...base, ok: false, error: 'カメラに届きません' })).toBe('実行できませんでした: カメラに届きません')
   })
 })

@@ -78,6 +78,24 @@ export interface CamClipsEvent {
   clip: CamClipsEventClip | null
 }
 
+/** `POST /auto-run` の応答の 1 台ぶん (cron と同じ自動切り出しを手動で回した結果) */
+export interface CamClipsAutoRunCamera {
+  camera_id: string
+  ok: boolean
+  events: number
+  groups: number
+  ready: number
+  failed: number
+  deferred: number
+  fetched: number
+  listing_failed: boolean
+  error: string | null
+}
+
+export interface CamClipsAutoRun {
+  cameras: CamClipsAutoRunCamera[]
+}
+
 /** `POST /cameras` の本文 */
 export interface CamClipsCreateBody {
   name: string
@@ -227,6 +245,12 @@ export function summarizeCounts(c: CamClipsDeviceCounts): string {
 /** イベントの種類の表示名。知らない種類はそのまま */
 export function eventKindLabel(kind: string): string {
   return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind as keyof CamClipsDeviceCounts] : kind
+}
+
+/** 「今すぐ切り出す」の結果 1 行 */
+export function summarizeAutoRun(r: CamClipsAutoRunCamera): string {
+  if (!r.ok) return `実行できませんでした: ${r.error}`
+  return `切り出し ${r.ready} 本 / 失敗 ${r.failed} / 次回へ ${r.deferred}${r.listing_failed ? ' (SD の一覧が取れず)' : ''}`
 }
 
 /** 登録簿に名前が無い端末の表示名 */

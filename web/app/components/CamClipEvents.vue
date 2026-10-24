@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { listCamClipsCameras, listCamClipsEvents } from '~/utils/api'
+import { listCamClipsCameras, listCamClipsEvents, runCamClipsAuto } from '~/utils/api'
 import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
-import { clipSrc, errorText, eventKindLabel, formatJst } from '~/utils/cam-clips'
+import { clipSrc, errorText, eventKindLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
+import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { jstTodayDate } from '~/utils/jst'
 
 /**
  * 拠点カメラの自動切り出しの一覧 (Refs ippoan/alc-cam#2)。カメラと JST の日付を選ぶと、
  * その日のイベント (アルコール・血圧・打刻・免許証・指静脈登録) と切り出しの結果を時刻順に出す。読み取りだけ。
- * 再生は押した行の 1 本だけ (同じ clip が複数のイベントに付くので、行ごとには並べない)。
+ * 再生は押した行の 1 本だけをモーダルで出す (同じ clip が複数のイベントに付くので、行ごとには並べない)。
+ * 閉じるのは閉じるボタン・背景クリック・Esc。閉じると video は DOM から外れ、再生が止まる。
  */
 
 const cameras = ref<CamClipsCamera[]>([])
@@ -16,7 +18,9 @@ const date = ref(jstTodayDate())
 const events = ref<CamClipsEvent[]>([])
 const loaded = ref(false)
 const error = ref('')
-const playing = ref<{ sourceId: string, key: string } | null>(null)
+const running = ref(false)
+const runResult = ref('')
+const playing = ref<{ sourceId: string, key: string, occurredAt: string, kind: CamClipsEvent['kind'] } | null>(null)
 
 async function loadEvents() {
   playing.value = null
@@ -45,9 +49,44 @@ onMounted(async () => {
 
 watch([cameraId, date], loadEvents)
 
-function play(ev: CamClipsEvent) {
-  playing.value = { sourceId: ev.source_id, key: ev.clip!.key }
+/** cron (毎時 0 分) と同じ自動切り出しを、選んだカメラで今すぐ回す */
+async function runNow() {
+  running.value = true
+  runResult.value = ''
+  try {
+    runResult.value = summarizeAutoRun((await runCamClipsAuto(cameraId.value)).cameras[0]!)
+    await loadEvents()
+  }
+  catch (e) {
+    const msg = errorText(e, '切り出しを実行できませんでした')
+    error.value = msg === FETCH_TIMEOUT_MESSAGE_WRITE
+      ? '時間がかかっています。裏で続いている可能性があるので、少し後に一覧を更新してください'
+      : msg
+  }
+  finally {
+    running.value = false
+  }
 }
+
+function play(ev: CamClipsEvent) {
+  playing.value = { sourceId: ev.source_id, key: ev.clip!.key, occurredAt: ev.occurred_at, kind: ev.kind }
+}
+
+function closePlayer() {
+  playing.value = null
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closePlayer()
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <template>
@@ -61,11 +100,20 @@ function play(ev: CamClipsEvent) {
           <option v-for="c in cameras" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
       </label>
+      <button
+        class="px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+        :disabled="!cameraId || running"
+        data-testid="cam-clips-events-run"
+        @click="runNow"
+      >
+        {{ running ? '切り出し中…' : '今すぐ切り出す' }}
+      </button>
       <label>
         日付 (JST)
         <input v-model="date" type="date" class="block border rounded px-2 py-1" data-testid="cam-clips-events-date">
       </label>
     </div>
+    <p v-if="runResult" class="text-sm text-gray-700" data-testid="cam-clips-events-run-result">{{ runResult }}</p>
     <p v-if="error" class="text-sm text-red-600" data-testid="cam-clips-events-error">{{ error }}</p>
     <p v-else-if="loaded && events.length === 0" class="text-sm text-gray-500" data-testid="cam-clips-events-empty">
       この日のイベントはありません
@@ -110,13 +158,32 @@ function play(ev: CamClipsEvent) {
         </tbody>
       </table>
     </div>
-    <video
+    <div
       v-if="playing"
-      :src="clipSrc(playing.key)"
-      controls
-      preload="metadata"
-      class="w-full max-w-3xl bg-black"
-      data-testid="cam-clips-events-video"
-    />
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      data-testid="cam-clips-events-modal"
+      @click.self="closePlayer"
+    >
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-3xl mx-4 p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h4 class="font-bold text-sm">{{ formatJst(playing.occurredAt) }} {{ eventKindLabel(playing.kind) }}</h4>
+          <button
+            class="px-3 py-1 rounded border text-sm"
+            data-testid="cam-clips-events-modal-close"
+            @click="closePlayer"
+          >
+            閉じる
+          </button>
+        </div>
+        <video
+          :src="clipSrc(playing.key)"
+          controls
+          autoplay
+          preload="metadata"
+          class="w-full bg-black"
+          data-testid="cam-clips-events-video"
+        />
+      </div>
+    </div>
   </div>
 </template>

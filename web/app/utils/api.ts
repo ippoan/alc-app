@@ -28,7 +28,7 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import type {
-  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent,
+  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun,
 } from '~/utils/cam-clips'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
@@ -1945,6 +1945,15 @@ export async function createCamClipsClip(body: { camera_id: string, from: string
   return request<CamClipsClip>('/api/cam-clips/clips', {
     method: 'POST',
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(UPLOAD_FETCH_TIMEOUT_MS),
+  }, 'admin')
+}
+
+/** 自動切り出し (cron と同じもの) を手動で回す。SD から取り込むので上限は手動の切り出しと同じ 120 秒 */
+export async function runCamClipsAuto(cameraId: string): Promise<CamClipsAutoRun> {
+  return request<CamClipsAutoRun>('/api/cam-clips/auto-run', {
+    method: 'POST',
+    body: JSON.stringify({ camera_id: cameraId }),
     signal: AbortSignal.timeout(UPLOAD_FETCH_TIMEOUT_MS),
   }, 'admin')
 }
