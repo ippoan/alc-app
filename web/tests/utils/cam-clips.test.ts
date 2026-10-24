@@ -2,13 +2,14 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  deviceDisplayName, EMPTY_FORM, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
+  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, rtspLabel, rtspPortError, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
 const CAM: CamClipsCamera = {
   id: 'c1', name: '正門', vpc_binding: 'CAM_A', rec_username: 'admin', has_password: true,
-  recording: true, device_ids: ['d1', 'd2'], rec_scanned_until: '2026-10-23T12:58:00.000+09:00',
+  recording: true, lan_ip: '192.168.1.64', rtsp_port: 554, rtsp_path: 'stream1',
+  device_ids: ['d1', 'd2'], rec_scanned_until: '2026-10-23T12:58:00.000+09:00',
 }
 const form = (over: Partial<CamClipsForm> = {}): CamClipsForm => ({ ...formFromCamera(CAM), ...over })
 
@@ -106,11 +107,48 @@ describe('buildPatchBody', () => {
   })
 })
 
+describe('RTSP の接続先', () => {
+  it('追加: 入れた項目だけ送る (ポートは数にする)', () => {
+    expect(buildCreateBody({ ...EMPTY_FORM, name: 'x', lan_ip: ' 192.168.1.64 ', rtsp_port: ' 8554 ', rtsp_path: ' stream1 ' }, true)).toEqual({
+      name: 'x', lan_ip: '192.168.1.64', rtsp_port: 8554, rtsp_path: 'stream1',
+    })
+  })
+  it('編集: 変えた項目だけ。IP・パスを空にしたら null (消す)、ポートを空にしたら null (既定に戻す)', () => {
+    expect(buildPatchBody(CAM, form({ lan_ip: '192.168.1.65', rtsp_port: '8554', rtsp_path: 'stream2' }), true)).toEqual({
+      lan_ip: '192.168.1.65', rtsp_port: 8554, rtsp_path: 'stream2',
+    })
+    expect(buildPatchBody(CAM, form({ lan_ip: '', rtsp_path: '' }), true)).toEqual({ lan_ip: null, rtsp_path: null })
+    // 既定のポートのまま空にしても送らない / 既定でないポートを空にしたら既定へ戻す
+    expect(buildPatchBody(CAM, form({ rtsp_port: '' }), true)).toEqual({})
+    expect(buildPatchBody({ ...CAM, rtsp_port: 8554 }, form({ rtsp_port: '' }), true)).toEqual({ rtsp_port: null })
+    // 元から無い (null) とき、空のままなら変えない
+    const c = { ...CAM, lan_ip: null, rtsp_path: null }
+    expect(buildPatchBody(c, formFromCamera(c), true)).toEqual({})
+  })
+  it('ポートの検査 (空 = 既定は通す)', () => {
+    expect(DEFAULT_RTSP_PORT).toBe(554)
+    expect(rtspPortError('')).toBeNull()
+    expect(rtspPortError(' 554 ')).toBeNull()
+    expect(rtspPortError('65535')).toBeNull()
+    for (const bad of ['0', '65536', 'abc', '5.5', '-1']) expect(rtspPortError(bad)).toBe('RTSP のポートは 1〜65535 にしてください')
+  })
+  it('一覧の表示: IP とパスが揃ったときだけ', () => {
+    expect(rtspLabel(CAM)).toBe('192.168.1.64:554/stream1')
+    expect(rtspLabel({ ...CAM, rtsp_path: '/live/ch1' })).toBe('192.168.1.64:554/live/ch1')
+    expect(rtspLabel({ ...CAM, lan_ip: null })).toBe('未設定')
+    expect(rtspLabel({ ...CAM, rtsp_path: null })).toBe('未設定')
+  })
+})
+
 describe('formFromCamera', () => {
   it('null は空文字、端末は写し、パスワードは空', () => {
     const c = { ...CAM, vpc_binding: null, rec_username: null }
     const f = formFromCamera(c)
-    expect(f).toEqual({ name: '正門', vpc_binding: '', rec_username: '', rec_password: '', device_ids: ['d1', 'd2'], stop: false })
+    expect(f).toEqual({
+      name: '正門', vpc_binding: '', rec_username: '', rec_password: '',
+      lan_ip: '192.168.1.64', rtsp_port: '554', rtsp_path: 'stream1', device_ids: ['d1', 'd2'], stop: false,
+    })
+    expect(formFromCamera({ ...CAM, lan_ip: null, rtsp_path: null })).toMatchObject({ lan_ip: '', rtsp_path: '' })
     expect(f.device_ids).not.toBe(c.device_ids)
   })
 })

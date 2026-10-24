@@ -28,7 +28,7 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import type {
-  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun,
+  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey,
 } from '~/utils/cam-clips'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
@@ -1931,6 +1931,16 @@ export async function updateCamClipsCamera(id: string, body: CamClipsPatchBody):
 
 export async function listCamClipsDeviceCandidates(days = 30): Promise<CamClipsDeviceCandidate[]> {
   return request<CamClipsDeviceCandidate[]>(`/api/cam-clips/device-candidates?days=${days}`, {}, 'admin')
+}
+
+/**
+ * 録画タブの端末候補に出す CoreS3 の鍵 (拠点 PC の拡張に渡す cam-host の鍵の元)。admin の token が要る。
+ * 中身は auth-worker の鍵の一覧 (`server/api/cam-host-keys.get.ts` が中継する)
+ */
+export async function listCamHostKeys(): Promise<{ keys: CamHostKey[] }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ keys: CamHostKey[] }>('/api/cam-host-keys', jwt, { method: 'GET' })
 }
 
 /** カメラ 1 台の、JST の暦日 (`YYYY-MM-DD`) 1 日ぶんのイベントと自動切り出しの結果 (時刻順) */

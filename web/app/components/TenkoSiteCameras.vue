@@ -6,7 +6,7 @@ import { errorText } from '~/utils/cam-clips'
 
 /**
  * 遠隔点呼の通話中に、乗務員の端末 (kiosk) が置かれた拠点のカメラを映す。
- * kiosk が申告した端末 ID を `device_ids` に含むカメラを全部 `CamLiveTile` (roomId = camera.id) で出す。
+ * kiosk の端末 ID (signaling が kiosk の鍵の sub = `alarm:<fingerprint>` を渡す) を `device_ids` に含むカメラを全部 `CamLiveTile` (roomId = camera.id) で出す。
  * 通話を終えて外される (unmount) と、タイルごと切れる。端末 ID が変わったら引き直す。
  */
 const props = defineProps<{ deviceId: string }>()

@@ -25,8 +25,17 @@ const isDemoMode = computed(() => props.demoMode || isDemoModeFromUrl.value)
 // --- 遠隔点呼 WebRTC (インスタンス生成のみ; watch は useTenkoKiosk 後に設定) ---
 const config = useRuntimeConfig()
 const webRtc = useWebRtc('device')
-// 遠隔点呼の部屋に入るとき申告する端末 ID (管理者画面がこの端末の拠点カメラを引く)。未登録なら付けない
-const { kioskDeviceId } = useDeviceToken()
+// 遠隔点呼の部屋に入るときは端末の鍵を付ける。signaling が鍵の sub (alarm:<fingerprint>) を
+// 管理者画面へ渡し、管理者画面がこの端末の拠点カメラを引く。鍵が取れなければ付けない (従来どおり)
+const { getDeviceJwt } = useDeviceToken()
+async function roomToken(): Promise<string | undefined> {
+  try {
+    return (await getDeviceJwt()) ?? undefined
+  }
+  catch {
+    return undefined
+  }
+}
 const camera = useCamera()
 let audioStream: MediaStream | null = null  // マイク音声 (WebRTC用)
 const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVideoCall用)
@@ -182,7 +191,7 @@ watch(shouldConnectRemote, async (connectNow) => {
       // マイク拒否時はビデオのみで続行
     }
     combinedStream.value = streamToSend
-    await webRtc.connect(config.public.signalingUrl, session.value.id, 'room', undefined, kioskDeviceId.value)
+    await webRtc.connect(config.public.signalingUrl, session.value.id, 'room', await roomToken())
     if (streamToSend) {
       await webRtc.startStreaming(streamToSend)
     }
@@ -208,7 +217,7 @@ const isDisconnected = computed(
 async function reconnect() {
   if (!session.value?.id) return
   try {
-    await webRtc.connect(config.public.signalingUrl, session.value.id, 'room', undefined, kioskDeviceId.value)
+    await webRtc.connect(config.public.signalingUrl, session.value.id, 'room', await roomToken())
     if (camera.stream.value) await webRtc.startStreaming(camera.stream.value)
   } catch {
     // 失敗しても点呼フローはブロックしない

@@ -93,6 +93,10 @@ useFaceSync()
 // 運行者タブで使う運行管理者 PC でも繋がるように (Refs #231)。ManagerAlarmBar は表示だけ
 useAlarmWatch()
 
+// 拠点 PC のカメラ配信の拡張 (alc-cam) へ cam-host の鍵を渡す。CoreS3 が繋がっている間だけ、
+// 拡張に送る口 (chrome.runtime.sendMessage) が在るブラウザでだけ動く
+useCamHostToken()
+
 // Android 横画面検出
 const { isAndroidLandscape } = useAndroidLandscape()
 
