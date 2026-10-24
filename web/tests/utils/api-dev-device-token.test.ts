@@ -223,10 +223,12 @@ describe("request() — scope 'bp-station' (測定台と点呼の共用 4 本)",
     expect(sent().bearer).toBe(`Bearer ${DEV_KIOSK_JWT}`)
   })
 
-  it('admin JWT + dev でない端末 → admin JWT (今までどおり)', async () => {
+  // 測定の口 (startMeasurement 等) は dev でなくても端末の鍵が取れればそちらで送る (設計書 §5.5。
+  // api-measurement-device-key.test.ts)。ここは測定以外の測定台の口
+  it('admin JWT + dev でない端末 → admin JWT (今までどおり。測定以外の口)', async () => {
     initWithAdmin({ bp: true })
 
-    await startMeasurement('e1')
+    await getEmployeeByCode('c1', 'bp-station')
 
     expect(bpGetter).not.toHaveBeenCalled()
     expect(sent().bearer).toBe(`Bearer ${ADMIN_JWT}`)

@@ -390,3 +390,7 @@ branches = true
 [[files]]
 path = "app/composables/useDeviceNames.ts"
 branches = true
+
+[[files]]
+path = "app/utils/device-key-status.ts"
+branches = true

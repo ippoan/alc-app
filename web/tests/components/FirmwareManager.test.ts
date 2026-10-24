@@ -428,7 +428,9 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
     return wrapper
   }
   const labels = (w: Awaited<ReturnType<typeof mountAdmin>>) => w.findAll('button').map(b => b.text())
-  const tabLabels = (w: Awaited<ReturnType<typeof mountAdmin>>) => labels(w).slice(0, labels(w).indexOf('ログアウト'))
+  // 「端末の鍵の状態」は常に出るタブ (ファームの隣)。ここはファームのタブの出入りを見るので並びから除く
+  // (専用のテストは DeviceKeyStatus.test.ts)
+  const tabLabels = (w: Awaited<ReturnType<typeof mountAdmin>>) => labels(w).slice(0, labels(w).indexOf('ログアウト')).filter(l => l !== '端末の鍵の状態')
 
   it('更新できる端末が無いとき、並びに無い。既存の 14 個の並びは変わらない', async () => {
     const wrapper = await mountAdmin()

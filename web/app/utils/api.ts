@@ -31,6 +31,7 @@ import type {
   CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey,
 } from '~/utils/cam-clips'
 import type { KnownDeviceName } from '~/utils/device-name'
+import type { DeviceKeyStatus } from '~/utils/device-key-status'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
@@ -197,6 +198,38 @@ function buildAuthHeaders(): Record<string, string> {
  *   **点呼・測定・打刻など記録を作る口には付けない**
  */
 export type RequestTokenScope = 'default' | 'manager-device' | 'bp-station' | 'tenko-monitor' | 'admin'
+  | 'measurement' | 'measurement-bp'
+
+/**
+ * 測定を作る・更新する 4 口 (`POST /api/measurements/start`・`POST /api/measurements`・
+ * `PUT /api/measurements/{id}`・`POST /api/measurements/{id}/tenko`) の印。
+ * Refs ippoan/alc-cam#2 (設計書 §5.5)。
+ *
+ * - `'measurement'` … 土台は `'default'` (キオスクの鍵)
+ * - `'measurement-bp'` … 土台は `'bp-station'` (測定台と決着した画面なら測定台の鍵)
+ *
+ * 規則: 管理者の JWT で送ることになる場面 (`usesAdminToken`) でも、**端末の鍵の JWT が取れれば
+ * そちらで送る** (auth-worker が検証済みの sub を `X-Device-Id` に付けるため。ブラウザは端末 ID を
+ * 名乗らない)。取れない・端末の鍵が拒まれた (401/403) ときは今までどおり管理者の経路で送る
+ * (測定を止めない)。dev 端末 (管理者へ戻さない側) の規則と、測定以外の口には触れない。
+ */
+const MEASUREMENT_BASE_SCOPE: Record<'measurement' | 'measurement-bp', 'default' | 'bp-station'> = {
+  'measurement': 'default',
+  'measurement-bp': 'bp-station',
+}
+
+/** 測定の口が管理者の経路へ行く前に試す端末の鍵の JWT。取れなければ null (投げない)。 */
+async function measurementDeviceJwt(scope: RequestTokenScope): Promise<string | null> {
+  // 測定台の getter が入っている画面だけ測定台の鍵。それ以外はキオスクの鍵 (`request()` の分岐と同じ)
+  const getter = deviceTokenKindOf(scope) === 'bp-station' ? getBpStationDeviceJwt : getKioskDeviceJwt
+  if (!getter) return null
+  try {
+    return await getter()
+  }
+  catch {
+    return null
+  }
+}
 
 /**
  * 運行管理者席の端末で認証できなかったときの文言 (#338 と同じ趣旨 —
@@ -259,6 +292,9 @@ async function request<T>(
 ): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
   if (scope === 'tenko-monitor') scope = resolveTenkoMonitorScope()
+  // 測定の 4 口は土台の scope に解く (端末の鍵を先に試す印だけ持ち越す)
+  const preferDeviceKey = scope === 'measurement' || scope === 'measurement-bp'
+  if (scope === 'measurement' || scope === 'measurement-bp') scope = MEASUREMENT_BASE_SCOPE[scope]
   // 管理画面の口: admin JWT が無ければ 'default' と同じ経路へ (Refs ippoan/alc-app#436)
   if (scope === 'admin' && !getAccessToken?.()) scope = 'default'
   // 上限 (timeout) の `AbortSignal.timeout()` はここ 1 箇所で載せる
@@ -275,6 +311,20 @@ async function request<T>(
     // `usesAdminToken`、Refs ippoan/alc-app#387)。ただし管理画面の口 (scope 'admin') は
     // 記録を作らないので dev端末でも admin JWT で送る (ここに来る 'admin' は admin JWT あり)。
     if (scope === 'admin' || usesAdminToken(getAccessToken?.(), deviceTokenKindOf(scope))) {
+      // 測定の 4 口: 端末の鍵が取れればそちらで送る (X-Device-Id は auth-worker が付ける)。
+      // 取れない・拒まれたときは管理者の経路のまま (測定を止めない)
+      if (preferDeviceKey) {
+        const deviceJwt = await measurementDeviceJwt(scope)
+        if (deviceJwt) {
+          try {
+            return await proxyRequest<T>(path, deviceJwt, opts)
+          }
+          catch (e) {
+            const status = (e as { status?: number }).status
+            if (status !== 401 && status !== 403) throw e
+          }
+        }
+      }
       // proxyAuthFetch は authFetch と同時に initApi で必ず設定される (上の guard を
       // 通過 = initApi 済み) ので non-null。
       return await proxyAuthFetch!<T>(toProxyPath(path), opts)
@@ -418,7 +468,7 @@ export async function saveMeasurement(result: MeasurementResult, facePhotoBlob?:
       carins_cert_no: result.carinsCertNo,
       carins_vehicle_id: result.carinsVehicleId,
     }),
-  })
+  }, 'measurement')
 }
 
 /**
@@ -432,7 +482,7 @@ export async function startMeasurement(employeeId: string): Promise<ApiMeasureme
   return request<ApiMeasurement>('/api/measurements/start', {
     method: 'POST',
     body: JSON.stringify({ employee_id: employeeId }),
-  }, 'bp-station')
+  }, 'measurement-bp')
 }
 
 /** 測定レコードを更新 (血圧測定台の 4 本のうちの 1 本、Refs #353) */
@@ -440,7 +490,7 @@ export async function updateMeasurement(id: string, data: Record<string, unknown
   return request<UpdatedMeasurement>(`/api/measurements/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
-  }, 'bp-station')
+  }, 'measurement-bp')
 }
 
 /**
@@ -461,7 +511,7 @@ export async function confirmMeasurementTenko(id: string, tenkoMethod: TenkoConf
   return request(`/api/measurements/${id}/tenko`, {
     method: 'POST',
     body: JSON.stringify({ tenko_method: tenkoMethod }),
-  }, 'bp-station')
+  }, 'measurement-bp')
 }
 
 /** 測定履歴を取得 */
@@ -1956,6 +2006,14 @@ export async function updateCamClipsCamera(id: string, body: CamClipsPatchBody):
 
 export async function listCamClipsDeviceCandidates(days = 30): Promise<CamClipsDeviceCandidate[]> {
   return request<CamClipsDeviceCandidate[]>(`/api/cam-clips/device-candidates?days=${days}`, {}, 'admin')
+}
+
+/**
+ * 管理画面「端末の鍵の状態」タブ。どの鍵で記録が来ているかを端末ごとに数えた結果 (設計書 §7.2)。
+ * 口は alc-cam ingest の `GET /device-key-status` (候補と同じく `/api/cam-clips/` の経路)。管理者だけ
+ */
+export async function getDeviceKeyStatus(days = 7): Promise<DeviceKeyStatus> {
+  return request<DeviceKeyStatus>(`/api/cam-clips/device-key-status?days=${days}`, {}, 'admin')
 }
 
 /**

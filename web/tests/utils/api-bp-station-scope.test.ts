@@ -13,7 +13,7 @@ import {
   setBpStationJwtGetter,
   BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployeeByNfcId, getFaceData, startMeasurement, updateMeasurement,
-  getEmployees, startTenkoSession, submitAlcohol, listSchedules,
+  getEmployees, getEmployeeByCode, startTenkoSession, submitAlcohol, listSchedules,
 } from '~/utils/api'
 
 const API_BASE = 'https://api.example.test'
@@ -131,9 +131,11 @@ describe('api.ts — 測定台の 4 本は測定台の鍵で通す (#353)', () =
     expect(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE).toContain('測定台')
   })
 
-  it('admin JWT があるときは従来どおり admin が優先 (admin タブは無変更)', async () => {
+  // 測定の口 (start / PUT / POST / tenko) は端末の鍵が取れれば端末の鍵で送る (設計書 §5.5)。
+  // その規則は api-measurement-device-key.test.ts。ここは測定以外の測定台の口
+  it('admin JWT があるときは従来どおり admin が優先 (admin タブは無変更。測定以外の口)', async () => {
     initApi(API_BASE, () => ADMIN_JWT, () => 'test-tenant', undefined, kioskGetter, managerGetter, bpGetter)
-    await startMeasurement('emp-1')
+    await getEmployeeByCode('c1', 'bp-station')
 
     expect(bpGetter).not.toHaveBeenCalled()
     expect(kioskGetter).not.toHaveBeenCalled()

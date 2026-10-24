@@ -49,6 +49,7 @@ const TABS = [
   { key: 'vein_fleet', label: '端末の指静脈' },
   { key: 'bp_notify', label: '血圧の通知' },
   { key: 'firmware', label: '端末のファーム' },
+  { key: 'device_key_status', label: '端末の鍵の状態' },
 ] as const
 
 type TabKey = typeof TABS[number]['key']
@@ -180,6 +181,10 @@ const visibleTabs = computed(() => TABS.filter(t =>
 
       <div v-if="activeTab === 'firmware'">
         <FirmwareManager />
+      </div>
+
+      <div v-if="activeTab === 'device_key_status'">
+        <DeviceKeyStatus />
       </div>
 
       <div v-if="activeTab === 'bp_notify'">
