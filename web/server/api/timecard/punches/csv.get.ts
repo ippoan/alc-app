@@ -8,11 +8,13 @@
  *   → 200 のときだけ、呼び手が admin なら (introspect → role) auth-worker の鍵の一覧と登録簿で名前を引いて差し替える
  *
  * 名前は飾りなので、**名前を引けなくても CSV は返す** (admin でない・鍵の一覧が取れない → 元の CSV のまま)。
+ * 名前の無い端末 (登録簿にも無い ID・ラベルの無い鍵) は **ID のまま残す** — CSV は集計に使うので、
+ * 「名前未登録の端末」に替えると端末を見分けられなくなる。
  * backend の失敗 (401/403/5xx など) は status と本文をそのまま返す。
  * 名前は cam-host-keys と同じ経路 (呼び手の管理者 JWT を cookie に載せて service binding) で引く。
  */
 import { setResponseStatus } from 'h3'
-import { deviceDisplayName } from '../../../../app/utils/device-name'
+import { deviceDisplayName, UNNAMED_DEVICE } from '../../../../app/utils/device-name'
 import { buildAlarmKeysForward, parseAlarmKeyNames } from '../../../utils/cam-host-keys'
 import { decideFirmwareAdminAccess, loadDeviceLabelRows } from '../../../utils/firmware-relay'
 import { introspectCaller } from '../../../utils/introspect-route'
@@ -55,5 +57,8 @@ export default defineEventHandler(async (event) => {
   const csv = new TextDecoder('utf-8', { ignoreBOM: true }).decode(await res.arrayBuffer())
   const names = await loadNames(event)
   if (!names) return csv
-  return renameDeviceColumn(csv, id => deviceDisplayName(id, names.keyNames, names.registry))
+  return renameDeviceColumn(csv, (id) => {
+    const name = deviceDisplayName(id, names.keyNames, names.registry)
+    return name === UNNAMED_DEVICE ? id : name
+  })
 })

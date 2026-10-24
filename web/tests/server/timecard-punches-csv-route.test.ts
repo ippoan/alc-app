@@ -77,7 +77,7 @@ describe('GET /api/timecard/punches/csv', () => {
       `﻿${HEADER}\n1,打刻,IC,001,山田,2026-10-24 09:00:00,帯広の拠点 PC,,,,\n`
       + '2,打刻,IC,001,山田,2026-10-24 09:01:00,旧ハブ (鍵の ID 未登録),,,,\n'
       + '3,打刻,IC,001,山田,2026-10-24 09:02:00,ブラウザ (ログイン利用者の打刻),,,,\n'
-      + '4,打刻,IC,001,山田,2026-10-24 09:03:00,名前未登録の端末,,,,\n',
+      + '4,打刻,IC,001,山田,2026-10-24 09:03:00,cores3-z,,,,\n',
     )
     expect(backendFetch).toHaveBeenCalledWith('/api/proxy/timecard/punches/csv?date_from=2026-10-24', { method: 'GET' })
     expect(getResponseStatus(ev)).toBe(200)
@@ -109,11 +109,12 @@ describe('GET /api/timecard/punches/csv', () => {
     expect(await route(event())).toBe(BACKEND_CSV)
   })
 
-  it('登録簿だけ取れなくても鍵の名前は使う (結び付きの無い hub は名前未登録)', async () => {
+  it('登録簿だけ取れなくても鍵の名前は使う (名前の無い端末は ID のまま残す)', async () => {
     labels = { status: 500, body: '{}' }
     const out = await route(event()) as string
     expect(out).toContain('帯広の拠点 PC')
-    expect(out).toContain('2026-10-24 09:01:00,名前未登録の端末,')
+    expect(out).toContain('2026-10-24 09:01:00,cores3-a,')
+    expect(out).not.toContain('名前未登録の端末')
   })
 
   it('クエリが無くても通る', async () => {
