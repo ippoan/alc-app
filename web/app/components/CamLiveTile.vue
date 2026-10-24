@@ -34,6 +34,31 @@ const talk = useCamTalk(webRtc.ptzChannel, webRtc.camAudioSender)
 /** カメラの音を鳴らす (既定はミュート。自動再生の制限もあるのでボタンで解除する) */
 const soundOn = ref(false)
 
+/** 聞く音量 (0〜100)。見る人ごと・このブラウザに覚える (カメラの設定は変えない) */
+const CAM_VOLUME_KEY = 'alc_cam_volume'
+const volume = ref(readVolume())
+
+function readVolume() {
+  try {
+    const saved = localStorage.getItem(CAM_VOLUME_KEY)
+    const v = Number(saved)
+    return saved !== null && Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 100
+  }
+  catch {
+    return 100
+  }
+}
+
+function onVolume(e: Event) {
+  volume.value = Number((e.target as HTMLInputElement).value)
+  try {
+    localStorage.setItem(CAM_VOLUME_KEY, String(volume.value))
+  }
+  catch {
+    // 保存できなくても今の画面では効く
+  }
+}
+
 /** 方向ボタンの並び (3x3、真ん中はホーム) */
 const PTZ_PAD: Array<PtzDir | 'home' | null> = [null, 'up', null, 'left', 'home', 'right', null, 'down', null]
 const PTZ_ICON: Record<PtzDir | 'home', string> = { up: '▲', down: '▼', left: '◀', right: '▶', home: '●' }
@@ -130,6 +155,10 @@ watch(() => webRtc.error.value, (e) => {
 watch([() => webRtc.remoteStream.value, videoRef], ([stream, el]) => {
   if (el) el.srcObject = stream
 })
+
+watch([volume, videoRef], ([v, el]) => {
+  if (el) el.volume = v / 100
+}, { immediate: true })
 
 watch(() => props.autoConnect, (v) => {
   if (v) connect()
@@ -272,7 +301,20 @@ onUnmounted(() => {
         >
           他の人が話しています
         </div>
-        <div v-if="webRtc.camAudioSender.value && webRtc.remoteStream.value" class="flex gap-1 select-none touch-none">
+        <div v-if="webRtc.camAudioSender.value && webRtc.remoteStream.value" class="flex items-center gap-1 select-none touch-none">
+          <input
+            v-if="soundOn"
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            :value="volume"
+            class="w-24 accent-blue-500"
+            :title="`音量 ${volume}%`"
+            aria-label="カメラの音量"
+            data-testid="cam-tile-volume"
+            @input="onVolume"
+          >
           <button
             class="h-9 px-2 rounded-lg text-white text-xs"
             :class="soundOn ? 'bg-blue-600/80' : 'bg-black/40 hover:bg-black/60'"
