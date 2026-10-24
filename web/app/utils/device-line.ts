@@ -34,7 +34,7 @@ export function findDeviceLine(lines: string[]): DeviceLine | null {
 /**
  * 機体のうち、**自分で打刻をサーバーへ送る**ものの FLAVOR (Refs ippoan/alc-app#436)。
  * LAN を持つ打刻端末 (alc-app-s3 `crates/atoms3-timecard` の既定ビルド)。
- * Vein Station 版 (`timecard-station` / `timecard-vein`) は LAN が無く、読んだカードを
+ * Vein Station 版 (`timecard-station` / `timecard-vein` / `timecard-vein-gps`) は LAN が無く、読んだカードを
  * USB に流すだけで送らない
  */
 const SELF_PUNCHING_TIMECARD_FLAVOR = 'timecard'
@@ -48,7 +48,7 @@ const SELF_PUNCHING_TIMECARD_FLAVOR = 'timecard'
  * |---|---|
  * | CoreS3 | 送る |
  * | Vein Station で FLAVOR=timecard (LAN 版) | 送る |
- * | Vein Station のそれ以外 (timecard-station・timecard-vein・不明) | 送らない |
+ * | Vein Station のそれ以外 (timecard-station・timecard-vein・timecard-vein-gps・不明) | 送らない |
  * | 血圧測定台・NFC ブリッジ・不明 | 送らない |
  *
  * **分からないときは「送らない」(= 画面が書く)。** 消えた打刻は後から作れないが、重複は消せる。

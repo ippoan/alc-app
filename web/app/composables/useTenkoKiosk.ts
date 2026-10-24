@@ -13,6 +13,7 @@ import {
   getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
   selfResumeTenkoSession, apiErrorCode,
 } from '~/utils/api'
+import { currentLocation } from '~/composables/useGpsFix'
 
 /** UI ステップ (バックエンド status とは別) */
 export type TenkoStep =
@@ -479,6 +480,9 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
       const body: StartTenkoSession = selectedSchedule.value
         ? { schedule_id: selectedSchedule.value.id, employee_id: employeeId.value, identity_face_photo_url: photoUrl }
         : { tenko_type: selectedTenkoType.value ?? 'pre_operation', employee_id: employeeId.value, identity_face_photo_url: photoUrl }
+      // GPS 版の機体をつないでいれば位置を付ける (NOFIX でも止めない。Refs ippoan/alc-app#514)
+      const location = currentLocation()
+      if (location !== undefined) body.location = location
       const s = await startTenkoSession(body)
       session.value = s
       _advanceByStatus(s.status)

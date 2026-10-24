@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
+import { onGpsLine, resetGpsFix } from '~/composables/useGpsFix'
 
 const deviceId = ref<string | null>('device-1')
 mockNuxtImport('useAuth', () => () => ({ deviceId }))
@@ -373,6 +374,41 @@ describe('useTenkoKiosk', () => {
         identity_face_photo_url: undefined,
       })
       expect(k.step.value).toBe('alcohol')
+    })
+
+    it('GPS の位置を受けていれば start の body に location を載せる (予定あり・なし両方、Refs ippoan/alc-app#514)', async () => {
+      resetGpsFix()
+      onGpsLine('EVT GPS FIX lat=35.681237 lon=139.767125 sats=8 hdop=0.9 alt=40.1 utc=2026-10-24T06:30:00Z')
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'identity_verified' }))
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(startTenkoSession).toHaveBeenLastCalledWith(expect.objectContaining({
+        schedule_id: 'sched-1',
+        location: 'FIX lat=35.681237 lon=139.767125 sats=8 hdop=0.9 alt=40.1 utc=2026-10-24T06:30:00Z',
+      }))
+
+      const k2 = useTenkoKiosk()
+      k2.employeeId.value = 'emp-1'
+      k2.proceedWithoutSchedule()
+      await k2.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(startTenkoSession).toHaveBeenLastCalledWith(expect.objectContaining({ tenko_type: 'post_operation', location: expect.stringMatching(/^FIX /) }))
+      resetGpsFix()
+    })
+
+    it('GPS を受けていなければ start の body に location の欄ごと載せない', async () => {
+      resetGpsFix()
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'identity_verified' }))
+
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      const body = vi.mocked(startTenkoSession).mock.calls.at(-1)![0]
+      expect('location' in body).toBe(false)
     })
 
     it('スケジュール選択後: セッション開始 + status による遷移', async () => {

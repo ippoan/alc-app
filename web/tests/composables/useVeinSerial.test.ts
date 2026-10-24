@@ -395,6 +395,21 @@ describe('useVeinSerial', () => {
       ])
     })
 
+    it('EVT GPS の行は useGpsFix へ渡し、他の EVT と同じく onEvent にも配る (Refs ippoan/alc-app#514)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      // load() が vi.resetModules() するので、useVeinSerial と同じ世代の useGpsFix を取る
+      const { currentLocation } = await import('~/composables/useGpsFix')
+      const names: string[] = []
+      vein.onEvent(name => names.push(name))
+
+      dev.emit('EVT GPS NOFIX sats=3 utc=2026-10-24T06:30:00Z\nEVT NFC_READY\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(currentLocation()).toBe('NOFIX sats=3 utc=2026-10-24T06:30:00Z')
+      expect(names).toEqual(['GPS', 'NFC_READY'])
+    })
+
     it('プローブ中に来ていた EVT も接続時に配る', async () => {
       const dev = createMockPort()
       installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })

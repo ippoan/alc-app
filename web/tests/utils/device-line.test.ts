@@ -65,6 +65,7 @@ describe('deviceSendsPunch', () => {
     ['vein-station', 'timecard', true],
     ['vein-station', 'timecard-station', false],
     ['vein-station', 'timecard-vein', false],
+    ['vein-station', 'timecard-vein-gps', false],
     ['vein-station', null, false],
     ['vein-station', undefined, false],
     ['vein-station', 'timecard-next', false],
