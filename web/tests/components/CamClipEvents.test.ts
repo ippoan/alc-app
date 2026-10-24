@@ -6,10 +6,12 @@ import CamClipEvents from '~/components/CamClipEvents.vue'
 import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
 import { clipSrc } from '~/utils/cam-clips'
 import { jstTodayDate } from '~/utils/jst'
+import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 
 const api = vi.hoisted(() => ({
   listCamClipsCameras: vi.fn(),
   listCamClipsEvents: vi.fn(),
+  runCamClipsAuto: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -124,5 +126,53 @@ describe('CamClipEvents', () => {
     await flushPromises()
     expect(w.find(t('error')).text()).toBe('admin だけです')
     expect(api.listCamClipsEvents).not.toHaveBeenCalled()
+  })
+
+  describe('今すぐ切り出す', () => {
+    const run = (over = {}) => ({
+      camera_id: 'c1', ok: true, events: 4, groups: 2, ready: 2, failed: 0, deferred: 1,
+      fetched: 2, listing_failed: false, error: null, ...over,
+    })
+    it('カメラ未選択なら押せない', async () => {
+      const w = await mountIt([cam('c1', '正門'), cam('c2', '裏門')])
+      expect(w.find(t('run')).attributes('disabled')).toBeDefined()
+      await w.find(t('camera')).setValue('c2')
+      expect(w.find(t('run')).attributes('disabled')).toBeUndefined()
+    })
+    it('選択中のカメラで実行し、結果を 1 行出して一覧を取り直す', async () => {
+      api.runCamClipsAuto.mockResolvedValue({ cameras: [run()] })
+      const w = await mountIt()
+      api.listCamClipsEvents.mockClear()
+      await w.find(t('run')).trigger('click')
+      await flushPromises()
+      expect(api.runCamClipsAuto).toHaveBeenCalledWith('c1')
+      expect(w.find(t('run-result')).text()).toBe('切り出し 2 本 / 失敗 0 / 次回へ 1')
+      expect(api.listCamClipsEvents).toHaveBeenCalledWith('c1', jstTodayDate())
+    })
+    it('実行中は押せない', async () => {
+      let done!: (v: unknown) => void
+      api.runCamClipsAuto.mockReturnValue(new Promise((r) => { done = r }))
+      const w = await mountIt()
+      await w.find(t('run')).trigger('click')
+      expect(w.find(t('run')).attributes('disabled')).toBeDefined()
+      done({ cameras: [run()] })
+      await flushPromises()
+      expect(w.find(t('run')).attributes('disabled')).toBeUndefined()
+    })
+    it('実行に失敗したら error の文言を出す', async () => {
+      api.runCamClipsAuto.mockRejectedValue(new Error('API エラー (404): {"error":"カメラがありません"}'))
+      const w = await mountIt()
+      await w.find(t('run')).trigger('click')
+      await flushPromises()
+      expect(w.find(t('error')).text()).toBe('カメラがありません')
+      expect(w.find(t('run-result')).exists()).toBe(false)
+    })
+    it('時間切れなら裏で続いている可能性を伝える', async () => {
+      api.runCamClipsAuto.mockRejectedValue(new Error(FETCH_TIMEOUT_MESSAGE_WRITE))
+      const w = await mountIt()
+      await w.find(t('run')).trigger('click')
+      await flushPromises()
+      expect(w.find(t('error')).text()).toBe('時間がかかっています。裏で続いている可能性があるので、少し後に一覧を更新してください')
+    })
   })
 })
