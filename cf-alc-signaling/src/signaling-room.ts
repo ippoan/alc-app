@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { DEV_HEADER, isDevRequest } from './auth';
+import { DEV_HEADER, DEVICE_SUB_HEADER, isDevRequest } from './auth';
 import { setKeepaliveAutoResponse } from './keepalive';
 
 type ClientRole = 'device' | 'admin';
@@ -34,7 +34,10 @@ interface Env {
 interface PeerAttachment {
   /** dev端末の鍵で入った接続か (worker が introspect の結果から決めた値)。 */
   dev: boolean;
-  /** device が自己申告した端末 ID (遠隔点呼の kiosk、`?device_id=`)。admin への peer_joined に載せる。 */
+  /**
+   * device の端末 ID。admin への peer_joined に載せる。worker が鍵から取り出した sub
+   * (`DEVICE_SUB_HEADER`、CoreS3 の鍵なら `alarm:<fingerprint>`) を優先し、無ければ自己申告の `?device_id=`。
+   */
   deviceId?: string;
   /** dev の device が入ってきて切られた admin。close の完了までの間、居ないものとして扱う。 */
   kicked?: true;
@@ -81,7 +84,10 @@ export class SignalingRoom extends DurableObject<Env> {
     const pair = new WebSocketPair();
     // Accept with role tag for Hibernatable WebSockets
     this.ctx.acceptWebSocket(pair[1], [role]);
-    const deviceId = role === 'device' ? url.searchParams.get('device_id') || undefined : undefined;
+    const deviceId =
+      role === 'device'
+        ? request.headers.get(DEVICE_SUB_HEADER) || url.searchParams.get('device_id') || undefined
+        : undefined;
     pair[1].serializeAttachment({ dev, ...(deviceId ? { deviceId } : {}) } satisfies PeerAttachment);
 
     // admin が先に入っている部屋に dev の device が入ってきたら、dev でない admin を切る。

@@ -17,6 +17,10 @@ const TOKENS = {
   // 運行管理者席の鍵 (device JWT) / 他の device 鍵 / 閲覧のみ (cam-room の role 判定用)
   "seat-token": { active: true, tenant_id: "tenant-1", role: "device-tenko-manager", sub: "seat-1" },
   "kiosk-token": { active: true, tenant_id: "tenant-1", role: "device-kiosk", sub: "kiosk-1" },
+  // 拠点 PC の拡張の鍵 (CoreS3 署名の cam-host。sub は alarm:<fingerprint>)
+  "cam-host-token": { active: true, tenant_id: "tenant-1", role: "device-cam-host", sub: "alarm:fp-1" },
+  // kiosk の鍵 (遠隔点呼 /room の device_id 用。sub は CoreS3 の鍵と同じ形)
+  "kiosk-alarm-token": { active: true, tenant_id: "tenant-1", role: "device-kiosk", sub: "alarm:fp-2" },
   "viewer-token": { active: true, tenant_id: "tenant-1", role: "viewer", sub: "view-1" },
   // dev_device が true 以外の値 (文字列) — dev として扱ってはいけない
   "truthy-token": { active: true, tenant_id: "tenant-1", role: "admin", sub: "t-1", dev_device: "true" },
