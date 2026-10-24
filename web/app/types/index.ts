@@ -1352,6 +1352,13 @@ export interface HubMeasurement {
   id: string
   tenant_id: string
   device_id: string
+  /** この行を送った hub の接続の ID (`device_id` と同じ値。API が返す間だけ) */
+  via_device_id?: string | null
+  /**
+   * `device_id` (hub の ID) を結び付いた機体の鍵の ID (`alarm:<fp>`) に畳んだ値。
+   * 結び付きの無い hub は `device_id` と同じ。API が古い間は無い (= `device_id` を使う)
+   */
+  machine_id?: string | null
   /** temperature / blood_pressure / alcohol / fc1200_raw */
   kind: string
   payload: unknown

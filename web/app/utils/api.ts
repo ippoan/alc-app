@@ -28,8 +28,9 @@ import type {
   DriverMasterSyncResult,
 } from '~/types'
 import type {
-  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey, KnownDeviceName,
+  CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey,
 } from '~/utils/cam-clips'
+import type { KnownDeviceName } from '~/utils/device-name'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
@@ -1088,7 +1089,11 @@ function toParams(filter: object): string {
 
 /** CSV ダウンロード (blob → ブラウザ保存) */
 async function downloadCsv(path: string, filename: string): Promise<void> {
-  const res = await proxyRawFetch(path, {})
+  await saveCsvResponse(await proxyRawFetch(path, {}), filename)
+}
+
+/** CSV の応答を検査してブラウザに保存する (失敗は本文付きで投げる) */
+async function saveCsvResponse(res: Response, filename: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`CSV ダウンロード失敗 (${res.status}): ${body || res.statusText}`)
@@ -1507,8 +1512,21 @@ export async function listTimePunches(filter: TimePunchFilter = {}): Promise<Tim
   return request<TimePunchesResponse>(`/api/timecard/punches${toParams(filter)}`)
 }
 
+/**
+ * 打刻の CSV。token があれば alc-app 自身の server route (`/api/timecard/punches/csv`) を叩く —
+ * backend の CSV の「デバイス」列を、端末の名前 (機体の鍵のラベル) に替えて返すのはその route
+ * (鍵のラベルは auth-worker にしか無く、backend は名前を持たない)。
+ * token が無いときは従来どおり backend の CSV を proxy 経由でそのまま落とす。
+ */
 export async function downloadTimePunchesCsv(filter: TimePunchFilter = {}): Promise<void> {
-  await downloadCsv(`/api/timecard/punches/csv${toParams(filter)}`, 'time-punches.csv')
+  // 付ける token は他の proxy 経路 (`proxyRawFetch`) と同じ規則で選ぶ。route はその Bearer をそのまま proxy へ流す
+  const jwt = await selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
+  if (!jwt) {
+    await downloadCsv(`/api/timecard/punches/csv${toParams(filter)}`, 'time-punches.csv')
+    return
+  }
+  const res = await fetchWithTimeout(`/api/timecard/punches/csv${toParams(filter)}`, { headers: { Authorization: `Bearer ${jwt}` } })
+  await saveCsvResponse(res, 'time-punches.csv')
 }
 
 // ============================================================

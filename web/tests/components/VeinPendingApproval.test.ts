@@ -4,8 +4,11 @@ import { ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import VeinPendingApproval from '~/components/VeinPendingApproval.vue'
+import { resetDeviceNames } from '~/composables/useDeviceNames'
 
 const api = vi.hoisted(() => ({
+  listCamHostKeys: vi.fn(),
+  listDeviceLabels: vi.fn(),
   getPendingVeinModuleTemplates: vi.fn(),
   approveVeinByEmployee: vi.fn(),
 }))
@@ -56,6 +59,10 @@ async function selectFirstAndApprove(w: Awaited<ReturnType<typeof mountPanel>>) 
 describe('VeinPendingApproval', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetDeviceNames()
+    // 名前の表は既定で取れない (今の短い表記)
+    api.listCamHostKeys.mockRejectedValue(new Error('403'))
+    api.listDeviceLabels.mockRejectedValue(new Error('403'))
     vein.isConnected = ref(true)
     vein.say.mockResolvedValue(undefined)
     vein.identify.mockResolvedValue(10)
@@ -63,6 +70,15 @@ describe('VeinPendingApproval', () => {
     api.approveVeinByEmployee.mockResolvedValue(undefined)
     db.loadVeinModuleEntries.mockResolvedValue(ENTRIES)
     sync.syncVeinModule.mockResolvedValue(true)
+  })
+
+  it('★ 登録した端末は機体の鍵のラベルで出す。引けなければ今の短い表記', async () => {
+    api.listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0123456789abcdef', label: '帯広の Vein Station', revoked: false }] })
+    const w = await mountPanel()
+    const rows = w.findAll('[data-testid="vein-pending-row"]').map(r => r.text())
+    expect(rows[0]).toContain('帯広の Vein Station')
+    expect(rows[0]).not.toContain('Vein Station 01234567')
+    expect(rows[1]).toContain('不明')
   })
 
   it('未承認の一覧を出す (登録した時刻と端末)。無ければそう出す。取れなければ理由', async () => {

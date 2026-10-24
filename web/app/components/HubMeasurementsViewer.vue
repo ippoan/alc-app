@@ -13,6 +13,7 @@
 import { getEmployees, getMeasurements, listHubMeasurements } from '~/utils/api'
 import { readAlcohol, alcoholResultLabel, alcoholResultClass, type AlcoholPayload } from '~/utils/alcohol'
 import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type ApiMeasurement, type HubMeasurement } from '~/types'
+import { isKeyDeviceId } from '~/utils/device-name'
 
 const PAGE_SIZE = 50
 
@@ -42,6 +43,15 @@ const kindOptions = computed(() => {
   return [...HUB_MEASUREMENT_KINDS]
 })
 
+/** 端末の名前 (機体の鍵のラベル)。ID は表の title に出し、絞り込みの選択肢の中身は鍵の ID */
+const { keyNames, nameOf } = useDeviceNames()
+/** 絞り込みの選択肢 = 機体の鍵 (失効済みを含む。過去の記録を見るため)。名前が引けない鍵は選択肢にしない */
+const deviceOptions = computed(() =>
+  keyNames.value
+    .filter(k => k.label && isKeyDeviceId(k.device_id))
+    .map(k => ({ id: k.device_id, name: nameOf(k.device_id) })),
+)
+
 const deviceId = ref('')
 const kind = ref('')
 const from = ref('')
@@ -67,7 +77,10 @@ interface SessionRow {
    * ★ template で `items[0]!` と書くと Vue のテンプレート式は TS ではないので
    * 壊れる。畳む側で決めておく。 */
   createdAt: string
+  /** hub の接続の ID (生値。JSON を見る人向けに残す) */
   deviceId: string
+  /** 機体の鍵に畳んだ ID (`machine_id`)。API が古くて無い間は deviceId。名前を引く・ツールチップに出す側 */
+  machineId: string
   /** 免許証の測定。点呼を免許証から始めていなければ null。 */
   license: { nfcId: string, issue: string | null, expiry: string | null } | null
   /** アルコール測定 (吹込不良は result のみで value は信用しない)。 */
@@ -142,6 +155,7 @@ const sessions = computed<SessionRow[]>(() => {
         items: [],
         createdAt: item.created_at,
         deviceId: item.device_id,
+        machineId: item.machine_id || item.device_id,
         license: null,
         alcohol: null,
         temperature: null,
@@ -333,14 +347,15 @@ onMounted(() => {
     <div class="bg-white rounded-xl p-4 shadow-sm">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <label class="flex flex-col gap-1">
-          <span class="text-sm text-gray-500">デバイスID</span>
-          <input
+          <span class="text-sm text-gray-500">端末</span>
+          <select
             v-model="deviceId"
-            type="text"
-            placeholder="すべて"
+            data-testid="hub-device-filter"
             class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            @keyup.enter="search"
           >
+            <option value="">すべて</option>
+            <option v-for="o in deviceOptions" :key="o.id" :value="o.id">{{ o.name }}</option>
+          </select>
         </label>
         <label v-if="scope !== 'timecard'" class="flex flex-col gap-1">
           <span class="text-sm text-gray-500">種別</span>
@@ -402,7 +417,7 @@ onMounted(() => {
           <thead class="bg-gray-50">
             <tr>
               <th class="px-2 py-2 text-left text-gray-500">受信日時</th>
-              <th class="px-2 py-2 text-left text-gray-500">デバイスID</th>
+              <th class="px-2 py-2 text-left text-gray-500">端末</th>
               <th class="px-2 py-2 text-left text-gray-500">乗務員</th>
               <th class="px-2 py-2 text-left text-gray-500">免許 有効期限</th>
               <th class="px-2 py-2 text-left text-gray-500">アルコール</th>
@@ -417,7 +432,7 @@ onMounted(() => {
             <template v-for="row in sessions" :key="row.key">
               <tr class="border-t border-gray-100">
                 <td class="px-2 py-2 text-gray-700 whitespace-nowrap">{{ formatDateTime(row.createdAt) }}</td>
-                <td class="px-2 py-2 font-mono text-gray-700">{{ row.deviceId }}</td>
+                <td class="px-2 py-2 text-gray-700" :title="row.machineId" data-testid="hub-device">{{ nameOf(row.machineId) }}</td>
                 <td class="px-2 py-2 whitespace-nowrap">
                   <span v-if="!row.license" class="text-gray-400">—</span>
                   <span v-else-if="employeeOf(row)" class="text-gray-700">

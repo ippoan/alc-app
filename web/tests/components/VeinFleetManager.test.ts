@@ -5,8 +5,11 @@ import { flushPromises } from '@vue/test-utils'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import type { VeinFleetDevice } from '~/utils/api'
 import VeinFleetManager from '~/components/VeinFleetManager.vue'
+import { resetDeviceNames } from '~/composables/useDeviceNames'
 
-const { listVeinFleet, requestVeinFleet, getEmployees } = vi.hoisted(() => ({
+const { listVeinFleet, requestVeinFleet, getEmployees, listCamHostKeys, listDeviceLabels } = vi.hoisted(() => ({
+  listCamHostKeys: vi.fn(),
+  listDeviceLabels: vi.fn(),
   listVeinFleet: vi.fn(),
   requestVeinFleet: vi.fn(),
   getEmployees: vi.fn(),
@@ -16,6 +19,8 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   listVeinFleet,
   requestVeinFleet,
   getEmployees,
+  listCamHostKeys,
+  listDeviceLabels,
 }))
 
 const timecardWatch = vi.hoisted(() => vi.fn())
@@ -51,6 +56,10 @@ async function mountManager() {
 describe('VeinFleetManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetDeviceNames()
+    // 名前の表は既定で取れない (今の短い表記)
+    listCamHostKeys.mockRejectedValue(new Error('403'))
+    listDeviceLabels.mockRejectedValue(new Error('403'))
     timecardWatch.mockReturnValue(watchHandle)
     listVeinFleet.mockResolvedValue({ devices: [dev()] })
     requestVeinFleet.mockResolvedValue({ sent: 2 })
@@ -106,6 +115,29 @@ describe('VeinFleetManager', () => {
     const wrapper = await mountManager()
     expect(wrapper.findAll('[data-testid="vein-fleet-registered"]').map(c => c.text())).toEqual([
       'Vein Station 01234567 (この端末)',
+      'kiosk-12',
+    ])
+  })
+
+  it('★ 登録した端末は機体の鍵のラベルで出す (失効は「(失効)」付き)。引けない端末は今の短い表記', async () => {
+    listCamHostKeys.mockResolvedValue({ keys: [], names: [
+      { device_id: 'alarm:0123456789abcdef', label: '帯広の Vein Station', revoked: false },
+      { device_id: 'alarm:fedcba9876543210', label: '旧機', revoked: true },
+    ] })
+    listVeinFleet.mockResolvedValue({
+      devices: [dev({
+        device_id: 'alarm-0123456789abcdef',
+        entries: [
+          { module_id: 10, employee_id: 'e1', approved: true, registered_device_id: 'alarm:0123456789abcdef' },
+          { module_id: 11, employee_id: 'e2', approved: true, registered_device_id: 'alarm-fedcba9876543210' },
+          { module_id: 12, employee_id: 'e3', approved: true, registered_device_id: 'kiosk-123456789' },
+        ],
+      })],
+    })
+    const wrapper = await mountManager()
+    expect(wrapper.findAll('[data-testid="vein-fleet-registered"]').map(c => c.text())).toEqual([
+      '帯広の Vein Station (この端末)',
+      '旧機 (失効)',
       'kiosk-12',
     ])
   })

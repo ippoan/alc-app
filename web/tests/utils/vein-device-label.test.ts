@@ -7,6 +7,11 @@ describe('veinDeviceLabel', () => {
     expect(veinDeviceLabel('alarm:0123456789abcdef')).toBe('Vein Station 01234567')
     expect(veinDeviceLabel('alarm-0123456789abcdef')).toBe('Vein Station 01234567')
   })
+  it('鍵のラベルが引けていればそれ。引けなければ (null / 未指定) 今の短い表記。id が無ければラベルがあっても不明', () => {
+    expect(veinDeviceLabel('alarm:0123456789abcdef', '帯広の Vein Station')).toBe('帯広の Vein Station')
+    expect(veinDeviceLabel('alarm:0123456789abcdef', null)).toBe('Vein Station 01234567')
+    expect(veinDeviceLabel(null, 'ラベル')).toBe('不明')
+  })
   it('それ以外は頭 8 文字、無ければ不明', () => {
     expect(veinDeviceLabel('kiosk-123456789')).toBe('kiosk-12')
     expect(veinDeviceLabel(null)).toBe('不明')

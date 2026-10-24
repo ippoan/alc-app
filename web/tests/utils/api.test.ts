@@ -1721,6 +1721,36 @@ restoreNativeApis()
       expect(mockAnchor.download).toBe('time-punches.csv')
     })
 
+    it('★ downloadTimePunchesCsv は token があれば alc-app の server route (名前に替える) を Bearer 付きで叩く。保存名は変えない', async () => {
+      if (isLive) return
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+      stubResponse({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['csv'])),
+      })
+
+      await downloadTimePunchesCsv({ employee_id: 'emp-1' })
+
+      const [url, init] = mockFetch.mock.calls[0]
+      expect(url).toBe('/api/timecard/punches/csv?employee_id=emp-1')
+      expect(init.headers.Authorization).toBe('Bearer admin-jwt')
+      expect(mockAnchor.download).toBe('time-punches.csv')
+      expect(mockAnchor.click).toHaveBeenCalled()
+    })
+
+    it('downloadTimePunchesCsv は route の失敗を本文付きで投げる', async () => {
+      if (isLive) return
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+      stubResponse({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: () => Promise.resolve('forbidden'),
+      })
+
+      await expect(downloadTimePunchesCsv({})).rejects.toThrow('CSV ダウンロード失敗 (403): forbidden')
+    })
+
     it('downloadCsv should throw on error response', async () => {
       if (isLive) {
         // live: use invalid filter to trigger server-side error or just exercise error path

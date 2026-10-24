@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import {
   createCamClipsCamera, createCamClipsClip, listCamClipsCameras, listCamClipsDeviceCandidates,
-  listCamHostKeys, listDeviceLabels, updateCamClipsCamera,
+  updateCamClipsCamera,
 } from '~/utils/api'
-import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm, CamHostKey, KnownDeviceName } from '~/utils/cam-clips'
+import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm } from '~/utils/cam-clips'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, MAX_STREAM_DEVICES,
-  isCamHostKeyId, moveStreamDevice, rtspLabel, rtspPortError, streamPrimary, summarizeCounts,
+  DEFAULT_RTSP_PORT, EMPTY_FORM, errorText, formatJst, formFromCamera, MAX_STREAM_DEVICES,
+  isCamHostKeyId, moveStreamDevice, pendingDeviceIds, rtspLabel, rtspPortError, streamPrimary, summarizeCounts,
 } from '~/utils/cam-clips'
 
 /**
@@ -19,10 +19,8 @@ import {
 const cameras = ref<CamClipsCamera[]>([])
 const canEditDestination = ref(false)
 const candidates = ref<CamClipsDeviceCandidate[]>([])
-const knownDevices = ref<KnownDeviceName[]>([])
-/** 拠点 PC の機体の鍵 (CoreS3・Vein Station・測定台の ATOM S3。拠点 PC の拡張の鍵の元)。device_id = `alarm:<fingerprint>` */
-const camHostKeys = ref<CamHostKey[]>([])
-const keyNames = ref<KnownDeviceName[]>([])
+/** 機体の鍵の名前の表 (名前の正本は鍵のラベル)。keys = 拠点 PC の機体の鍵 (CoreS3・Vein Station・測定台の ATOM S3。拠点 PC の拡張の鍵の元)。device_id = `alarm:<fingerprint>` */
+const { keys: camHostKeys, nameOf, ready: namesReady } = useDeviceNames()
 const listError = ref('')
 
 /** 編集中のカメラ (null = 追加) とフォーム。`formOpen` が false なら閉じている */
@@ -53,35 +51,50 @@ async function loadCameras() {
   }
 }
 
-/** 端末の候補と表示名。取れなくても登録はできる (候補が選べないだけ) */
+/** 端末の候補 (件数・最終時刻) と名前の表。取れなくても登録はできる (候補が選べないだけ) */
 async function loadDevices() {
-  const [cand, labels, keys] = await Promise.allSettled([listCamClipsDeviceCandidates(30), listDeviceLabels(), listCamHostKeys()])
-  candidates.value = cand.status === 'fulfilled' ? cand.value : []
-  knownDevices.value = labels.status === 'fulfilled' ? labels.value.devices : []
-  camHostKeys.value = keys.status === 'fulfilled' ? keys.value.keys : []
-  keyNames.value = keys.status === 'fulfilled' ? keys.value.names ?? [] : []
+  try {
+    candidates.value = await listCamClipsDeviceCandidates(30)
+  }
+  catch {
+    candidates.value = []
+  }
+  await namesReady
 }
 
 onMounted(() => Promise.all([loadCameras(), loadDevices()]))
 
 /**
- * 選択肢 = 直近 30 日にイベントを出した端末 + 機体の鍵 (拠点 PC の配信の紐づけ先) +
- * どちらにも無いが結び付いている端末
+ * 選択肢 = 機体の鍵の一覧 (`/api/cam-host-keys`) を土台に、候補 API の件数・最終時刻をその行に載せる
+ * (件数の無い鍵は「直近 30 日のイベントなし」) + 候補に在って一覧に無い機体の鍵 (失効した鍵など。名前は鍵のラベルで「(失効)」付き) +
+ * どちらにも無いが結び付いている ID。hub の ID・`browser` は選択肢に出さない (hub の分は結び付きで鍵の行に合算されて返る)。
+ * `pending_device_ids` (鍵に結び付いていない hub の ID) も選択肢には出さず、フォームの「置き換え待ち」に出す。
  */
 const deviceOptions = computed(() => {
-  const seen = new Set(candidates.value.map(c => c.device_id))
-  const keys = camHostKeys.value.filter(k => !seen.has(k.device_id))
-  for (const k of keys) seen.add(k.device_id)
-  const extra = form.value.device_ids.filter(id => !seen.has(id))
-  return [
-    ...candidates.value.map(c => ({ id: c.device_id, isDev: c.is_dev === true, summary: summarizeCounts(c.counts), last: formatJst(c.last_at) })),
-    ...keys.map(k => ({ id: k.device_id, isDev: false, summary: '機体の鍵 (拠点 PC のカメラ配信)', last: '—' })),
-    ...extra.map(id => ({ id, isDev: false, summary: '直近 30 日のイベントなし', last: '—' })),
-  ]
+  const keyCandidates = new Map(candidates.value.filter(c => isCamHostKeyId(c.device_id)).map(c => [c.device_id, c]))
+  const keyIds = camHostKeys.value.map(k => k.device_id)
+  const seen = new Set(keyIds)
+  const orphanIds = [...keyCandidates.keys()].filter(id => !seen.has(id))
+  for (const id of orphanIds) seen.add(id)
+  const pending = pendingDeviceIds(editing.value ?? {})
+  const extraIds = form.value.device_ids.filter(id => !seen.has(id) && !pending.includes(id))
+  const row = (id: string) => {
+    const c = keyCandidates.get(id)
+    return {
+      id,
+      isDev: c?.is_dev === true,
+      summary: c ? summarizeCounts(c.counts) : '直近 30 日のイベントなし',
+      last: c ? formatJst(c.last_at) : '—',
+    }
+  }
+  return [...keyIds, ...orphanIds, ...extraIds].map(row)
 })
 
-function nameOf(id: string): string {
-  return deviceDisplayName(id, [...knownDevices.value, ...keyNames.value, ...camHostKeys.value])
+/** 編集中のカメラの、置き換え待ちの hub の ID のうち、フォームに残っているもの (外すと消える・新しくは足せない) */
+const pendingInForm = computed(() => pendingDeviceIds(editing.value ?? {}).filter(id => form.value.device_ids.includes(id)))
+
+function removePending(id: string) {
+  form.value.device_ids = form.value.device_ids.filter(d => d !== id)
 }
 
 /** 拡張の設定 (siteId) に入れる値。クリップボードが使えない環境では選択コピーに任せる (select-all) */
@@ -247,6 +260,11 @@ async function makeClip() {
                 <span v-if="c.device_ids.length === 0" class="text-gray-400">—</span>
                 <span v-for="id in c.device_ids" :key="id" class="block" data-testid="cam-clips-row-device">
                   <span class="font-semibold" data-testid="cam-clips-row-device-name">{{ nameOf(id) }}</span>
+                  <span
+                    v-if="pendingDeviceIds(c).includes(id)"
+                    class="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
+                    data-testid="cam-clips-row-device-pending"
+                  >機体の鍵へ置き換え待ち</span>
                   <span class="block text-xs text-gray-500 font-mono" data-testid="cam-clips-row-device-id">{{ id }}</span>
                 </span>
               </td>
@@ -351,10 +369,11 @@ async function makeClip() {
       </fieldset>
 
       <fieldset class="text-sm">
-        <legend>結び付ける端末 (直近 30 日にイベントを出した端末・機体の鍵)</legend>
+        <legend>結び付ける端末 (機体の鍵)</legend>
         <p class="text-xs text-gray-500" data-testid="cam-clips-candidates-help">
-          このカメラに映る端末を選びます。選んだ端末で記録したアルコール・血圧・打刻・免許証・指静脈の登録の前後 10 秒が切り出されます。
-          機体 (CoreS3・Vein Station・測定台の ATOM S3) の鍵を選ぶと、その機体を挿した拠点 PC がこのカメラを配信し、その端末の遠隔点呼にこのカメラが出ます。
+          このカメラに映る機体 (CoreS3・Vein Station・測定台の ATOM S3) を、機体の鍵で選びます。選んだ機体で記録したアルコール・血圧・打刻・免許証・指静脈の登録の前後 10 秒が切り出されます
+          (件数と最終時刻は直近 30 日。CoreS3 のハブ経由の記録も鍵の行に合算されます)。
+          その機体を挿した拠点 PC がこのカメラを配信し、その機体の遠隔点呼にこのカメラが出ます。
         </p>
         <p v-if="deviceOptions.length === 0" class="text-gray-500" data-testid="cam-clips-no-candidates">候補はありません</p>
         <label v-for="o in deviceOptions" :key="o.id" class="flex items-start gap-2 py-1" data-testid="cam-clips-candidate">
@@ -372,6 +391,17 @@ async function makeClip() {
             <span class="block text-xs text-gray-500">{{ o.summary }} ・ 最終 {{ o.last }}</span>
           </span>
         </label>
+        <div v-if="pendingInForm.length" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-1" data-testid="cam-clips-pending">
+          <p class="text-xs text-amber-800">
+            機体の鍵へ置き換え待ち: 鍵の ID が結び付いていない hub の ID です。外すことはできますが、新しく選ぶことはできません
+            (機体のファームが更新されて鍵との結び付きができると、鍵の行に畳まれます)。
+          </p>
+          <p v-for="id in pendingInForm" :key="id" class="flex items-center gap-2" data-testid="cam-clips-pending-item">
+            <span class="font-semibold" data-testid="cam-clips-pending-name">{{ nameOf(id) }}</span>
+            <span class="text-xs text-gray-500 font-mono">{{ id }}</span>
+            <button type="button" class="px-2 text-red-700" data-testid="cam-clips-pending-remove" @click="removePending(id)">外す</button>
+          </p>
+        </div>
       </fieldset>
 
       <fieldset class="text-sm space-y-2" data-testid="cam-clips-stream">
