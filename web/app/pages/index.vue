@@ -487,6 +487,10 @@ function onRoleTabClick(role: RoleTab) {
       </button>
     </div>
 
+    <!-- この端末のカメラ配信の拡張 (alc-cam) の状態の 1 行。ロールタブに関わらず出し、拡張が無い端末では出ない。
+         メンテナンスは端末の鍵では入れないので、拠点 PC の状態と操作はここから -->
+    <CamExtensionStatus />
+
     <!-- 運行者タブ -->
     <template v-if="activeRole === 'driver'">
       <!-- 端末未登録 (device JWT も管理者 JWT も無い) の案内 (Refs #206) -->

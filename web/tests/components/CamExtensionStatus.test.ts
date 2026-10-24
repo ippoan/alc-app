@@ -1,10 +1,10 @@
-// メンテナンス画面の「カメラ配信 (拡張)」: 拡張の cam_status を数秒ごとに出し、cam_control を送る。
+// 点呼画面の「カメラ配信」: 拡張の cam_status を数秒ごとに 1 行で出し、押すと詳細と cam_control の操作。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import CamExtensionPanel from '~/components/CamExtensionPanel.vue'
+import CamExtensionStatus from '~/components/CamExtensionStatus.vue'
 import { defineComponent, h } from 'vue'
-import { POLL_MS, jstMinuteLabel, useCamExtension, parseStatusReply, tokenLabel, updateLabel, viewersLabel, type CamExtensionStatus } from '~/composables/useCamExtension'
+import { POLL_MS, jstMinuteLabel, summaryLabel, useCamExtension, parseStatusReply, tokenLabel, updateLabel, viewersLabel, type CamExtensionStatus } from '~/composables/useCamExtension'
 import { ALC_CAM_EXTENSION_ID } from '~/utils/alc-cam-extension'
 
 const NOW = Date.parse('2026-10-24T00:00:00Z')
@@ -50,20 +50,23 @@ afterEach(() => {
 
 const text = (w: Awaited<ReturnType<typeof mountSuspended>>, id: string) => w.find(`[data-testid="${id}"]`)
 
-describe('CamExtensionPanel', () => {
-  it('chrome.runtime が無いブラウザでは案内だけで、拡張に送らない', async () => {
+describe('CamExtensionStatus', () => {
+  it('chrome.runtime が無いブラウザでは何も出さず、拡張に送らない', async () => {
     vi.stubGlobal('chrome', undefined)
-    const w = await mountSuspended(CamExtensionPanel)
-    expect(text(w, 'cam-ext-unsupported').exists()).toBe(true)
-    expect(text(w, 'cam-ext-toggle').exists()).toBe(false)
+    const w = await mountSuspended(CamExtensionStatus)
+    expect(text(w, 'cam-ext-status').exists()).toBe(false)
     w.unmount()
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
-  it('状態を出し (版・鍵の sub・担当カメラ・host 更新の時刻は JST)、POLL_MS ごとに取り直す', async () => {
-    const w = await mountSuspended(CamExtensionPanel)
+  it('1 行を出し、押すと詳細 (版・鍵の sub・担当カメラ・host 更新の時刻は JST)。POLL_MS ごとに取り直す', async () => {
+    const w = await mountSuspended(CamExtensionStatus)
     await flushPromises()
     expect(sendMessage).toHaveBeenCalledWith(ALC_CAM_EXTENSION_ID, { type: 'cam_status' }, expect.any(Function))
+    expect(text(w, 'cam-ext-summary').text()).toBe('カメラ配信:配信中・本社・見る人 1')
+    expect(text(w, 'cam-ext-detail').exists()).toBe(false)
+    await text(w, 'cam-ext-summary').trigger('click')
+    expect(text(w, 'cam-ext-summary').attributes('aria-expanded')).toBe('true')
     const body = w.text()
     expect(body).toContain('拡張 v0.4.2・host v0.4.2')
     expect(body).toContain('alarm:fp1')
@@ -86,22 +89,43 @@ describe('CamExtensionPanel', () => {
     expect(sendMessage.mock.calls.length).toBe(calls)
   })
 
-  it('拡張が無い・古い拡張 ({ ok: false }) は「拡張が見つかりません」', async () => {
+  it('拡張が無い・古い拡張 ({ ok: false }) では何も出さない', async () => {
     reply = () => ({ ok: false })
-    const w = await mountSuspended(CamExtensionPanel)
+    const w = await mountSuspended(CamExtensionStatus)
     await flushPromises()
-    expect(text(w, 'cam-ext-missing').exists()).toBe(true)
+    expect(text(w, 'cam-ext-status').exists()).toBe(false)
   })
 
-  it('停止/開始・更新確認・取り直しのボタンで cam_control を送り、結果と新しい状態を出す', async () => {
-    const w = await mountSuspended(CamExtensionPanel)
+  it('もう一度押すと閉じる', async () => {
+    const w = await mountSuspended(CamExtensionStatus)
     await flushPromises()
+    await text(w, 'cam-ext-summary').trigger('click')
+    await text(w, 'cam-ext-summary').trigger('click')
+    expect(text(w, 'cam-ext-detail').exists()).toBe(false)
+    expect(text(w, 'cam-ext-summary').attributes('aria-expanded')).toBe('false')
+  })
+
+  it('停止 (確かめてから)/開始・更新確認・取り直しのボタンで cam_control を送り、結果と新しい状態を出す', async () => {
+    const w = await mountSuspended(CamExtensionStatus)
+    await flushPromises()
+    await text(w, 'cam-ext-summary').trigger('click')
+
+    // 停止は確かめる。「やめる」なら送らない
+    const before = sendMessage.mock.calls.length
+    await text(w, 'cam-ext-toggle').trigger('click')
+    expect(text(w, 'cam-ext-confirm').exists()).toBe(true)
+    await text(w, 'cam-ext-confirm-cancel').trigger('click')
+    expect(text(w, 'cam-ext-confirm').exists()).toBe(false)
+    expect(sendMessage.mock.calls.length).toBe(before)
 
     reply = msg => (msg.type === 'cam_control'
       ? { ok: true, message: '停止しました', status: makeStatus({ enabled: false }) }
       : { ok: true, status: makeStatus({ enabled: false }) })
     await text(w, 'cam-ext-toggle').trigger('click')
+    await text(w, 'cam-ext-confirm-stop').trigger('click')
     await flushPromises()
+    expect(text(w, 'cam-ext-confirm').exists()).toBe(false)
+    expect(text(w, 'cam-ext-summary').text()).toContain('停止中')
     expect(sendMessage).toHaveBeenLastCalledWith(ALC_CAM_EXTENSION_ID, { type: 'cam_control', action: 'stop' }, expect.any(Function))
     expect(text(w, 'cam-ext-result').text()).toBe('停止しました')
     expect(text(w, 'cam-ext-toggle').text()).toBe('開始')
@@ -127,13 +151,13 @@ describe('CamExtensionPanel', () => {
     sendMessage.mockImplementation((_id: string, _msg: unknown, cb: Cb) => cb())
     await text(w, 'cam-ext-refetch').trigger('click')
     await flushPromises()
-    expect(text(w, 'cam-ext-missing').exists()).toBe(true)
-    expect(text(w, 'cam-ext-result').text()).toBe('拡張が見つかりません')
+    expect(text(w, 'cam-ext-status').exists()).toBe(false)
   })
 
   it('操作中は次の操作を送らない', async () => {
-    const w = await mountSuspended(CamExtensionPanel)
+    const w = await mountSuspended(CamExtensionStatus)
     await flushPromises()
+    await text(w, 'cam-ext-summary').trigger('click')
     let pending: Cb = () => {}
     sendMessage.mockImplementation((_id: string, _msg: unknown, cb: Cb) => { pending = cb })
     void text(w, 'cam-ext-update').trigger('click')
@@ -192,6 +216,14 @@ describe('useCamExtension', () => {
   it('見る人: なし / 混在', () => {
     expect(viewersLabel(makeStatus({ viewers: [] }))).toEqual(['なし', ''])
     expect(viewersLabel(makeStatus({ viewers: [{ ok: false, message: '接続待ち' }, { ok: false, message: '接続待ち' }] }))).toEqual(['2 人: 接続待ち', ''])
+  })
+
+  it('1 行: 停止中 / 担当カメラ待ち / 繋がらない / host・カメラの異常', () => {
+    expect(summaryLabel(makeStatus({ enabled: false }))).toEqual(['停止中', 'warn'])
+    expect(summaryLabel(makeStatus({ assigned: null, config: ['担当カメラ待ち', 'warn'] }))).toEqual(['担当カメラ待ち', 'warn'])
+    expect(summaryLabel(makeStatus({ signal: ['切断', 'warn'] }))).toEqual(['本社・切断', 'warn'])
+    expect(summaryLabel(makeStatus({ host: ['停止: crash', 'warn'] }))[1]).toBe('warn')
+    expect(summaryLabel(makeStatus({ camera: ['401', 'warn'], viewers: [] }))).toEqual(['配信中・本社・見る人 0', 'warn'])
   })
 
   it('host 更新: 未確認は時刻を付けない', () => {
