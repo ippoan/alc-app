@@ -20,7 +20,7 @@ const cameras = ref<CamClipsCamera[]>([])
 const canEditDestination = ref(false)
 const candidates = ref<CamClipsDeviceCandidate[]>([])
 const knownDevices = ref<KnownDeviceName[]>([])
-/** CoreS3 の鍵 (拠点 PC の拡張の鍵の元)。device_id = `alarm:<fingerprint>` */
+/** 拠点 PC の機体の鍵 (CoreS3・Vein Station・測定台の ATOM S3。拠点 PC の拡張の鍵の元)。device_id = `alarm:<fingerprint>` */
 const camHostKeys = ref<CamHostKey[]>([])
 const keyNames = ref<KnownDeviceName[]>([])
 const listError = ref('')
@@ -65,7 +65,7 @@ async function loadDevices() {
 onMounted(() => Promise.all([loadCameras(), loadDevices()]))
 
 /**
- * 選択肢 = 直近 30 日にイベントを出した端末 + CoreS3 の鍵 (拠点 PC の配信の紐づけ先) +
+ * 選択肢 = 直近 30 日にイベントを出した端末 + 機体の鍵 (拠点 PC の配信の紐づけ先) +
  * どちらにも無いが結び付いている端末
  */
 const deviceOptions = computed(() => {
@@ -75,7 +75,7 @@ const deviceOptions = computed(() => {
   const extra = form.value.device_ids.filter(id => !seen.has(id))
   return [
     ...candidates.value.map(c => ({ id: c.device_id, isDev: c.is_dev === true, summary: summarizeCounts(c.counts), last: formatJst(c.last_at) })),
-    ...keys.map(k => ({ id: k.device_id, isDev: false, summary: 'CoreS3 の鍵 (拠点 PC のカメラ配信)', last: '—' })),
+    ...keys.map(k => ({ id: k.device_id, isDev: false, summary: '機体の鍵 (拠点 PC のカメラ配信)', last: '—' })),
     ...extra.map(id => ({ id, isDev: false, summary: '直近 30 日のイベントなし', last: '—' })),
   ]
 })
@@ -316,10 +316,10 @@ async function makeClip() {
       </fieldset>
 
       <fieldset class="text-sm">
-        <legend>結び付ける端末 (直近 30 日にイベントを出した端末・CoreS3 の鍵)</legend>
+        <legend>結び付ける端末 (直近 30 日にイベントを出した端末・機体の鍵)</legend>
         <p class="text-xs text-gray-500" data-testid="cam-clips-candidates-help">
           このカメラに映る端末を選びます。選んだ端末で記録したアルコール・血圧・打刻・免許証・指静脈の登録の前後 10 秒が切り出されます。
-          CoreS3 の鍵を選ぶと、その CoreS3 を挿した拠点 PC がこのカメラを配信し、その端末の遠隔点呼にこのカメラが出ます。
+          機体 (CoreS3・Vein Station・測定台の ATOM S3) の鍵を選ぶと、その機体を挿した拠点 PC がこのカメラを配信し、その端末の遠隔点呼にこのカメラが出ます。
         </p>
         <p v-if="deviceOptions.length === 0" class="text-gray-500" data-testid="cam-clips-no-candidates">候補はありません</p>
         <label v-for="o in deviceOptions" :key="o.id" class="flex items-start gap-2 py-1" data-testid="cam-clips-candidate">

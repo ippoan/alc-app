@@ -1,4 +1,4 @@
-// `/api/cam-host-keys` (録画タブの端末候補に出す CoreS3 の鍵) が、誰を通し、auth-worker へ
+// `/api/cam-host-keys` (録画タブの端末候補に出す機体の鍵) が、誰を通し、auth-worker へ
 // **実際に何を送るか**を固定する。admin の JWT だけ・同じ JWT を cookie に載せて
 // `/device/setup/alarm-keys` を引き、用途 kiosk (CoreS3) の鍵の sub と label だけを返す。
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest'
@@ -117,18 +117,22 @@ describe('cam-host-keys の純関数', () => {
       { usage: 'kiosk', sub: 'alarm:b', label: 3 },
     ] })).toEqual([{ device_id: 'alarm:a', label: null }, { device_id: 'alarm:b', label: null }])
   })
-  it('名前用は全用途・失効済みまで返し、kiosk の絞り込みは担当付け用で従来どおり', () => {
+  it('名前用は全用途・失効済みまで返し、担当付け用は kiosk / bp-station の鍵だけ', () => {
     const json = { keys: [
       { sub: 'alarm:k', label: 'kiosk', usage: 'kiosk' },
+      { sub: 'alarm:b', label: '測定台', usage: 'bp-station' },
+      { sub: 'alarm:m', label: '運行管理者席', usage: 'tenko-manager' },
       { sub: 'alarm:v', label: 'VoiceS3R', usage: 'voice', revoked_at: 123 },
       { sub: 'alarm:n', usage: 5, revoked_at: null },
     ] }
     expect(parseAlarmKeyNames(json)).toEqual([
       { device_id: 'alarm:k', label: 'kiosk', revoked: false },
+      { device_id: 'alarm:b', label: '測定台', revoked: false },
+      { device_id: 'alarm:m', label: '運行管理者席', revoked: false },
       { device_id: 'alarm:v', label: 'VoiceS3R', revoked: true },
       { device_id: 'alarm:n', label: null, revoked: false },
     ])
-    expect(parseCamHostKeys(json)).toEqual([{ device_id: 'alarm:k', label: 'kiosk' }])
+    expect(parseCamHostKeys(json)).toEqual([{ device_id: 'alarm:k', label: 'kiosk' }, { device_id: 'alarm:b', label: '測定台' }])
     expect(parseAlarmKeyNames(null)).toEqual([])
   })
 })

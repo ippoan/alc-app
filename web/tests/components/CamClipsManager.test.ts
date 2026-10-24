@@ -181,7 +181,7 @@ describe('CamClipsManager 端末候補の表示', () => {
   })
 })
 
-describe('CamClipsManager RTSP の接続先と CoreS3 の鍵', () => {
+describe('CamClipsManager RTSP の接続先と機体の鍵', () => {
   const KEYS = { keys: [
     { device_id: 'alarm:fp-1', label: '帯広の拠点 PC' },
     { device_id: 'dev-2', label: null },
@@ -194,7 +194,7 @@ describe('CamClipsManager RTSP の接続先と CoreS3 の鍵', () => {
     expect(cells[1]!.text()).toBe('未設定')
   })
 
-  it('追加: IP・ポート・パスを送る。CoreS3 の鍵は候補に label 付きで出て、選べる (イベントの候補と重なる鍵は 1 行)', async () => {
+  it('追加: IP・ポート・パスを送る。機体の鍵は候補に label 付きで出て、選べる (イベントの候補と重なる鍵は 1 行)', async () => {
     api.listCamHostKeys.mockResolvedValue(KEYS)
     const w = await mountIt(true)
     await w.find(t('add')).trigger('click')
@@ -202,7 +202,7 @@ describe('CamClipsManager RTSP の接続先と CoreS3 の鍵', () => {
     expect(rows).toHaveLength(3)
     expect(rows[2]!.find(t('candidate-name')).text()).toBe('帯広の拠点 PC')
     expect(rows[2]!.find(t('candidate-id')).text()).toBe('alarm:fp-1')
-    expect(rows[2]!.text()).toContain('CoreS3 の鍵 (拠点 PC のカメラ配信)')
+    expect(rows[2]!.text()).toContain('機体の鍵 (拠点 PC のカメラ配信)')
     expect(w.find(t('rtsp-port')).attributes('placeholder')).toBe('554')
     await w.find(t('name')).setValue('裏門')
     await w.find(t('lan-ip')).setValue('192.168.1.64')

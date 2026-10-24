@@ -10,36 +10,37 @@ async function load() {
 const AUTH_BASE = 'https://auth.ippoan.org'
 const EXT_ID = 'icmmpdjddlphkbokdalofdjpkcgfiggd'
 
-const coreS3 = vi.hoisted(() => ({
-  isConnected: false,
-  open: [] as Array<() => void>,
-  close: [] as Array<() => void>,
-  request: vi.fn(),
+// 3 機体とも isConnected (ref) と request だけを見る。resetModules の後は composable が新しい vue を
+// import するので、ref もテスト毎にその vue で作り直す (古い vue の ref は watch に拾われない)
+const serial = vi.hoisted(() => ({
+  refs: {} as Record<'coreS3' | 'vein' | 'atom', { value: boolean }>,
+  request: { coreS3: vi.fn(), vein: vi.fn(), atom: vi.fn() },
 }))
-mockNuxtImport('useCoreS3Serial', () => () => ({
-  request: coreS3.request,
-  onOpen: (cb: () => void) => {
-    coreS3.open.push(cb)
-    if (coreS3.isConnected) cb()
-  },
-  onClose: (cb: () => void) => { coreS3.close.push(cb) },
-}))
+async function serialMock(name: 'coreS3' | 'vein' | 'atom') {
+  const { ref } = await import('vue')
+  serial.refs[name] = ref(false)
+  return { isConnected: serial.refs[name], request: serial.request[name] }
+}
+const mocks = vi.hoisted(() => ({} as Record<string, unknown>))
+mockNuxtImport('useCoreS3Serial', () => () => mocks.coreS3)
+mockNuxtImport('useVeinSerial', () => () => mocks.vein)
+mockNuxtImport('useAtomS3Serial', () => () => mocks.atom)
 
 const getDeviceJwt = vi.hoisted(() => vi.fn())
 mockNuxtImport('useDeviceToken', () => () => ({ getDeviceJwt }))
+const getBpStationJwt = vi.hoisted(() => vi.fn())
+mockNuxtImport('useBpStationDeviceToken', () => () => ({ getBpStationJwt }))
 
 const signMock = vi.hoisted(() => vi.fn())
 vi.mock('~/utils/alarm-sign', () => ({ signAlarmDeviceNonce: signMock }))
 
 let sendMessage: ReturnType<typeof vi.fn>
 
-function connect() {
-  coreS3.isConnected = true
-  for (const cb of coreS3.open) cb()
+function connect(name: 'coreS3' | 'vein' | 'atom' = 'coreS3') {
+  serial.refs[name]!.value = true
 }
-function disconnect() {
-  coreS3.isConnected = false
-  for (const cb of coreS3.close) cb()
+function disconnect(name: 'coreS3' | 'vein' | 'atom' = 'coreS3') {
+  serial.refs[name]!.value = false
 }
 
 /** nonce → token を n 回ぶん返す fetch */
@@ -54,15 +55,16 @@ function stubFetch(times = 1, tokenBody: Record<string, unknown> = { access_toke
   return fetchMock
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-24T00:00:00Z'))
-  coreS3.isConnected = false
-  coreS3.open = []
-  coreS3.close = []
-  coreS3.request.mockReset()
+  for (const name of ['coreS3', 'vein', 'atom'] as const) {
+    mocks[name] = await serialMock(name)
+    serial.request[name].mockReset()
+  }
   getDeviceJwt.mockReset().mockResolvedValue('kiosk.jwt.x')
+  getBpStationJwt.mockReset().mockResolvedValue('bp.jwt.x')
   signMock.mockReset().mockResolvedValue({ pubkey: 'pk', sig: 'sg' })
   sendMessage = vi.fn((_id: string, _msg: unknown, cb: () => void) => cb())
   vi.stubGlobal('chrome', { runtime: { sendMessage, lastError: undefined } })
@@ -91,7 +93,8 @@ describe('useCamHostToken', () => {
     const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
     expect(url).toBe(`${AUTH_BASE}/device/alarm-token`)
     expect(JSON.parse(init.body as string)).toEqual({ nonce: 'n0', pubkey: 'pk', sig: 'sg', usage: 'cam-host' })
-    expect(signMock).toHaveBeenCalledWith('n0', coreS3.request)
+    expect(signMock).toHaveBeenCalledWith('n0', serial.request.coreS3)
+    expect(getBpStationJwt).not.toHaveBeenCalled()
     const [id, msg] = sendMessage.mock.calls[0]!
     expect(id).toBe(EXT_ID)
     expect(msg).toEqual({ type: 'cam_host_token', token: 'a.b.c', exp: Date.parse('2026-10-24T00:00:00Z') / 1000 + 900 })
@@ -104,7 +107,7 @@ describe('useCamHostToken', () => {
     useCamHostToken()
     connect()
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
-    expect(coreS3.open).toHaveLength(1)
+    expect(signMock).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(900_000 - REFRESH_BEFORE_MS - 1000)
     expect(sendMessage).toHaveBeenCalledTimes(1)
@@ -214,5 +217,61 @@ describe('useCamHostToken', () => {
     releaseSign({ pubkey: 'pk', sig: 'sg' })
     await vi.advanceTimersByTimeAsync(1000)
     expect(sendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('Vein Station だけなら Vein Station の署名で取る (キオスクの鍵を先に済ませる)', async () => {
+    const fetchMock = stubFetch()
+    const { useCamHostToken } = await load()
+    useCamHostToken()
+    connect('vein')
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
+    expect(getDeviceJwt).toHaveBeenCalled()
+    expect(getBpStationJwt).not.toHaveBeenCalled()
+    expect(signMock).toHaveBeenCalledWith('n0', serial.request.vein)
+    expect(fetchMock.mock.calls[0]![0]).toBe(`${AUTH_BASE}/device/alarm-nonce?usage=cam-host`)
+  })
+
+  it('測定台の ATOM S3 だけなら ATOM S3 の署名で取る (測定台の鍵を先に済ませる)', async () => {
+    stubFetch()
+    const { useCamHostToken } = await load()
+    useCamHostToken()
+    connect('atom')
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
+    expect(getBpStationJwt).toHaveBeenCalled()
+    expect(getDeviceJwt).not.toHaveBeenCalled()
+    expect(signMock).toHaveBeenCalledWith('n0', serial.request.atom)
+  })
+
+  it('最初から繋がっていればすぐ取る', async () => {
+    stubFetch()
+    connect('vein')
+    const { useCamHostToken, CAM_HOST_SIGNERS } = await load()
+    expect(CAM_HOST_SIGNERS).toEqual(['vein', 'coreS3', 'atom'])
+    useCamHostToken()
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
+    expect(signMock).toHaveBeenCalledWith('n0', serial.request.vein)
+  })
+
+  it('CoreS3 を抜いて Vein Station に差し替えたら Vein Station の署名で取り直す (移行)', async () => {
+    stubFetch(2)
+    const { useCamHostToken } = await load()
+    useCamHostToken()
+    connect('coreS3')
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
+    disconnect('coreS3')
+    connect('vein')
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2))
+    expect(signMock).toHaveBeenLastCalledWith('n1', serial.request.vein)
+  })
+
+  it('全部抜けたら拡張が無くても何もしない (sendMessage が無い端末で機体が繋がっても取りに行かない)', async () => {
+    vi.stubGlobal('chrome', undefined)
+    const fetchMock = stubFetch()
+    const { useCamHostToken } = await load()
+    useCamHostToken()
+    connect('vein')
+    disconnect('vein')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

@@ -42,7 +42,7 @@ export interface CamClipsDeviceCounts {
   vein_enroll: number
 }
 
-/** 録画タブの端末候補に出す CoreS3 の鍵 (`GET /api/cam-host-keys`)。device_id は `alarm:<fingerprint>` */
+/** 録画タブの端末候補に出す機体の鍵 (CoreS3・Vein Station・測定台の ATOM S3。`GET /api/cam-host-keys`)。device_id は `alarm:<fingerprint>` */
 export interface CamHostKey {
   device_id: string
   label: string | null
