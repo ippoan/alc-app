@@ -1400,6 +1400,20 @@ describe("dev端末の区別", () => {
     expect(calls[0].dev).toBeNull();
   });
 
+  it("★ WS: 試験記録 (kind = test) は本番の機体でも X-Device-Dev: 1 で転送される (本番 → 開発の向きだけ)", async () => {
+    for (const [token, seq] of [["hub-token-1", 21], ["hub-token-dev", 22]] as const) {
+      const { ws, messages } = await connectAccepted(token);
+      openSockets.push(ws);
+      ws.send(JSON.stringify({ type: "measurement", seq, kind: "test", payload: { type: "test", command_id: "c1" } }));
+      expect(await messages.next()).toEqual({ type: "ack", seq });
+    }
+    const calls = await spyIngest();
+    expect(calls.map((c) => [c.items[0].kind, c.dev])).toEqual([
+      ["test", "1"],
+      ["test", "1"],
+    ]);
+  });
+
   it("★ POST /measurements: dev端末は X-Device-Dev: 1、dev でなければ無い (body の申告は効かない)", async () => {
     const post = (token: string, extraHeaders: Record<string, string> = {}) =>
       SELF.fetch(`${BASE}/measurements`, {
@@ -2285,6 +2299,20 @@ describe("機体の鍵の証明 (X-Machine-Token)", () => {
     expect(await messages.next()).toEqual({ type: "ack", seq: 12 });
     const calls = await spyIngest();
     expect(calls[0].tenantId).toBe("tenant-1");
+    expect(calls[0].items[0].device_id).toBe("alarm:0123456789abcdef");
+    expect(calls[0].items[0].via_device_id).toBe("device-1");
+  });
+
+  it("★ 試験記録も鍵の ID と via_device_id で、開発の軸に入る", async () => {
+    const { res, ws } = await connectWithMachine("hub-token-1", "hub-record-token-1");
+    expect(res.status).toBe(101);
+    openSockets.push(ws!);
+    const messages = messageQueue(ws!);
+    expect(await messages.next()).toEqual({ type: "connected" });
+    ws!.send(JSON.stringify({ type: "measurement", seq: 31, kind: "test", payload: { type: "test" } }));
+    expect(await messages.next()).toEqual({ type: "ack", seq: 31 });
+    const calls = await spyIngest();
+    expect(calls[0].dev).toBe("1");
     expect(calls[0].items[0].device_id).toBe("alarm:0123456789abcdef");
     expect(calls[0].items[0].via_device_id).toBe("device-1");
   });

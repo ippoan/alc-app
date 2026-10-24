@@ -203,6 +203,7 @@ describe('候補の表示', () => {
   it('イベントの種類の表示名 (知らない種類はそのまま)', () => {
     expect(['alcohol', 'blood_pressure', 'timecard', 'license', 'vein_enroll'].map(eventKindLabel))
       .toEqual(['アルコール', '血圧', '打刻', '免許証', '指静脈登録'])
+    expect(eventKindLabel('test')).toBe('試験')
     expect(eventKindLabel('toString')).toBe('toString')
     expect(eventKindLabel('future_kind')).toBe('future_kind')
   })

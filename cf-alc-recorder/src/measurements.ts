@@ -170,6 +170,13 @@ export function buildTimecardPunch(
 }
 
 /**
+ * 開発用の試験記録 (auth-worker の MCP `create_test_record` が機体に作らせる、Refs ippoan/alc-cam#2)。
+ * **接続が本番の機体でも、必ず開発の軸 (`X-Device-Dev: 1`) で転送する** — rust-alc-api は test を
+ * 開発の軸以外では 400 で断る。
+ */
+export const TEST_KIND = "test";
+
+/**
  * crash_log (CoreS3 の異常リセット復帰レポート: reset reason + panic 前ログ、
  * Refs ippoan/alc-app-s3#43) はバックエンド (rust-alc-api hub_measurements) へ
  * 転送せず、受口の DO/Worker が R2 (`CRASH_LOGS`) へ直接保存して完結させる。
