@@ -1,4 +1,13 @@
-import { introspectToken, resolveSecret, decideCamAdminAuth, decideDevDevice, headersWithDev } from './auth';
+import {
+  introspectToken,
+  resolveSecret,
+  decideCamAdminAuth,
+  decideCamDeviceAuth,
+  decideCamDeviceWithoutToken,
+  decideDevDevice,
+  headersWithDev,
+  DEVICE_SUB_HEADER,
+} from './auth';
 
 export { SignalingRoom } from './signaling-room';
 export { RoomRegistry } from './room-registry';
@@ -18,24 +27,29 @@ export interface Env {
 const CORS_ORIGIN = { 'Access-Control-Allow-Origin': '*' };
 
 /**
- * 任意の query `token` から「dev端末の鍵か」を得る (Refs ippoan/alc-app#387)。
- * - token が無い → dev でない (Android 端末や既存のブラウザは付けていない。従来どおり)
+ * 任意の query `token` から「dev端末の鍵か」と鍵の sub を得る (Refs ippoan/alc-app#387)。
+ * - token が無い → dev でない・sub 無し (Android 端末や既存のブラウザは付けていない。従来どおり)
  * - token があって検証に落ちた → 拒否の Response (dev でない側に倒さない)
  */
-async function resolveDev(url: URL, env: Env): Promise<boolean | Response> {
+async function resolveToken(url: URL, env: Env): Promise<{ dev: boolean; sub?: string } | Response> {
   const token = url.searchParams.get('token');
-  if (token === null) return false;
+  if (token === null) return { dev: false };
   const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
   if (!sharedSecret) {
     return new Response('Server misconfigured', { status: 503, headers: CORS_ORIGIN });
   }
-  const decided = decideDevDevice(
-    token ? await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin) : null,
-  );
+  const result = token ? await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin) : null;
+  const decided = decideDevDevice(result);
   if (decided === 401) {
     return new Response('Unauthorized', { status: 401, headers: CORS_ORIGIN });
   }
-  return decided;
+  return { dev: decided, ...(result?.sub ? { sub: result.sub } : {}) };
+}
+
+/** resolveToken の dev だけを使う経路 (`/active-rooms` `/watch-rooms`)。 */
+async function resolveDev(url: URL, env: Env): Promise<boolean | Response> {
+  const resolved = await resolveToken(url, env);
+  return resolved instanceof Response ? resolved : resolved.dev;
 }
 
 export default {
@@ -239,20 +253,24 @@ export default {
         });
       }
 
-      // admin (ブラウザ) 接続のみ、Google ログイン JWT (role=admin) を要求する。
-      // device (P4/alc-gw) 側は cam-relay-token の転送経路が未整備のため、
-      // このステップでは未着手 (別途調整、Refs alc-app#129)。
-      if (role === 'admin') {
-        const token = url.searchParams.get('token');
-        if (!token) {
-          return new Response('Missing token query param for role=admin', { status: 401 });
+      // admin (ブラウザ) は JWT の role が CAM_ADMIN_ROLES のどれかを要求する。
+      // device (拠点 PC の拡張) は token を付けて来たら role=device-cam-host を要求し、
+      // token 無しは CAM_DEVICE_TOKEN_REQUIRED が false の間 (拡張の入れ替えまで) だけ通す。
+      const token = url.searchParams.get('token');
+      if (role === 'admin' && !token) {
+        return new Response('Missing token query param for role=admin', { status: 401 });
+      }
+      if (token === null) {
+        if (decideCamDeviceWithoutToken() !== 101) {
+          return new Response('Missing token query param for role=device', { status: 401 });
         }
+      } else {
         const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
         if (!sharedSecret) {
           return new Response('Server misconfigured', { status: 503 });
         }
-        const result = await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin);
-        const status = decideCamAdminAuth(result);
+        const result = token ? await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin) : null;
+        const status = role === 'admin' ? decideCamAdminAuth(result) : decideCamDeviceAuth(result);
         if (status !== 101) {
           return new Response('Unauthorized', { status });
         }
@@ -277,13 +295,18 @@ export default {
       });
     }
 
-    const dev = await resolveDev(url, env);
-    if (dev instanceof Response) return dev;
+    const resolved = await resolveToken(url, env);
+    if (resolved instanceof Response) return resolved;
 
     // Route to Durable Object by room ID
     const id = env.SIGNALING_ROOM.idFromName(roomId);
     const stub = env.SIGNALING_ROOM.get(id);
 
-    return stub.fetch(new Request(request, { headers: headersWithDev(request, dev) }));
+    // device の鍵の sub は自己申告の `?device_id=` より優先して admin へ渡す。client が付けてきた
+    // 同名のヘッダは消す (DO はこのヘッダだけを信じる)
+    const headers = headersWithDev(request, resolved.dev);
+    headers.delete(DEVICE_SUB_HEADER);
+    if (role === 'device' && resolved.sub) headers.set(DEVICE_SUB_HEADER, resolved.sub);
+    return stub.fetch(new Request(request, { headers }));
   },
 } satisfies ExportedHandler<Env>;

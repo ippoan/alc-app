@@ -103,3 +103,38 @@ export function decideDevDevice(result: IntrospectResult | null | undefined): 40
   if (!result || result.active !== true) return 401;
   return result.dev_device === true;
 }
+
+/**
+ * cam-room の device (拠点 PC の拡張 alc-cam) が持つ鍵の role。auth-worker `/device/alarm-token`
+ * の usage=`cam-host` で CoreS3 の署名から発行される (kiosk の鍵は拡張に渡さない)。
+ */
+export const CAM_DEVICE_ROLE = "device-cam-host";
+
+/**
+ * cam-room の device に token を必須にするか。拠点の拡張を token 付きの版へ入れ替え終えるまでは
+ * false (token 無しの device も通す)。入れ替え後に true にするだけで必須化できる。
+ * token を付けて来た device は false の間も検証する (落ちたら 401/403)。
+ */
+export const CAM_DEVICE_TOKEN_REQUIRED: boolean = false;
+
+/** token を付けずに来た cam-room の device の可否 (純粋関数。既定は `CAM_DEVICE_TOKEN_REQUIRED`)。 */
+export function decideCamDeviceWithoutToken(required: boolean = CAM_DEVICE_TOKEN_REQUIRED): 401 | 101 {
+  return required ? 401 : 101;
+}
+
+/**
+ * token を付けて来た cam-room の device の introspect 結果から可否を決める (純粋関数)。
+ * - `active` でない → 401
+ * - role が `device-cam-host` でない (kiosk の鍵・admin 等) → 403
+ */
+export function decideCamDeviceAuth(result: IntrospectResult | null | undefined): 401 | 403 | 101 {
+  if (!result || result.active !== true) return 401;
+  if (result.role !== CAM_DEVICE_ROLE) return 403;
+  return 101;
+}
+
+/**
+ * worker が `/room` の device の鍵から取り出した sub を DO へ渡すヘッダ。DEV_HEADER と同じく
+ * client が付けてきた同名のヘッダは worker が必ず消す / 上書きするので、DO はこの値だけを信じてよい。
+ */
+export const DEVICE_SUB_HEADER = "X-Alc-Signaling-Device-Sub";

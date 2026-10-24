@@ -65,6 +65,7 @@ import {
   // CoreS3 のファームの更新 (Refs ippoan/alc-app#403)
   listFirmwareDevices,
   listCamHostKeys,
+  listDeviceLabels,
   updateFirmware,
   listVeinFleet,
   getPendingVeinModuleTemplates,
@@ -2495,6 +2496,22 @@ describe.skipIf(isLive)('ファームの更新 (#403)', () => {
 
     initApi(API_BASE, () => null, () => 'tid')
     await expect(listCamHostKeys()).rejects.toThrow('ログインが必要です')
+  })
+
+  it('listDeviceLabels: admin JWT を Bearer に載せて /api/device-labels を GET。JWT が無ければ fetch せずに throw', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const payload = { devices: [{ device_id: 'd1', label: '釧路' }, { device_id: 'd2', label: null }] }
+    mockFetch.mockResolvedValueOnce(okJson(payload))
+    expect(await listDeviceLabels()).toEqual(payload)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/device-labels')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer admin-jwt')
+
+    mockFetch.mockReset()
+    initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
+    await expect(listDeviceLabels()).rejects.toThrow('ログインが必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('updateFirmware: admin JWT で /api/firmware/update に {device_id} だけを POST', async () => {

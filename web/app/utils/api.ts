@@ -914,6 +914,13 @@ export async function listFirmwareDevices(): Promise<{ devices: FirmwareDevice[]
   return bearerRequest<{ devices: FirmwareDevice[] }>('/api/firmware/devices', jwt, { method: 'GET' })
 }
 
+/** 端末の登録簿 (鍵) のラベル。画面で端末に名前を付ける用。admin の token が要る。 */
+export async function listDeviceLabels(): Promise<{ devices: { device_id: string, label: string | null }[] }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ devices: { device_id: string, label: string | null }[] }>('/api/device-labels', jwt, { method: 'GET' })
+}
+
 /**
  * 指定した 1 台を更新する合図を出す。admin の token が要る。
  * `sent` は合図を送ったキオスクの数 (0 でも成功 — 購読中のキオスクが居ないだけ)。

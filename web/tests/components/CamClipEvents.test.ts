@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   listCamClipsCameras: vi.fn(),
   listCamClipsEvents: vi.fn(),
   runCamClipsAuto: vi.fn(),
+  listDeviceLabels: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -44,6 +45,7 @@ async function mountIt(cameras = [cam('c1', '正門')]) {
 beforeEach(() => {
   vi.clearAllMocks()
   api.listCamClipsEvents.mockResolvedValue(EVENTS)
+  api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
 })
 
 describe('CamClipEvents', () => {
@@ -67,6 +69,7 @@ describe('CamClipEvents', () => {
     expect(rows[0]!.find(t('time')).text()).toBe('2026-10-23 09:05:00')
     expect(rows[0]!.find(t('kind')).text()).toBe('アルコール')
     expect(rows[0]!.find(t('device')).text()).toBe('dev-1')
+    expect(rows[0]!.find(t('device-name')).text()).toBe('事務所の端末')
     expect(rows[0]!.find(t('dev')).exists()).toBe(false)
     expect(rows[0]!.find(t('none')).text()).toBe('未切り出し')
     expect(rows[1]!.find(t('dev')).text()).toBe('開発端末')
@@ -82,16 +85,58 @@ describe('CamClipEvents', () => {
     const w = await mountIt()
     expect(w.find(t('failed')).text()).toBe('失敗')
   })
-  it('再生は押した行の 1 本だけで、別の行を押すと差し替わる', async () => {
+  it('再生はモーダルに押した行の 1 本だけ出し、別の行を押すと差し替わる', async () => {
     const w = await mountIt()
+    expect(w.find(t('modal')).exists()).toBe(false)
     expect(w.find(t('video')).exists()).toBe(false)
     const plays = w.findAll(t('play'))
     await plays[0]!.trigger('click')
+    expect(w.find(t('modal')).exists()).toBe(true)
+    expect(w.find(t('modal')).text()).toContain('2026-10-23 09:05:00 指静脈登録')
     expect(w.findAll(t('video'))).toHaveLength(1)
     expect(w.find(t('video')).attributes('src')).toBe(clipSrc('clips/t/c/b.mp4'))
+    expect(w.find(t('video')).attributes('autoplay')).toBeDefined()
     await plays[1]!.trigger('click')
+    expect(w.findAll(t('modal'))).toHaveLength(1)
     expect(w.findAll(t('video'))).toHaveLength(1)
     expect(w.find(t('video')).attributes('src')).toBe(clipSrc('clips/t/c/c.mp4'))
+  })
+  describe('モーダルの閉じ方', () => {
+    async function open() {
+      const w = await mountIt()
+      await w.findAll(t('play'))[0]!.trigger('click')
+      expect(w.find(t('video')).exists()).toBe(true)
+      return w
+    }
+    it('閉じるボタンで video ごと消える', async () => {
+      const w = await open()
+      await w.find(t('modal-close')).trigger('click')
+      expect(w.find(t('modal')).exists()).toBe(false)
+      expect(w.find(t('video')).exists()).toBe(false)
+    })
+    it('背景クリックで消え、中身のクリックでは消えない', async () => {
+      const w = await open()
+      await w.find(t('video')).trigger('click')
+      expect(w.find(t('modal')).exists()).toBe(true)
+      await w.find(t('modal')).trigger('click')
+      expect(w.find(t('modal')).exists()).toBe(false)
+      expect(w.find(t('video')).exists()).toBe(false)
+    })
+    it('Esc で消え、他のキーでは消えない', async () => {
+      const w = await open()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+      await flushPromises()
+      expect(w.find(t('modal')).exists()).toBe(true)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await flushPromises()
+      expect(w.find(t('modal')).exists()).toBe(false)
+      expect(w.find(t('video')).exists()).toBe(false)
+    })
+    it('unmount 後の Esc は何もしない (リスナーを外している)', async () => {
+      const w = await open()
+      w.unmount()
+      expect(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))).not.toThrow()
+    })
   })
   it('日付を変えると取り直し、再生中の動画は閉じる', async () => {
     const w = await mountIt()
@@ -174,5 +219,22 @@ describe('CamClipEvents', () => {
       await flushPromises()
       expect(w.find(t('error')).text()).toBe('時間がかかっています。裏で続いている可能性があるので、少し後に一覧を更新してください')
     })
+  })
+})
+
+describe('CamClipEvents 端末の表示名', () => {
+  it('鍵の登録簿にラベルが無い端末は「名前未登録の端末」+ 2 行目に device_id', async () => {
+    api.listCamClipsEvents.mockResolvedValue([ev({ source_id: 'a', device_id: 'dev-9' })])
+    const w = await mountIt()
+    expect(api.listDeviceLabels).toHaveBeenCalledTimes(1)
+    expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
+    expect(w.find(t('device')).text()).toBe('dev-9')
+  })
+  it('ラベルの取得に失敗しても一覧は出る (名前は「名前未登録の端末」)', async () => {
+    api.listDeviceLabels.mockRejectedValue(new Error('403'))
+    const w = await mountIt()
+    expect(w.findAll(t('row'))).toHaveLength(4)
+    expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
+    expect(w.find(t('error')).exists()).toBe(false)
   })
 })

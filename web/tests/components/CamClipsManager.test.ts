@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   updateCamClipsCamera: vi.fn(),
   listCamClipsDeviceCandidates: vi.fn(),
   createCamClipsClip: vi.fn(),
-  listFirmwareDevices: vi.fn(),
+  listDeviceLabels: vi.fn(),
   listCamHostKeys: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
@@ -40,7 +40,7 @@ const t = (id: string) => `[data-testid="cam-clips-${id}"]`
 beforeEach(() => {
   vi.clearAllMocks()
   api.listCamClipsDeviceCandidates.mockResolvedValue(CANDIDATES)
-  api.listFirmwareDevices.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
+  api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
   api.updateCamClipsCamera.mockResolvedValue(CAM)
   api.createCamClipsCamera.mockResolvedValue(CAM)
   api.listCamHostKeys.mockResolvedValue({ keys: [] })
@@ -75,7 +75,7 @@ describe('CamClipsManager 一覧', () => {
   })
   it('端末の候補・表示名が取れなくても画面は出る', async () => {
     api.listCamClipsDeviceCandidates.mockRejectedValue(new Error('x'))
-    api.listFirmwareDevices.mockRejectedValue(new Error('y'))
+    api.listDeviceLabels.mockRejectedValue(new Error('y'))
     const w = await mountIt()
     expect(w.find(t('row')).text()).toContain('dev-1')
     await w.find(t('add')).trigger('click')
