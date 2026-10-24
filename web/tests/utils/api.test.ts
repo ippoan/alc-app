@@ -92,6 +92,7 @@ import {
   listCamClipsDeviceCandidates,
   listCamClipsEvents,
   createCamClipsClip,
+  runCamClipsAuto,
 } from '~/utils/api'
 import type { MeasurementResult } from '~/types'
 import {
@@ -3168,6 +3169,17 @@ describe.skipIf(isLive)('拠点カメラの録画 (alc-cam#2)', () => {
     expect(url).toMatch(/\/cam-clips\/clips$/)
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body)).toEqual(body)
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('自動切り出しの手動実行は POST /auto-run に camera_id を載せる', async () => {
+    const res = { cameras: [{ camera_id: 'c1', ok: true }] }
+    mockFetch.mockResolvedValueOnce(okJson(res))
+    await expect(runCamClipsAuto('c1')).resolves.toEqual(res)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/cam-clips\/auto-run$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ camera_id: 'c1' })
     expect(init.signal).toBeInstanceOf(AbortSignal)
   })
 })

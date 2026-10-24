@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { listCamClipsCameras, listCamClipsEvents } from '~/utils/api'
+import { listCamClipsCameras, listCamClipsEvents, runCamClipsAuto } from '~/utils/api'
 import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
-import { clipSrc, errorText, eventKindLabel, formatJst } from '~/utils/cam-clips'
+import { clipSrc, errorText, eventKindLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
+import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { jstTodayDate } from '~/utils/jst'
 
 /**
@@ -16,6 +17,8 @@ const date = ref(jstTodayDate())
 const events = ref<CamClipsEvent[]>([])
 const loaded = ref(false)
 const error = ref('')
+const running = ref(false)
+const runResult = ref('')
 const playing = ref<{ sourceId: string, key: string } | null>(null)
 
 async function loadEvents() {
@@ -45,6 +48,25 @@ onMounted(async () => {
 
 watch([cameraId, date], loadEvents)
 
+/** cron (毎時 0 分) と同じ自動切り出しを、選んだカメラで今すぐ回す */
+async function runNow() {
+  running.value = true
+  runResult.value = ''
+  try {
+    runResult.value = summarizeAutoRun((await runCamClipsAuto(cameraId.value)).cameras[0]!)
+    await loadEvents()
+  }
+  catch (e) {
+    const msg = errorText(e, '切り出しを実行できませんでした')
+    error.value = msg === FETCH_TIMEOUT_MESSAGE_WRITE
+      ? '時間がかかっています。裏で続いている可能性があるので、少し後に一覧を更新してください'
+      : msg
+  }
+  finally {
+    running.value = false
+  }
+}
+
 function play(ev: CamClipsEvent) {
   playing.value = { sourceId: ev.source_id, key: ev.clip!.key }
 }
@@ -61,11 +83,20 @@ function play(ev: CamClipsEvent) {
           <option v-for="c in cameras" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
       </label>
+      <button
+        class="px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+        :disabled="!cameraId || running"
+        data-testid="cam-clips-events-run"
+        @click="runNow"
+      >
+        {{ running ? '切り出し中…' : '今すぐ切り出す' }}
+      </button>
       <label>
         日付 (JST)
         <input v-model="date" type="date" class="block border rounded px-2 py-1" data-testid="cam-clips-events-date">
       </label>
     </div>
+    <p v-if="runResult" class="text-sm text-gray-700" data-testid="cam-clips-events-run-result">{{ runResult }}</p>
     <p v-if="error" class="text-sm text-red-600" data-testid="cam-clips-events-error">{{ error }}</p>
     <p v-else-if="loaded && events.length === 0" class="text-sm text-gray-500" data-testid="cam-clips-events-empty">
       この日のイベントはありません
