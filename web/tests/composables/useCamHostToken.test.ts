@@ -242,30 +242,26 @@ describe('useCamHostToken', () => {
     expect(signMock).toHaveBeenCalledWith('n0', serial.request.atom)
   })
 
-  it('最初から繋がっていればすぐ取る / 複数繋がっていれば Vein Station → CoreS3 → ATOM S3 の順', async () => {
-    stubFetch(3)
-    connect('atom')
-    connect('coreS3')
+  it('最初から繋がっていればすぐ取る', async () => {
+    stubFetch()
+    connect('vein')
     const { useCamHostToken, CAM_HOST_SIGNERS } = await load()
     expect(CAM_HOST_SIGNERS).toEqual(['vein', 'coreS3', 'atom'])
     useCamHostToken()
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
-    expect(signMock).toHaveBeenLastCalledWith('n0', serial.request.coreS3)
+    expect(signMock).toHaveBeenCalledWith('n0', serial.request.vein)
+  })
 
-    // 後から Vein Station が繋がれば Vein Station に頼み直す (移行先が先)
+  it('CoreS3 を抜いて Vein Station に差し替えたら Vein Station の署名で取り直す (移行)', async () => {
+    stubFetch(2)
+    const { useCamHostToken } = await load()
+    useCamHostToken()
+    connect('coreS3')
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
+    disconnect('coreS3')
     connect('vein')
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2))
     expect(signMock).toHaveBeenLastCalledWith('n1', serial.request.vein)
-
-    // 先頭以外が抜けても頼む相手は変わらない (取り直さない)
-    disconnect('atom')
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(sendMessage).toHaveBeenCalledTimes(2)
-
-    // Vein Station が抜ければ残った CoreS3 に戻る
-    disconnect('vein')
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(3))
-    expect(signMock).toHaveBeenLastCalledWith('n2', serial.request.coreS3)
   })
 
   it('全部抜けたら拡張が無くても何もしない (sendMessage が無い端末で機体が繋がっても取りに行かない)', async () => {

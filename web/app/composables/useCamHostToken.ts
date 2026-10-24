@@ -12,10 +12,9 @@
  *
  * - 署名はその PC に挿さった機体 (`AUTH SIGN <nonce>`)。cam-host は専用の鍵を持たず、機体の鍵の
  *   署名で出る (auth-worker 側で sub を `alarm:<fp>` に揃え、録画の設定の紐づけ ID にするため)。
- *   署名を頼む相手は繋がっているうちの先頭 1 台 ({@link CAM_HOST_SIGNERS} の順):
- *   Vein Station (用途 kiosk) → CoreS3 (用途 kiosk) → 測定台の ATOM S3 (用途 bp-station)。
- *   Vein Station が先なのは、拠点 PC の署名機を CoreS3 から Vein Station へ移していくため
- *   (キオスクの鍵も Vein Station が繋がっていればその鍵だけで取る。`useDeviceToken` の doc)。
+ *   署名を頼む相手は繋がっている 1 台: Vein Station (用途 kiosk)・CoreS3 (用途 kiosk)・
+ *   測定台の ATOM S3 (用途 bp-station)。1 台の PC に 2 台を同時に挿すことはない前提
+ *   ({@link CAM_HOST_SIGNERS} の順は見る順というだけ。移行先の Vein Station を先に置く)。
  *   `AUTH SIGNBP` は使わない (ボンド状態は cam-host の鍵に関係ない。全機種のファームが `AUTH SIGN` に答える)。
  * - 機体ごとの鍵 (キオスク = `useDeviceToken`、測定台 = `useBpStationDeviceToken`) の取得と
  *   署名要求がぶつからないよう、先にそちらを済ませてから署名を頼む (どちらも single-flight)。
@@ -49,14 +48,14 @@ type Request = (line: string, matchPrefix: string, timeoutMs: number) => Promise
 // --- module スコープ (PC に 1 つ) ---
 let installed = false
 let timer: ReturnType<typeof setTimeout> | null = null
-/** 署名を頼む機体の世代。機体の切り替え・切断のたびに増やし、古い世代の結果は捨てる */
+/** 署名を頼む機体の世代。抜き差しのたびに増やし、古い世代の結果は捨てる */
 let generation = 0
 /** いま署名を頼んでいる機体 (どれも繋がっていなければ null) */
 let current: CamHostSignerName | null = null
 
 /** 署名を頼む機体の名前 (優先順は {@link CAM_HOST_SIGNERS}) */
 export type CamHostSignerName = 'coreS3' | 'vein' | 'atom'
-/** 署名を頼む順。先頭から見て最初に繋がっている 1 台に頼む */
+/** 繋がっている機体を探す順 (同時には挿さない前提なので、見つかった 1 台に頼む) */
 export const CAM_HOST_SIGNERS: ReadonlyArray<CamHostSignerName> = ['vein', 'coreS3', 'atom']
 
 function clearTimer(): void {
@@ -131,7 +130,7 @@ export function useCamHostToken(): void {
     }
   }
 
-  /** 取って渡し、次の取り直しを予約する。機体が切り替わった・切れた (世代が変わった) 後の結果は捨てる。 */
+  /** 取って渡し、次の取り直しを予約する。機体が抜けた (世代が変わった) 後の結果は捨てる。 */
   async function handOver(gen: number, name: CamHostSignerName, send: SendMessage): Promise<void> {
     const signer = signers[name]
     // 機体の鍵の取得 (接続時の先取り) とその機体への署名要求がぶつからないよう、先に済ませる
@@ -158,7 +157,7 @@ export function useCamHostToken(): void {
     void handOver(gen, name, send)
   }
 
-  /** 繋がっているうちの先頭の機体に頼み直す。頼む相手が変わらなければ何もしない */
+  /** 抜き差しのたびに、繋がっている機体に頼み直す (どれも無ければ止める) */
   function reselect(): void {
     const next = CAM_HOST_SIGNERS.find(name => signers[name].isConnected.value) ?? null
     if (next === current) return
