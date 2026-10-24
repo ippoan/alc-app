@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { listCamClipsCameras, listCamClipsEvents, runCamClipsAuto } from '~/utils/api'
+import { listCamClipsCameras, listCamClipsEvents, listDeviceLabels, runCamClipsAuto } from '~/utils/api'
 import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
-import { clipSrc, errorText, eventKindLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
+import { clipSrc, deviceDisplayName, errorText, eventKindLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { jstTodayDate } from '~/utils/jst'
 
@@ -21,6 +21,17 @@ const error = ref('')
 const running = ref(false)
 const runResult = ref('')
 const playing = ref<{ sourceId: string, key: string, occurredAt: string, kind: CamClipsEvent['kind'] } | null>(null)
+const labels = ref<{ device_id: string, label: string | null }[]>([])
+
+/** 端末の表示名。取れなくても一覧は出す (名前が「名前未登録の端末」になるだけ) */
+onMounted(async () => {
+  try {
+    labels.value = (await listDeviceLabels()).devices
+  }
+  catch {
+    labels.value = []
+  }
+})
 
 async function loadEvents() {
   playing.value = null
@@ -133,12 +144,13 @@ onUnmounted(() => {
             <td class="py-2 pr-3" data-testid="cam-clips-events-time">{{ formatJst(ev.occurred_at) }}</td>
             <td class="py-2 pr-3" data-testid="cam-clips-events-kind">{{ eventKindLabel(ev.kind) }}</td>
             <td class="py-2 pr-3">
-              <span class="font-mono text-xs" data-testid="cam-clips-events-device">{{ ev.device_id }}</span>
+              <span class="font-semibold" data-testid="cam-clips-events-device-name">{{ deviceDisplayName(ev.device_id, labels) }}</span>
               <span
                 v-if="ev.is_dev"
                 class="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
                 data-testid="cam-clips-events-dev"
               >開発端末</span>
+              <span class="block text-xs text-gray-500 font-mono" data-testid="cam-clips-events-device">{{ ev.device_id }}</span>
             </td>
             <td class="py-2">
               <span v-if="ev.clip === null" class="text-gray-500" data-testid="cam-clips-events-none">未切り出し</span>
