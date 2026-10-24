@@ -306,9 +306,10 @@ describe('CamClipsManager 配信担当 (順位)', () => {
       await w.find(t('stream-pick')).setValue(id)
       await w.find(t('stream-add')).trigger('click')
     }
-    // 足した鍵は選択肢から消え、全部足すと選ぶ欄も消える
+    // 足した鍵は選択肢から消え、全部足すと選ぶ欄の代わりに理由が出る
     expect(w.find(t('stream-pick')).exists()).toBe(false)
     expect(w.find(t('stream-no-keys')).exists()).toBe(false)
+    expect(w.find(t('stream-all-in')).text()).toContain('すべて順位に入っています')
     expect(w.findAll(t('stream-rank')).map(n => n.text())).toEqual(['1 位', '2 位', '3 位'])
     expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 1', '帯広 PC 2', 'Vein Station'])
     const ups = w.findAll(t('stream-up'))
@@ -361,6 +362,9 @@ describe('CamClipsManager 配信担当 (順位)', () => {
     expect(w.findAll(t('stream-item'))).toHaveLength(10)
     expect(w.find(t('stream-pick')).exists()).toBe(false)
     expect(w.find(t('stream-no-keys')).exists()).toBe(false)
+    // 結び付けた鍵が 1 つ余っていても、上限の理由を出す
+    expect(w.find(t('stream-all-in')).exists()).toBe(false)
+    expect(w.find(t('stream-full')).text()).toBe('配信担当は 10 台までです (これ以上は足せません)')
   })
 })
 
