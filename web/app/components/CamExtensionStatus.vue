@@ -2,7 +2,7 @@
 // 点呼画面の「カメラ配信」: この端末の alc-cam 拡張の状態を 1 行で出し、押すと詳細と操作 (useCamExtension)。
 // 拡張が見つからない端末 (拠点 PC 以外・Chrome 以外) では何も出さない。
 // 乗務員も触れる画面なので「停止」は確かめてから送る。詳細は外側のクリック・Esc・× でも閉じる (≡ メニューと同じ作法)。
-import { summaryLabel, tokenLabel, updateLabel, useCamExtension, viewersLabel, type CamLabel } from '~/composables/useCamExtension'
+import { rankLabel, summaryLabel, tokenLabel, updateLabel, useCamExtension, viewersLabel, type CamLabel } from '~/composables/useCamExtension'
 
 const { found, status, busy, result, control } = useCamExtension()
 
@@ -15,10 +15,12 @@ const summary = computed(() => (status.value ? summaryLabel(status.value) : null
 const rows = computed<{ label: string, value: CamLabel }[]>(() => {
   const st = status.value
   if (!st) return []
+  const rank = rankLabel(st)
   return [
     { label: '版', value: [`拡張 v${st.version}${st.hostVersion ? `・host v${st.hostVersion}` : ''}`, ''] },
     { label: '鍵', value: tokenLabel(st) },
     { label: '担当カメラ', value: st.assigned ? [`${st.assigned.name} (${st.assigned.id})`, st.config[1]] : st.config },
+    ...(rank ? [{ label: '配信の順位', value: rank }] : []),
     { label: 'host', value: st.host },
     { label: 'シグナリング', value: st.signal },
     { label: '見る人・映像', value: viewersLabel(st) },

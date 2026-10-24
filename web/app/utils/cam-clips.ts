@@ -18,6 +18,11 @@ export interface CamClipsCamera {
   rtsp_port: number
   rtsp_path: string | null
   device_ids: string[]
+  /**
+   * 配信担当の端末 (機体の鍵の device_id)。並び = 順位で、先頭が 1 位 (主)。1 位が配信し、居なければ次が引き継ぐ。
+   * 空なら `device_ids` の全員が 1 位 (先着が配信)。ingest が返さない間は無い = 空扱い
+   */
+  stream_device_ids?: string[]
   rec_scanned_until: string | null
 }
 
@@ -124,6 +129,7 @@ export interface CamClipsCreateBody {
   rtsp_port?: number
   rtsp_path?: string
   device_ids?: string[]
+  stream_device_ids?: string[]
 }
 
 /** `PATCH /cameras/{id}` の本文 (省略 = 変えない) */
@@ -139,6 +145,8 @@ export interface CamClipsPatchBody {
   /** null = 消す */
   rtsp_path?: string | null
   device_ids?: string[]
+  /** 送ると全差し替え (並び = 順位)。[] = 順位を消す */
+  stream_device_ids?: string[]
 }
 
 /** 追加・編集フォームの値 */
@@ -153,12 +161,31 @@ export interface CamClipsForm {
   rtsp_port: string
   rtsp_path: string
   device_ids: string[]
+  /** 配信担当 (並び = 順位、先頭 = 1 位) */
+  stream_device_ids: string[]
   /** 「取り込みをやめる」(vpc_binding を null にする) */
   stop: boolean
 }
 
 export const EMPTY_FORM: CamClipsForm = {
-  name: '', vpc_binding: '', rec_username: '', rec_password: '', lan_ip: '', rtsp_port: '', rtsp_path: '', device_ids: [], stop: false,
+  name: '', vpc_binding: '', rec_username: '', rec_password: '', lan_ip: '', rtsp_port: '', rtsp_path: '', device_ids: [], stream_device_ids: [], stop: false,
+}
+
+/** 配信担当の上限 (ingest と migration 189 の CHECK と同じ) */
+export const MAX_STREAM_DEVICES = 10
+
+/** 配信担当の 1 位 (順位が無ければ null) */
+export function streamPrimary(c: Pick<CamClipsCamera, 'stream_device_ids'>): string | null {
+  return c.stream_device_ids?.[0] ?? null
+}
+
+/** 配信担当の i 番目を delta (−1 = 上へ、+1 = 下へ) ずらした新しい並び。端からはみ出すなら同じ並び */
+export function moveStreamDevice(ids: string[], i: number, delta: number): string[] {
+  const j = i + delta
+  const next = [...ids]
+  if (i < 0 || i >= ids.length || j < 0 || j >= ids.length) return next
+  ;[next[i], next[j]] = [next[j]!, next[i]!]
+  return next
 }
 
 /** RTSP の既定のポート (サーバーも null をこの値にする) */
@@ -239,6 +266,7 @@ export function formFromCamera(c: CamClipsCamera): CamClipsForm {
     rtsp_port: String(c.rtsp_port),
     rtsp_path: c.rtsp_path ?? '',
     device_ids: [...c.device_ids],
+    stream_device_ids: [...(c.stream_device_ids ?? [])],
     stop: false,
   }
 }
@@ -254,6 +282,7 @@ export function buildCreateBody(f: CamClipsForm, canEditDestination: boolean): C
   if (f.rtsp_port.trim()) body.rtsp_port = Number(f.rtsp_port.trim())
   if (f.rtsp_path.trim()) body.rtsp_path = f.rtsp_path.trim()
   if (f.device_ids.length > 0) body.device_ids = f.device_ids
+  if (f.stream_device_ids.length > 0) body.stream_device_ids = f.stream_device_ids
   return body
 }
 
@@ -266,6 +295,7 @@ function sameSet(a: string[], b: string[]): boolean {
  * - 宛先は `canEditDestination` のときだけ。「取り込みをやめる」は null、空欄は変えない
  * - パスワードは空なら送らない (サーバーも "" は変えない)
  * - RTSP の IP・パスは空にしたら null (消す)、ポートは空にしたら null (既定の 554 に戻す)
+ * - 配信担当は並び (順位) が変わったら全部を送る
  */
 export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDestination: boolean): CamClipsPatchBody {
   const patch: CamClipsPatchBody = {}
@@ -293,6 +323,11 @@ export function buildPatchBody(orig: CamClipsCamera, f: CamClipsForm, canEditDes
   const path = f.rtsp_path.trim()
   if (path !== (orig.rtsp_path ?? '')) patch.rtsp_path = path || null
   if (!sameSet(f.device_ids, orig.device_ids)) patch.device_ids = f.device_ids
+  // 配信担当は並びが順位なので、並べ替えだけでも送る
+  const stream = orig.stream_device_ids ?? []
+  if (f.stream_device_ids.length !== stream.length || f.stream_device_ids.some((id, i) => id !== stream[i])) {
+    patch.stream_device_ids = f.stream_device_ids
+  }
   return patch
 }
 

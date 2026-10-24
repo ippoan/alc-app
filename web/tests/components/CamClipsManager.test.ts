@@ -257,6 +257,82 @@ describe('CamClipsManager RTSP の接続先と機体の鍵', () => {
   })
 })
 
+describe('CamClipsManager 配信担当 (順位)', () => {
+  const KEYS = { keys: [
+    { device_id: 'alarm:pc-1', label: '帯広 PC 1' },
+    { device_id: 'alarm:pc-2', label: '帯広 PC 2' },
+    { device_id: 'alarm:vein', label: 'Vein Station' },
+  ] }
+
+  it('一覧に 1 位と待機の台数。未設定なら先着の説明', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true, [{ ...CAM, stream_device_ids: ['alarm:pc-2', 'alarm:pc-1'] }, { ...CAM, id: 'c2' }, { ...CAM, id: 'c3', stream_device_ids: ['alarm:pc-1'] }])
+    const cells = w.findAll(t('row-stream'))
+    expect(cells[0]!.find(t('row-stream-name')).text()).toBe('帯広 PC 2')
+    expect(cells[0]!.find(t('row-stream-more')).text()).toBe('ほか 1 台が待機')
+    expect(cells[1]!.find(t('row-stream-unset')).exists()).toBe(true)
+    expect(cells[2]!.find(t('row-stream-more')).exists()).toBe(false)
+  })
+
+  it('追加: 機体の鍵を順に足し、上下で並べ替え・外して、並びのまま送る', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true)
+    await w.find(t('add')).trigger('click')
+    expect(w.find(t('stream-empty')).exists()).toBe(true)
+    expect((w.find(t('stream-add')).element as HTMLButtonElement).disabled).toBe(true)
+    for (const id of ['alarm:pc-1', 'alarm:pc-2', 'alarm:vein']) {
+      await w.find(t('stream-pick')).setValue(id)
+      await w.find(t('stream-add')).trigger('click')
+    }
+    // 足した鍵は選択肢から消え、全部足すと選ぶ欄も消える
+    expect(w.find(t('stream-pick')).exists()).toBe(false)
+    expect(w.findAll(t('stream-rank')).map(n => n.text())).toEqual(['1 位', '2 位', '3 位'])
+    expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 1', '帯広 PC 2', 'Vein Station'])
+    const ups = w.findAll(t('stream-up'))
+    const downs = w.findAll(t('stream-down'))
+    expect((ups[0]!.element as HTMLButtonElement).disabled).toBe(true)
+    expect((downs[2]!.element as HTMLButtonElement).disabled).toBe(true)
+    await ups[1]!.trigger('click')
+    await w.findAll(t('stream-down'))[1]!.trigger('click')
+    expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 2', 'Vein Station', '帯広 PC 1'])
+    await w.findAll(t('stream-remove'))[1]!.trigger('click')
+    expect(w.findAll(t('stream-pick')).length).toBe(1)
+    await w.find(t('name')).setValue('裏門')
+    await w.find(t('form')).trigger('submit')
+    await flushPromises()
+    expect(api.createCamClipsCamera).toHaveBeenCalledWith({ name: '裏門', stream_device_ids: ['alarm:pc-2', 'alarm:pc-1'] })
+  })
+
+  it('編集: 今の並びを出し、並べ替えたら全部を送る', async () => {
+    api.listCamHostKeys.mockResolvedValue(KEYS)
+    const w = await mountIt(true, [{ ...CAM, stream_device_ids: ['alarm:pc-1', 'alarm:gone'] }])
+    await w.find(t('edit')).trigger('click')
+    // 鍵の一覧に無い (失効した等) 端末も並びに残り、名前は「名前未登録の端末」
+    expect(w.findAll(t('stream-name')).map(n => n.text())).toEqual(['帯広 PC 1', '名前未登録の端末'])
+    await w.findAll(t('stream-down'))[0]!.trigger('click')
+    await w.find(t('form')).trigger('submit')
+    await flushPromises()
+    expect(api.updateCamClipsCamera).toHaveBeenCalledWith('c1', { stream_device_ids: ['alarm:gone', 'alarm:pc-1'] })
+  })
+
+  it('機体の鍵が無ければ足す欄の代わりに文言', async () => {
+    const w = await mountIt(true)
+    await w.find(t('add')).trigger('click')
+    expect(w.find(t('stream-pick')).exists()).toBe(false)
+    expect(w.find(t('stream-no-keys')).exists()).toBe(true)
+  })
+
+  it('10 台まで (上限で足す欄が消える)', async () => {
+    const keys = Array.from({ length: 11 }, (_, i) => ({ device_id: `alarm:k${i}`, label: `PC ${i}` }))
+    api.listCamHostKeys.mockResolvedValue({ keys })
+    const w = await mountIt(true, [{ ...CAM, stream_device_ids: keys.slice(0, 10).map(k => k.device_id) }])
+    await w.find(t('edit')).trigger('click')
+    expect(w.findAll(t('stream-item'))).toHaveLength(10)
+    expect(w.find(t('stream-pick')).exists()).toBe(false)
+    expect(w.find(t('stream-no-keys')).exists()).toBe(false)
+  })
+})
+
 describe('CamClipsManager 切り出し', () => {
   async function fill(w: Awaited<ReturnType<typeof mountIt>>) {
     await w.find(t('clip-camera')).setValue('c1')

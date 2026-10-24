@@ -6,8 +6,8 @@ import {
 import type { CamClipsCamera, CamClipsClip, CamClipsDeviceCandidate, CamClipsForm, CamHostKey, KnownDeviceName } from '~/utils/cam-clips'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, rtspLabel, rtspPortError,
-  summarizeCounts,
+  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, errorText, formatJst, formFromCamera, MAX_STREAM_DEVICES,
+  moveStreamDevice, rtspLabel, rtspPortError, streamPrimary, summarizeCounts,
 } from '~/utils/cam-clips'
 
 /**
@@ -98,7 +98,8 @@ async function copyId(id: string) {
 
 function openAdd() {
   editing.value = null
-  form.value = { ...EMPTY_FORM, device_ids: [] }
+  form.value = { ...EMPTY_FORM, device_ids: [], stream_device_ids: [] }
+  streamPick.value = ''
   saveError.value = ''
   formOpen.value = true
 }
@@ -106,12 +107,31 @@ function openAdd() {
 function openEdit(c: CamClipsCamera) {
   editing.value = c
   form.value = formFromCamera(c)
+  streamPick.value = ''
   saveError.value = ''
   formOpen.value = true
 }
 
 function closeForm() {
   formOpen.value = false
+}
+
+/** 配信担当に足せる機体の鍵 (もう入っているものは除く) と、選んでいる鍵 */
+const streamAddable = computed(() => camHostKeys.value.filter(k => !form.value.stream_device_ids.includes(k.device_id)))
+const streamPick = ref('')
+
+/** 選んだ鍵を末尾 (いちばん下の順位) に足す (選択肢は足せる鍵だけ・上限で欄ごと隠れる・未選択はボタンが押せない) */
+function addStreamDevice() {
+  form.value.stream_device_ids = [...form.value.stream_device_ids, streamPick.value]
+  streamPick.value = ''
+}
+
+function moveStream(i: number, delta: number) {
+  form.value.stream_device_ids = moveStreamDevice(form.value.stream_device_ids, i, delta)
+}
+
+function removeStream(id: string) {
+  form.value.stream_device_ids = form.value.stream_device_ids.filter(d => d !== id)
 }
 
 function toggleDevice(id: string, ev: Event) {
@@ -197,6 +217,7 @@ async function makeClip() {
               <th class="py-1 pr-3">パスワード</th>
               <th class="py-1 pr-3">RTSP</th>
               <th class="py-1 pr-3">結び付けた端末</th>
+              <th class="py-1 pr-3">配信 1 位</th>
               <th class="py-1 pr-3">走査済み</th>
               <th class="py-1" />
             </tr>
@@ -224,6 +245,16 @@ async function makeClip() {
                   <span class="font-semibold" data-testid="cam-clips-row-device-name">{{ nameOf(id) }}</span>
                   <span class="block text-xs text-gray-500 font-mono" data-testid="cam-clips-row-device-id">{{ id }}</span>
                 </span>
+              </td>
+              <td class="py-2 pr-3" data-testid="cam-clips-row-stream">
+                <template v-if="streamPrimary(c)">
+                  <span class="font-semibold" data-testid="cam-clips-row-stream-name">{{ nameOf(streamPrimary(c)!) }}</span>
+                  <span class="block text-xs text-gray-500 font-mono">{{ streamPrimary(c) }}</span>
+                  <span v-if="c.stream_device_ids!.length > 1" class="block text-xs text-gray-500" data-testid="cam-clips-row-stream-more">
+                    ほか {{ c.stream_device_ids!.length - 1 }} 台が待機
+                  </span>
+                </template>
+                <span v-else class="text-xs text-gray-400" data-testid="cam-clips-row-stream-unset">未設定 (結び付けた機体が先着で配信)</span>
               </td>
               <td class="py-2 pr-3">{{ formatJst(c.rec_scanned_until) }}</td>
               <td class="py-2">
@@ -337,6 +368,53 @@ async function makeClip() {
             <span class="block text-xs text-gray-500">{{ o.summary }} ・ 最終 {{ o.last }}</span>
           </span>
         </label>
+      </fieldset>
+
+      <fieldset class="text-sm space-y-2" data-testid="cam-clips-stream">
+        <legend>配信担当 (順位)</legend>
+        <p class="text-xs text-gray-500">
+          このカメラをライブ配信する拠点 PC を、機体 (CoreS3・Vein Station・測定台の ATOM S3) の鍵で順番に並べます。
+          1 位が配信し、1 位の PC が止まっていると 2 位以下が順に引き継ぎます (1 位が戻れば 1 位に戻ります)。
+          空なら、上で結び付けた機体のうち先に繋いだ 1 台が配信します。
+        </p>
+        <ol v-if="form.stream_device_ids.length" class="space-y-1">
+          <li v-for="(id, i) in form.stream_device_ids" :key="id" class="flex items-start gap-2" data-testid="cam-clips-stream-item">
+            <span class="w-10 shrink-0 font-semibold" data-testid="cam-clips-stream-rank">{{ i + 1 }} 位</span>
+            <span class="flex-1">
+              <span class="block font-semibold" data-testid="cam-clips-stream-name">{{ nameOf(id) }}</span>
+              <span class="block text-xs text-gray-500 font-mono">{{ id }}</span>
+            </span>
+            <button type="button" class="px-2 text-blue-700 disabled:opacity-30" :disabled="i === 0" aria-label="上へ" data-testid="cam-clips-stream-up" @click="moveStream(i, -1)">↑</button>
+            <button
+              type="button"
+              class="px-2 text-blue-700 disabled:opacity-30"
+              :disabled="i === form.stream_device_ids.length - 1"
+              aria-label="下へ"
+              data-testid="cam-clips-stream-down"
+              @click="moveStream(i, 1)"
+            >
+              ↓
+            </button>
+            <button type="button" class="px-2 text-red-700" data-testid="cam-clips-stream-remove" @click="removeStream(id)">外す</button>
+          </li>
+        </ol>
+        <p v-else class="text-gray-500" data-testid="cam-clips-stream-empty">未設定</p>
+        <div v-if="streamAddable.length && form.stream_device_ids.length < MAX_STREAM_DEVICES" class="flex gap-2">
+          <select v-model="streamPick" class="border rounded px-2 py-1" data-testid="cam-clips-stream-pick">
+            <option value="">(機体の鍵を選ぶ)</option>
+            <option v-for="k in streamAddable" :key="k.device_id" :value="k.device_id">{{ nameOf(k.device_id) }} ({{ k.device_id }})</option>
+          </select>
+          <button
+            type="button"
+            class="px-3 py-1 rounded bg-gray-200 disabled:opacity-50"
+            :disabled="!streamPick"
+            data-testid="cam-clips-stream-add"
+            @click="addStreamDevice"
+          >
+            {{ form.stream_device_ids.length + 1 }} 位に追加
+          </button>
+        </div>
+        <p v-else-if="camHostKeys.length === 0" class="text-xs text-gray-500" data-testid="cam-clips-stream-no-keys">機体の鍵がありません</p>
       </fieldset>
 
       <p v-if="saveError" class="text-sm text-red-600" data-testid="cam-clips-save-error">{{ saveError }}</p>
