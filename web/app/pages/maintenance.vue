@@ -258,6 +258,11 @@ onMounted(reloadDiag)
       </div>
     </div>
 
+    <!-- カメラ配信 (拡張): 拠点 PC は PWA で開いていて拡張のパネルが見えないため、ここで状態と操作 -->
+    <div class="w-full max-w-lg mt-4">
+      <CamExtensionPanel />
+    </div>
+
     <!-- シリアル診断ログ -->
     <div class="w-full max-w-lg mt-4">
       <div class="bg-white rounded-2xl p-6 shadow-sm">
