@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { SELF } from "cloudflare:test";
-import { decideCamAdminAuth } from "../src/auth";
+import { decideCamAdminAuth, decideCamDeviceAuth, decideCamDeviceWithoutToken, CAM_DEVICE_TOKEN_REQUIRED } from "../src/auth";
 import { MAX_VIEWERS } from "../src/camera-signaling-room";
 
 /**
@@ -62,6 +62,39 @@ describe("decideCamAdminAuth", () => {
     expect((await camAdmin(room, "seat-token")).res.status).toBe(101);
     expect((await camAdmin(room, "viewer-token")).res.status).toBe(403);
     expect((await camAdmin(room, "kiosk-token")).res.status).toBe(403);
+  });
+});
+
+describe("cam-room device の鍵", () => {
+  it("decideCamDeviceAuth: device-cam-host だけ通し、他の role は 403、非 active は 401", () => {
+    expect(decideCamDeviceAuth({ active: true, role: "device-cam-host" })).toBe(101);
+    expect(decideCamDeviceAuth({ active: true, role: "device-kiosk" })).toBe(403);
+    expect(decideCamDeviceAuth({ active: true, role: "admin" })).toBe(403);
+    expect(decideCamDeviceAuth({ active: true })).toBe(403);
+    expect(decideCamDeviceAuth({ active: false, role: "device-cam-host" })).toBe(401);
+    expect(decideCamDeviceAuth(null)).toBe(401);
+  });
+
+  it("token 無しは移行期間の間だけ通す (フラグを true にすると 401)", () => {
+    expect(CAM_DEVICE_TOKEN_REQUIRED).toBe(false);
+    expect(decideCamDeviceWithoutToken()).toBe(101);
+    expect(decideCamDeviceWithoutToken(true)).toBe(401);
+  });
+
+  it("WS ハンドシェイク: cam-host の鍵と token 無しは入れ、他の鍵は 403・不正は 401", async () => {
+    expect((await camDevice(newRoom("cam-dev-ok"), "&proto=2&token=cam-host-token")).res.status).toBe(101);
+    expect((await camDevice(newRoom("cam-dev-none"))).res.status).toBe(101);
+    expect((await camDevice(newRoom("cam-dev-kiosk"), "&token=kiosk-token")).res.status).toBe(403);
+    expect((await camDevice(newRoom("cam-dev-admin"), "&token=prod-token")).res.status).toBe(403);
+    expect((await camDevice(newRoom("cam-dev-bad"), "&token=nope")).res.status).toBe(401);
+    expect((await camDevice(newRoom("cam-dev-empty"), "&token=")).res.status).toBe(401);
+  });
+
+  it("admin は token 無し・空で 401、cam-host の鍵で 403", async () => {
+    const room = newRoom("cam-admin-tok");
+    expect((await connect(`/cam-room/${room}?role=admin`)).res.status).toBe(401);
+    expect((await camAdmin(room, "")).res.status).toBe(401);
+    expect((await camAdmin(room, "cam-host-token")).res.status).toBe(403);
   });
 });
 
@@ -263,6 +296,36 @@ describe("遠隔点呼 /room の device_id", () => {
     await room(id, "device", "&device_id=kiosk-2");
     await sleep(50);
     expect(admin.all).toContainEqual({ type: "peer_joined", role: "device", device_id: "kiosk-2" });
+  });
+
+  it("device の鍵の sub が自己申告の device_id より優先される", async () => {
+    const id = newRoom("tenko-sub");
+    const admin = (await room(id, "admin")).q!;
+    await room(id, "device", "&token=kiosk-alarm-token&device_id=self-claimed");
+    await sleep(50);
+    expect(admin.all).toContainEqual({ type: "peer_joined", role: "device", device_id: "alarm:fp-2" });
+    const late = newRoom("tenko-sub-late");
+    await room(late, "device", "&token=kiosk-alarm-token");
+    const admin2 = (await room(late, "admin")).q!;
+    await sleep(50);
+    expect(admin2.all).toContainEqual({ type: "peer_joined", role: "device", device_id: "alarm:fp-2" });
+  });
+
+  it("client が付けた sub のヘッダは捨てる / admin の鍵の sub は device_id にしない", async () => {
+    const id = newRoom("tenko-forged");
+    const res = await SELF.fetch(`${BASE}/room/${id}?role=device&device_id=kiosk-9`, {
+      headers: { Upgrade: "websocket", "X-Alc-Signaling-Device-Sub": "alarm:forged" },
+    });
+    opened.push(res.webSocket!);
+    res.webSocket!.accept();
+    const admin = (await room(id, "admin", "&token=prod-token")).q!;
+    await sleep(50);
+    expect(admin.all).toContainEqual({ type: "peer_joined", role: "device", device_id: "kiosk-9" });
+    expect(admin.all.some((m) => m.device_id === "prod-1")).toBe(false);
+  });
+
+  it("鍵が不正なら 401 (自己申告に倒さない)", async () => {
+    expect((await room(newRoom("tenko-bad"), "device", "&token=nope&device_id=k")).res.status).toBe(401);
   });
 
   it("device_id が無ければ従来どおり載らない / admin の device_id は無視", async () => {

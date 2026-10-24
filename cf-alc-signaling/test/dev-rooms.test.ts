@@ -319,7 +319,7 @@ describe("dev の device が入った部屋", () => {
     expect(devAdmin.res.status).toBe(101);
     await sleep(50);
     expect(device.all).toContainEqual({ type: "peer_joined", role: "admin" });
-    expect(devAdmin.q!.all).toContainEqual({ type: "peer_joined", role: "device" });
+    expect(devAdmin.q!.all).toContainEqual({ type: "peer_joined", role: "device", device_id: "dev-1" });
   });
 
   it("admin が先に居る部屋に dev の device が入ると、dev でない admin が切られる", async () => {
@@ -348,7 +348,7 @@ describe("dev の device が入った部屋", () => {
     const admin = (await joinRoom(roomId, "admin", { token: "dev-token" })).q!;
     const device = (await joinRoom(roomId, "device", { token: "dev-token" })).q!;
     await sleep(100);
-    expect(admin.all).toContainEqual({ type: "peer_joined", role: "device" });
+    expect(admin.all).toContainEqual({ type: "peer_joined", role: "device", device_id: "dev-1" });
     expect(device.all).toContainEqual({ type: "peer_joined", role: "admin" });
     expect((await joinRoom(roomId, "admin", { token: "dev-token" })).res.status).toBe(409);
   });
