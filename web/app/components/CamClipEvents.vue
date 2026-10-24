@@ -8,7 +8,8 @@ import { jstTodayDate } from '~/utils/jst'
 /**
  * 拠点カメラの自動切り出しの一覧 (Refs ippoan/alc-cam#2)。カメラと JST の日付を選ぶと、
  * その日のイベント (アルコール・血圧・打刻・免許証・指静脈登録) と切り出しの結果を時刻順に出す。読み取りだけ。
- * 再生は押した行の 1 本だけ (同じ clip が複数のイベントに付くので、行ごとには並べない)。
+ * 再生は押した行の 1 本だけをモーダルで出す (同じ clip が複数のイベントに付くので、行ごとには並べない)。
+ * 閉じるのは閉じるボタン・背景クリック・Esc。閉じると video は DOM から外れ、再生が止まる。
  */
 
 const cameras = ref<CamClipsCamera[]>([])
@@ -19,7 +20,7 @@ const loaded = ref(false)
 const error = ref('')
 const running = ref(false)
 const runResult = ref('')
-const playing = ref<{ sourceId: string, key: string } | null>(null)
+const playing = ref<{ sourceId: string, key: string, occurredAt: string, kind: CamClipsEvent['kind'] } | null>(null)
 
 async function loadEvents() {
   playing.value = null
@@ -68,8 +69,24 @@ async function runNow() {
 }
 
 function play(ev: CamClipsEvent) {
-  playing.value = { sourceId: ev.source_id, key: ev.clip!.key }
+  playing.value = { sourceId: ev.source_id, key: ev.clip!.key, occurredAt: ev.occurred_at, kind: ev.kind }
 }
+
+function closePlayer() {
+  playing.value = null
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closePlayer()
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <template>
@@ -141,13 +158,32 @@ function play(ev: CamClipsEvent) {
         </tbody>
       </table>
     </div>
-    <video
+    <div
       v-if="playing"
-      :src="clipSrc(playing.key)"
-      controls
-      preload="metadata"
-      class="w-full max-w-3xl bg-black"
-      data-testid="cam-clips-events-video"
-    />
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      data-testid="cam-clips-events-modal"
+      @click.self="closePlayer"
+    >
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-3xl mx-4 p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h4 class="font-bold text-sm">{{ formatJst(playing.occurredAt) }} {{ eventKindLabel(playing.kind) }}</h4>
+          <button
+            class="px-3 py-1 rounded border text-sm"
+            data-testid="cam-clips-events-modal-close"
+            @click="closePlayer"
+          >
+            閉じる
+          </button>
+        </div>
+        <video
+          :src="clipSrc(playing.key)"
+          controls
+          autoplay
+          preload="metadata"
+          class="w-full bg-black"
+          data-testid="cam-clips-events-video"
+        />
+      </div>
+    </div>
   </div>
 </template>
