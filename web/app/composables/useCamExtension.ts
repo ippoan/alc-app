@@ -28,6 +28,10 @@ export interface CamExtensionStatus {
   tokenExp: number
   tokenSub: string
   assigned: { id: string, name: string } | null
+  /** 配信担当の順位 (1 = 主、0 = 順位を知らない)。0.4.3〜 (それより前の拡張は無い) */
+  rank?: number
+  /** 上位か同位の端末が配信中で待機している。0.4.3〜 */
+  standby?: boolean
   config: CamLabel
   host: CamLabel
   signal: CamLabel
@@ -70,14 +74,23 @@ export function viewersLabel(st: CamExtensionStatus): CamLabel {
   return [`${vs.length} 人: ${text}`, ok === vs.length ? 'ok' : '']
 }
 
-/** 点呼画面の 1 行: 「配信中・担当カメラ・見る人 N」。止まっている・繋がらないときは warn */
+/** 配信の順位の表示 (順位を知らない拡張・設定では null = 行を出さない) */
+export function rankLabel(st: CamExtensionStatus): CamLabel | null {
+  if (!st.rank) return null
+  const head = `${st.rank} 位${st.rank === 1 ? ' (主)' : ''}`
+  return st.standby ? [`${head}・待機中 (上位の端末が配信中)`, ''] : [`${head}・配信担当`, 'ok']
+}
+
+/** 点呼画面の 1 行: 「配信中・担当カメラ・見る人 N」。待機は正常 (ok)。止まっている・繋がらないときは warn */
 export function summaryLabel(st: CamExtensionStatus): CamLabel {
   if (!st.enabled) return ['停止中', 'warn']
   if (!st.assigned) return [st.config[0], 'warn']
+  if (st.standby) return [`待機中 (${st.rank} 位)・${st.assigned.name}`, 'ok']
   if (st.signal[1] !== 'ok') return [`${st.assigned.name}・${st.signal[0]}`, 'warn']
   // host が落ちた・カメラ (RTSP) に繋がらない
   const tone = st.host[1] === 'warn' || st.camera[1] === 'warn' ? 'warn' : 'ok'
-  return [`配信中・${st.assigned.name}・見る人 ${st.viewers.length}`, tone]
+  const rank = st.rank ? ` (${st.rank} 位)` : ''
+  return [`配信中${rank}・${st.assigned.name}・見る人 ${st.viewers.length}`, tone]
 }
 
 /** 最後の更新確認の表示 (latest は拡張の文言に確認の時刻が入っているので足さない) */

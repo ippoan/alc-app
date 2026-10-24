@@ -4,7 +4,7 @@ import { flushPromises } from '@vue/test-utils'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import CamExtensionStatus from '~/components/CamExtensionStatus.vue'
 import { defineComponent, h, nextTick } from 'vue'
-import { POLL_MS, jstMinuteLabel, summaryLabel, useCamExtension, parseStatusReply, tokenLabel, updateLabel, viewersLabel, type CamExtensionStatus } from '~/composables/useCamExtension'
+import { POLL_MS, jstMinuteLabel, rankLabel, summaryLabel, useCamExtension, parseStatusReply, tokenLabel, updateLabel, viewersLabel, type CamExtensionStatus } from '~/composables/useCamExtension'
 import { ALC_CAM_EXTENSION_ID } from '~/utils/alc-cam-extension'
 
 const NOW = Date.parse('2026-10-24T00:00:00Z')
@@ -258,6 +258,34 @@ describe('useCamExtension', () => {
     expect(summaryLabel(makeStatus({ signal: ['切断', 'warn'] }))).toEqual(['本社・切断', 'warn'])
     expect(summaryLabel(makeStatus({ host: ['停止: crash', 'warn'] }))[1]).toBe('warn')
     expect(summaryLabel(makeStatus({ camera: ['401', 'warn'], viewers: [] }))).toEqual(['配信中・本社・見る人 0', 'warn'])
+  })
+
+  it('配信の順位: 1 位 (主)・2 位・待機中。順位を知らない拡張では出さない', () => {
+    expect(rankLabel(makeStatus())).toBeNull()
+    expect(rankLabel(makeStatus({ rank: 0 }))).toBeNull()
+    expect(rankLabel(makeStatus({ rank: 1, standby: false }))).toEqual(['1 位 (主)・配信担当', 'ok'])
+    expect(rankLabel(makeStatus({ rank: 2, standby: true }))).toEqual(['2 位・待機中 (上位の端末が配信中)', ''])
+    // 1 行: 待機は正常 (ok)、配信中は順位を添える
+    expect(summaryLabel(makeStatus({ rank: 2, standby: true, signal: ['待機中 (上位の端末が配信中) — 42s 後に入り直す', 'ok'] }))).toEqual(['待機中 (2 位)・本社', 'ok'])
+    expect(summaryLabel(makeStatus({ rank: 1, standby: false }))).toEqual(['配信中 (1 位)・本社・見る人 1', 'ok'])
+  })
+
+  it('詳細に配信の順位の行 (0.4.3〜の拡張だけ)', async () => {
+    reply = () => ({ ok: true, status: makeStatus({ version: '0.4.3', rank: 2, standby: true, signal: ['待機中 (上位の端末が配信中)', 'ok'] }) })
+    const w = await mountSuspended(CamExtensionStatus)
+    await flushPromises()
+    expect(text(w, 'cam-ext-summary').text()).toBe('カメラ配信:待機中 (2 位)・本社')
+    await text(w, 'cam-ext-summary').trigger('click')
+    expect(w.text()).toContain('配信の順位')
+    expect(w.text()).toContain('2 位・待機中 (上位の端末が配信中)')
+    w.unmount()
+
+    reply = () => ({ ok: true, status: makeStatus() })
+    const old = await mountSuspended(CamExtensionStatus)
+    await flushPromises()
+    await text(old, 'cam-ext-summary').trigger('click')
+    expect(old.text()).not.toContain('配信の順位')
+    old.unmount()
   })
 
   it('host 更新: 未確認は時刻を付けない', () => {

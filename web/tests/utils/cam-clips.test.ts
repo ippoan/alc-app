@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, rtspLabel, rtspPortError, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
+  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, moveStreamDevice, streamPrimary, rtspLabel, rtspPortError, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
@@ -140,13 +140,48 @@ describe('RTSP の接続先', () => {
   })
 })
 
+describe('配信担当 (順位)', () => {
+  const STREAM = { ...CAM, stream_device_ids: ['alarm:a', 'alarm:b'] }
+  it('フォームは写し (並びのまま)。ingest が返さない間は空', () => {
+    const f = formFromCamera(STREAM)
+    expect(f.stream_device_ids).toEqual(['alarm:a', 'alarm:b'])
+    expect(f.stream_device_ids).not.toBe(STREAM.stream_device_ids)
+    expect(formFromCamera(CAM).stream_device_ids).toEqual([])
+  })
+  it('追加: 入れたときだけ送る', () => {
+    expect(buildCreateBody({ ...EMPTY_FORM, name: 'x', stream_device_ids: ['alarm:b', 'alarm:a'] }, true)).toEqual({ name: 'x', stream_device_ids: ['alarm:b', 'alarm:a'] })
+    expect('stream_device_ids' in buildCreateBody({ ...EMPTY_FORM, name: 'x' }, true)).toBe(false)
+  })
+  it('編集: 並べ替えだけでも全部を送る。外せば [] 。同じなら送らない', () => {
+    const f = (ids: string[]) => ({ ...formFromCamera(STREAM), stream_device_ids: ids })
+    expect(buildPatchBody(STREAM, f(['alarm:a', 'alarm:b']), true)).toEqual({})
+    expect(buildPatchBody(STREAM, f(['alarm:b', 'alarm:a']), true)).toEqual({ stream_device_ids: ['alarm:b', 'alarm:a'] })
+    expect(buildPatchBody(STREAM, f(['alarm:a']), true)).toEqual({ stream_device_ids: ['alarm:a'] })
+    expect(buildPatchBody(STREAM, f([]), true)).toEqual({ stream_device_ids: [] })
+    expect(buildPatchBody(CAM, { ...formFromCamera(CAM), stream_device_ids: ['alarm:a'] }, true)).toEqual({ stream_device_ids: ['alarm:a'] })
+  })
+  it('1 位と並べ替え', () => {
+    expect(streamPrimary(STREAM)).toBe('alarm:a')
+    expect(streamPrimary(CAM)).toBeNull()
+    expect(streamPrimary({ stream_device_ids: [] })).toBeNull()
+    const ids = ['a', 'b', 'c']
+    expect(moveStreamDevice(ids, 1, -1)).toEqual(['b', 'a', 'c'])
+    expect(moveStreamDevice(ids, 1, 1)).toEqual(['a', 'c', 'b'])
+    expect(moveStreamDevice(ids, 0, -1)).toEqual(ids)
+    expect(moveStreamDevice(ids, 2, 1)).toEqual(ids)
+    expect(moveStreamDevice(ids, 5, -1)).toEqual(ids)
+    expect(moveStreamDevice(ids, 1, 1)).not.toBe(ids)
+    expect(ids).toEqual(['a', 'b', 'c'])
+  })
+})
+
 describe('formFromCamera', () => {
   it('null は空文字、端末は写し、パスワードは空', () => {
     const c = { ...CAM, vpc_binding: null, rec_username: null }
     const f = formFromCamera(c)
     expect(f).toEqual({
       name: '正門', vpc_binding: '', rec_username: '', rec_password: '',
-      lan_ip: '192.168.1.64', rtsp_port: '554', rtsp_path: 'stream1', device_ids: ['d1', 'd2'], stop: false,
+      lan_ip: '192.168.1.64', rtsp_port: '554', rtsp_path: 'stream1', device_ids: ['d1', 'd2'], stream_device_ids: [], stop: false,
     })
     expect(formFromCamera({ ...CAM, lan_ip: null, rtsp_path: null })).toMatchObject({ lan_ip: '', rtsp_path: '' })
     expect(f.device_ids).not.toBe(c.device_ids)
