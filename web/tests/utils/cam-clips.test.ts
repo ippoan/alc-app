@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildClipBody, buildCreateBody, buildPatchBody, clipRangeError, clipSrc, defaultClipRange,
-  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, moveStreamDevice, streamPrimary, rtspLabel, rtspPortError, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
+  DEFAULT_RTSP_PORT, deviceDisplayName, EMPTY_FORM, isCamHostKeyId, moveStreamDevice, streamPrimary, rtspLabel, rtspPortError, errorText, eventKindLabel, UNNAMED_DEVICE, formatJst, formFromCamera, jstInputToIso, summarizeCounts, summarizeAutoRun,
   type CamClipsCamera, type CamClipsForm,
 } from '~/utils/cam-clips'
 
@@ -159,6 +159,12 @@ describe('配信担当 (順位)', () => {
     expect(buildPatchBody(STREAM, f(['alarm:a']), true)).toEqual({ stream_device_ids: ['alarm:a'] })
     expect(buildPatchBody(STREAM, f([]), true)).toEqual({ stream_device_ids: [] })
     expect(buildPatchBody(CAM, { ...formFromCamera(CAM), stream_device_ids: ['alarm:a'] }, true)).toEqual({ stream_device_ids: ['alarm:a'] })
+  })
+  it('配信の鍵になれる id は alarm: の sub だけ', () => {
+    expect(isCamHostKeyId('alarm:0666000000000000')).toBe(true)
+    expect(isCamHostKeyId('alarm-0666000000000000')).toBe(false)
+    expect(isCamHostKeyId('browser')).toBe(false)
+    expect(isCamHostKeyId('dev-1')).toBe(false)
   })
   it('1 位と並べ替え', () => {
     expect(streamPrimary(STREAM)).toBe('alarm:a')
