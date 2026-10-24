@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // 点呼画面の「カメラ配信」: この端末の alc-cam 拡張の状態を 1 行で出し、押すと詳細と操作 (useCamExtension)。
 // 拡張が見つからない端末 (拠点 PC 以外・Chrome 以外) では何も出さない。
-// 乗務員も触れる画面なので「停止」は確かめてから送る。
+// 乗務員も触れる画面なので「停止」は確かめてから送る。詳細は外側のクリック・Esc・× でも閉じる (≡ メニューと同じ作法)。
 import { summaryLabel, tokenLabel, updateLabel, useCamExtension, viewersLabel, type CamLabel } from '~/composables/useCamExtension'
 
 const { found, status, busy, result, control } = useCamExtension()
 
 const open = ref(false)
 const confirmStop = ref(false)
+const rootRef = ref<HTMLElement | null>(null)
 
 const summary = computed(() => (status.value ? summaryLabel(status.value) : null))
 
@@ -33,6 +34,26 @@ function toggle() {
   confirmStop.value = false
 }
 
+function close() {
+  open.value = false
+  confirmStop.value = false
+}
+
+function onDocClick(e: Event) {
+  if (open.value && !rootRef.value?.contains(e.target as Node)) close()
+}
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') close()
+}
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+  document.addEventListener('keydown', onKeydown)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick)
+  document.removeEventListener('keydown', onKeydown)
+})
+
 async function run(action: 'start' | 'stop' | 'update_check' | 'refetch') {
   confirmStop.value = false
   await control(action)
@@ -40,7 +61,7 @@ async function run(action: 'start' | 'stop' | 'update_check' | 'refetch') {
 </script>
 
 <template>
-  <div v-if="found && status && summary" class="relative w-full max-w-lg mx-auto px-4 mt-1" data-testid="cam-ext-status">
+  <div v-if="found && status && summary" ref="rootRef" class="relative w-full max-w-lg mx-auto px-4 mt-1" data-testid="cam-ext-status">
     <button
       class="w-full flex items-center gap-2 text-xs text-left px-2 py-1 rounded-md hover:bg-gray-100 transition-colors"
       :aria-expanded="open ? 'true' : 'false'"
@@ -57,6 +78,16 @@ async function run(action: 'start' | 'stop' | 'update_check' | 'refetch') {
       class="absolute left-4 right-4 top-full mt-1 z-40 bg-white rounded-xl shadow-lg border p-4"
       data-testid="cam-ext-detail"
     >
+      <button
+        class="absolute top-2 right-2 p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+        aria-label="閉じる"
+        data-testid="cam-ext-close"
+        @click="close"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
       <dl class="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 text-sm mb-4">
         <template v-for="row in rows" :key="row.label">
           <dt class="text-gray-500">{{ row.label }}</dt>

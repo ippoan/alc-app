@@ -80,9 +80,9 @@ export function summaryLabel(st: CamExtensionStatus): CamLabel {
   return [`配信中・${st.assigned.name}・見る人 ${st.viewers.length}`, tone]
 }
 
-/** 最後の更新確認の表示 */
+/** 最後の更新確認の表示 (latest は拡張の文言に確認の時刻が入っているので足さない) */
 export function updateLabel(st: CamExtensionStatus): CamLabel {
-  if (!st.updateAt) return [st.update[0], st.update[1]]
+  if (!st.updateAt || st.updateState === 'latest') return [st.update[0], st.update[1]]
   return [`${st.update[0]} (${jstMinuteLabel(st.updateAt)})`, st.update[1]]
 }
 
