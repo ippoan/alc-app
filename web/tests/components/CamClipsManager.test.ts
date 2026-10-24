@@ -222,6 +222,13 @@ describe('CamClipsManager RTSP の接続先と CoreS3 の鍵', () => {
     expect(w.find(t('row-device-name')).text()).toBe('帯広の拠点 PC')
   })
 
+  it('鍵の名前を全部出す: 別用途の鍵 (names)・失効済み (失効)・browser', async () => {
+    api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'alarm:dead', label: '旧機', revoked: true }] })
+    api.listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0666000000000000', label: 'VoiceS3R', revoked: false }] })
+    const w = await mountIt(true, [{ ...CAM, device_ids: ['alarm-0666000000000000', 'alarm-dead', 'browser'] }])
+    expect(w.findAll(t('row-device-name')).map(n => n.text())).toEqual(['VoiceS3R', '旧機 (失効)', 'ブラウザ (ログイン利用者の打刻)'])
+  })
+
   it('ポートが不正なら送らずに文言を出す', async () => {
     const w = await mountIt(true)
     await w.find(t('edit')).trigger('click')

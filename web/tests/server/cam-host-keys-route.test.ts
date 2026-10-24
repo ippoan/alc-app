@@ -8,7 +8,7 @@ import {
   createError, createEvent, defineEventHandler, getHeader, getRequestURL, getResponseHeader,
   getResponseStatus, setResponseHeader, type H3Event,
 } from 'h3'
-import { buildAlarmKeysForward, parseCamHostKeys } from '../../server/utils/cam-host-keys'
+import { buildAlarmKeysForward, parseAlarmKeyNames, parseCamHostKeys } from '../../server/utils/cam-host-keys'
 
 const SECRET = 'test-internal-shared-secret-32!!'
 const ADMIN_CLAIMS = { active: true, tenant_id: 't1', role: 'admin', sub: 'u1' }
@@ -65,7 +65,14 @@ function event(bearer: string | null = 'admin-jwt'): H3Event {
 describe('GET /api/cam-host-keys', () => {
   it('★ admin → 同じ JWT を cookie に載せて鍵の一覧を引き、CoreS3 (kiosk) の鍵だけ返す', async () => {
     const ev = event()
-    expect(await route(ev)).toEqual({ keys: [{ device_id: 'alarm:fp-1', label: '帯広の拠点 PC' }] })
+    // keys = 担当付け (kiosk だけ) / names = 名前付け (全用途)
+    expect(await route(ev)).toEqual({
+      keys: [{ device_id: 'alarm:fp-1', label: '帯広の拠点 PC' }],
+      names: [
+        { device_id: 'alarm:fp-1', label: '帯広の拠点 PC', revoked: false },
+        { device_id: 'alarm:fp-2', label: '運行管理者席', revoked: false },
+      ],
+    })
     const [url, init] = authWorkerFetch.mock.calls[1] as [string, RequestInit]
     expect(new URL(url).pathname).toBe('/device/setup/alarm-keys')
     expect(init).toEqual({ method: 'GET', headers: { Cookie: 'logi_auth_token=admin-jwt' } })
@@ -109,5 +116,19 @@ describe('cam-host-keys の純関数', () => {
       { usage: 'kiosk', sub: 'alarm:a', label: '' },
       { usage: 'kiosk', sub: 'alarm:b', label: 3 },
     ] })).toEqual([{ device_id: 'alarm:a', label: null }, { device_id: 'alarm:b', label: null }])
+  })
+  it('名前用は全用途・失効済みまで返し、kiosk の絞り込みは担当付け用で従来どおり', () => {
+    const json = { keys: [
+      { sub: 'alarm:k', label: 'kiosk', usage: 'kiosk' },
+      { sub: 'alarm:v', label: 'VoiceS3R', usage: 'voice', revoked_at: 123 },
+      { sub: 'alarm:n', usage: 5, revoked_at: null },
+    ] }
+    expect(parseAlarmKeyNames(json)).toEqual([
+      { device_id: 'alarm:k', label: 'kiosk', revoked: false },
+      { device_id: 'alarm:v', label: 'VoiceS3R', revoked: true },
+      { device_id: 'alarm:n', label: null, revoked: false },
+    ])
+    expect(parseCamHostKeys(json)).toEqual([{ device_id: 'alarm:k', label: 'kiosk' }])
+    expect(parseAlarmKeyNames(null)).toEqual([])
   })
 })

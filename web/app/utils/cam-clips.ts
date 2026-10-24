@@ -48,6 +48,14 @@ export interface CamHostKey {
   label: string | null
 }
 
+/** 名前付け用の鍵 (全用途・失効済みを含む。`GET /api/cam-host-keys` の `names`) */
+export interface KnownDeviceName {
+  device_id: string
+  label: string | null
+  /** 失効済みの鍵 (無ければ false) */
+  revoked?: boolean
+}
+
 export interface CamClipsDeviceCandidate {
   device_id: string
   counts: CamClipsDeviceCounts
@@ -313,12 +321,20 @@ export function summarizeAutoRun(r: CamClipsAutoRunCamera): string {
 /** 登録簿に名前が無い端末の表示名 */
 export const UNNAMED_DEVICE = '名前未登録の端末'
 
+/** ログイン利用者のブラウザ打刻の固定 ID (`server/utils/timecard-relay.ts` の `BROWSER_DEVICE_ID`)。鍵ではない */
+export const BROWSER_DEVICE_ID = 'browser'
+export const BROWSER_DEVICE_NAME = 'ブラウザ (ログイン利用者の打刻)'
+
 /**
  * 端末の表示名。登録簿 (ファームの一覧) と device_id が一致すればその名前、無ければ `UNNAMED_DEVICE`。
+ * 失効済みの鍵は名前の後ろに「 (失効)」。`browser` は鍵ではないので、鍵の有無に関わらず固定の名前。
  * device_id は付けない (画面で別の行に出す。くっつけると境目が見えない)
  */
-export function deviceDisplayName(deviceId: string, known: { device_id: string, label: string | null }[]): string {
-  return known.find(k => sameVeinDevice(k.device_id, deviceId))?.label || UNNAMED_DEVICE
+export function deviceDisplayName(deviceId: string, known: KnownDeviceName[]): string {
+  if (deviceId === BROWSER_DEVICE_ID) return BROWSER_DEVICE_NAME
+  const hit = known.find(k => k.label && sameVeinDevice(k.device_id, deviceId))
+  if (!hit) return UNNAMED_DEVICE
+  return hit.revoked ? `${hit.label} (失効)` : hit.label!
 }
 
 /**

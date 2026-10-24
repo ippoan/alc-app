@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   listCamClipsEvents: vi.fn(),
   runCamClipsAuto: vi.fn(),
   listDeviceLabels: vi.fn(),
+  listCamHostKeys: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -46,6 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.listCamClipsEvents.mockResolvedValue(EVENTS)
   api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'dev-1', label: '事務所の端末' }] })
+  api.listCamHostKeys.mockResolvedValue({ keys: [], names: [] })
 })
 
 describe('CamClipEvents', () => {
@@ -236,5 +238,22 @@ describe('CamClipEvents 端末の表示名', () => {
     expect(w.findAll(t('row'))).toHaveLength(4)
     expect(w.find(t('device-name')).text()).toBe('名前未登録の端末')
     expect(w.find(t('error')).exists()).toBe(false)
+  })
+  it('鍵の名前を全部出す: 別用途の鍵 (alarm-)・失効済み (失効)・browser', async () => {
+    api.listDeviceLabels.mockResolvedValue({ devices: [{ device_id: 'alarm:dead', label: '旧機', revoked: true }] })
+    api.listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0666000000000000', label: 'VoiceS3R', revoked: false }] })
+    api.listCamClipsEvents.mockResolvedValue([
+      ev({ source_id: 'a', device_id: 'alarm-0666000000000000' }),
+      ev({ source_id: 'b', device_id: 'alarm-dead' }),
+      ev({ source_id: 'c', device_id: 'browser' }),
+    ])
+    const w = await mountIt()
+    expect(w.findAll(t('device-name')).map(n => n.text())).toEqual(['VoiceS3R', '旧機 (失効)', 'ブラウザ (ログイン利用者の打刻)'])
+  })
+  it('鍵の一覧が取れなくても登録簿の名前で出る (names が無い古い応答も同じ)', async () => {
+    api.listCamHostKeys.mockRejectedValue(new Error('403'))
+    expect((await mountIt()).find(t('device-name')).text()).toBe('事務所の端末')
+    api.listCamHostKeys.mockResolvedValue({ keys: [] })
+    expect((await mountIt()).find(t('device-name')).text()).toBe('事務所の端末')
   })
 })

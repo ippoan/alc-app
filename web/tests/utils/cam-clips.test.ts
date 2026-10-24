@@ -171,6 +171,23 @@ describe('候補の表示', () => {
     expect(deviceDisplayName('d2', known)).toBe(UNNAMED_DEVICE)
     expect(deviceDisplayName('d9', known)).toBe('名前未登録の端末')
   })
+
+  it('失効済みの鍵は名前の後ろに「 (失効)」。revoked が無い・false は付けない', () => {
+    const known = [{ device_id: 'alarm:a', label: '旧機', revoked: true }, { device_id: 'alarm:b', label: '現役', revoked: false }, { device_id: 'alarm:c', label: '無印' }]
+    expect(deviceDisplayName('alarm:a', known)).toBe('旧機 (失効)')
+    expect(deviceDisplayName('alarm:b', known)).toBe('現役')
+    expect(deviceDisplayName('alarm:c', known)).toBe('無印')
+  })
+
+  it('browser は鍵ではない固定 ID。鍵の有無に関わらず固定の名前', () => {
+    expect(deviceDisplayName('browser', [])).toBe('ブラウザ (ログイン利用者の打刻)')
+    expect(deviceDisplayName('browser', [{ device_id: 'browser', label: '別名' }])).toBe('ブラウザ (ログイン利用者の打刻)')
+  })
+
+  it('alarm: と alarm- の違いを吸収して別用途の鍵の名前が出る。label 無しの行は飛ばして次の名前を使う', () => {
+    const fp = '0666000000000000'
+    expect(deviceDisplayName(`alarm-${fp}`, [{ device_id: `alarm:${fp}`, label: null }, { device_id: `alarm:${fp}`, label: 'VoiceS3R' }])).toBe('VoiceS3R')
+  })
 })
 
 describe('errorText', () => {

@@ -22,6 +22,15 @@ export interface CamHostKey {
   label: string | null
 }
 
+/** 名前を引くための鍵 (全用途・失効済みを含む) */
+export interface AlarmKeyName extends CamHostKey {
+  revoked: boolean
+}
+
+interface AlarmKey extends AlarmKeyName {
+  usage: string
+}
+
 /** auth-worker `/device/setup/alarm-keys` への forward request を組む。 */
 export function buildAlarmKeysForward(token: string): { url: string, init: RequestInit } {
   return {
@@ -30,14 +39,31 @@ export function buildAlarmKeysForward(token: string): { url: string, init: Reque
   }
 }
 
-/** 応答 `{keys:[{sub, label, usage}]}` から CoreS3 の鍵だけを取り出す。形が違えば空。 */
-export function parseCamHostKeys(json: unknown): CamHostKey[] {
+/** 応答 `{keys:[{sub, label, usage, revoked_at}]}` の鍵を全用途・失効済みまで取り出す。形が違えば空。 */
+function parseAlarmKeys(json: unknown): AlarmKey[] {
   const keys = (json as { keys?: unknown } | null | undefined)?.keys
   if (!Array.isArray(keys)) return []
-  const out: CamHostKey[] = []
-  for (const k of keys as Array<{ sub?: unknown, label?: unknown, usage?: unknown } | null>) {
-    if (k?.usage !== CAM_HOST_SIGNER_USAGE || typeof k.sub !== 'string' || !k.sub) continue
-    out.push({ device_id: k.sub, label: typeof k.label === 'string' && k.label ? k.label : null })
+  const out: AlarmKey[] = []
+  for (const k of keys as Array<{ sub?: unknown, label?: unknown, usage?: unknown, revoked_at?: unknown } | null>) {
+    if (typeof k?.sub !== 'string' || !k.sub) continue
+    out.push({
+      device_id: k.sub,
+      label: typeof k.label === 'string' && k.label ? k.label : null,
+      usage: typeof k.usage === 'string' ? k.usage : '',
+      revoked: k.revoked_at != null,
+    })
   }
   return out
+}
+
+/** 名前付け用: 全用途・失効済みの鍵 (`alarm:<fp>` の名前と失効の印) */
+export function parseAlarmKeyNames(json: unknown): AlarmKeyName[] {
+  return parseAlarmKeys(json).map(({ device_id, label, revoked }) => ({ device_id, label, revoked }))
+}
+
+/** 担当付け用: CoreS3 (kiosk) の鍵だけ。 */
+export function parseCamHostKeys(json: unknown): CamHostKey[] {
+  return parseAlarmKeys(json)
+    .filter(k => k.usage === CAM_HOST_SIGNER_USAGE)
+    .map(({ device_id, label }) => ({ device_id, label }))
 }

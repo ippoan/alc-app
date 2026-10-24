@@ -486,14 +486,22 @@ describe('GET /api/device-labels (Refs ippoan/alc-cam#2)', () => {
     const event = deviceLabelsEvent({ headers: { 'x-tenant-id': 'evil' } })
     const res = await deviceLabels(event)
 
-    expect(res).toEqual({ devices: [{ device_id: 'd1', label: '事務所' }, { device_id: 'd2', label: null }] })
+    expect(res).toEqual({ devices: [{ device_id: 'd1', label: '事務所', revoked: false }, { device_id: 'd2', label: null, revoked: false }] })
     const calls = labelsCalls()
     expect(calls).toHaveLength(1)
     const [url, init] = calls[0]!
-    expect(url).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t9')
+    // ★ 名前を引くだけのこの route だけが all=1 (失効済みの鍵の名前も返させる)
+    expect(url).toBe('https://auth-worker.internal/internal/device-labels?tenant_id=t9&all=1')
     expect(init).toEqual({ method: 'GET', headers: { Authorization: SECRET } })
     expect(recorderFetch).not.toHaveBeenCalled()
     expectNoStore(event)
+  })
+
+  it('★ 失効済みの鍵は revoked: true で載る (revoked が無い行は false)', async () => {
+    labels = { json: { devices: [{ device_id: 'alarm:a', label: '旧機', revoked: true }, { device_id: 'alarm:b', label: '現役' }] }, status: 200 }
+    expect(await deviceLabels(deviceLabelsEvent())).toEqual({
+      devices: [{ device_id: 'alarm:a', label: '旧機', revoked: true }, { device_id: 'alarm:b', label: '現役', revoked: false }],
+    })
   })
 
   it('★ token 無しは 401 で auth-worker を呼ばない', async () => {
