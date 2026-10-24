@@ -113,7 +113,52 @@ const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 
 /** 409 (視聴人数の上限・既に視聴中) はハンドシェイクで弾かれ、ブラウザには「接続エラー」としか見えない */
 const SIGNALING_ERROR_HINT = '接続できませんでした。他の人が視聴中か、カメラが配信していない可能性があります'
 
-async function connect() {
+/**
+ * 切れたら (P2P の切断・シグナリングの切断・弾かれた) 畳んで繋ぎ直す。待ちは倍々で上限あり、映像が繋がったら最初に戻す。
+ * 「切る」・unmount・`autoConnect` が false に戻ったときは繋ぎ直さない
+ */
+const RECONNECT_FIRST_MS = 3_000
+const RECONNECT_MAX_MS = 60_000
+/** 見ていたい (接続を押した・autoConnect)。切る・unmount で false */
+let wanted = false
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let retryDelay = RECONNECT_FIRST_MS
+const reconnecting = ref(false)
+
+function cancelRetry() {
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = null
+  reconnecting.value = false
+}
+
+function scheduleRetry() {
+  if (!wanted || retryTimer) return
+  reconnecting.value = true
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    reconnecting.value = false
+    open()
+  }, retryDelay)
+  retryDelay = Math.min(retryDelay * 2, RECONNECT_MAX_MS)
+}
+
+/** 接続ボタン・autoConnect から。待っている繋ぎ直しは今すぐにする */
+function connect() {
+  wanted = true
+  cancelRetry()
+  retryDelay = RECONNECT_FIRST_MS
+  return open()
+}
+
+/** 切れた: 畳んで (次の接続は新しい PeerConnection で始める)、見ていたいなら繋ぎ直しを予約する */
+function drop() {
+  if (isActive.value) emit('update:active', false)
+  isActive.value = false
+  webRtc.disconnect()
+  scheduleRetry()
+}
+
+async function open() {
   if (isActive.value || isConnecting.value) return
   connectError.value = null
   isConnecting.value = true
@@ -124,11 +169,13 @@ async function connect() {
   catch (e) {
     connectError.value = e instanceof Error ? e.message : '接続に必要な認証情報を取得できませんでした'
     isConnecting.value = false
+    scheduleRetry()
     return
   }
   if (!token) {
     connectError.value = 'ログインセッションが見つかりません。再ログインしてください。'
     isConnecting.value = false
+    scheduleRetry()
     return
   }
   try {
@@ -138,13 +185,17 @@ async function connect() {
   }
   catch {
     connectError.value = '接続に失敗しました'
+    scheduleRetry()
   }
   finally {
     isConnecting.value = false
   }
 }
 
+/** 切るボタン・unmount・autoConnect が false。繋ぎ直さない */
 function disconnect() {
+  wanted = false
+  cancelRetry()
   webRtc.disconnect()
   if (isActive.value) emit('update:active', false)
   isActive.value = false
@@ -163,8 +214,21 @@ function onFullscreenChange() {
 watch(() => webRtc.error.value, (e) => {
   if (!e) return
   connectError.value = e === 'シグナリングサーバー接続エラー' ? SIGNALING_ERROR_HINT : e
-  // 繋がらなかった (弾かれた) タイルは映像の枠を畳む
-  if (!webRtc.isConnected.value) disconnect()
+  // 弾かれた・P2P が切れた: 映像の枠を畳んで繋ぎ直す (P2P だけ切れた PeerConnection は使い回さない)
+  if (isActive.value) drop()
+})
+
+// シグナリングが黙って閉じた (エラー無し)
+watch(() => webRtc.isConnected.value, (now, before) => {
+  if (before && !now && isActive.value) drop()
+})
+
+// 映像が繋がったら、次に切れたときの待ちを最初に戻す
+watch(() => webRtc.isPeerConnected.value, (v) => {
+  if (v) {
+    retryDelay = RECONNECT_FIRST_MS
+    connectError.value = null
+  }
 })
 
 // video は繋がってから描画される。映像が先に届いていても付くよう、要素の出現も見る
@@ -188,6 +252,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  wanted = false
+  cancelRetry()
   webRtc.disconnect()
 })
 </script>
@@ -202,11 +268,12 @@ onUnmounted(() => {
         />
         <span class="font-medium text-gray-700 truncate" data-testid="cam-tile-label">{{ label ?? roomId }}</span>
         <span class="text-xs text-gray-500 shrink-0" data-testid="cam-tile-status">
-          {{ isConnecting ? '接続中...' : !isActive ? '停止中' : webRtc.isPeerConnected.value ? '受信中' : 'カメラ接続待ち...' }}
+          {{ isConnecting ? '接続中...' : reconnecting ? '再接続待ち...' : !isActive ? '停止中' : webRtc.isPeerConnected.value ? '受信中' : 'カメラ接続待ち...' }}
         </span>
       </div>
+      <!-- 繋ぎ直しを待つ間は「切る」で止められる -->
       <button
-        v-if="!isActive"
+        v-if="!isActive && !reconnecting"
         class="px-3 py-1 text-xs rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
         :disabled="isConnecting"
         data-testid="cam-tile-connect"

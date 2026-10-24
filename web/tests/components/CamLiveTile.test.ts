@@ -1,5 +1,5 @@
 // 拠点カメラ 1 台ぶんのライブ表示タイルと、全カメラのグリッド (カメラ一覧タブ)。
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, nextTick } from 'vue'
 import { flushPromises } from '@vue/test-utils'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
@@ -68,30 +68,28 @@ describe('CamLiveTile', () => {
     expect(rtc.instances[0]!.connect).toHaveBeenCalledTimes(1)
   })
 
-  it('繋ぐ途中に失敗したら文言を出す', async () => {
+  it('繋ぐ途中に失敗したら文言を出し、繋ぎ直しを待つ (切るで止まる)', async () => {
     const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1' } })
     rtc.instances[0]!.connect.mockRejectedValueOnce(new Error('x'))
     await w.find(t('connect')).trigger('click')
     await flushPromises()
     expect(w.find(t('error')).text()).toBe('接続に失敗しました')
+    expect(w.find(t('status')).text()).toBe('再接続待ち...')
+    await w.find(t('disconnect')).trigger('click')
+    expect(w.find(t('status')).text()).toBe('停止中')
     expect(w.find(t('connect')).exists()).toBe(true)
   })
 
-  it('signaling に弾かれたら (409 等) 分かる文言を出して枠を畳む', async () => {
+  it('signaling に弾かれたら (409 等) 分かる文言を出して枠を畳み、繋ぎ直しを待つ', async () => {
     const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
     await flushPromises()
     rtc.instances[0]!.isConnected.value = false
     rtc.instances[0]!.error.value = 'シグナリングサーバー接続エラー'
     await flushPromises()
     expect(w.find(t('error')).text()).toContain('他の人が視聴中')
-    expect(w.find(t('connect')).exists()).toBe(true)
-    // 繋がった後の別のエラーは、そのまま出して枠は畳まない
-    await w.find(t('connect')).trigger('click')
-    await flushPromises()
-    rtc.instances[0]!.error.value = 'P2P 接続が切断されました'
-    await flushPromises()
-    expect(w.find(t('error')).text()).toBe('P2P 接続が切断されました')
-    expect(w.find(t('disconnect')).exists()).toBe(true)
+    expect(rtc.instances[0]!.disconnect).toHaveBeenCalled()
+    expect(w.find(t('status')).text()).toBe('再接続待ち...')
+    expect(w.emitted('update:active')).toEqual([[true], [false]])
   })
 
   it('トークンが無ければ繋がずに文言を出す', async () => {
@@ -100,6 +98,90 @@ describe('CamLiveTile', () => {
     await w.find(t('connect')).trigger('click')
     expect(rtc.instances[0]!.connect).not.toHaveBeenCalled()
     expect(w.find(t('error')).text()).toContain('再ログイン')
+    await w.find(t('disconnect')).trigger('click')
+  })
+
+  describe('切れたら繋ぎ直す', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('P2P が切れたら畳んで 3 秒後に新しく繋ぎ、待ちは倍々 (映像が繋がったら最初に戻す)', async () => {
+      const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+      await flushPromises()
+      const inst = rtc.instances[0]!
+      expect(inst.connect).toHaveBeenCalledTimes(1)
+      inst.isPeerConnected.value = true
+      await flushPromises()
+
+      const fail = async () => {
+        inst.isPeerConnected.value = false
+        inst.error.value = null
+        await flushPromises()
+        inst.error.value = 'P2P 接続が切断されました'
+        await flushPromises()
+      }
+      await fail()
+      expect(w.find(t('error')).text()).toBe('P2P 接続が切断されました')
+      expect(inst.disconnect).toHaveBeenCalledTimes(1)
+      expect(w.find(t('status')).text()).toBe('再接続待ち...')
+      await vi.advanceTimersByTimeAsync(2_900)
+      expect(inst.connect).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(inst.connect).toHaveBeenCalledTimes(2)
+      expect(w.find(t('status')).text()).toBe('カメラ接続待ち...')
+
+      // 繋がらないまままた切れた: 次は 6 秒
+      await fail()
+      await vi.advanceTimersByTimeAsync(5_900)
+      expect(inst.connect).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(inst.connect).toHaveBeenCalledTimes(3)
+
+      // 映像が繋がると文言を消して待ちを 3 秒に戻す
+      inst.isPeerConnected.value = true
+      await flushPromises()
+      expect(w.find(t('error')).exists()).toBe(false)
+      await fail()
+      await vi.advanceTimersByTimeAsync(3_100)
+      expect(inst.connect).toHaveBeenCalledTimes(4)
+    })
+
+    it('シグナリングが黙って閉じても繋ぎ直す。待ちには上限がある', async () => {
+      const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+      await flushPromises()
+      const inst = rtc.instances[0]!
+      inst.connect.mockRejectedValue(new Error('down'))
+      inst.isConnected.value = false
+      await flushPromises()
+      expect(w.find(t('status')).text()).toBe('再接続待ち...')
+      // 3 + 6 + 12 + 24 + 48 + 60 + 60 秒
+      for (const ms of [3_000, 6_000, 12_000, 24_000, 48_000, 60_000, 60_000]) await vi.advanceTimersByTimeAsync(ms)
+      expect(inst.connect).toHaveBeenCalledTimes(8)
+      expect(w.find(t('error')).text()).toBe('接続に失敗しました')
+    })
+
+    it('待っている間に接続を押すと今すぐ繋ぐ。切る・autoConnect off・unmount では繋ぎ直さない', async () => {
+      const w = await mountSuspended(CamLiveTile, { props: { roomId: 'cam-1', autoConnect: true } })
+      await flushPromises()
+      const inst = rtc.instances[0]!
+      inst.error.value = 'P2P 接続が切断されました'
+      await flushPromises()
+      await w.setProps({ autoConnect: false })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(inst.connect).toHaveBeenCalledTimes(1)
+      expect(w.find(t('status')).text()).toBe('停止中')
+
+      await w.find(t('connect')).trigger('click')
+      await flushPromises()
+      expect(inst.connect).toHaveBeenCalledTimes(2)
+      inst.error.value = null
+      await flushPromises()
+      inst.error.value = 'P2P 接続が切断されました'
+      await flushPromises()
+      w.unmount()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(inst.connect).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('getToken を渡されたら、管理者ログインの JWT ではなくその戻り値で繋ぐ (繋ぐたびに呼ぶ)', async () => {
@@ -120,6 +202,7 @@ describe('CamLiveTile', () => {
     await w.find(t('connect')).trigger('click')
     await flushPromises()
     expect(w.find(t('error')).text()).toBe('席の鍵が取れません')
+    await w.find(t('disconnect')).trigger('click') // 繋ぎ直しを止めて、押し直す
     expect(w.find(t('connect')).attributes('disabled')).toBeUndefined()
     await w.find(t('connect')).trigger('click')
     await flushPromises()
@@ -133,6 +216,8 @@ describe('CamLiveTile', () => {
     await flushPromises()
     expect(rtc.instances[0]!.connect).not.toHaveBeenCalled()
     expect(w.find(t('error')).exists()).toBe(true)
+    expect(w.find(t('status')).text()).toBe('再接続待ち...')
+    await w.find(t('disconnect')).trigger('click')
     expect(w.find(t('connect')).attributes('disabled')).toBeUndefined()
   })
 
