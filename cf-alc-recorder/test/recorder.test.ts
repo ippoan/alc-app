@@ -3,8 +3,10 @@ import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { Env } from "../src/index";
 import { hubStub } from "../src/hub-stub";
 import {
+  decideRecordIdentity,
   decideRecorderAuth,
   decideWatcherAuth,
+  machineTokenMissing,
   RECORDER_DEVICE_ROLES,
   DEVICE_ROLE_KIOSK,
   isDevIntrospect,
@@ -2243,5 +2245,191 @@ describe("vein-list の合図・保存・一覧", () => {
       headers: { Authorization: SHARED_SECRET },
     });
     expect(postStatus.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 機体の鍵の証明 (X-Machine-Token、Refs ippoan/alc-cam#2)。
+// 接続の主は hub の JWT のまま (下り command・OTA の宛先は hub の ID)。証明があれば
+// 記録の device_id を鍵の sub (`alarm:<fingerprint>`) にし、接続の hub の ID を via_device_id に添える。
+// ---------------------------------------------------------------------------
+
+describe("機体の鍵の証明 (X-Machine-Token)", () => {
+  async function connectWithMachine(token: string, machine: string) {
+    const res = await SELF.fetch(`${BASE}/ws`, {
+      headers: { Upgrade: "websocket", Authorization: `Bearer ${token}`, "X-Machine-Token": machine },
+    });
+    return { res, ws: res.webSocket ?? null };
+  }
+
+  const frame = (seq: number) =>
+    JSON.stringify({ type: "measurement", seq, kind: "alcohol", payload: { value: 0 } });
+
+  it("証明が無ければ記録は接続の ID のまま、via_device_id は載らない", async () => {
+    const { ws, messages } = await connectAccepted("hub-token-1");
+    openSockets.push(ws);
+    ws.send(frame(11));
+    expect(await messages.next()).toEqual({ type: "ack", seq: 11 });
+    const item = (await spyIngest())[0].items[0];
+    expect(item.device_id).toBe("device-1");
+    expect(item).not.toHaveProperty("via_device_id");
+  });
+
+  it("★ 証明があれば記録の device_id は鍵の sub、via_device_id は接続の hub の ID", async () => {
+    const { res, ws } = await connectWithMachine("hub-token-1", "hub-record-token-1");
+    expect(res.status).toBe(101);
+    openSockets.push(ws!);
+    const messages = messageQueue(ws!);
+    expect(await messages.next()).toEqual({ type: "connected" });
+    ws!.send(frame(12));
+    expect(await messages.next()).toEqual({ type: "ack", seq: 12 });
+    const calls = await spyIngest();
+    expect(calls[0].tenantId).toBe("tenant-1");
+    expect(calls[0].items[0].device_id).toBe("alarm:0123456789abcdef");
+    expect(calls[0].items[0].via_device_id).toBe("device-1");
+  });
+
+  it("★ 下り command の宛先は接続の hub の ID のまま (鍵の ID では届かない)", async () => {
+    const { res, ws } = await connectWithMachine("hub-token-1", "hub-record-token-1");
+    expect(res.status).toBe(101);
+    openSockets.push(ws!);
+    expect(await messageQueue(ws!).next()).toEqual({ type: "connected" });
+    const list = await SELF.fetch(`${BASE}/tenants/tenant-1/devices`, {
+      headers: { Authorization: SHARED_SECRET },
+    });
+    const body = (await list.json()) as { devices: string[] };
+    expect(body.devices).toContain("device-1");
+    expect(body.devices).not.toContain("alarm:0123456789abcdef");
+  });
+
+  it("★ 証明が通らなければ 401 (別テナント / dev の食い違い / sub が alarm: でない / role 違い / 失効)", async () => {
+    for (const machine of [
+      "hub-record-token-other-tenant",
+      "hub-record-token-dev",
+      "hub-record-token-bad-sub",
+      "kiosk-token",
+      "expired-token",
+      "unknown-token",
+    ]) {
+      const { res } = await connectWithMachine("hub-token-1", machine);
+      expect(res.status, machine).toBe(401);
+      expect(await res.json(), machine).toEqual({ error: "invalid_machine_token" });
+    }
+  });
+
+  it("dev の接続には dev の鍵の証明が通る", async () => {
+    const { res, ws } = await connectWithMachine("hub-token-dev", "hub-record-token-dev");
+    expect(res.status).toBe(101);
+    openSockets.push(ws!);
+    const messages = messageQueue(ws!);
+    expect(await messages.next()).toEqual({ type: "connected" });
+    ws!.send(frame(13));
+    expect(await messages.next()).toEqual({ type: "ack", seq: 13 });
+    const calls = await spyIngest();
+    expect(calls[0].dev).toBe("1");
+    expect(calls[0].items[0].device_id).toBe("alarm:00000000000000aa");
+    expect(calls[0].items[0].via_device_id).toBe("device-dev");
+  });
+
+  it("★ 端末が DO 向けの内部ヘッダーを名乗っても無視される (worker が上書き・削除する)", async () => {
+    const res = await SELF.fetch(`${BASE}/ws`, {
+      headers: {
+        Upgrade: "websocket",
+        Authorization: "Bearer hub-token-1",
+        "X-Recorder-Record-Device-Id": "alarm:forged",
+        "X-Recorder-Via-Device-Id": "forged-hub",
+        "X-Recorder-Machine-Missing": "1",
+      },
+    });
+    expect(res.status).toBe(101);
+    openSockets.push(res.webSocket!);
+    const messages = messageQueue(res.webSocket!);
+    expect(await messages.next()).toEqual({ type: "connected" });
+    res.webSocket!.send(frame(14));
+    expect(await messages.next()).toEqual({ type: "ack", seq: 14 });
+    const item = (await spyIngest())[0].items[0];
+    expect(item.device_id).toBe("device-1");
+    expect(item).not.toHaveProperty("via_device_id");
+  });
+
+  it("POST /measurements も同じ: 証明があれば鍵の sub と via_device_id で転送、通らなければ 401", async () => {
+    const post = (machine: string) =>
+      SELF.fetch(`${BASE}/measurements`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hub-token-1",
+          "X-Machine-Token": machine,
+        },
+        body: JSON.stringify([{ seq: 15, kind: "alcohol", payload: { value: 0 } }]),
+      });
+    expect((await post("hub-record-token-1")).status).toBe(200);
+    const item = (await spyIngest())[0].items[0];
+    expect(item.device_id).toBe("alarm:0123456789abcdef");
+    expect(item.via_device_id).toBe("device-1");
+    expect((await post("hub-record-token-other-tenant")).status).toBe(401);
+  });
+
+  it("★ 鍵の証明が要る段 (DO に Machine-Missing) では接続は受けるが測定を ack しない", async () => {
+    // worker の vars はテストで切り替えられないので、DO の接続口を内部ヘッダー付きで直接叩く
+    const res = await hubStub(env, "tenant-machine").fetch(
+      new Request("https://recorder-hub.internal/connect", {
+        headers: {
+          Upgrade: "websocket",
+          "X-Recorder-Tenant-Id": "tenant-machine",
+          "X-Recorder-Device-Id": "device-machine",
+          "X-Recorder-Record-Device-Id": "device-machine",
+          "X-Recorder-Machine-Missing": "1",
+        },
+      }),
+    );
+    expect(res.status).toBe(101);
+    const ws = res.webSocket!;
+    ws.accept();
+    openSockets.push(ws);
+    const messages = messageQueue(ws);
+    expect(await messages.next()).toEqual({ type: "connected" });
+    ws.send(frame(16));
+    expect(await messages.next()).toEqual({ type: "error", seq: 16, message: "machine_token_required" });
+    expect(await spyIngest()).toEqual([]);
+  });
+
+  it("decideRecordIdentity: 証明の判定 (純粋関数)", () => {
+    const primary = { active: true, tenant_id: "t", role: "device-hub", sub: "hub-1" };
+    const machine = { active: true, tenant_id: "t", role: "device-hub-record", sub: "alarm:0011223344556677" };
+    expect(decideRecordIdentity(primary, undefined)).toEqual({ recordDeviceId: "hub-1" });
+    expect(decideRecordIdentity(primary, machine)).toEqual({
+      recordDeviceId: "alarm:0011223344556677",
+      viaDeviceId: "hub-1",
+    });
+    // 読めない (introspect 失敗) / inactive / role 違い / sub 違い / tenant 違い / dev 違いは null
+    expect(decideRecordIdentity(primary, null)).toBeNull();
+    expect(decideRecordIdentity(primary, { ...machine, active: false })).toBeNull();
+    expect(decideRecordIdentity(primary, { ...machine, role: "device-kiosk" })).toBeNull();
+    expect(decideRecordIdentity(primary, { ...machine, sub: "hub-2" })).toBeNull();
+    expect(decideRecordIdentity(primary, { ...machine, sub: undefined })).toBeNull();
+    expect(decideRecordIdentity(primary, { ...machine, tenant_id: "u" })).toBeNull();
+    expect(decideRecordIdentity(primary, { ...machine, dev_device: true })).toBeNull();
+    expect(
+      decideRecordIdentity({ ...primary, dev_device: true }, { ...machine, dev_device: true }),
+    ).toEqual({ recordDeviceId: "alarm:0011223344556677", viaDeviceId: "hub-1" });
+    // device-hub 以外の接続 (印刷ブリッジ等) は証明を見ない
+    expect(decideRecordIdentity({ ...primary, role: "device-print" }, machine)).toEqual({
+      recordDeviceId: "hub-1",
+    });
+    expect(decideRecordIdentity({ ...primary, role: undefined }, machine)).toEqual({
+      recordDeviceId: "hub-1",
+    });
+  });
+
+  it("machineTokenMissing: vars がちょうど \"1\" で、device-hub の接続に証明が無いときだけ true", () => {
+    const bare = { recordDeviceId: "hub-1" };
+    const keyed = { recordDeviceId: "alarm:0011223344556677", viaDeviceId: "hub-1" };
+    expect(machineTokenMissing("1", "device-hub", bare)).toBe(true);
+    expect(machineTokenMissing("1", "device-hub", keyed)).toBe(false);
+    expect(machineTokenMissing(undefined, "device-hub", bare)).toBe(false);
+    expect(machineTokenMissing("true", "device-hub", bare)).toBe(false);
+    expect(machineTokenMissing("1", "device-print", bare)).toBe(false);
+    expect(machineTokenMissing("1", undefined, bare)).toBe(false);
   });
 });
