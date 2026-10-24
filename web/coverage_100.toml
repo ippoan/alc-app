@@ -198,6 +198,14 @@ branches = true
 path = "app/composables/useBpStationMode.ts"
 branches = true
 
+[[files]]
+path = "app/composables/useCamHostToken.ts"
+branches = true
+
+[[files]]
+path = "app/composables/useCamExtension.ts"
+branches = true
+
 # --- plugins ---
 
 [[files]]
@@ -211,6 +219,10 @@ path = "app/middleware/auth.global.ts"
 branches = false
 
 # --- utils ---
+
+[[files]]
+path = "app/utils/alc-cam-extension.ts"
+branches = true
 
 [[files]]
 path = "app/utils/api.ts"

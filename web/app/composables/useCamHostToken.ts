@@ -23,11 +23,10 @@
  */
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
+import { ALC_CAM_EXTENSION_ID, extensionSendMessage, swallowLastError, type ExtensionSendMessage } from '~/utils/alc-cam-extension'
 
 /** auth-worker が拠点 PC の拡張に割り当てた用途。nonce (query) と token (body) の両方で使う。 */
 export const CAM_HOST_KEY_USAGE = 'cam-host'
-/** 拡張 alc-cam の ID (externally_connectable で https://alc.ippoan.org/* からの送信を受ける)。 */
-export const ALC_CAM_EXTENSION_ID = 'icmmpdjddlphkbokdalofdjpkcgfiggd'
 
 /** `expires_in` 欠落時の fallback TTL (秒。auth-worker の 900s と同値) */
 const DEFAULT_TTL_SECONDS = 900
@@ -36,14 +35,7 @@ export const REFRESH_BEFORE_MS = 60_000
 /** 失敗してから試し直すまで (ms) */
 export const RETRY_MS = 60_000
 
-type SendMessage = (extensionId: string, message: unknown, callback: () => void) => void
-
-/** 拡張へ送る口。無ければ null (拡張が無い / Chrome 以外)。 */
-function extensionSendMessage(): SendMessage | null {
-  const runtime = (globalThis as { chrome?: { runtime?: { sendMessage?: unknown, lastError?: unknown } } }).chrome?.runtime
-  if (typeof runtime?.sendMessage !== 'function') return null
-  return (id, message, callback) => (runtime.sendMessage as SendMessage).call(runtime, id, message, callback)
-}
+type SendMessage = ExtensionSendMessage
 
 // --- module スコープ (PC に 1 つ) ---
 let installed = false
@@ -125,10 +117,7 @@ export function useCamHostToken(): void {
       return
     }
     try {
-      send(ALC_CAM_EXTENSION_ID, { type: 'cam_host_token', token: minted.token, exp: Math.floor(minted.expMs / 1000) }, () => {
-        // 拡張が無い・応答しないときの lastError を読んで捨てる (Chrome がコンソールに出さないように)
-        void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError
-      })
+      send(ALC_CAM_EXTENSION_ID, { type: 'cam_host_token', token: minted.token, exp: Math.floor(minted.expMs / 1000) }, swallowLastError)
     }
     catch { /* 拡張が無い */ }
     timer = setTimeout(() => start(gen, send), Math.max(minted.expMs - REFRESH_BEFORE_MS - Date.now(), 0))
