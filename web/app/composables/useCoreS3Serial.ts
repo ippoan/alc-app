@@ -101,7 +101,33 @@ const DIAG_EVENT_PREFIXES = [
   'EVT ALARM_RESTORED',
   'EVT OTA OK',
   'EVT OTA NG',
+  // 体温計への接続の試行と結果 (ファームの hub-ble。体温が届かなかった回の切り分け用)
+  'EVT THERMO_CONN',
+  'EVT THERMO_RX',
 ]
+
+/**
+ * 置き場に `dev <行>` で残す体温計の状態の JSON の `type` (`{"type":"found","device":"thermometer"}` 等)。
+ * 体温が PC に届かなかった回に、体温計を見つけたのか・つながったのか・失敗したのかを
+ * 遠隔 (get_log の pwa_log) から追うため。測定値の行 (`temperature`) は利用者の情報なので入れない
+ */
+const DIAG_THERMO_TYPES = ['found', 'connected', 'disconnected']
+
+/**
+ * 体温計の状態の JSON 行か。`error` は `{"type":"error","message":"thermometer: connection failed"}`
+ * のように message の先頭で機器を名乗る。読めない行は false (診断の置き場が本処理を落とさない)
+ */
+export function isThermoDiagLine(line: string): boolean {
+  try {
+    // `{` で始まる行だけが来るので msg は必ず object
+    const msg = JSON.parse(line) as { type?: unknown, device?: unknown, message?: unknown }
+    if (msg.type === 'error') return typeof msg.message === 'string' && msg.message.startsWith('thermometer')
+    return DIAG_THERMO_TYPES.includes(msg.type as string) && msg.device === 'thermometer'
+  }
+  catch {
+    return false
+  }
+}
 
 /** 行の素性。機種識別 (`DEVICE <kind>`) は arbiter が行うので、ここはメッセージの
  * 振り分けと legacyClaim (後方互換) の判定にだけ使う */
@@ -221,7 +247,10 @@ export function useCoreS3Serial() {
 
   function handleLine(line: string): void {
     const kind = classify(line)
-    if (kind === 'json') lineDispatch.dispatchJson(line)
+    if (kind === 'json') {
+      if (isThermoDiagLine(line)) appendDiag(`dev ${line}`)
+      lineDispatch.dispatchJson(line)
+    }
     else if (kind === 'event') {
       if (DIAG_EVENT_PREFIXES.some(prefix => line.startsWith(prefix))) appendDiag(`dev ${line}`)
       lineDispatch.dispatchEvent(line)
