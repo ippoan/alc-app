@@ -119,6 +119,12 @@ import {
   createHealthBaselineBody, createTimecardCardBody, startTenkoSessionBody, createEmployeeBody,
 } from '../helpers/api-test-data'
 
+// 測定の口 (`/api/measurements` 系) は alc-measurements-worker が持ち、rust-alc-api から消える
+// (Refs ippoan/rust-alc-api#680)。live の相手は rust-alc-api のコンテナなので、測定の検証は mock だけで回す
+const MEASUREMENTS_PATH = '/api/measurements'
+const withoutMeasurementsWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
+  isLive ? rows.filter(([, , path]) => !path.startsWith(MEASUREMENTS_PATH)) : rows
+
 // Valid UUIDs for live-mode compatibility
 const UUID1 = '00000000-0000-0000-0000-000000000001'
 const UUID2 = '00000000-0000-0000-0000-000000000002'
@@ -469,7 +475,7 @@ describe('api', () => {
   // saveMeasurement
   // ============================================================
 
-  describe('saveMeasurement', () => {
+  describe.skipIf(isLive)('saveMeasurement', () => {
     const baseResult: MeasurementResult = {
       employeeId: TEST_EMPLOYEE_ID,
       alcoholValue: 0.0,
@@ -656,7 +662,7 @@ describe('api', () => {
   // getMeasurements (manual URLSearchParams)
   // ============================================================
 
-  describe('getMeasurements', () => {
+  describe.skipIf(isLive)('getMeasurements', () => {
     it('should GET /api/measurements with no filters', async () => {
       const apiResponse = { measurements: [], total: 0, page: 1, per_page: 20 }
       await verifyApi(() => getMeasurements(), apiResponse)
@@ -720,7 +726,7 @@ describe('api', () => {
   // ============================================================
 
   describe('simple GET functions', () => {
-    it.each([
+    it.each(withoutMeasurementsWhenLive([
       ['getEmployees', () => getEmployees(), '/api/employees'],
       ['getEmployeeByCode', () => getEmployeeByCode('E001'), '/api/employees/by-code/E001'],
       ['getEmployeeById', () => getEmployeeById(TEST_EMPLOYEE_ID), `/api/employees/${TEST_EMPLOYEE_ID}`],
@@ -744,7 +750,7 @@ describe('api', () => {
       ['getDtakoDrivers', () => getDtakoDrivers(), '/api/drivers'],
       ['getVehicleCategories', () => getVehicleCategories(), '/api/car-inspections/vehicle-categories'],
       ['getVeinTemplates', () => getVeinTemplates(), '/api/vein/templates'],
-    ] as [string, () => Promise<unknown>, string][])(
+    ] as [string, () => Promise<unknown>, string][]))(
       '%s → GET %s',
       async (_name, fn, expectedPath) => {
         stubOk({})
@@ -781,7 +787,7 @@ describe('api', () => {
   // ============================================================
 
   describe('GET with filter functions', () => {
-    it.each([
+    it.each(withoutMeasurementsWhenLive([
       ['listSchedules', () => listSchedules({}), '/api/tenko/schedules'],
       ['listTenkoSessions', () => listTenkoSessions({}), '/api/tenko/sessions'],
       ['listFailures', () => listFailures({}), '/api/tenko/equipment-failures'],
@@ -790,7 +796,7 @@ describe('api', () => {
       ['listCommunicationItems', () => listCommunicationItems({}), '/api/communication-items'],
       ['getDtakoDailyHours', () => getDtakoDailyHours({}), '/api/daily-hours'],
       ['listHubMeasurements', () => listHubMeasurements(), '/api/hub/measurements'],
-    ] as [string, () => Promise<unknown>, string][])(
+    ] as [string, () => Promise<unknown>, string][]))(
       '%s({}) → GET %s',
       async (_name, fn, expectedPath) => {
         stubOk({})
@@ -854,7 +860,7 @@ describe('api', () => {
   // ============================================================
 
   describe('POST functions', () => {
-    it.each([
+    it.each(withoutMeasurementsWhenLive([
       ['startMeasurement', () => startMeasurement(TEST_EMPLOYEE_ID), '/api/measurements/start'],
       ['createEmployee', () => createEmployee({ name: 'POST Test', code: `E-POST-${Date.now()}` }), '/api/employees'],
       ['createSchedule', () => createSchedule(createScheduleBody as any), '/api/tenko/schedules'],
@@ -885,7 +891,7 @@ describe('api', () => {
       ['createGuidanceRecord', () => createGuidanceRecord(createGuidanceRecordBody as any), '/api/guidance-records'],
       ['createCommunicationItem', () => createCommunicationItem(createCommunicationItemBody as any), '/api/communication-items'],
       ['identifyVein', () => identifyVein('AABBCC'), '/api/vein/identify'],
-    ] as [string, () => Promise<unknown>, string][])(
+    ] as [string, () => Promise<unknown>, string][]))(
       '%s → POST %s',
       async (_name, fn, expectedPath) => {
         stubOk({})
@@ -1040,7 +1046,7 @@ describe('api', () => {
   // ============================================================
 
   describe('PUT functions', () => {
-    it.each([
+    it.each(withoutMeasurementsWhenLive([
       ['updateMeasurement', () => updateMeasurement(SEED_MEASUREMENT_ID, { alcohol_value: 0.1 }), `/api/measurements/${SEED_MEASUREMENT_ID}`],
       ['updateEmployee', () => updateEmployee(TEST_EMPLOYEE_ID, { name: 'B' }), `/api/employees/${TEST_EMPLOYEE_ID}`],
       ['updateEmployeeFace', () => updateEmployeeFace(TEST_EMPLOYEE_ID, 'url', [1, 2], 'v1'), `/api/employees/${TEST_EMPLOYEE_ID}/face`],
@@ -1064,7 +1070,7 @@ describe('api', () => {
       ['updateDeviceCallSettings', () => updateDeviceCallSettings(SEED_DEVICE_ID, true), `/api/devices/${SEED_DEVICE_ID}/call-settings`],
       ['updateDeviceLastLogin', () => updateDeviceLastLogin(SEED_DEVICE_ID, TEST_EMPLOYEE_ID, 'name', []), '/api/devices/update-last-login'],
       ['putVeinTemplate', () => putVeinTemplate(TEST_EMPLOYEE_ID, ['AA', 'BB']), `/api/vein/templates/${TEST_EMPLOYEE_ID}`],
-    ] as [string, () => Promise<unknown>, string][])(
+    ] as [string, () => Promise<unknown>, string][]))(
       '%s → PUT %s',
       async (_name, fn, expectedPath) => {
         stubOk({})
@@ -1276,7 +1282,7 @@ describe('api', () => {
   // ============================================================
 
   describe('DELETE functions', () => {
-    it.each([
+    it.each(withoutMeasurementsWhenLive([
       ['deleteEmployee', () => deleteEmployee(DEL_EMPLOYEE_ID), `/api/employees/${DEL_EMPLOYEE_ID}`],
       ['deleteSchedule', () => deleteSchedule(DEL_SCHEDULE_ID), `/api/tenko/schedules/${DEL_SCHEDULE_ID}`],
       ['deleteWebhook', () => deleteWebhook(DEL_WEBHOOK_ID), `/api/tenko/webhooks/${DEL_WEBHOOK_ID}`],
@@ -1287,7 +1293,7 @@ describe('api', () => {
       ['deleteGuidanceRecord', () => deleteGuidanceRecord(DEL_GUIDANCE_ID), `/api/guidance-records/${DEL_GUIDANCE_ID}`],
       ['deleteGuidanceAttachment', () => deleteGuidanceAttachment(DEL_GUIDANCE_ID, 'ffffffff-ffff-ffff-ffff-ffffffffffff'), `/api/guidance-records/${DEL_GUIDANCE_ID}/attachments/ffffffff-ffff-ffff-ffff-ffffffffffff`],
       ['deleteCommunicationItem', () => deleteCommunicationItem(DEL_COMM_ID), `/api/communication-items/${DEL_COMM_ID}`],
-    ] as [string, () => Promise<unknown>, string][])(
+    ] as [string, () => Promise<unknown>, string][]))(
       '%s → DELETE %s',
       async (_name, fn, expectedPath) => {
         stub204()
@@ -1522,7 +1528,7 @@ restoreNativeApis()
   // fetchFacePhoto
   // ============================================================
 
-  describe('fetchFacePhoto', () => {
+  describe.skipIf(isLive)('fetchFacePhoto', () => {
     beforeEach(() => {
       if (!isLive) {
         vi.stubGlobal('URL', {
@@ -1602,7 +1608,7 @@ restoreNativeApis()
   // fetchMeasurementVideo
   // ============================================================
 
-  describe('fetchMeasurementVideo', () => {
+  describe.skipIf(isLive)('fetchMeasurementVideo', () => {
     beforeEach(() => {
       if (!isLive) {
         vi.stubGlobal('URL', {
@@ -1861,7 +1867,7 @@ restoreNativeApis()
     })
   })
 
-  describe('Measurements CRUD', () => {
+  describe.skipIf(isLive)('Measurements CRUD', () => {
     let measurementId: string
 
     it('should start measurement', async () => {
