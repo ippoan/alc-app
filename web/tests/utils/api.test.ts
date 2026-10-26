@@ -119,8 +119,9 @@ import {
   createHealthBaselineBody, createTimecardCardBody, startTenkoSessionBody, createEmployeeBody,
 } from '../helpers/api-test-data'
 
-// 測定の口 (`/api/measurements` 系) は alc-measurements-worker が持ち、rust-alc-api から消える
-// (Refs ippoan/rust-alc-api#680)。live の相手は rust-alc-api のコンテナなので、測定の検証は mock だけで回す
+// 測定の口 (`/api/measurements` 系) と upload の 3 口 (`/api/upload/{face-photo,blow-video,report-audio}`) は
+// alc-measurements-worker が持ち、rust-alc-api から消えた (Refs ippoan/rust-alc-api#680)。live の相手は rust-alc-api の
+// コンテナなので、これらの検証は mock だけで回す
 const MEASUREMENTS_PATH = '/api/measurements'
 const withoutMeasurementsWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
   isLive ? rows.filter(([, , path]) => !path.startsWith(MEASUREMENTS_PATH)) : rows
@@ -1320,7 +1321,7 @@ describe('api', () => {
   // FormData upload functions
   // ============================================================
 
-  describe('uploadFacePhoto', () => {
+  describe.skipIf(isLive)('uploadFacePhoto', () => {
     beforeEach(() => { restoreNativeApis() })
     afterEach(async () => { await setupApi() })
 
@@ -1385,7 +1386,7 @@ describe('api', () => {
     })
   })
 
-  describe('uploadReportAudio', () => {
+  describe.skipIf(isLive)('uploadReportAudio', () => {
     beforeEach(() => {
 restoreNativeApis()
     })
@@ -1426,7 +1427,7 @@ restoreNativeApis()
     })
   })
 
-  describe('uploadBlowVideo', () => {
+  describe.skipIf(isLive)('uploadBlowVideo', () => {
     beforeEach(() => {
 restoreNativeApis()
     })
