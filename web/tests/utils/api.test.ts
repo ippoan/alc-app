@@ -125,12 +125,16 @@ import {
 const MEASUREMENTS_PATH = '/api/measurements'
 // 物品・携行品・伝達事項・指導記録の口も alc-records-worker へ移り、rust-alc-api から消える (Refs ippoan/rust-alc-api#680)。
 // 点呼の携行品チェック (`/api/tenko/sessions/{id}/carrying-items`) は rust に残るので、前方一致で外す。
-// タイムカードの口 (`/api/timecard/`) も alc-people-worker へ移り、rust-alc-api から消える (W4d-a)
-const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/']
+// タイムカードの口 (`/api/timecard/`) も alc-people-worker へ移り、rust-alc-api から消える (W4d-a)。社員の口 (`/api/employees`) も同じ (W4d-b)
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees']
 const isMovedPath = (path: string) =>
   path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
 const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
   isLive ? rows.filter(([, , path]) => !isMovedPath(path)) : rows
+
+// 認証・401 の再取得の検証で叩く口。mock は従来どおり社員の一覧、live は rust-alc-api に残る点呼の webhook の一覧
+// (社員の口は alc-people-worker へ移り rust から消えるので、live で叩くと認証の前に 404 になる。W4d-b)
+const authProbe = () => (isLive ? listWebhooks() : getEmployees())
 
 // Valid UUIDs for live-mode compatibility
 const UUID1 = '00000000-0000-0000-0000-000000000001'
@@ -166,13 +170,13 @@ describe('api', () => {
 
     it('should throw if API is not initialized (empty baseUrl)', async () => {
       initApi('')
-      await expect(getEmployees()).rejects.toThrow('API 未初期化')
+      await expect(authProbe()).rejects.toThrow('API 未初期化')
     })
 
     it('should strip trailing slash from baseUrl', async () => {
       initApi(API_BASE + '/', isLive ? () => jwtToken! : undefined, isLive ? undefined : () => 'test-tenant')
       stubOk([])
-      await callApi(() => getEmployees())
+      await callApi(() => authProbe())
       assertMock(() => { expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/api/employees`) })
     })
 
@@ -204,7 +208,7 @@ describe('api', () => {
         statusText: 'Internal Server Error',
         text: () => Promise.resolve(''),
       })
-      await expect(getEmployees()).rejects.toThrow('Internal Server Error')
+      await expect(authProbe()).rejects.toThrow('Internal Server Error')
     })
 
     it('should handle text() rejection gracefully', async () => {
@@ -219,7 +223,7 @@ describe('api', () => {
         statusText: 'Bad Gateway',
         text: () => Promise.reject(new Error('stream error')),
       })
-      await expect(getEmployees()).rejects.toThrow('API エラー (502)')
+      await expect(authProbe()).rejects.toThrow('API エラー (502)')
     })
   })
 
@@ -236,7 +240,7 @@ describe('api', () => {
     it('should succeed with JWT auth', async () => {
       initApi(API_BASE, () => jwtToken || 'jwt-token-123', () => TEST_TENANT_ID)
       stubOk([])
-      const result = await getEmployees()
+      const result = await authProbe()
       expect(Array.isArray(result)).toBe(true)
       assertMock(() => {
         const headers = mockFetch.mock.calls[0][1].headers
@@ -248,7 +252,7 @@ describe('api', () => {
     it('should succeed with X-Tenant-ID (kiosk mode)', async () => {
       initApi(API_BASE, () => null, () => TEST_TENANT_ID)
       stubOk([])
-      const result = await getEmployees()
+      const result = await authProbe()
       expect(Array.isArray(result)).toBe(true)
       assertMock(() => {
         const headers = mockFetch.mock.calls[0][1].headers
@@ -260,19 +264,19 @@ describe('api', () => {
     it('should reject without any auth', async () => {
       initApi(API_BASE, () => null, () => null)
       stubResponse(errResponse(401))
-      await expect(getEmployees()).rejects.toThrow()
+      await expect(authProbe()).rejects.toThrow()
     })
 
     it('should reject when no getters provided', async () => {
       initApi(API_BASE)
       stubResponse(errResponse(401))
-      await expect(getEmployees()).rejects.toThrow()
+      await expect(authProbe()).rejects.toThrow()
     })
 
     it('should fall back to X-Tenant-ID when JWT getter not provided', async () => {
       initApi(API_BASE, undefined, () => isLive ? TEST_TENANT_ID : 'tenant-only')
       stubOk([])
-      await callApi(() => getEmployees())
+      await callApi(() => authProbe())
       assertMock(() => {
         const headers = mockFetch.mock.calls[0][1].headers
         expect(headers['X-Tenant-ID']).toBe('tenant-only')
@@ -295,7 +299,7 @@ describe('api', () => {
         const refresher = vi.fn(async () => { token = jwtToken! })
         initApi(API_BASE, () => token, undefined, refresher)
 
-        const result = await getEmployees()
+        const result = await authProbe()
         expect(refresher).toHaveBeenCalledTimes(1)
         expect(Array.isArray(result)).toBe(true)
         return
@@ -308,7 +312,7 @@ describe('api', () => {
         .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('') })
         .mockResolvedValueOnce(okJson({ id: '1' }))
 
-      const result = await getEmployees()
+      const result = await authProbe()
       expect(refresher).toHaveBeenCalledTimes(1)
       expectMock(mockFetch).toHaveBeenCalledTimes(2)
       expect(result).toEqual({ id: '1' })
@@ -322,7 +326,7 @@ describe('api', () => {
         // live: 無効 JWT + refresher が直さない → retry も 401 → エラー
         const refresher = vi.fn(async () => {}) // token 差し替えなし
         initApi(API_BASE, () => 'invalid-token', undefined, refresher)
-        await expect(getEmployees()).rejects.toThrow('API エラー (401)')
+        await expect(authProbe()).rejects.toThrow('API エラー (401)')
         expect(refresher).toHaveBeenCalledTimes(1)
         return
       }
@@ -333,7 +337,7 @@ describe('api', () => {
         .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('unauthorized') })
         .mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden', text: () => Promise.resolve('denied') })
 
-      await expect(getEmployees()).rejects.toThrow('API エラー (403): denied')
+      await expect(authProbe()).rejects.toThrow('API エラー (403): denied')
       expect(refresher).toHaveBeenCalledTimes(1)
       expectMock(mockFetch).toHaveBeenCalledTimes(2)
     })
@@ -350,7 +354,7 @@ describe('api', () => {
         text: () => Promise.resolve('unauthorized'),
       })
 
-      await expect(getEmployees()).rejects.toThrow('API エラー (401)')
+      await expect(authProbe()).rejects.toThrow('API エラー (401)')
     })
 
     it('should not attempt refresh when no tokenRefresher is set', async () => {
@@ -360,7 +364,7 @@ describe('api', () => {
         ok: false, status: 401, statusText: 'Unauthorized',
         text: () => Promise.resolve(''),
       })
-      await expect(getEmployees()).rejects.toThrow('API エラー (401)')
+      await expect(authProbe()).rejects.toThrow('API エラー (401)')
       assertMock(() => { expect(mockFetch).toHaveBeenCalledTimes(1) })
     })
 
@@ -374,10 +378,10 @@ describe('api', () => {
       })
       if (isLive) {
         // live: X-Tenant-ID で認証成功 → refresher 呼ばれず
-        const result = await getEmployees()
+        const result = await authProbe()
         expect(Array.isArray(result)).toBe(true)
       } else {
-        await expect(getEmployees()).rejects.toThrow('API エラー (401)')
+        await expect(authProbe()).rejects.toThrow('API エラー (401)')
       }
       expect(refresher).not.toHaveBeenCalled()
     })
@@ -414,7 +418,7 @@ describe('api', () => {
         const refresher = vi.fn(async () => { token = jwtToken! })
         initApi(API_BASE, () => token, undefined, refresher)
 
-        const [r1, r2] = await Promise.all([getEmployees(), getEmployees()])
+        const [r1, r2] = await Promise.all([authProbe(), authProbe()])
         expect(Array.isArray(r1)).toBe(true)
         expect(Array.isArray(r2)).toBe(true)
         // live: タイミング次第で 1 or 2 回呼ばれる (shared promise の保証はネットワーク依存)
@@ -430,8 +434,8 @@ describe('api', () => {
       const res401 = { ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('') }
       mockFetch.mockResolvedValue(res401)
 
-      const p1 = getEmployees().catch(() => {})
-      const p2 = getEmployees().catch(() => {})
+      const p1 = authProbe().catch(() => {})
+      const p2 = authProbe().catch(() => {})
 
       // 両方が refreshPromise を await している状態で resolve
       await vi.waitFor(() => { expect(refresher).toHaveBeenCalledTimes(1) })
@@ -451,7 +455,7 @@ describe('api', () => {
         .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('original') })
         .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Error', text: () => Promise.reject(new Error('fail')) })
 
-      await expect(getEmployees()).rejects.toThrow(isLive ? 'API エラー (401)' : 'API エラー (500)')
+      await expect(authProbe()).rejects.toThrow(isLive ? 'API エラー (401)' : 'API エラー (500)')
     })
   })
 
@@ -1832,7 +1836,8 @@ restoreNativeApis()
   // CRUD テスト (mock / live 両対応)
   // ============================================================
 
-  describe('Employees CRUD', () => {
+  // 社員の口は alc-people-worker へ移り rust-alc-api から消える (W4d-b)。live の相手は rust のコンテナなので mock だけで回す
+  describe.skipIf(isLive)('Employees CRUD', () => {
     let createdId: string
 
     it('should list employees', async () => {
@@ -2335,12 +2340,12 @@ restoreNativeApis()
   describe.skipIf(!isLive)('Auth (live only)', () => {
     it('should reject request without auth', async () => {
       initApi(API_BASE)
-      await expect(getEmployees()).rejects.toThrow()
+      await expect(authProbe()).rejects.toThrow()
     })
 
     it('should reject request with invalid JWT', async () => {
       initApi(API_BASE, () => 'invalid-token')
-      await expect(getEmployees()).rejects.toThrow()
+      await expect(authProbe()).rejects.toThrow()
     })
   })
 })
