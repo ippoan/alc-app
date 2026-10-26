@@ -126,7 +126,8 @@ const MEASUREMENTS_PATH = '/api/measurements'
 // 物品・携行品・伝達事項・指導記録の口も alc-records-worker へ移り、rust-alc-api から消える (Refs ippoan/rust-alc-api#680)。
 // 点呼の携行品チェック (`/api/tenko/sessions/{id}/carrying-items`) は rust に残るので、前方一致で外す。
 // タイムカードの口 (`/api/timecard/`) も alc-people-worker へ移り、rust-alc-api から消える (W4d-a)。社員の口 (`/api/employees`) も同じ (W4d-b)
-const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees']
+// デジタコの乗務員・日別の労働時間 (`/api/drivers`・`/api/daily-hours`) も alc-dtako-worker へ移り、rust-alc-api から消える (W5c-1)
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours']
 const isMovedPath = (path: string) =>
   path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
 const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
