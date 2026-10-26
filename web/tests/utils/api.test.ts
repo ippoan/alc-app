@@ -124,8 +124,9 @@ import {
 // コンテナなので、これらの検証は mock だけで回す
 const MEASUREMENTS_PATH = '/api/measurements'
 // 物品・携行品・伝達事項・指導記録の口も alc-records-worker へ移り、rust-alc-api から消える (Refs ippoan/rust-alc-api#680)。
-// 点呼の携行品チェック (`/api/tenko/sessions/{id}/carrying-items`) は rust に残るので、前方一致で外す
-const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records']
+// 点呼の携行品チェック (`/api/tenko/sessions/{id}/carrying-items`) は rust に残るので、前方一致で外す。
+// タイムカードの口 (`/api/timecard/`) も alc-people-worker へ移り、rust-alc-api から消える (W4d-a)
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/']
 const isMovedPath = (path: string) =>
   path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
 const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
@@ -830,12 +831,12 @@ describe('api', () => {
       })
     })
 
-    it('listTimecardCards without employeeId', async () => {
+    it.skipIf(isLive)('listTimecardCards without employeeId', async () => {
       await verifyApi(() => listTimecardCards(), [])
       assertMock(() => { expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/timecard/cards') })
     })
 
-    it('listTimecardCards with employeeId', async () => {
+    it.skipIf(isLive)('listTimecardCards with employeeId', async () => {
       await verifyApi(() => listTimecardCards(TEST_EMPLOYEE_ID), [])
       assertMock(() => { expect(mockFetch.mock.calls[0][0]).toBe(`https://api.example.com/api/timecard/cards?employee_id=${TEST_EMPLOYEE_ID}`) })
     })
@@ -1717,11 +1718,8 @@ restoreNativeApis()
       expect(mockAnchor.download).toBe('equipment-failures.csv')
     })
 
-    it('downloadTimePunchesCsv should download CSV', async () => {
-      if (isLive) {
-        try { await downloadTimePunchesCsv({}) } catch { /* may fail without DOM */ }
-        return
-      }
+    // 打刻の CSV の口は alc-people-worker へ移り、rust-alc-api から消える (W4d-a)。live では回さない
+    it.skipIf(isLive)('downloadTimePunchesCsv should download CSV', async () => {
       stubResponse({
         ok: true,
         blob: () => Promise.resolve(new Blob(['csv'])),
@@ -2109,7 +2107,8 @@ restoreNativeApis()
     })
   })
 
-  describe('Timecard CRUD', () => {
+  // タイムカードの口は alc-people-worker へ移り、rust-alc-api から消える (W4d-a)。live では回さない
+  describe.skipIf(isLive)('Timecard CRUD', () => {
     let cardId: string
     const nfcCardId = `NFC-CRUD-${Date.now()}`
 
