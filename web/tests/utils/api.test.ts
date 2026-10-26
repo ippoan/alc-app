@@ -123,8 +123,13 @@ import {
 // alc-measurements-worker が持ち、rust-alc-api から消えた (Refs ippoan/rust-alc-api#680)。live の相手は rust-alc-api の
 // コンテナなので、これらの検証は mock だけで回す
 const MEASUREMENTS_PATH = '/api/measurements'
-const withoutMeasurementsWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
-  isLive ? rows.filter(([, , path]) => !path.startsWith(MEASUREMENTS_PATH)) : rows
+// 物品・携行品・伝達事項・指導記録の口も alc-records-worker へ移り、rust-alc-api から消える (Refs ippoan/rust-alc-api#680)。
+// 点呼の携行品チェック (`/api/tenko/sessions/{id}/carrying-items`) は rust に残るので、前方一致で外す
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records']
+const isMovedPath = (path: string) =>
+  path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
+const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
+  isLive ? rows.filter(([, , path]) => !isMovedPath(path)) : rows
 
 // Valid UUIDs for live-mode compatibility
 const UUID1 = '00000000-0000-0000-0000-000000000001'
@@ -727,7 +732,7 @@ describe('api', () => {
   // ============================================================
 
   describe('simple GET functions', () => {
-    it.each(withoutMeasurementsWhenLive([
+    it.each(withoutMovedWhenLive([
       ['getEmployees', () => getEmployees(), '/api/employees'],
       ['getEmployeeByCode', () => getEmployeeByCode('E001'), '/api/employees/by-code/E001'],
       ['getEmployeeById', () => getEmployeeById(TEST_EMPLOYEE_ID), `/api/employees/${TEST_EMPLOYEE_ID}`],
@@ -788,7 +793,7 @@ describe('api', () => {
   // ============================================================
 
   describe('GET with filter functions', () => {
-    it.each(withoutMeasurementsWhenLive([
+    it.each(withoutMovedWhenLive([
       ['listSchedules', () => listSchedules({}), '/api/tenko/schedules'],
       ['listTenkoSessions', () => listTenkoSessions({}), '/api/tenko/sessions'],
       ['listFailures', () => listFailures({}), '/api/tenko/equipment-failures'],
@@ -845,12 +850,12 @@ describe('api', () => {
       assertMock(() => { expect(mockFetch.mock.calls[0][0]).toContain('date=2026-01-15') })
     })
 
-    it('getActiveCommunicationItems without targetEmployeeId', async () => {
+    it.skipIf(isLive)('getActiveCommunicationItems without targetEmployeeId', async () => {
       await verifyApi(() => getActiveCommunicationItems(), [])
       assertMock(() => { expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/communication-items/active') })
     })
 
-    it('getActiveCommunicationItems with targetEmployeeId', async () => {
+    it.skipIf(isLive)('getActiveCommunicationItems with targetEmployeeId', async () => {
       await verifyApi(() => getActiveCommunicationItems(TEST_EMPLOYEE_ID), [])
       assertMock(() => { expect(mockFetch.mock.calls[0][0]).toContain(`target_employee_id=${TEST_EMPLOYEE_ID}`) })
     })
@@ -861,7 +866,7 @@ describe('api', () => {
   // ============================================================
 
   describe('POST functions', () => {
-    it.each(withoutMeasurementsWhenLive([
+    it.each(withoutMovedWhenLive([
       ['startMeasurement', () => startMeasurement(TEST_EMPLOYEE_ID), '/api/measurements/start'],
       ['createEmployee', () => createEmployee({ name: 'POST Test', code: `E-POST-${Date.now()}` }), '/api/employees'],
       ['createSchedule', () => createSchedule(createScheduleBody as any), '/api/tenko/schedules'],
@@ -1047,7 +1052,7 @@ describe('api', () => {
   // ============================================================
 
   describe('PUT functions', () => {
-    it.each(withoutMeasurementsWhenLive([
+    it.each(withoutMovedWhenLive([
       ['updateMeasurement', () => updateMeasurement(SEED_MEASUREMENT_ID, { alcohol_value: 0.1 }), `/api/measurements/${SEED_MEASUREMENT_ID}`],
       ['updateEmployee', () => updateEmployee(TEST_EMPLOYEE_ID, { name: 'B' }), `/api/employees/${TEST_EMPLOYEE_ID}`],
       ['updateEmployeeFace', () => updateEmployeeFace(TEST_EMPLOYEE_ID, 'url', [1, 2], 'v1'), `/api/employees/${TEST_EMPLOYEE_ID}/face`],
@@ -1283,7 +1288,7 @@ describe('api', () => {
   // ============================================================
 
   describe('DELETE functions', () => {
-    it.each(withoutMeasurementsWhenLive([
+    it.each(withoutMovedWhenLive([
       ['deleteEmployee', () => deleteEmployee(DEL_EMPLOYEE_ID), `/api/employees/${DEL_EMPLOYEE_ID}`],
       ['deleteSchedule', () => deleteSchedule(DEL_SCHEDULE_ID), `/api/tenko/schedules/${DEL_SCHEDULE_ID}`],
       ['deleteWebhook', () => deleteWebhook(DEL_WEBHOOK_ID), `/api/tenko/webhooks/${DEL_WEBHOOK_ID}`],
@@ -1468,7 +1473,7 @@ restoreNativeApis()
     })
   })
 
-  describe('uploadGuidanceAttachment', () => {
+  describe.skipIf(isLive)('uploadGuidanceAttachment', () => {
     beforeEach(() => {
 restoreNativeApis()
     })
@@ -2196,7 +2201,7 @@ restoreNativeApis()
     })
   })
 
-  describe('Carrying Items CRUD', () => {
+  describe.skipIf(isLive)('Carrying Items CRUD', () => {
     let itemId: string
 
     it('should create carrying item', async () => {
@@ -2226,7 +2231,7 @@ restoreNativeApis()
     })
   })
 
-  describe('Communication Items CRUD', () => {
+  describe.skipIf(isLive)('Communication Items CRUD', () => {
     let itemId: string
 
     it('should create communication item', async () => {
@@ -2256,7 +2261,7 @@ restoreNativeApis()
     })
   })
 
-  describe('Guidance Records CRUD', () => {
+  describe.skipIf(isLive)('Guidance Records CRUD', () => {
     let recordId: string
 
     it('should create guidance record', async () => {
