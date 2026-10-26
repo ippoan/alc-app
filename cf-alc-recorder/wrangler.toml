@@ -84,6 +84,9 @@ destination_address = "m.tama.ramu@gmail.com"
 [vars]
 NOTIFY_EMAIL_FROM = "alc-crash@mtamaramu.com"
 NOTIFY_EMAIL_TO = "m.tama.ramu@gmail.com"
+# 鍵の証明 (X-Machine-Token) の無い device-hub の測定を ack しない (Refs ippoan/alc-cam#2)。
+# 接続・下り command・OTA は受ける。戻すときはこの行を消して deploy するだけ
+REQUIRE_MACHINE_TOKEN = "1"
 
 [env.staging]
 name = "alc-recorder-staging"
@@ -123,3 +126,6 @@ destination_address = "m.tama.ramu@gmail.com"
 [env.staging.vars]
 NOTIFY_EMAIL_FROM = "alc-crash@mtamaramu.com"
 NOTIFY_EMAIL_TO = "m.tama.ramu@gmail.com"
+# 鍵の証明 (X-Machine-Token) の無い device-hub の測定を ack しない (Refs ippoan/alc-cam#2)。
+# 接続・下り command・OTA は受ける。戻すときはこの行を消して deploy するだけ
+REQUIRE_MACHINE_TOKEN = "1"
