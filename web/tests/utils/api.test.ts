@@ -129,7 +129,8 @@ const MEASUREMENTS_PATH = '/api/measurements'
 // デジタコの乗務員・日別の労働時間 (`/api/drivers`・`/api/daily-hours`) も alc-dtako-worker へ移り、rust-alc-api から消える (W5c-1)
 // 端末の測定・打刻の一覧 (`/api/hub/measurements`) も alc-people-worker へ移り、rust-alc-api から消える (W6a)
 // 端末の登録・管理・FCM の口 (`/api/devices`) も alc-devices-worker へ移り、rust-alc-api から消える (W6b)
-const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours', '/api/hub/measurements', '/api/devices']
+// 車検証の口 (`/api/car-inspections`) も alc-carins-worker へ移り、rust-alc-api から消える (W3)
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours', '/api/hub/measurements', '/api/devices', '/api/car-inspections']
 const isMovedPath = (path: string) =>
   path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
 const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
@@ -621,7 +622,7 @@ describe('api', () => {
   // ============================================================
 
   describe('lookupCarInspection', () => {
-    it('POST /api/car-inspections/lookup、body に番号を JSON で載せる (URL には載せない)', async () => {
+    it.skipIf(isLive)('POST /api/car-inspections/lookup、body に番号を JSON で載せる (URL には載せない)', async () => {
       const apiResponse = { expires_on: '2030-12-31', matched_by: 'cert_no', car_no: 'TEST-1' }
       const response = await verifyApi(
         () => lookupCarInspection('000000000001', 'TESTCARID00001'),
