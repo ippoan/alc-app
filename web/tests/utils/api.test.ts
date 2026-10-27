@@ -2299,7 +2299,8 @@ restoreNativeApis()
       expect(result).toBeDefined()
     })
 
-    it('should get vehicle categories', async () => {
+    // 車検証の口は alc-carins-worker へ移り、rust-alc-api から消えた (W3)。live の相手は rust のコンテナなので mock だけで回す
+    it.skipIf(isLive)('should get vehicle categories', async () => {
       stubOk({})
       const result = await getVehicleCategories()
       expect(result).toBeDefined()
