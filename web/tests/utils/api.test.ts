@@ -128,7 +128,8 @@ const MEASUREMENTS_PATH = '/api/measurements'
 // タイムカードの口 (`/api/timecard/`) も alc-people-worker へ移り、rust-alc-api から消える (W4d-a)。社員の口 (`/api/employees`) も同じ (W4d-b)
 // デジタコの乗務員・日別の労働時間 (`/api/drivers`・`/api/daily-hours`) も alc-dtako-worker へ移り、rust-alc-api から消える (W5c-1)
 // 端末の測定・打刻の一覧 (`/api/hub/measurements`) も alc-people-worker へ移り、rust-alc-api から消える (W6a)
-const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours', '/api/hub/measurements']
+// 端末の登録・管理・FCM の口 (`/api/devices`) も alc-devices-worker へ移り、rust-alc-api から消える (W6b)
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours', '/api/hub/measurements', '/api/devices']
 const isMovedPath = (path: string) =>
   path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
 const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
@@ -916,7 +917,7 @@ describe('api', () => {
       },
     )
 
-    it('createDeviceRegistrationRequest with deviceName', async () => {
+    it.skipIf(isLive)('createDeviceRegistrationRequest with deviceName', async () => {
       stubOk({})
       await callApi(() => createDeviceRegistrationRequest('My Device'))
       assertMock(() => {
@@ -994,7 +995,7 @@ describe('api', () => {
       ).rejects.toThrow('API エラー (404)')
     })
 
-    it('createDeviceUrlToken with opts', async () => {
+    it.skipIf(isLive)('createDeviceUrlToken with opts', async () => {
       stubOk({})
       await callApi(() => createDeviceUrlToken('dev', { is_device_owner: true, is_dev_device: true }))
       assertMock(() => {
@@ -1015,7 +1016,7 @@ describe('api', () => {
       })
     })
 
-    it('createDeviceOwnerToken with opts', async () => {
+    it.skipIf(isLive)('createDeviceOwnerToken with opts', async () => {
       stubOk({})
       await callApi(() => createDeviceOwnerToken('dev', { is_dev_device: true }))
       assertMock(() => {
@@ -1025,7 +1026,7 @@ describe('api', () => {
       })
     })
 
-    it('approveDevice with deviceName', async () => {
+    it.skipIf(isLive)('approveDevice with deviceName', async () => {
       stubOk({})
       await callApi(() => approveDevice(UUID7, 'Named Device'))
       assertMock(() => {
@@ -1034,7 +1035,7 @@ describe('api', () => {
       })
     })
 
-    it('triggerUpdate with opts', async () => {
+    it.skipIf(isLive)('triggerUpdate with opts', async () => {
       stubOk({})
       await callApi(() => triggerUpdate({ device_ids: [UUID7, UUID8], dev_only: true }))
       assertMock(() => {
@@ -1192,7 +1193,7 @@ describe('api', () => {
       })
     })
 
-    it('updateDeviceCallSettings with callSchedule and alwaysOn', async () => {
+    it.skipIf(isLive)('updateDeviceCallSettings with callSchedule and alwaysOn', async () => {
       const schedule = { start: '08:00', end: '18:00' }
       stubOk({})
       await callApi(() => updateDeviceCallSettings(UUID7, true, schedule as any, true))
@@ -1204,7 +1205,7 @@ describe('api', () => {
       })
     })
 
-    it('updateDeviceCallSettings with bpEnabled sends bp_enabled (Refs ippoan/alc-app-s3#135)', async () => {
+    it.skipIf(isLive)('updateDeviceCallSettings with bpEnabled sends bp_enabled (Refs ippoan/alc-app-s3#135)', async () => {
       stubOk({})
       await callApi(() => updateDeviceCallSettings(UUID7, true, null, undefined, true))
       assertMock(() => {
@@ -1215,7 +1216,7 @@ describe('api', () => {
       })
     })
 
-    it('updateDeviceCallSettings without alwaysOn omits always_on', async () => {
+    it.skipIf(isLive)('updateDeviceCallSettings without alwaysOn omits always_on', async () => {
       stubOk({})
       await callApi(() => updateDeviceCallSettings(UUID7, false, null))
       assertMock(() => {
@@ -1227,7 +1228,7 @@ describe('api', () => {
       })
     })
 
-    it('updateDeviceLastLogin sends correct body', async () => {
+    it.skipIf(isLive)('updateDeviceLastLogin sends correct body', async () => {
       stubOk({})
       await callApi(() => updateDeviceLastLogin(UUID7, TEST_EMPLOYEE_ID, 'Taro', ['admin']))
       assertMock(() => {
@@ -2155,7 +2156,7 @@ restoreNativeApis()
     })
   })
 
-  describe('Devices CRUD', () => {
+  describe.skipIf(isLive)('Devices CRUD', () => {
     it('should create device registration request', async () => {
       stubOk({ registration_code: '123456', expires_at: '2026-01-01' })
       const result = await createDeviceRegistrationRequest('Test Device')
