@@ -124,21 +124,20 @@ import {
 // コンテナなので、これらの検証は mock だけで回す
 const MEASUREMENTS_PATH = '/api/measurements'
 // 物品・携行品・伝達事項・指導記録の口も alc-records-worker へ移り、rust-alc-api から消える (Refs ippoan/rust-alc-api#680)。
-// 点呼の携行品チェック (`/api/tenko/sessions/{id}/carrying-items`) は rust に残るので、前方一致で外す。
 // タイムカードの口 (`/api/timecard/`) も alc-people-worker へ移り、rust-alc-api から消える (W4d-a)。社員の口 (`/api/employees`) も同じ (W4d-b)
 // デジタコの乗務員・日別の労働時間 (`/api/drivers`・`/api/daily-hours`) も alc-dtako-worker へ移り、rust-alc-api から消える (W5c-1)
 // 端末の測定・打刻の一覧 (`/api/hub/measurements`) も alc-people-worker へ移り、rust-alc-api から消える (W6a)
 // 端末の登録・管理・FCM の口 (`/api/devices`) も alc-devices-worker へ移り、rust-alc-api から消える (W6b)
 // 車検証の口 (`/api/car-inspections`) も alc-carins-worker へ移り、rust-alc-api から消える (W3)
-const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours', '/api/hub/measurements', '/api/devices', '/api/car-inspections']
+// 点呼の口 (`/api/tenko`・`/api/tenko-call`。携行品チェックを含む) も alc-tenko-worker へ移り、rust-alc-api から消える (W7d)
+const RECORDS_PATHS = ['/api/items', '/api/item-files', '/api/carrying-items', '/api/communication-items', '/api/guidance-records', '/api/timecard/', '/api/employees', '/api/drivers', '/api/daily-hours', '/api/hub/measurements', '/api/devices', '/api/car-inspections', '/api/tenko']
 const isMovedPath = (path: string) =>
   path.startsWith(MEASUREMENTS_PATH) || RECORDS_PATHS.some(p => path.startsWith(p))
 const withoutMovedWhenLive = <T extends [string, () => Promise<unknown>, string]>(rows: T[]): T[] =>
   isLive ? rows.filter(([, , path]) => !isMovedPath(path)) : rows
 
-// 認証・401 の再取得の検証で叩く口。mock は従来どおり社員の一覧、live は rust-alc-api に残る点呼の webhook の一覧
-// (社員の口は alc-people-worker へ移り rust から消えるので、live で叩くと認証の前に 404 になる。W4d-b)
-const authProbe = () => (isLive ? listWebhooks() : getEmployees())
+// 認証・401 の再取得の検証で叩く口 (mock だけ)
+const authProbe = () => getEmployees()
 
 // Valid UUIDs for live-mode compatibility
 const UUID1 = '00000000-0000-0000-0000-000000000001'
@@ -152,7 +151,9 @@ const UUID8 = '00000000-0000-0000-0000-000000000008'
 const UUID9 = '00000000-0000-0000-0000-000000000009'
 const UUID10 = '00000000-0000-0000-0000-000000000010'
 
-describe('api', () => {
+// 点呼の口が alc-tenko-worker へ移り (W7d)、api.ts が叩く口は rust-alc-api に 1 つも残らない。
+// live の相手は rust-alc-api のコンテナなので、ここも mock だけで回す (Refs ippoan/rust-alc-api#680)
+describe.skipIf(isLive)('api', () => {
   beforeAll(async () => {
     if (isLive) await setupApi()
   })
