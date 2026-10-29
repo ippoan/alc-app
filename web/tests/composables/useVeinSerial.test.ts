@@ -397,6 +397,23 @@ describe('useVeinSerial', () => {
       ])
     })
 
+    it('体温計の EVT と状態の JSON を診断ログの置き場に `dev ` で残す (体温の値と他の行は残さない)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const { readDiag } = await import('~/utils/serialDiagLog')
+      localStorage.removeItem('alc_serial_diag')
+
+      dev.emit('EVT THERMO_CONN try\nEVT OMRON CONNECTING\nEVT THERMO_RX err\n')
+      dev.emit('{"type":"connected","device":"thermometer"}\n{"type":"temperature","value":36.5}\n{"type":"connected","device":"blood_pressure"}\n')
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(readDiag().map(l => l.replace(/^\S+ /, ''))).toEqual([
+        'dev EVT THERMO_CONN try',
+        'dev EVT THERMO_RX err',
+        'dev {"type":"connected","device":"thermometer"}',
+      ])
+    })
+
     it('EVT GPS の行は useGpsFix へ渡し、他の EVT と同じく onEvent にも配る (Refs ippoan/alc-app#514)', async () => {
       const dev = createMockPort()
       await connectDevice(dev)

@@ -17,6 +17,16 @@
  */
 
 const STORAGE_KEY = 'alc_serial_diag'
+/**
+ * 機体の行 (`dev ` で始まる行) の送り待ち。useDiagUpload が 1 分ごとに signaling の
+ * `/device-log` へ送って空にする (Cloudflare のログに 7 日残る)。置き場と違って同じ本文も
+ * まとめない — 「`THERMO_CONN try` が続いて `RX` が来ない」を数えられるように
+ */
+const OUTBOX_KEY = 'alc_serial_diag_outbox'
+/** 送り待ちの上限。送れない間 (オフライン等) は古い行から捨てる */
+const OUTBOX_MAX = 500
+/** 送り待ちに入れる行の接頭辞 (機体の行。arbiter の `[SERIAL]` 等は入れない) */
+const OUTBOX_PREFIX = 'dev '
 /** 保持する最大件数。超えたら古い件から捨てる */
 const MAX_LINES = 200
 /** 1 行の最大文字数 (時刻・まとめた回数の表示込み) */
@@ -86,8 +96,45 @@ export function appendDiag(msg: string): void {
       entries.push({ t: now, msg: body, n: 1, last: now.slice(0, 8) })
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(-MAX_LINES)))
+    if (body.startsWith(OUTBOX_PREFIX)) saveOutbox([...loadOutbox(), `${now} ${body}`])
   }
   catch {
     // 容量超過など。診断が本処理を止めないよう黙って捨てる
+  }
+}
+
+function loadOutbox(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(OUTBOX_KEY) ?? '[]')
+    return Array.isArray(parsed) ? parsed.filter((l): l is string => typeof l === 'string') : []
+  }
+  catch {
+    return []
+  }
+}
+
+function saveOutbox(lines: string[]): void {
+  localStorage.setItem(OUTBOX_KEY, JSON.stringify(lines.slice(-OUTBOX_MAX)))
+}
+
+/** 送り待ちを古い順に取り出して空にする */
+export function takeDiagOutbox(): string[] {
+  try {
+    const lines = loadOutbox()
+    if (lines.length > 0) localStorage.removeItem(OUTBOX_KEY)
+    return lines
+  }
+  catch {
+    return []
+  }
+}
+
+/** 送れなかった行を送り待ちの頭へ戻す (取り出した後に足された行より前へ) */
+export function returnDiagOutbox(lines: string[]): void {
+  try {
+    saveOutbox([...lines, ...loadOutbox()])
+  }
+  catch {
+    // 戻せなければ捨てる (診断が本処理を止めない)
   }
 }

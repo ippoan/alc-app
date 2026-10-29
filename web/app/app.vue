@@ -86,6 +86,8 @@ onMounted(async () => {
   const vein = useVeinSerial()
   // 開発用の端末だけの診断の口 (window.alcVein。印が外れれば消える。useVeinDevPort の doc)
   installVeinDevPort(vein.request)
+  // 機体の診断の行 (体温計の接続・受信など) を 1 分ごとに signaling の /device-log へ送る (Cloudflare のログに 7 日残る)
+  useDiagUpload()
   const atom = useAtomS3Serial()
   // 種類ごとの「その機体がつながっているか」(kiosk = CoreS3 か Vein Station)
   const ownDeviceConnected = {

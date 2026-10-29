@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { appendDiag, readDiag } from '~/utils/serialDiagLog'
+import { appendDiag, readDiag, returnDiagOutbox, takeDiagOutbox } from '~/utils/serialDiagLog'
 
 const KEY = 'alc_serial_diag'
+const OUTBOX = 'alc_serial_diag_outbox'
 
 describe('serialDiagLog', () => {
   beforeEach(() => {
     localStorage.removeItem(KEY)
+    localStorage.removeItem(OUTBOX)
     vi.useFakeTimers({ toFake: ['Date'] })
     // ローカル時刻 09:05:07.042
     vi.setSystemTime(new Date(2026, 8, 10, 9, 5, 7, 42))
@@ -16,6 +18,7 @@ describe('serialDiagLog', () => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     localStorage.removeItem(KEY)
+    localStorage.removeItem(OUTBOX)
   })
 
   it('1 行 = `HH:MM:SS.mmm <msg>` (ローカル時刻) で、古い順に読める', () => {
@@ -154,5 +157,56 @@ describe('serialDiagLog', () => {
 
     expect(readDiag()).toEqual([])
     expect(() => appendDiag('x')).not.toThrow()
+  })
+
+  describe('送り待ち (signaling の /device-log へ送る行)', () => {
+    it('`dev ` 行だけを、まとめずに時刻付きで積み、取り出すと空になる', () => {
+      appendDiag('scan start: candidates=1')
+      appendDiag('dev EVT THERMO_CONN try')
+      appendDiag('dev EVT THERMO_CONN try')
+      vi.setSystemTime(new Date(2026, 8, 10, 9, 5, 9, 1))
+      appendDiag('dev EVT THERMO_RX ok')
+
+      // 置き場はまとめるが、送り待ちはまとめない
+      expect(readDiag()).toHaveLength(3)
+      expect(takeDiagOutbox()).toEqual([
+        '09:05:07.042 dev EVT THERMO_CONN try',
+        '09:05:07.042 dev EVT THERMO_CONN try',
+        '09:05:09.001 dev EVT THERMO_RX ok',
+      ])
+      expect(takeDiagOutbox()).toEqual([])
+    })
+
+    it('戻した行は、取り出した後に積まれた行より前に並ぶ', () => {
+      appendDiag('dev A')
+      const taken = takeDiagOutbox()
+      appendDiag('dev B')
+      returnDiagOutbox(taken)
+      expect(takeDiagOutbox()).toEqual(['09:05:07.042 dev A', '09:05:07.042 dev B'])
+    })
+
+    it('500 行を超えたら古い行から捨てる', () => {
+      for (let i = 0; i < 503; i++) appendDiag(`dev ${i}`)
+      const lines = takeDiagOutbox()
+      expect(lines).toHaveLength(500)
+      expect(lines[0]).toBe('09:05:07.042 dev 3')
+    })
+
+    it('文字列でない要素・配列でない中身・読めない中身は捨てる', () => {
+      localStorage.setItem(OUTBOX, JSON.stringify(['09:05:07.042 dev ok', 1, null]))
+      expect(takeDiagOutbox()).toEqual(['09:05:07.042 dev ok'])
+      localStorage.setItem(OUTBOX, JSON.stringify({ a: 1 }))
+      expect(takeDiagOutbox()).toEqual([])
+      localStorage.setItem(OUTBOX, '{broken')
+      expect(takeDiagOutbox()).toEqual([])
+    })
+
+    it('localStorage が無い・投げるときも落ちない', () => {
+      vi.stubGlobal('localStorage', undefined)
+      expect(takeDiagOutbox()).toEqual([])
+      expect(() => returnDiagOutbox(['x'])).not.toThrow()
+      vi.stubGlobal('localStorage', { getItem: vi.fn(() => '["a"]'), setItem: vi.fn(), removeItem: vi.fn(() => { throw new Error('x') }) })
+      expect(takeDiagOutbox()).toEqual([])
+    })
   })
 })
