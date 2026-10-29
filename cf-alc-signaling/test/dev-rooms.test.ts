@@ -10,7 +10,6 @@ import { decideDevDevice, DEV_HEADER } from "../src/auth";
  */
 
 const BASE = "https://alc-signaling.test";
-const BACKEND = "https://backend.test";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -100,8 +99,9 @@ function answeredRoomIds(q: Queue): string[] {
     .map((m) => m.roomId ?? "");
 }
 
-const outbound = (path: string, init?: RequestInit) => fetch(`${BACKEND}${path}`, init);
-const fcmCalls = async () => (await outbound("/__spy/fcm")).json<Array<{ room_ids: string[] }>>();
+// alc-devices-worker のテストダブル (ALC_DEVICES の binding) の観測用の口
+const outbound = (path: string, init?: RequestInit) => env.ALC_DEVICES!.fetch(`https://alc-devices${path}`, init);
+const fcmCalls = async () => (await outbound("/__spy/fcm")).json<Array<{ room_ids: string[]; _internal_secret: string | null }>>();
 
 /** 部屋を全部消してから FCM の記録を空にする (dev でない部屋が 0 件の状態から始める)。 */
 async function cleanSlate(): Promise<void> {
@@ -371,6 +371,8 @@ describe("着信通知 (FCM)", () => {
     expect(calls.length).toBe(2);
     for (const call of calls) {
       expect(call.room_ids).toEqual([prodRoom]);
+      // alc-devices-worker の照合用に INTERNAL_SHARED_SECRET を載せる
+      expect(call._internal_secret).toBe("test-shared-secret");
     }
   });
 });

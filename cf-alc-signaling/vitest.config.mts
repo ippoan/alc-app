@@ -9,8 +9,8 @@ import { defineConfig } from "vitest/config";
  *     plain binding の固定文字列で注入する (コードは resolveSecret で両対応)。
  *   - AUTH_WORKER service binding は auxiliary worker (test/mocks/auth-worker.mjs)
  *     に差し替える (/auth/introspect のモック)。
- *   - 着信通知 (FCM) の `fetch(BACKEND_API_URL/...)` は outboundService で
- *     auxiliary worker (test/mocks/backend.mjs) に流し、叩かれた body を記録する。
+ *   - 着信通知 (FCM) の ALC_DEVICES service binding は auxiliary worker
+ *     (test/mocks/backend.mjs) に差し替え、叩かれた body と X-Internal-Secret を記録する。
  * binding 名 / DO class 名は wrangler.toml と一致させること (drift 注意)。
  */
 export default defineConfig({
@@ -28,12 +28,10 @@ export default defineConfig({
           ROOM_REGISTRY: { className: "RoomRegistry" },
           CAMERA_SIGNALING_ROOM: { className: "CameraSignalingRoom" },
         },
-        serviceBindings: { AUTH_WORKER: "auth-worker" },
+        serviceBindings: { AUTH_WORKER: "auth-worker", ALC_DEVICES: "backend" },
         bindings: {
           INTERNAL_SHARED_SECRET: "test-shared-secret",
-          BACKEND_API_URL: "https://backend.test",
         },
-        outboundService: "backend",
         workers: [
           {
             name: "auth-worker",

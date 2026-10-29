@@ -17,8 +17,12 @@ export interface Env {
   SIGNALING_ROOM: DurableObjectNamespace;
   ROOM_REGISTRY: DurableObjectNamespace;
   CAMERA_SIGNALING_ROOM: DurableObjectNamespace;
-  BACKEND_API_URL?: string;
-  FCM_INTERNAL_SECRET?: string;
+  /**
+   * alc-devices-worker への Service Binding (着信の FCM `fcm-notify-call`・試し送り `test-fcm-all-exclude`)。
+   * 以前は rust-alc-api の Cloud Run を URL で直接呼んでいたが、口は alc-devices-worker へ移った (Refs ippoan/rust-alc-api#680)。
+   * 無い env では FCM を送らない。`X-Internal-Secret` には INTERNAL_SHARED_SECRET を載せる (新しい secret は作らない)
+   */
+  ALC_DEVICES?: Fetcher;
   AUTH_WORKER: Fetcher;
   INTERNAL_SHARED_SECRET: unknown;
 }

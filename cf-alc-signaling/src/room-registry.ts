@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './index';
-import { isDevRequest } from './auth';
+import { isDevRequest, resolveSecret } from './auth';
 
 interface CallSchedule {
   enabled: boolean;
@@ -228,18 +228,9 @@ export class RoomRegistry extends DurableObject<Env> {
 
       // 2) FCM: 全デバイスに送信 (Android側dedupで重複排除)
       let fcmResult: { sent?: number; errors?: number; results?: { device_id: string; device_name: string; success: boolean; error?: string }[] } = {};
-      if (this.env.BACKEND_API_URL) {
+      if (this.env.ALC_DEVICES) {
         try {
-          const res = await fetch(`${this.env.BACKEND_API_URL}/api/devices/test-fcm-all-exclude`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(this.env.FCM_INTERNAL_SECRET
-                ? { 'X-Internal-Secret': this.env.FCM_INTERNAL_SECRET }
-                : {}),
-            },
-            body: JSON.stringify({ exclude_device_ids: [] }),
-          });
+          const res = await this.devicesPost('test-fcm-all-exclude', { exclude_device_ids: [] });
           if (res.ok) {
             fcmResult = await res.json() as typeof fcmResult;
             for (const r of fcmResult.results || []) {
@@ -461,28 +452,33 @@ export class RoomRegistry extends DurableObject<Env> {
     // ws.send() can silently succeed on stale connections, so we cannot rely on
     // WS delivery to exclude devices from FCM.
     // FCM は本番の運行管理者へ届くので、dev の部屋は渡さない (`rooms` は dev でない部屋だけ)。
-    if (rooms.length > 0 && this.env.BACKEND_API_URL) {
-      console.log(`[broadcast] FCM requesting to ${this.env.BACKEND_API_URL}`);
+    if (rooms.length > 0 && this.env.ALC_DEVICES) {
+      console.log('[broadcast] FCM requesting to alc-devices');
       this.ctx.waitUntil(
-        fetch(`${this.env.BACKEND_API_URL}/api/devices/fcm-notify-call`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(this.env.FCM_INTERNAL_SECRET
-              ? { 'X-Internal-Secret': this.env.FCM_INTERNAL_SECRET }
-              : {}),
-          },
-          body: JSON.stringify({
-            room_ids: rooms,
-            exclude_device_ids: [],
-          }),
-        })
-        .then(res => console.log(`[broadcast] FCM response: ${res.status}`))
-        .catch(e => console.log(`[broadcast] FCM failed: ${e}`))
+        this.devicesPost('fcm-notify-call', { room_ids: rooms, exclude_device_ids: [] })
+          .then(res => console.log(`[broadcast] FCM response: ${res.status}`))
+          .catch(e => console.log(`[broadcast] FCM failed: ${e}`))
       );
     } else {
-      console.log(`[broadcast] FCM skipped: rooms=${rooms.length}, backend=${!!this.env.BACKEND_API_URL}`);
+      console.log(`[broadcast] FCM skipped: rooms=${rooms.length}, devices=${!!this.env.ALC_DEVICES}`);
     }
+  }
+
+  /**
+   * alc-devices-worker の FCM の口 (`/api/devices/<path>`) を Service Binding で POST する。
+   * `X-Internal-Secret` には INTERNAL_SHARED_SECRET (Secrets Store、introspect と同じ entry) を載せる。
+   * 呼ぶ前に `this.env.ALC_DEVICES` が在ることを確かめること。
+   */
+  private async devicesPost(path: string, body: unknown): Promise<Response> {
+    const secret = await resolveSecret(this.env.INTERNAL_SHARED_SECRET);
+    return this.env.ALC_DEVICES!.fetch(`https://alc-devices/api/devices/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(secret ? { 'X-Internal-Secret': secret } : {}),
+      },
+      body: JSON.stringify(body),
+    });
   }
 
   private async shouldNotify(ws: WebSocket): Promise<boolean> {
