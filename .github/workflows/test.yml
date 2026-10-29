@@ -67,15 +67,6 @@ jobs:
       staging_build_secret_name: 'ALC_STAGING_API_KEY'
       staging_build_env_name: 'NUXT_PUBLIC_STAGING_API_KEY'
       install_command: 'npm install'
-      has_integration: true
-      # integration test は rust-alc-api コンテナ (docker-compose.test.yml の
-      # api サービス) を相手に走る。Release Wave の frontend↔backend
-      # compatibility edge を記録するため backend repo と image env を配線する。
-      # compat machinery が test 前に backend SHA を解決し
-      # API_IMAGE=ghcr.io/ippoan/rust-alc-api:<sha> を export して、その image で
-      # integration を回す (truthful 突合)。docker-compose は ${API_IMAGE} を読む。
-      compat_backend_repo: 'ippoan/rust-alc-api'
-      compat_backend_image_env: 'API_IMAGE'
       use_auth_client_dev: true
       pre_install_script: |
         mkdir -p ../fc1200-wasm/pkg
@@ -84,8 +75,6 @@ jobs:
         if [ -f app/types/fc1200-wasm.d.ts ]; then
           cp app/types/fc1200-wasm.d.ts ../fc1200-wasm/pkg/index.d.ts
         fi
-      integration_test_command: 'npx vitest run tests/utils/api.test.ts'
-      integration_env: 'TEST_LIVE=1 API_BASE_URL=http://localhost:18080'
       cache_dependency_path: web/package-lock.json
       # Release Wave の deploy 面に乗せる。frontend-ci の deploy-staging (PR) /
       # deploy-release (v* tag) が wrangler deploy 後に version 配分を

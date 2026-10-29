@@ -25,7 +25,6 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | **`fc1200-wasm/`** | (git ignored) Rust → WASM | FC-1200 RS232C プロトコル実装を WASM に compile して**ソース秘匿**。`web` から `fc1200-wasm` import |
 | **`docs/`** | mkdocs (`mkdocs.yml`, admin/ operator/) | 運用ドキュメント。`docs/*.pdf` = Tanita Confidential で **.gitignore** |
 | **`plan/`** | `implementation-plan.md` `initialplan.md` | 実装計画 |
-| **`scripts/`** | `sync-ts-bindings.sh` | rust-alc-api 型同期補助 |
 | **`~/rust/rust-nfc-bridge`** `~/rust/rust-alc-api` | **別 repo** (symlink `alc-app` あり) | NFC リーダ→仮想シリアル (Windows) / バックエンド API (Axum + Cloud Run + PG RLS) |
 
 ## web/ の区画
@@ -273,15 +272,7 @@ bash scripts/sync-types.sh
 - テストファイルを mock 用 / live 用に分けない。1ファイルで完結させる
 - `api-live.test.ts` のような別ファイルは作らない
 
-**実行方法**:
-```bash
-npm test                                          # mock モード (DB 不要、高速)
-docker compose -f docker-compose.test.yml up -d   # API + DB コンテナ起動
-API_BASE_URL=http://localhost:18080 npm test       # live モード (実 API)
-docker compose -f docker-compose.test.yml down -v  # コンテナ停止
-```
-
-**コンテナ**: `docker-compose.test.yml` で GHCR の `rust-alc-api:latest` + PostgreSQL を起動。seed データは `tests/fixtures/seed.sql`。
+**実行方法**: `npm test` (mock モード。live 用コンテナ `docker-compose.test.yml` は撤去済み)。
 
 #### CI
 
