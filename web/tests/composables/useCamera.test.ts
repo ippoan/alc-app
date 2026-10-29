@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { toRaw } from 'vue'
 import { useCamera } from '~/composables/useCamera'
 import { withSetup } from '../helpers/with-setup'
 
@@ -120,6 +121,47 @@ describe('useCamera', () => {
       await expect(cam.start()).rejects.toThrow('Device not found')
       expect(cam.error.value).toBe('Device not found')
       expect(cam.permissionDenied.value).toBe(false)
+    })
+
+    describe('NotReadableError → 他のカメラを順に試す', () => {
+      const notReadable = new DOMException('Could not start video source', 'NotReadableError')
+      function withDevices(devices: Partial<MediaDeviceInfo>[]) {
+        (navigator.mediaDevices as any).enumerateDevices = vi.fn().mockResolvedValue(devices)
+      }
+
+      it('2 台目で開ければそれを使う (videoinput だけを deviceId 指定で)', async () => {
+        withDevices([
+          { kind: 'audioinput', deviceId: 'mic', label: 'Mic' },
+          { kind: 'videoinput', deviceId: 'cam-a', label: 'Cam A' },
+          { kind: 'videoinput', deviceId: 'cam-b', label: '' },
+        ])
+        const stream = createMockStream()
+        mockGetUserMedia
+          .mockRejectedValueOnce(notReadable)
+          .mockRejectedValueOnce(new DOMException('busy', 'NotReadableError'))
+          .mockResolvedValueOnce(stream)
+
+        const cam = useCamera()
+        await cam.start()
+
+        expect(toRaw(cam.stream.value)).toBe(stream)
+        expect(mockGetUserMedia).toHaveBeenCalledTimes(3)
+        expect(mockGetUserMedia.mock.calls[1]![0].video.deviceId).toEqual({ exact: 'cam-a' })
+        expect(mockGetUserMedia.mock.calls[2]![0].video.deviceId).toEqual({ exact: 'cam-b' })
+      })
+
+      it('どれも開けなければ最初のエラーを投げる (DOMException 以外の失敗も続ける)', async () => {
+        withDevices([{ kind: 'videoinput', deviceId: 'cam-a', label: 'Cam A' }, { kind: 'videoinput', deviceId: 'cam-b', label: '' }])
+        mockGetUserMedia
+          .mockRejectedValueOnce(notReadable)
+          .mockRejectedValueOnce('odd')
+          .mockRejectedValueOnce(new DOMException('busy', 'NotReadableError'))
+
+        const cam = useCamera()
+        await expect(cam.start()).rejects.toBe(notReadable)
+        expect(cam.error.value).toBe('Could not start video source')
+        expect(cam.isActive.value).toBe(false)
+      })
     })
 
     it('非 Error throw', async () => {

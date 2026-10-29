@@ -192,11 +192,15 @@ function extractVeinErrReason(message: string): string {
   return message.slice(at + 'ERR VEIN'.length).replace(/^[:\s]+/, '')
 }
 
-/** 血圧の遅れの切り分け用 (開発用の端末だけ出る)。本文は EVT 行のみ・JSON は type だけ */
-const TIMING_JSON_TYPES = ['found', 'connected', 'disconnected', 'blood_pressure']
+/**
+ * 血圧・体温の届かない回の切り分け用 (開発用の端末だけ出る)。本文は EVT 行のみ・JSON は type だけ。
+ * 体温計は `EVT THERMO_CONN try` → `EVT THERMO_RX ok|none|err` (alc-app-s3#336) と
+ * `temperature` の JSON の有無で、体温計が送らなかったのか・ハブが受け損ねたのか・画面で落ちたのかが分かる
+ */
+const TIMING_JSON_TYPES = ['found', 'connected', 'disconnected', 'blood_pressure', 'temperature']
 function tapTiming(line: string): void {
   if (line.startsWith('EVT GPS ')) onGpsLine(line)
-  else if (line.startsWith('EVT OMRON') || line.startsWith('EVT BP')) devTiming('vein.evt', { line })
+  else if (line.startsWith('EVT OMRON') || line.startsWith('EVT BP') || line.startsWith('EVT THERMO')) devTiming('vein.evt', { line })
   else if (line.startsWith('{')) {
     const type = TIMING_JSON_TYPES.find(t => line.includes(`"type":"${t}"`))
     if (type) devTiming('vein.json', { type })
