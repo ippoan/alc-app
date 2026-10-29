@@ -378,20 +378,22 @@ describe('useVeinSerial', () => {
       expect(jsons).toEqual([{ type: 'alcohol', value: 0.1, result: 'normal' }])
     })
 
-    it('時間計測: EVT OMRON / EVT BP の行と、血圧の JSON の type だけを devTiming へ渡す', async () => {
+    it('時間計測: EVT OMRON / EVT BP / EVT THERMO の行と、血圧・体温の JSON の type だけを devTiming へ渡す', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
       timing.devTiming.mockClear()
 
-      dev.emit('EVT OMRON CONNECTING\nEVT BP READ\nEVT NFC_READY\n')
-      dev.emit('{"type":"blood_pressure","systolic":120}\n{"type":"found"}\n{"type":"alcohol","value":0.1}\n')
+      dev.emit('EVT OMRON CONNECTING\nEVT BP READ\nEVT THERMO_RX none\nEVT NFC_READY\n')
+      dev.emit('{"type":"blood_pressure","systolic":120}\n{"type":"found"}\n{"type":"alcohol","value":0.1}\n{"type":"temperature","value":36.5}\n')
       await vi.advanceTimersByTimeAsync(0)
 
       expect(timing.devTiming.mock.calls).toEqual([
         ['vein.evt', { line: 'EVT OMRON CONNECTING' }],
         ['vein.evt', { line: 'EVT BP READ' }],
+        ['vein.evt', { line: 'EVT THERMO_RX none' }],
         ['vein.json', { type: 'blood_pressure' }],
         ['vein.json', { type: 'found' }],
+        ['vein.json', { type: 'temperature' }],
       ])
     })
 

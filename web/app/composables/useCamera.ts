@@ -123,6 +123,26 @@ if (isClient) {
   }
 }
 
+/**
+ * 既定のカメラが NotReadableError のとき、つながっているカメラを 1 台ずつ deviceId 指定で開く。
+ * どれも開けなければ最初のエラーを投げ直す。どのカメラがどう失敗したかをログに残す
+ */
+async function openAnyCamera(size: MediaTrackConstraints, firstError: DOMException): Promise<MediaStream> {
+  const cameras = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput')
+  console.warn('[Camera] default camera not readable:', firstError.message, 'cameras:', cameras.map(c => c.label || c.deviceId.slice(0, 8)))
+  for (const cam of cameras) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: cam.deviceId }, ...size }, audio: false })
+      console.warn('[Camera] opened instead:', cam.label || cam.deviceId.slice(0, 8))
+      return s
+    }
+    catch (e) {
+      console.warn('[Camera] open failed:', cam.label || cam.deviceId.slice(0, 8), e instanceof DOMException ? `${e.name}: ${e.message}` : e)
+    }
+  }
+  throw firstError
+}
+
 export function useCamera() {
   const stream = ref<MediaStream | null>(null)
   const videoRef = ref<HTMLVideoElement | null>(null)
@@ -160,14 +180,17 @@ export function useCamera() {
         height = 480
       }
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode,
-          width: { ideal: width },
-          height: { ideal: height },
-        },
-        audio: false,
-      })
+      const size = { width: { ideal: width }, height: { ideal: height } }
+      let mediaStream: MediaStream
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode, ...size }, audio: false })
+      }
+      catch (e) {
+        // NotReadableError = 既定のカメラを OS から開けない (他のアプリが掴んでいる・仮想カメラ等)。
+        // 権限はあるので、つながっている他のカメラを順に試す
+        if (!(e instanceof DOMException && e.name === 'NotReadableError')) throw e
+        mediaStream = await openAnyCamera(size, e)
+      }
       stream.value = mediaStream
       isActive.value = true
 
