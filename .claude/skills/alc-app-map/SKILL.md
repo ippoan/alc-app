@@ -142,7 +142,7 @@ description: yhonda-ohishi-alc/alc-app (業務用アルコールチェッカー�
 | ファイル | 役割 |
 |---------|------|
 | `web/app/components/TenkoVideoCall.vue` | PiP ビデオ通話 UI (ミュート・カメラOFF ボタン、接続状態バッジ) |
-| `web/app/components/TenkoKiosk.vue` | `remoteMode` prop → セッション開始後 WebRTC 接続 + ビデオオーバーレイ |
+| `web/app/components/TenkoKiosk.vue` | `remoteMode` prop → セッション開始後 WebRTC 接続 + ビデオオーバーレイ。**アルコールの段は測定の完了の保存で進める** (`useTenkoKiosk.onAlcoholMeasured` が `PUT /api/measurements/{id}` に `tenko_session_id` を足し、応答の `tenko_session` で段を進める。サーバが測定の行の結果から決める。旧い `PUT /tenko/sessions/{id}/alcohol` = `submitAlcohol` は消した。Refs ippoan/rust-alc-api#680)。遠隔点呼は最後の段で `judgment_pending` になり、完了の画面 (`TenkoCompleted`) が「入力完了・判定待ち」を出す |
 | `web/app/components/TenkoRemoteAdminView.vue` | 管理者側: アクティブセッション一覧 + クリックで通話開始 |
 | `web/app/pages/index.vue` | 「遠隔点呼」タブ追加 (`?tab=remote`) |
 | `web/app/pages/dashboard.vue` | 点呼管理グループに「遠隔点呼」タブ追加 |

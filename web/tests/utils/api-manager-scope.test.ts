@@ -14,7 +14,7 @@ import {
   MANAGER_DEVICE_AUTH_FAILED_MESSAGE,
   createSchedule, batchCreateSchedules, listSchedules, getSchedule, updateSchedule, deleteSchedule,
   getPendingSchedules,
-  startTenkoSession, submitAlcohol, getTenkoDashboard, getEmployees,
+  startTenkoSession, submitMedical, getTenkoDashboard, getEmployees,
   lookupEmployeeByCard,
 } from '~/utils/api'
 
@@ -194,7 +194,7 @@ describe('api.ts — キオスクの点呼は運行管理者トークンを使�
 
   it.each([
     ['startTenkoSession', () => startTenkoSession({ employee_id: 'e1', tenko_type: 'pre_operation' } as never)],
-    ['submitAlcohol', () => submitAlcohol('s1', {} as never)],
+    ['submitMedical', () => submitMedical('s1', {} as never)],
     ['getTenkoDashboard', () => getTenkoDashboard()],
     ['getEmployees', () => getEmployees()],
   ])('%s もキオスクの鍵のまま', async (_name, call) => {

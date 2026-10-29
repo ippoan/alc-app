@@ -26,8 +26,16 @@ function formatTime(iso: string | null): string {
       </svg>
     </div>
 
-    <h3 class="text-xl font-bold text-green-700">点呼完了</h3>
+    <h3 class="text-xl font-bold text-green-700">{{ session.status === 'judgment_pending' ? '入力完了' : '点呼完了' }}</h3>
     <p class="text-gray-500 text-sm">{{ employeeName }}</p>
+    <!-- 遠隔点呼は乗務員の側が終わっても運行管理者の判定で閉じる (Refs ippoan/rust-alc-api#680) -->
+    <p
+      v-if="session.status === 'judgment_pending'"
+      class="w-full rounded-xl bg-amber-50 text-amber-800 text-sm text-center px-4 py-2"
+      data-testid="judgment-pending"
+    >
+      入力は終わりました。運行管理者の判定を待っています
+    </p>
 
     <!-- サマリ -->
     <div class="w-full rounded-xl border border-gray-200 divide-y divide-gray-100 text-sm">

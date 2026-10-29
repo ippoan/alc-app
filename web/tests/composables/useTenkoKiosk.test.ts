@@ -34,7 +34,7 @@ vi.mock('~/utils/api', async () => ({
   ...(await vi.importActual<typeof import('~/utils/api')>('~/utils/api')),
   getPendingSchedules: vi.fn(),
   startTenkoSession: vi.fn(),
-  submitAlcohol: vi.fn(),
+  updateMeasurement: vi.fn(),
   submitMedical: vi.fn(),
   submitSelfDeclaration: vi.fn(),
   submitDailyInspection: vi.fn(),
@@ -56,7 +56,7 @@ import {
 import {
   getPendingSchedules,
   startTenkoSession,
-  submitAlcohol,
+  updateMeasurement,
   submitMedical,
   submitSelfDeclaration,
   submitDailyInspection,
@@ -882,61 +882,75 @@ describe('useTenkoKiosk', () => {
     })
   })
 
-  // ---------- onAlcoholResult ----------
+  // ---------- onAlcoholMeasured ----------
 
-  describe('onAlcoholResult', () => {
+  describe('onAlcoholMeasured', () => {
+    /** 測定の保存の応答 (進めた後のセッションを載せる) */
+    const saved = (tenko_session?: ReturnType<typeof makeSession>) =>
+      ({ id: 'meas-1', tenko_session }) as Awaited<ReturnType<typeof updateMeasurement>>
+
     it('session なし → 何もしない', async () => {
       const k = useTenkoKiosk()
-      await k.onAlcoholResult('normal', 0.0)
-      expect(submitAlcohol).not.toHaveBeenCalled()
+      expect(await k.onAlcoholMeasured('meas-1', { status: 'completed' })).toBe(false)
+      expect(updateMeasurement).not.toHaveBeenCalled()
     })
 
-    it('正常 → status による遷移', async () => {
-      const sess = makeSession({ status: 'instruction_pending' })
-      vi.mocked(submitAlcohol).mockResolvedValue(sess)
+    it('測定の保存に tenko_session_id を足し、返ったセッションで進める', async () => {
+      vi.mocked(updateMeasurement).mockResolvedValue(saved(makeSession({ status: 'instruction_pending' })))
 
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onAlcoholResult('normal', 0.0, 'meas-1', 'https://face.url')
-      expect(submitAlcohol).toHaveBeenCalledWith('sess-1', {
-        measurement_id: 'meas-1',
-        alcohol_result: 'normal',
+      const retry = await k.onAlcoholMeasured('meas-1', { status: 'completed', result_type: 'normal', alcohol_value: 0.0 })
+      expect(retry).toBe(false)
+      expect(updateMeasurement).toHaveBeenCalledWith('meas-1', {
+        status: 'completed',
+        result_type: 'normal',
         alcohol_value: 0.0,
-        alcohol_face_photo_url: 'https://face.url',
+        tenko_session_id: 'sess-1',
       })
+      expect(k.session.value?.status).toBe('instruction_pending')
       expect(k.step.value).toBe('instruction')
       expect(k.isLoading.value).toBe(false)
     })
 
     it('アルコール検知 → cancelled', async () => {
-      const sess = makeSession({ status: 'cancelled' })
-      vi.mocked(submitAlcohol).mockResolvedValue(sess)
-
+      vi.mocked(updateMeasurement).mockResolvedValue(saved(makeSession({ status: 'cancelled' })))
       const k = useTenkoKiosk()
       k.session.value = makeSession()
-
-      await k.onAlcoholResult('over', 0.15)
+      expect(await k.onAlcoholMeasured('meas-1', {})).toBe(false)
       expect(k.step.value).toBe('cancelled')
     })
 
-    it('API エラー', async () => {
-      vi.mocked(submitAlcohol).mockRejectedValue(new Error('alc fail'))
-
+    it('結果が点呼にならない (本人確認済みのまま) → 測り直し', async () => {
+      vi.mocked(updateMeasurement).mockResolvedValue(saved(makeSession({ status: 'identity_verified' })))
       const k = useTenkoKiosk()
       k.session.value = makeSession()
+      expect(await k.onAlcoholMeasured('meas-1', {})).toBe(true)
+      expect(k.error.value).toBe('測定結果を点呼に使えませんでした。もう一度測ってください')
+    })
 
-      await k.onAlcoholResult('normal', 0.0)
+    it('応答にセッションが無い → 測り直し', async () => {
+      vi.mocked(updateMeasurement).mockResolvedValue(saved())
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      expect(await k.onAlcoholMeasured('meas-1', {})).toBe(true)
+      expect(k.error.value).toBe('アルコール測定を点呼に載せられませんでした。もう一度測ってください')
+    })
+
+    it('API エラー', async () => {
+      vi.mocked(updateMeasurement).mockRejectedValue(new Error('alc fail'))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      expect(await k.onAlcoholMeasured('meas-1', {})).toBe(true)
       expect(k.error.value).toBe('alc fail')
     })
 
     it('API エラー (非Error)', async () => {
-      vi.mocked(submitAlcohol).mockRejectedValue(42)
-
+      vi.mocked(updateMeasurement).mockRejectedValue(42)
       const k = useTenkoKiosk()
       k.session.value = makeSession()
-
-      await k.onAlcoholResult('normal', 0.0)
+      expect(await k.onAlcoholMeasured('meas-1', {})).toBe(true)
       expect(k.error.value).toBe('アルコール結果送信に失敗しました')
     })
   })
@@ -1382,11 +1396,19 @@ describe('useTenkoKiosk', () => {
     })
 
     it('report_pending → report', async () => {
-      vi.mocked(submitAlcohol).mockResolvedValue(makeSession({ status: 'report_pending' }))
+      vi.mocked(updateMeasurement).mockResolvedValue({ id: 'meas-1', tenko_session: makeSession({ status: 'report_pending' }) } as never)
       const k = useTenkoKiosk()
       k.session.value = makeSession()
-      await k.onAlcoholResult('normal', 0.0)
+      await k.onAlcoholMeasured('meas-1', {})
       expect(k.step.value).toBe('report')
+    })
+
+    it('judgment_pending → completed (完了の画面で判定待ちを出す)', async () => {
+      vi.mocked(submitReport).mockResolvedValue(makeSession({ status: 'judgment_pending' }))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await k.onReportSubmit({ vehicle_road_status: 'a', driver_alternation: 'b' } as never)
+      expect(k.step.value).toBe('completed')
     })
 
     it('interrupted → interrupted', async () => {

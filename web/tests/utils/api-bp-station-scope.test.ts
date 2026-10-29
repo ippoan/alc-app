@@ -13,7 +13,7 @@ import {
   setBpStationJwtGetter,
   BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
   getEmployeeByNfcId, getFaceData, startMeasurement, updateMeasurement,
-  getEmployees, getEmployeeByCode, startTenkoSession, submitAlcohol, listSchedules,
+  getEmployees, getEmployeeByCode, startTenkoSession, submitMedical, listSchedules,
 } from '~/utils/api'
 
 const API_BASE = 'https://api.example.test'
@@ -161,7 +161,7 @@ describe('api.ts — 測定台の getter を渡さない端末は無変更 (#353
     // 点呼はキオスクの鍵、予定は運行管理者の鍵で今までどおり通る
     await expect(getEmployees()).resolves.toBeDefined()
     await expect(startTenkoSession({ employee_id: 'e1', tenko_type: 'pre_operation' } as never)).resolves.toBeDefined()
-    await expect(submitAlcohol('s1', {} as never)).resolves.toBeDefined()
+    await expect(submitMedical('s1', {} as never)).resolves.toBeDefined()
     await expect(listSchedules()).resolves.toBeDefined()
     expect(bearerOf(fetchMock.mock.calls.at(-1)!)).toBe(`Bearer ${MANAGER_JWT}`)
     expect(bpGetter).toHaveBeenCalledTimes(1) // 点呼・予定では 1 度も呼ばれていない
@@ -215,7 +215,7 @@ describe('api.ts — 測定台の getter は後から入れられる (#368)', ()
 
     await expect(getEmployees()).resolves.toBeDefined()
     await expect(startTenkoSession({ employee_id: 'e1', tenko_type: 'pre_operation' } as never)).resolves.toBeDefined()
-    await expect(submitAlcohol('s1', {} as never)).resolves.toBeDefined()
+    await expect(submitMedical('s1', {} as never)).resolves.toBeDefined()
     await expect(listSchedules()).resolves.toBeDefined()
     expect(bpGetter).not.toHaveBeenCalled()
   })

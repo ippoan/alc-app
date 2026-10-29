@@ -359,6 +359,8 @@ export type TenkoSessionStatus =
   | 'carrying_items_pending'
   | 'instruction_pending'
   | 'report_pending'
+  /** 遠隔点呼・IT点呼の乗務員の側が終わり、運行管理者の判定を待っている (判定で completed になり記録が書かれる。Refs ippoan/rust-alc-api#680) */
+  | 'judgment_pending'
   | 'interrupted'
   | 'completed'
   | 'cancelled'
@@ -542,13 +544,6 @@ export interface StartTenkoSession {
   employee_id: string
   identity_face_photo_url?: string
   location?: string
-}
-
-export interface SubmitAlcoholResult {
-  measurement_id?: string
-  alcohol_result: string
-  alcohol_value: number
-  alcohol_face_photo_url?: string
 }
 
 export interface SubmitMedicalData {

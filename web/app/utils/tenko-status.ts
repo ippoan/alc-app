@@ -19,6 +19,7 @@ const TENKO_STATUS_LABELS: Record<TenkoSessionStatus, string> = {
   carrying_items_pending: '携行品確認待ち',
   instruction_pending: '指示確認待ち',
   report_pending: '報告待ち',
+  judgment_pending: '判定待ち',
   interrupted: '中断',
   completed: '完了',
   cancelled: 'キャンセル',

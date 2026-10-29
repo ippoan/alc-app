@@ -29,7 +29,7 @@ const retryBpRequirementMock = vi.fn()
 // アルコール測定の録画 + 測定レコード (Refs ippoan/alc-app#349)
 const employeeId = ref('')
 const tenkoType = ref<TenkoType | null>(null)
-const onAlcoholResultMock = vi.fn()
+const onAlcoholMeasuredMock = vi.fn(async () => false)
 
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
@@ -57,7 +57,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   bpRequirementUnknown,
   retryBpRequirement: retryBpRequirementMock,
   onFaceAuthComplete: vi.fn(),
-  onAlcoholResult: onAlcoholResultMock,
+  onAlcoholMeasured: onAlcoholMeasuredMock,
   onMedicalSubmit: vi.fn(),
   onSelfDeclarationSubmit: vi.fn(),
   onDailyInspectionSubmit: vi.fn(),
@@ -365,10 +365,9 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     wrapper.unmount()
   })
 
-  it('結果が出ると PUT で完了にし、measurement_id を点呼へ渡す', async () => {
+  it('結果が出ると、測定の完了の保存で点呼の段を進める (Refs ippoan/rust-alc-api#680)', async () => {
     const { startMeasurement, updateMeasurement } = await import('~/utils/api')
     vi.mocked(startMeasurement).mockResolvedValue({ id: 'meas-1' } as never)
-    vi.mocked(updateMeasurement).mockResolvedValue({ id: 'meas-1' } as never)
 
     const wrapper = await mountKiosk()
     step.value = 'alcohol'
@@ -377,8 +376,10 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     emitResult(wrapper)
     await flushPromises()
 
-    expect(updateMeasurement).toHaveBeenCalledTimes(1)
-    const [id, body] = vi.mocked(updateMeasurement).mock.calls[0]!
+    // 保存は onAlcoholMeasured が tenko_session_id を足して 1 回で行う (component は直接 PUT しない)
+    expect(updateMeasurement).not.toHaveBeenCalled()
+    expect(onAlcoholMeasuredMock).toHaveBeenCalledTimes(1)
+    const [id, body] = onAlcoholMeasuredMock.mock.calls[0]! as unknown as [string, Record<string, unknown>]
     expect(id).toBe('meas-1')
     expect(body).toMatchObject({
       status: 'completed',
@@ -387,15 +388,12 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
       device_use_count: 7,
       tenko_type: 'pre_operation',
     })
-    // 3 番目の引数が measurement_id (useTenkoKiosk が SubmitAlcoholResult に載せる)
-    expect(onAlcoholResultMock).toHaveBeenCalledWith('pass', 0.0, 'meas-1')
     wrapper.unmount()
   })
 
-  it('★ 完了更新に record_as_tenko を載せない (CSV に点呼が二重に出る)', async () => {
-    const { startMeasurement, updateMeasurement } = await import('~/utils/api')
+  it('★ 完了の保存に record_as_tenko を載せない (CSV に点呼が二重に出る)', async () => {
+    const { startMeasurement } = await import('~/utils/api')
     vi.mocked(startMeasurement).mockResolvedValue({ id: 'meas-1' } as never)
-    vi.mocked(updateMeasurement).mockResolvedValue({ id: 'meas-1' } as never)
 
     const wrapper = await mountKiosk()
     step.value = 'alcohol'
@@ -403,13 +401,13 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     emitResult(wrapper)
     await flushPromises()
 
-    const body = vi.mocked(updateMeasurement).mock.calls[0]![1]
+    const body = (onAlcoholMeasuredMock.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]
     expect(body).not.toHaveProperty('record_as_tenko')
     wrapper.unmount()
   })
 
-  it('測定レコードが作れなくても点呼は進む (measurement_id なしで送る)', async () => {
-    const { startMeasurement, updateMeasurement } = await import('~/utils/api')
+  it('段に入ったときに測定レコードが作れなかったら、結果の時に作り直す。作れなければ段は進めない', async () => {
+    const { startMeasurement } = await import('~/utils/api')
     vi.mocked(startMeasurement).mockRejectedValue(new Error('403'))
 
     const wrapper = await mountKiosk()
@@ -418,15 +416,17 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     emitResult(wrapper)
     await flushPromises()
 
-    expect(updateMeasurement).not.toHaveBeenCalled()
-    expect(onAlcoholResultMock).toHaveBeenCalledWith('pass', 0.0, undefined)
+    expect(startMeasurement).toHaveBeenCalledTimes(2)
+    expect(onAlcoholMeasuredMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('完了更新が失敗しても点呼は進む', async () => {
-    const { startMeasurement, updateMeasurement } = await import('~/utils/api')
-    vi.mocked(startMeasurement).mockResolvedValue({ id: 'meas-1' } as never)
-    vi.mocked(updateMeasurement).mockRejectedValue(new Error('500'))
+  it('測り直しが要るときは新しい測定レコードを作る', async () => {
+    const { startMeasurement } = await import('~/utils/api')
+    vi.mocked(startMeasurement)
+      .mockResolvedValueOnce({ id: 'meas-1' } as never)
+      .mockResolvedValueOnce({ id: 'meas-2' } as never)
+    onAlcoholMeasuredMock.mockResolvedValueOnce(true)
 
     const wrapper = await mountKiosk()
     step.value = 'alcohol'
@@ -434,7 +434,10 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     emitResult(wrapper)
     await flushPromises()
 
-    expect(onAlcoholResultMock).toHaveBeenCalledWith('pass', 0.0, 'meas-1')
+    expect(startMeasurement).toHaveBeenCalledTimes(2)
+    emitResult(wrapper)
+    await flushPromises()
+    expect((onAlcoholMeasuredMock.mock.calls[1] as unknown as [string])[0]).toBe('meas-2')
     wrapper.unmount()
   })
 

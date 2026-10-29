@@ -15,7 +15,7 @@ import {
   createSchedule, batchCreateSchedules, listSchedules, getSchedule, updateSchedule, deleteSchedule, getPendingSchedules,
   // Tenko sessions
   startTenkoSession, getTenkoSession,
-  submitAlcohol, submitMedical, submitSelfDeclaration, submitDailyInspection,
+  submitMedical, submitSelfDeclaration, submitDailyInspection,
   confirmInstruction, submitReport,
   cancelTenkoSession, listTenkoSessions, getTenkoDashboard,
   escalateTenkoSessionToRemote,
@@ -1071,7 +1071,6 @@ describe.skipIf(isLive)('api', () => {
       ['updateEmployeeNfcId', () => updateEmployeeNfcId(TEST_EMPLOYEE_ID, 'nfc1'), `/api/employees/${TEST_EMPLOYEE_ID}/nfc`],
       ['updateEmployeeLicense', () => updateEmployeeLicense(TEST_EMPLOYEE_ID, '2026-01-01', '2028-01-01'), `/api/employees/${TEST_EMPLOYEE_ID}/license`],
       ['updateSchedule', () => updateSchedule(SEED_SCHEDULE_ID, createScheduleBody as any), `/api/tenko/schedules/${SEED_SCHEDULE_ID}`],
-      ['submitAlcohol', () => submitAlcohol(SEED_SESSION_ID, { alcohol_result: 'normal', alcohol_value: 0.0, device_use_count: 100 } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/alcohol`],
       ['submitMedical', () => submitMedical(SEED_SESSION_ID, { temperature: 36.5, systolic: 120, diastolic: 80, pulse: 72 } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/medical`],
       ['submitSelfDeclaration', () => submitSelfDeclaration(SEED_SESSION_ID, { illness: false, fatigue: false, sleep_deprivation: false } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/self-declaration`],
       ['submitDailyInspection', () => submitDailyInspection(SEED_SESSION_ID, { brakes: 'ok', tires: 'ok', lights: 'ok', steering: 'ok', wipers: 'ok', mirrors: 'ok', horn: 'ok', seatbelts: 'ok' } as any), `/api/tenko/sessions/${SEED_SESSION_ID}/daily-inspection`],
