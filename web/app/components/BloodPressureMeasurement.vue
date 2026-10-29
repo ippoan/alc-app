@@ -39,7 +39,7 @@ import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS
  *   カウントダウンで最初の画面へ戻る。「次の人へ」を押さなくても、次の人が指を置く・カードをかざすとそのまま進む
  */
 
-type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble' | 'vein_pending'
+type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble' | 'vein_pending' | 'thermo_test'
 
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
@@ -382,6 +382,7 @@ function reset() {
     <!-- この端末の指静脈の一覧 (ID ↔ 乗務員、空き、モジュールの人数) -->
     <VeinModuleList v-else-if="step === 'vein_list'" @close="step = 'nfc'" />
     <BpBluetoothSettings v-else-if="step === 'bp_ble'" @close="step = 'nfc'" />
+    <ThermoTest v-else-if="step === 'thermo_test'" @close="step = 'nfc'" />
     <VeinPendingApproval v-else-if="step === 'vein_pending'" @close="step = 'nfc'" />
 
     <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
@@ -525,6 +526,13 @@ function reset() {
         @click="step = 'bp_ble'; error = null"
       >
         血圧計 (Bluetooth) の設定・ペアリング
+      </button>
+      <button
+        data-testid="thermo-test-open"
+        class="col-span-2 w-full px-4 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+        @click="step = 'thermo_test'; error = null"
+      >
+        体温計の受信テスト (続けて測る)
       </button>
     </div>
   </div>

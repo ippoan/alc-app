@@ -97,11 +97,12 @@ const VeinRegistrationStub = { name: 'VeinRegistration', template: '<div class="
 const VeinModuleListStub = { name: 'VeinModuleList', template: '<div class="vein-list-stub" />', emits: ['close'] }
 const BpBluetoothSettingsStub = { name: 'BpBluetoothSettings', template: '<div class="bp-ble-stub" />', emits: ['close'] }
 const VeinPendingApprovalStub = { name: 'VeinPendingApproval', template: '<div class="vein-pending-stub" />', emits: ['close'] }
+const ThermoTestStub = { name: 'ThermoTest', template: '<div class="thermo-test-stub" />', emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, EmployeeCodeKeypad: false } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, ThermoTest: ThermoTestStub, EmployeeCodeKeypad: false } },
   })
 }
 
@@ -1175,6 +1176,27 @@ describe('BloodPressureMeasurement — 血圧計 (Bluetooth) の設定・ペア�
     await w.findComponent(BpBluetoothSettingsStub).vm.$emit('close')
     await flush(w)
     expect(w.findComponent(BpBluetoothSettingsStub).exists()).toBe(false)
+    expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
+    w.unmount()
+    veinIsConnected.value = false
+  })
+})
+
+describe('BloodPressureMeasurement — 体温計の受信テスト', () => {
+  it('Vein Station がつながっているときだけ入口を出し、開いて閉じると入口へ戻る', async () => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = false
+    const off = await mountBp()
+    expect(off.find('[data-testid="thermo-test-open"]').exists()).toBe(false)
+    off.unmount()
+    veinIsConnected.value = true
+    const w = await mountBp()
+    await w.find('[data-testid="thermo-test-open"]').trigger('click')
+    await flush(w)
+    expect(w.findComponent(ThermoTestStub).exists()).toBe(true)
+    await w.findComponent(ThermoTestStub).vm.$emit('close')
+    await flush(w)
+    expect(w.findComponent(ThermoTestStub).exists()).toBe(false)
     expect(w.findComponent(NfcStatusStub).exists()).toBe(true)
     w.unmount()
     veinIsConnected.value = false

@@ -44,6 +44,18 @@ describe('createLineDispatch', () => {
     expect(seen).toEqual([])
   })
 
+  it('onJson の返り値で解除できる', () => {
+    const d = createLineDispatch('T')
+    const seen: unknown[] = []
+    const off = d.onJson(msg => seen.push(msg))
+
+    d.dispatchLine('{"n":1}')
+    off()
+    d.dispatchLine('{"n":2}')
+
+    expect(seen).toEqual([{ n: 1 }])
+  })
+
   it('onEvent の返り値で解除できる / 購読者の Set は呼び出しごとに別', () => {
     const a = createLineDispatch('A')
     const b = createLineDispatch('B')
