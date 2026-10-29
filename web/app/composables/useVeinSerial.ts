@@ -33,6 +33,7 @@
  * **使うのは `useSerialOta` だけ**。
  */
 
+import { isThermoDiagLine } from '~/utils/thermo-diag'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
@@ -207,6 +208,16 @@ function tapTiming(line: string): void {
   }
 }
 
+/**
+ * 体温計への接続の試行と結果 (`EVT THERMO_CONN` / `EVT THERMO_RX`) と体温計の状態の JSON を、
+ * CoreS3 と同じく診断ログの置き場 (utils/serialDiagLog) に `dev <行>` で残す。置き場の `dev ` 行は
+ * signaling の `/device-log` へも送られ (useDiagUpload)、体温が届かなかった回を後から追える。
+ * 測定値の行 (`temperature`) は利用者の情報なので入れない
+ */
+function tapDiag(line: string): void {
+  if (line.startsWith('EVT THERMO') || (line.startsWith('{') && isThermoDiagLine(line))) appendDiag(`dev ${line}`)
+}
+
 export function useVeinSerial() {
   // ポートの探索と調停は arbiter に任せる (navigator.serial を自前で叩かない)
   const arbiter = useSerialArbiter()
@@ -227,6 +238,7 @@ export function useVeinSerial() {
       // プローブ中に来ていた行も配る (useAtomS3Serial と同じ)
       for (const line of lines) {
         tapTiming(line)
+        tapDiag(line)
         lineDispatch.dispatchLine(line)
       }
       for (const notify of [...waiters]) notify()
@@ -237,6 +249,7 @@ export function useVeinSerial() {
     onLine(line) {
       rawLineTap?.(line)
       tapTiming(line)
+      tapDiag(line)
       lineDispatch.dispatchLine(line)
     },
 
