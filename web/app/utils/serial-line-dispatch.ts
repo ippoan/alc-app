@@ -48,9 +48,10 @@ export function createLineDispatch(label: string) {
     else if (line.startsWith('{')) dispatchJson(line)
   }
 
-  /** JSON として読めた行を受け取る */
-  function onJson(cb: SerialJsonHandler): void {
+  /** JSON として読めた行を受け取る。返り値を呼ぶと解除できる */
+  function onJson(cb: SerialJsonHandler): () => void {
     jsonHandlers.add(cb)
+    return () => { jsonHandlers.delete(cb) }
   }
 
   /** `EVT <NAME> <args...>` を受け取る。返り値を呼ぶと解除できる */
