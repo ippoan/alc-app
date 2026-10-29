@@ -2,7 +2,7 @@ import type {
   ApiMeasurement, ApiEmployee, MeasurementsResponse, MeasurementFilter, MeasurementResult, FaceDataEntry,
   // Tenko
   TenkoSchedule, CreateTenkoSchedule, UpdateTenkoSchedule, TenkoScheduleFilter, TenkoSchedulesResponse,
-  TenkoSession, StartTenkoSession, SubmitAlcoholResult, SubmitMedicalData, SubmitSelfDeclaration,
+  TenkoSession, StartTenkoSession, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
   SubmitManagerJudgment,
   TenkoRemoteEscalationReason,
@@ -495,9 +495,15 @@ export async function updateMeasurement(id: string, data: Record<string, unknown
 
 /**
  * 完了の PUT の応答。`tenko_pending` = body に `defer_tenko: true` を足し、点呼の記録を作らず
- * 確定待ちにした (Refs ippoan/alc-app#436)。この欄を返さない backend では undefined
+ * 確定待ちにした (Refs ippoan/alc-app#436)。この欄を返さない backend では undefined。
+ * `tenko_session` = body に `tenko_session_id` (自動点呼・遠隔点呼の本人確認済みのセッション) を付けた保存で、
+ * 測定の行の結果からアルコールの段を進めた後のセッション (Refs ippoan/rust-alc-api#680)。付けない保存では undefined
  */
-export type UpdatedMeasurement = ApiMeasurement & { tenko_pending?: boolean }
+export type UpdatedMeasurement = ApiMeasurement & {
+  tenko_pending?: boolean
+  tenko_session_id?: string | null
+  tenko_session?: TenkoSession
+}
 
 /** 点呼の確定の方法。完了の PUT に `defer_tenko: true` を足して後回しにした点呼を、どちらで記録するか */
 export type TenkoConfirmMethod = '通常点呼' | 'IT点呼'
@@ -1218,13 +1224,6 @@ export async function startTenkoSession(data: StartTenkoSession): Promise<TenkoS
 
 export async function getTenkoSession(id: string, scope: RequestTokenScope = 'default'): Promise<TenkoSession> {
   return request<TenkoSession>(`/api/tenko/sessions/${id}`, {}, scope)
-}
-
-export async function submitAlcohol(sessionId: string, data: SubmitAlcoholResult): Promise<TenkoSession> {
-  return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/alcohol`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
 }
 
 export async function submitMedical(sessionId: string, data: SubmitMedicalData): Promise<TenkoSession> {

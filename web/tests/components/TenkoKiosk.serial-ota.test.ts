@@ -80,7 +80,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   resumeSession: vi.fn(),
   proceedWithoutSchedule: vi.fn(),
   onFaceAuthComplete: vi.fn(),
-  onAlcoholResult: vi.fn(),
+  onAlcoholMeasured: vi.fn(async () => false),
   onMedicalSubmit: vi.fn(),
   onSelfDeclarationSubmit: vi.fn(),
   onDailyInspectionSubmit: vi.fn(),

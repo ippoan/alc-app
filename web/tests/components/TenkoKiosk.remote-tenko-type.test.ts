@@ -22,7 +22,7 @@ vi.mock('~/utils/api', () => ({
   getPendingSchedules: (...args: unknown[]) => getPendingSchedules(...args),
   startTenkoSession: vi.fn(),
   escalateTenkoSessionToRemote: vi.fn(),
-  submitAlcohol: vi.fn(),
+  updateMeasurement: vi.fn(),
   submitMedical: vi.fn(),
   submitSelfDeclaration: vi.fn(),
   submitDailyInspection: vi.fn(),

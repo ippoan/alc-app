@@ -1,13 +1,13 @@
 import type {
   TenkoSchedule, TenkoSession, TenkoSessionStatus, TenkoType,
-  FaceAuthResult, SubmitAlcoholResult, SubmitMedicalData,
+  FaceAuthResult, SubmitMedicalData,
   SubmitSelfDeclaration, SubmitDailyInspection, SubmitOperationReport,
   StartTenkoSession, SafetyJudgment, CarryingItem, CarryingItemCheckInput,
   TenkoRemoteEscalationReason,
 } from '~/types'
 import {
   getPendingSchedules, startTenkoSession,
-  submitAlcohol, submitMedical, submitSelfDeclaration,
+  updateMeasurement, submitMedical, submitSelfDeclaration,
   submitDailyInspection, confirmInstruction, submitReport,
   cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
   getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
@@ -74,14 +74,14 @@ export const SESSION_NOT_RESUMABLE_MESSAGE
 /**
  * 「続きから再開」の対象にする status (Refs ippoan/alc-app#343)。
  *
- * **`alcohol_tested_at IS NULL` と同値。** `submit_alcohol` は `identity_verified` の
- * ときしか受け付けない (`rust-alc-api` `tenko_sessions.rs:165-167`) ので、アルコールを
+ * **`alcohol_tested_at IS NULL` と同値。** アルコールの段は `identity_verified` の
+ * ときしか進まない (alc-measurements-worker の `tenko/alcohol.rs`) ので、アルコールを
  * まだ測っていない状態はこの 5 つで尽きる。
  *
  * 入れないもの:
  * - **`interrupted`** — 管理者が中断したものの再開は `AuthUser` 必須の `resume` API の
  *   領分で、キオスクの鍵 (`auth-worker` の `KIOSK_ROUTES`) では通らない。
- * - **`completed` / `cancelled`** — 終わっている。
+ * - **`completed` / `cancelled` / `judgment_pending`** — 終わっている (判定待ちは運行管理者が閉じる)。
  * - **`instruction_pending` / `report_pending`** — アルコール測定済み。続きを埋めること
  *   自体はできるが、**何時間も前に測った値のまま点呼記録が閉じる**ので入れない
  *   (オーナー要件「途中でアルコールチェック検知とかなければ再利用できるように」)。
@@ -493,33 +493,39 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     }
   }
 
-  // --- アルコール結果送信 ---
-  async function onAlcoholResult(alcoholResult: string, alcoholValue: number, measurementId?: string, alcoholFacePhotoUrl?: string) {
-    if (!session.value) return
+  // --- アルコールの段 (測定の保存で進める。Refs ippoan/rust-alc-api#680) ---
+  /**
+   * 測定を完了で保存し、**同じ保存で**アルコールの段を進める (`PUT /api/measurements/{id}` に
+   * `tenko_session_id`)。段の結果はサーバが**測定の行の**結果・値・顔写真から決める (本文の結果を信じる
+   * 旧い段の口 `PUT /tenko/sessions/{id}/alcohol` は使わない)。
+   *
+   * 戻り値は「測り直しが要るか」: 結果が点呼にならない (`error` など) とセッションは本人確認済みのまま
+   * 返ってくるので、呼び手は新しい測定を起こして測り直させる。保存に失敗したときも `true`
+   * (同じ測定は完了済みかもしれないので、測り直しは新しい測定で)。
+   */
+  async function onAlcoholMeasured(measurementId: string, fields: Record<string, unknown>): Promise<boolean> {
+    if (!session.value) return false
     error.value = null
     isLoading.value = true
 
     try {
-      const body: SubmitAlcoholResult = {
-        measurement_id: measurementId,
-        alcohol_result: alcoholResult,
-        alcohol_value: alcoholValue,
-        alcohol_face_photo_url: alcoholFacePhotoUrl,
+      const saved = await updateMeasurement(measurementId, { ...fields, tenko_session_id: session.value.id })
+      const s = saved.tenko_session
+      if (!s) {
+        error.value = 'アルコール測定を点呼に載せられませんでした。もう一度測ってください'
+        return true
       }
-      const s = await submitAlcohol(session.value.id, body)
       session.value = s
-
-      // アルコール検知 → cancelled
-      if (s.status === 'cancelled') {
-        step.value = 'cancelled'
-        return
+      if (s.status === 'identity_verified') {
+        error.value = '測定結果を点呼に使えませんでした。もう一度測ってください'
+        return true
       }
-
-      // 業務前: medical_pending → medical ステップ
-      // 業務後: report_pending → instruction ステップ (後述)
+      // 検知 → cancelled、業務前 → instruction_pending、業務後 → report_pending
       _advanceByStatus(s.status)
+      return false
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'アルコール結果送信に失敗しました'
+      return true
     } finally {
       isLoading.value = false
     }
@@ -701,6 +707,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
         step.value = 'report'
         break
       case 'completed':
+      // 遠隔点呼の乗務員の側の終わり。完了の画面で「判定待ち」を出す (閉じるのは運行管理者の判定)
+      case 'judgment_pending':
         step.value = 'completed'
         break
       case 'cancelled':
@@ -791,7 +799,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     proceedWithoutSchedule,
     onFaceAuthComplete,
     retryBpRequirement,
-    onAlcoholResult,
+    onAlcoholMeasured,
     onMedicalSubmit,
     onSelfDeclarationSubmit,
     onDailyInspectionSubmit,

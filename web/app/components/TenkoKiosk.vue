@@ -2,7 +2,7 @@
 import type { FaceAuthResult, MeasurementResult, SubmitMedicalData, TenkoRemoteEscalationReason } from '~/types'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement, updateMeasurement } from '~/utils/api'
+import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement } from '~/utils/api'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
@@ -48,7 +48,7 @@ const {
   stepLabels, currentStepIndex,
   bpRequirementUnknown, retryBpRequirement,
   identifyEmployee, selectSchedule, resumeSession, proceedWithoutSchedule, onFaceAuthComplete,
-  onAlcoholResult, onMedicalSubmit, onSelfDeclarationSubmit,
+  onAlcoholMeasured, onMedicalSubmit, onSelfDeclarationSubmit,
   onDailyInspectionSubmit, carryingItems, loadCarryingItems, onCarryingItemsSubmit,
   onInstructionConfirm, onReportSubmit,
   reset,
@@ -109,14 +109,11 @@ async function startAlcoholMeasurement() {
 }
 
 /**
- * 測定レコードを completed にする (best-effort)。**`record_as_tenko` は載せない**。
- *
- * **待たない。** `submitAlcohol` が要るのは `measurement_id` だけで、この PUT の完了は
- * 前提条件ではない。待つと、API が詰まったときに乗務員がアルコールの段で最大 30 秒
- * (`DEFAULT_FETCH_TIMEOUT_MS`) 足止めされる。
+ * 測定レコードを completed にする本文。**`record_as_tenko` は載せない** (通常点呼の新しいセッションは作らない)。
+ * 点呼の段は `onAlcoholMeasured` が同じ保存に `tenko_session_id` を足して進める (Refs ippoan/rust-alc-api#680)
  */
-function completeAlcoholMeasurement(id: string, result: MeasurementResult) {
-  void updateMeasurement(id, {
+function completedMeasurementFields(result: MeasurementResult): Record<string, unknown> {
+  return {
     status: 'completed',
     alcohol_value: result.alcoholValue,
     result_type: result.resultType,
@@ -124,7 +121,7 @@ function completeAlcoholMeasurement(id: string, result: MeasurementResult) {
     face_photo_url: result.facePhotoUrl,
     measured_at: result.measuredAt.toISOString(),
     tenko_type: tenkoType.value ?? undefined,
-  }).catch(e => console.warn('[TenkoKiosk] updateMeasurement failed:', e))
+  }
 }
 
 // アルコールの段に入ったら録画カメラを起こし、測定レコードを作る。
@@ -441,16 +438,22 @@ onMounted(() => {
 
 // --- アルコール測定結果 ---
 async function onMeasurementResult(result: MeasurementResult) {
-  const alcoholResult = result.resultType === 'normal' ? 'pass' : 'fail'
+  // 段に入ったときの測定の作成が失敗していたら、ここでもう一度作る (段は測定の保存でしか進まない)
+  if (!alcoholMeasurementId.value) await startAlcoholMeasurement()
   const measurementId = alcoholMeasurementId.value
   // **段を進める前に**録画を止めて blob を確定させる (進めると段が unmount される)
   await finishBlowRecording(employeeId.value, measurementId ?? undefined)
-  if (measurementId) {
-    completeAlcoholMeasurement(measurementId, result)
-    uploadBlowRecording(measurementId)
-  }
-  onAlcoholResult(alcoholResult, result.alcoholValue, measurementId ?? undefined)
   sendResult(result)
+  if (!measurementId) return
+  uploadBlowRecording(measurementId)
+  // 測定の保存と同じ要求で段を進める。**待つ** — 段の結果 (検知・次の段) はこの応答で決まる
+  const retry = await onAlcoholMeasured(measurementId, completedMeasurementFields(result))
+  if (retry) {
+    // 測り直しは新しい測定で (この測定は完了済みかもしれない)
+    alcoholMeasurementId.value = null
+    await startBlowCamera({ recordImmediately: isDemoMode.value })
+    await startAlcoholMeasurement()
+  }
 }
 
 // --- BLE 医療データ → 送信 ---
