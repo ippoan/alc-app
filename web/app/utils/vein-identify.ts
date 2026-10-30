@@ -13,6 +13,7 @@ import type { ApiEmployee } from '~/types'
 import { apiErrorMessage, getEmployeeById, getEmployees, getVeinTemplates, identifyVein } from '~/utils/api'
 import { loadVeinTemplates, saveVeinTemplates } from '~/utils/vein-db'
 import { loadVeinWasm, matchVeinOffline } from '~/utils/vein-match'
+import type { RequestTokenScope } from '~/utils/api'
 import { syncVeinModule } from '~/utils/vein-module'
 import type { VeinModulePort } from '~/utils/vein-module'
 
@@ -39,15 +40,18 @@ export function resetVeinSyncClock(): void {
  *
  * `module` を渡すと、あわせて端末のモジュールも揃える (`syncVeinModule`。
  * 時計は別に持つので、モジュールがつながった直後の呼び出しでも写しの同期とは関係なく動く)。
- * 戻り値はテンプレートの写しの同期の結果だけ
+ * 戻り値はテンプレートの写しの同期の結果だけ。
+ *
+ * `scope` はどの鍵で取るか (既定はキオスクの鍵)。運行管理者の入口は運行管理者席の鍵 (`manager-device`) で
+ * 取る — Vein Base を運行管理者席の鍵にした PC にはキオスクの鍵が無い
  */
-export async function syncVeinTemplates(opts: { ifOlderThanMs?: number; module?: VeinModulePort } = {}): Promise<boolean> {
-  if (opts.module) void syncVeinModule(opts.module, { ifOlderThanMs: opts.ifOlderThanMs })
+export async function syncVeinTemplates(opts: { ifOlderThanMs?: number; module?: VeinModulePort; scope?: RequestTokenScope } = {}): Promise<boolean> {
+  if (opts.module) void syncVeinModule(opts.module, { ifOlderThanMs: opts.ifOlderThanMs, scope: opts.scope })
   if (opts.ifOlderThanMs !== undefined && lastSyncedAt !== null && Date.now() - lastSyncedAt < opts.ifOlderThanMs) {
     return false
   }
   try {
-    const res = await getVeinTemplates()
+    const res = await getVeinTemplates(opts.scope)
     await saveVeinTemplates({
       logicVersion: res.logic_version,
       fetchedAt: Date.now(),

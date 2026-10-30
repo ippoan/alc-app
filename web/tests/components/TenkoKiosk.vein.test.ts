@@ -373,7 +373,7 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       expect(vein.identify).toHaveBeenCalledTimes(1)
       expect(vein.capture).not.toHaveBeenCalled()
       expect(api.identifyVein).not.toHaveBeenCalled()
-      expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1')
+      expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1', 'default')
       expect(identifyEmployeeMock).toHaveBeenCalledWith('emp-1', '山田 太郎')
       wrapper.unmount()
     })

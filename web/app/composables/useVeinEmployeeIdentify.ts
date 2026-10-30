@@ -12,6 +12,7 @@
  * 特定できた後に何をするか (顔認証へ進む・測定へ進む・権限を見る) は画面が `onEmployee` で決める。
  */
 import type { ApiEmployee } from '~/types'
+import type { RequestTokenScope } from '~/utils/api'
 import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
@@ -29,6 +30,11 @@ export interface VeinEmployeeIdentifyOptions {
   isIdle: () => boolean
   /** 照合を始める直前に呼ぶ (画面の前の結果を片付ける) */
   onStart?: () => void
+  /**
+   * 照合データの同期と、当たった人の照会をどの鍵で行うか (既定はキオスクの鍵)。運行管理者の入口は
+   * 運行管理者席の鍵 (`manager-device`) — Vein Base を運行管理者席の鍵にした PC にはキオスクの鍵が無い
+   */
+  scope?: RequestTokenScope
 }
 
 export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
@@ -44,7 +50,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
 
   /** 照合に使う写しを取る。モジュールで照合する構成は機体のモジュールも揃える */
   function sync(syncOpts: { ifOlderThanMs?: number } = {}) {
-    return syncVeinTemplates({ ...syncOpts, module: usesVeinModule() ? vein : undefined })
+    return syncVeinTemplates({ ...syncOpts, module: usesVeinModule() ? vein : undefined, scope: opts.scope })
   }
 
   onMounted(() => {
@@ -70,7 +76,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       return `指静脈を読み取れませんでした (${(e as Error).message})`
     }
     const outcome = viaModule
-      ? await identifyVeinModuleEmployee(read as number | null)
+      ? await identifyVeinModuleEmployee(read as number | null, opts.scope)
       : await identifyVeinEmployee(read as string)
     switch (outcome.kind) {
       case 'hit': return await opts.onEmployee(outcome.employee)

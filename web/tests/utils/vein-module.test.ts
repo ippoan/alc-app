@@ -93,7 +93,19 @@ describe('identifyVeinModuleEmployee', () => {
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 10)])
     api.getEmployeeById.mockResolvedValue(EMP)
     expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: EMP })
-    expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1')
+    expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1', 'default')
+  })
+
+  it('鍵の種類を渡すと、その鍵で乗務員を引く (オフラインの一覧も同じ鍵)', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 10)])
+    api.getEmployeeById.mockResolvedValue(EMP)
+    expect(await mod.identifyVeinModuleEmployee(10, 'manager-device')).toEqual({ kind: 'hit', employee: EMP })
+    expect(api.getEmployeeById).toHaveBeenLastCalledWith('emp-1', 'manager-device')
+
+    api.getEmployeeById.mockRejectedValue(new TypeError('Failed to fetch'))
+    api.getEmployees.mockResolvedValue([EMP])
+    expect(await mod.identifyVeinModuleEmployee(10, 'manager-device')).toEqual({ kind: 'hit', employee: EMP })
+    expect(api.getEmployees).toHaveBeenLastCalledWith('manager-device')
   })
 
   it('ネットワークで失敗したら手元の乗務員一覧から引く。居なければ理由を返す', async () => {
@@ -189,6 +201,13 @@ describe('syncVeinModule', () => {
     expect(api.getVeinModuleTemplates).not.toHaveBeenCalled()
   })
 
+  it('鍵の種類を渡すと、その鍵で承認済みの一覧を取る', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
+    expect(await mod.syncVeinModule(port(), { scope: 'manager-device' })).toBe(true)
+    expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith('manager-device')
+  })
+
   it('★ 新しい記録は空きへ書き、変わった記録は同じ ID に書き直し、消えた承認済みは消す。承認待ちは残す', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([
       entry('pending-approved', 10, { approved: false }), // この端末で登録 → 承認された
@@ -207,6 +226,8 @@ describe('syncVeinModule', () => {
     })
     const p = port()
     expect(await mod.syncVeinModule(p)).toBe(true)
+    // 既定はキオスクの鍵 (鍵の種類を渡さない)
+    expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith(undefined)
 
     expect(p.syncClear).toHaveBeenCalledTimes(1)
     expect(p.syncClear).toHaveBeenCalledWith(13)

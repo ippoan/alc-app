@@ -140,6 +140,8 @@ const vein = useVeinEmployeeIdentify({
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
   onEmployee: grantByVein,
   isIdle: () => step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value,
+  // 運行管理者の入口は運行管理者席の鍵で照合データを取り、当たった人を引く (キオスクの鍵が無い席がある)
+  scope: props.requiredRole === 'manager' ? 'manager-device' : 'default',
   onStart: () => {
     errorMessage.value = null
   },

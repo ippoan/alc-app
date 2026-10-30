@@ -719,8 +719,8 @@ export interface ApiVeinTemplate {
  * 指静脈テンプレートを全件取る (キオスクがオフラインの照合用に手元へ写す、
  * Refs ippoan/vein-match#20)。`logic_version` はサーバーの照合ロジックの版。
  */
-export async function getVeinTemplates(): Promise<{ logic_version: string; templates: ApiVeinTemplate[] }> {
-  return request<{ logic_version: string; templates: ApiVeinTemplate[] }>('/api/vein/templates')
+export async function getVeinTemplates(scope: RequestTokenScope = 'default'): Promise<{ logic_version: string; templates: ApiVeinTemplate[] }> {
+  return request<{ logic_version: string; templates: ApiVeinTemplate[] }>('/api/vein/templates', {}, scope)
 }
 
 /** バイト列を base64 に (指静脈のモジュールの記録を JSON で送る) */
@@ -762,8 +762,8 @@ export interface ApiVeinModuleRecord {
 }
 
 /** 承認済みのモジュールの記録を全件取る (端末のモジュールへ書き戻す元、Refs ippoan/alc-app#436) */
-export async function getVeinModuleTemplates(): Promise<{ templates: ApiVeinModuleRecord[] }> {
-  return request<{ templates: ApiVeinModuleRecord[] }>('/api/vein/module-templates')
+export async function getVeinModuleTemplates(scope: RequestTokenScope = 'default'): Promise<{ templates: ApiVeinModuleRecord[] }> {
+  return request<{ templates: ApiVeinModuleRecord[] }>('/api/vein/module-templates', {}, scope)
 }
 
 /** 指静脈の登録 (1 件分、承認待ち・承認済みの一覧で共通)。`updated_at` は承認するときの版 */
