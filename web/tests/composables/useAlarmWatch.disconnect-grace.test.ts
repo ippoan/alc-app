@@ -22,6 +22,7 @@ mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: readonly(veinConnected),
   connect: async () => false,
   request: vi.fn(),
+  alarm: { start: () => {}, stop: () => {} },
 }))
 
 mockNuxtImport('useActiveRooms', () => () => ({ start: () => {}, stop: () => {} }))

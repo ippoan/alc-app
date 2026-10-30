@@ -35,6 +35,12 @@ mockNuxtImport('useAlarmDevice', () => () => ({
   ...alarmMock,
 }))
 
+// Vein Base (VoiceS3R の無い席で警告デバイスを兼ねる)。バーは繋がっているかを読むだけ
+const veinState = { isConnected: ref(false) }
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinState.isConnected),
+}))
+
 mockNuxtImport('useActiveRooms', () => () => ({
   isWatching: readonly(roomsState.isWatching),
   callingRooms: readonly(roomsState.callingRooms),
@@ -68,6 +74,7 @@ describe('ManagerAlarmBar', () => {
     alarmState.isSupported = true
     alarmState.isConnected.value = false
     alarmState.deviceState.value = null
+    veinState.isConnected.value = false
     roomsState.isWatching.value = true
     roomsState.callingRooms.value = []
     settingState.enabled.value = true
@@ -118,7 +125,7 @@ describe('ManagerAlarmBar', () => {
     const wrapper = await mountSuspended(ManagerAlarmBar)
 
     expect(wrapper.find('[data-testid="manager-alarm-ask"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('この PC に警告デバイス (Atom VoiceS3R) をつなぎますか?')
+    expect(wrapper.text()).toContain('この PC に警告デバイス (Atom VoiceS3R か Vein Base) をつなぎますか?')
     expect(wrapper.find('[data-testid="manager-alarm-bar"]').exists()).toBe(false)
     // 「使う」と決まるまで探索しない
     expect(calls).toEqual([])
@@ -332,6 +339,26 @@ describe('ManagerAlarmBar', () => {
     expect(wrapper.text()).toContain('運行管理者のブラウザを見張っています (閉じると鳴ります)')
     expect(wrapper.text()).not.toContain('着信')
     expect(wrapper.find('.bg-green-100').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('VoiceS3R が無く Vein Base が繋がっていれば、Vein Base を警告デバイスとして「接続」と出す', async () => {
+    veinState.isConnected.value = true
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    expect(wrapper.find('[data-testid="alarm-via-vein"]').text()).toBe('Vein Base')
+    expect(wrapper.text()).not.toContain('接続されていません')
+    expect(wrapper.text()).toContain('運行管理者のブラウザを見張っています')
+    expect(wrapper.find('.bg-green-100').exists()).toBe(true)
+    expect(wrapper.find('button').text()).toBe('接続し直す')
+    wrapper.unmount()
+  })
+
+  it('VoiceS3R が繋がっていれば Vein Base の印は出さない (警告デバイスは VoiceS3R)', async () => {
+    veinState.isConnected.value = true
+    alarmState.isConnected.value = true
+    const wrapper = await mountSuspended(ManagerAlarmBar)
+    expect(wrapper.find('[data-testid="alarm-via-vein"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('接続')
     wrapper.unmount()
   })
 

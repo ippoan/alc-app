@@ -8,18 +8,31 @@ import { withSetup } from '../helpers/with-setup'
 const calls: string[] = []
 
 const alarmState = { isSupported: true }
+// VoiceS3R が繋がっているか (Vein Base が警告デバイスを兼ねるかの切り替えを見る)。
+// 前のテストの見張りが残るので、テストごとに作り直す
+let alarmConnected = ref(false)
+const heartbeatLine = () => 'HB OK'
 mockNuxtImport('useAlarmDevice', () => () => ({
   isSupported: alarmState.isSupported,
-  isConnected: ref(false),
+  isConnected: readonly(alarmConnected),
   connect: (delay: number) => { calls.push(`connect(${delay})`) },
   disconnect: async () => { calls.push('disconnect') },
+  heartbeatLine,
 }))
+
+// Vein Base へ送る警告の heartbeat の始め・止め (呼び順は calls と分けて記録する)
+const veinAlarmCalls: string[] = []
+const veinAlarmStart = vi.fn((line: () => string) => { veinAlarmCalls.push(`start(${line()})`) })
 
 // Vein Base (席の鍵にする席のため、見張りの開始で登録する)。ポートは指静脈・キオスクの鍵と
 // 共有なので、見張りをやめても手放さない (disconnect を持たせず、呼ばれたら落ちる)
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: ref(false),
   connect: async () => { calls.push('vein.connect'); return false },
+  alarm: {
+    start: veinAlarmStart,
+    stop: (off: boolean) => { veinAlarmCalls.push(`stop(${off})`) },
+  },
 }))
 
 mockNuxtImport('useActiveRooms', () => () => ({
@@ -40,6 +53,8 @@ let useAlarmWatch: typeof import('~/composables/useAlarmWatch').useAlarmWatch
 describe('useAlarmWatch', () => {
   beforeEach(async () => {
     calls.length = 0
+    veinAlarmCalls.length = 0
+    alarmConnected = ref(false)
     alarmState.isSupported = true
     enabled.value = true
     vi.resetModules()
@@ -82,6 +97,37 @@ describe('useAlarmWatch', () => {
     expect(calls).toEqual(['start', 'connect(0)', 'vein.connect', 'disconnect', 'stop'])
     second.unmount()
     third.unmount()
+  })
+
+  it('VoiceS3R が無いあいだは Vein Base に警告の heartbeat を送り、VoiceS3R が繋がったら HB OFF で解く', async () => {
+    const [, app] = withSetup(() => useAlarmWatch())
+    // 始めた時点で VoiceS3R が無い: Vein Base が警告デバイスを兼ねる (行は VoiceS3R と同じ関数で作る)
+    expect(veinAlarmCalls).toEqual(['start(HB OK)'])
+    expect(veinAlarmStart).toHaveBeenLastCalledWith(heartbeatLine)
+
+    // VoiceS3R が繋がった: Vein Base の見張りを HB OFF で解く (送らずにやめると鳴る)
+    alarmConnected.value = true
+    await nextTick()
+    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(true)'])
+
+    // VoiceS3R が抜けた: また Vein Base へ送る
+    alarmConnected.value = false
+    await nextTick()
+    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(true)', 'start(HB OK)'])
+    app.unmount()
+  })
+
+  it('設定を off にしたら Vein Base への heartbeat を HB OFF なしでやめ、その後の接続の変化も見ない', async () => {
+    const [, app] = withSetup(() => useAlarmWatch())
+    enabled.value = false
+    await nextTick()
+    // VoiceS3R の切断と同じく、off にした席は鳴る (HB OFF を送らない)
+    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(false)'])
+
+    alarmConnected.value = true
+    await nextTick()
+    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(false)'])
+    app.unmount()
   })
 
   it('設定 off の端末では何も始めない', () => {
