@@ -16,6 +16,14 @@ mockNuxtImport('useAlarmDevice', () => () => ({
   disconnect: async () => {},
 }))
 
+// Vein Base (席の鍵の機体のもう 1 つ)。テストごとに作り直す接続の ref は veinConnected
+let veinConnected = ref(false)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinConnected),
+  connect: async () => false,
+  request: vi.fn(),
+}))
+
 mockNuxtImport('useActiveRooms', () => () => ({ start: () => {}, stop: () => {} }))
 
 const enabled = ref<boolean | null>(true)
@@ -44,6 +52,7 @@ async function settle() {
 describe('useAlarmWatch — 運行管理者の鍵のトークンの先取り', () => {
   beforeEach(async () => {
     isConnected = ref(false)
+    veinConnected = ref(false)
     enabled.value = true
     prefetchManagerJwt.mockReset()
     prefetchManagerJwt.mockImplementation(async () => true)
@@ -56,6 +65,20 @@ describe('useAlarmWatch — 運行管理者の鍵のトークンの先取り', (
     await settle()
     expect(prefetchManagerJwt).not.toHaveBeenCalled()
 
+    isConnected.value = true
+    await settle()
+    expect(prefetchManagerJwt).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
+  it('VoiceS3R の無い席: Vein Base が繋がったら 1 回取りに行く。両方繋がっても重ねて取りに行かない', async () => {
+    const [, app] = withSetup(() => useAlarmWatch())
+    await settle()
+    veinConnected.value = true
+    await settle()
+    expect(prefetchManagerJwt).toHaveBeenCalledTimes(1)
+
+    // 席の鍵の機体が既に 1 つ繋がっているので、VoiceS3R が後から繋がっても取りに行かない
     isConnected.value = true
     await settle()
     expect(prefetchManagerJwt).toHaveBeenCalledTimes(1)
@@ -137,6 +160,7 @@ describe('useAlarmWatch — 先取りの試し直し', () => {
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
     isConnected = ref(false)
+    veinConnected = ref(false)
     enabled.value = true
     prefetchManagerJwt.mockReset()
     prefetchManagerJwt.mockImplementation(async () => true)

@@ -37,6 +37,14 @@
  * 「まだ繋がっていない」では始めない** (一度繋がってから切れたときだけ)。設定を off にして
  * 見張りをやめたときは、猶予なしでその場で期限を切る。
  *
+ * ## Vein Base を運行管理者席の鍵にする席
+ *
+ * VoiceS3R の代わりに Vein Base の鍵を運行管理者席として登録した席では、Vein Base が席の鍵を持つ
+ * (署名を頼む相手は `useManagerDeviceToken` が選ぶ)。そのため見張りを始めたときに Vein Base も
+ * arbiter に登録し、上の先取りと切断の猶予は「席の鍵の機体 (VoiceS3R か Vein Base) が 1 つでも
+ * 繋がっているか」で動かす。Vein Base は警告を鳴らさないので、heartbeat と警告は VoiceS3R だけのまま。
+ * Vein のポートは指静脈・キオスクの鍵と共有なので、見張りをやめても手放さない (`useNfcReader` と同じ)。
+ *
  * 猶予の 2 分が過ぎてから繋がり直すまでのあいだは `useSeatDisconnectGrace().expired` が true
  * (IT点呼 の受け画面が、開いている点呼を閉じて理由を出すのに読む)。設定を off にして自分で
  * 見張りをやめた席では true にしない (警告デバイスを使わない席と同じ表示のままにする)。
@@ -123,6 +131,7 @@ export function useAlarmWatch(): void {
   const alarm = useAlarmDevice()
   // Web Serial の無いブラウザでは購読も heartbeat も立てない
   if (!alarm.isSupported) return
+  const vein = useVeinSerial()
   const rooms = useActiveRooms()
   const { enabled } = useAlarmDeviceSetting()
   const seat = useManagerDeviceToken()
@@ -133,10 +142,12 @@ export function useAlarmWatch(): void {
     rooms.start()
     // BLE ゲートウェイと同居しない PC なので、ポートの取り合いを待つ必要が無い
     alarm.connect(0)
+    // Vein Base を席の鍵にする席のため (登録が残るので、後から挿しても拾われる)
+    void vein.connect()
     // トップ画面の unmount で止まらないよう、component から切り離した scope で見張る。
     // immediate: 始めた時点で既に繋がっていれば、そのとき 1 回
     const scope = effectScope(true)
-    scope.run(() => watch(alarm.isConnected, (connected, wasConnected) => {
+    scope.run(() => watch(() => alarm.isConnected.value || vein.isConnected.value, (connected, wasConnected) => {
       if (connected) {
         // 繋がり直した: 猶予をやめる (期限を外してから取りに行く)
         seat.clearDisconnectDeadline()

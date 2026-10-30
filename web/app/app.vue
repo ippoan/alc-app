@@ -89,11 +89,12 @@ onMounted(async () => {
   // 機体の診断の行 (体温計の接続・受信など) を 1 分ごとに signaling の /device-log へ送る (Cloudflare のログに 7 日残る)
   useDiagUpload()
   const atom = useAtomS3Serial()
-  // 種類ごとの「その機体がつながっているか」(kiosk = CoreS3 か Vein Station)
+  // 種類ごとの「その機体がつながっているか」(kiosk = CoreS3 か Vein Station、
+  // manager-device = VoiceS3R か Vein Base。どちらの鍵を席の鍵にするかは /device/setup の用途で決まる)
   const ownDeviceConnected = {
     'kiosk': [coreS3.isConnected, vein.isConnected],
     'bp-station': [atom.isConnected],
-    'manager-device': [alarm.isConnected],
+    'manager-device': [alarm.isConnected, vein.isConnected],
   }
   const checkDevMarks = (): void => {
     void dropDevMarksWithoutOwnDevice(hasKioskCredential.value, kind => ownDeviceConnected[kind].some(c => c.value))

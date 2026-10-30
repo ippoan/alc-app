@@ -10,8 +10,16 @@ const calls: string[] = []
 const alarmState = { isSupported: true }
 mockNuxtImport('useAlarmDevice', () => () => ({
   isSupported: alarmState.isSupported,
+  isConnected: ref(false),
   connect: (delay: number) => { calls.push(`connect(${delay})`) },
   disconnect: async () => { calls.push('disconnect') },
+}))
+
+// Vein Base (席の鍵にする席のため、見張りの開始で登録する)。ポートは指静脈・キオスクの鍵と
+// 共有なので、見張りをやめても手放さない (disconnect を持たせず、呼ばれたら落ちる)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: ref(false),
+  connect: async () => { calls.push('vein.connect'); return false },
 }))
 
 mockNuxtImport('useActiveRooms', () => () => ({
@@ -40,24 +48,24 @@ describe('useAlarmWatch', () => {
 
   it('設定 on なら mount で着信購読 → 接続の順に対で始め、unmount では止めない', () => {
     const [, app] = withSetup(() => useAlarmWatch())
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect'])
 
     // トップ画面を離れても singleton は動いたまま (ロールタブ切替で鳴らさない #205)
     app.unmount()
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect'])
   })
 
   it('設定を off にしたときだけ切断 → 購読停止を対で行い、on に戻せば対で始め直す', async () => {
     const [, app] = withSetup(() => useAlarmWatch())
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect'])
 
     enabled.value = false
     await nextTick()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect', 'disconnect', 'stop'])
 
     enabled.value = true
     await nextTick()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop', 'start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect', 'disconnect', 'stop', 'start', 'connect(0)', 'vein.connect'])
     app.unmount()
   })
 
@@ -66,12 +74,12 @@ describe('useAlarmWatch', () => {
     first.unmount()
     const [, second] = withSetup(() => useAlarmWatch())
     const [, third] = withSetup(() => useAlarmWatch())
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect'])
 
     // 生きている 2 instance の watch が両方動いても、止めるのは 1 回
     enabled.value = false
     await nextTick()
-    expect(calls).toEqual(['start', 'connect(0)', 'disconnect', 'stop'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect', 'disconnect', 'stop'])
     second.unmount()
     third.unmount()
   })
@@ -95,12 +103,12 @@ describe('useAlarmWatch', () => {
 
     enabled.value = true
     await nextTick()
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect'])
 
     // 未設定へ戻っても (localStorage を消した等) 止めない — 止めるのは off だけ
     enabled.value = null
     await nextTick()
-    expect(calls).toEqual(['start', 'connect(0)'])
+    expect(calls).toEqual(['start', 'connect(0)', 'vein.connect'])
     app.unmount()
   })
 

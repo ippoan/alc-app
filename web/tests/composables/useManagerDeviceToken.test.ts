@@ -25,6 +25,13 @@ const alarmMock = vi.hoisted(() => ({
 }))
 mockNuxtImport('useAlarmDevice', () => () => alarmMock)
 
+// Vein Base。VoiceS3R が繋がっていないときだけ、こちらに署名させる
+const veinMock = vi.hoisted(() => ({
+  isConnected: { value: false },
+  request: vi.fn(),
+}))
+mockNuxtImport('useVeinSerial', () => () => veinMock)
+
 const signAlarmDeviceNonceMock = vi.hoisted(() => vi.fn())
 vi.mock('~/utils/alarm-sign', () => ({
   signAlarmDeviceNonce: signAlarmDeviceNonceMock,
@@ -36,6 +43,8 @@ beforeEach(() => {
   vi.resetModules()
   alarmMock.isConnected.value = true
   alarmMock.request.mockReset()
+  veinMock.isConnected.value = false
+  veinMock.request.mockReset()
   signAlarmDeviceNonceMock.mockReset()
   signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: PUBKEY, sig: SIG })
   // 失敗のたびに 1 行出るので既定では捨てる (中身を見るテストは spy を取り直す)
@@ -64,6 +73,59 @@ describe('useManagerDeviceToken (#337 運行管理者席の鍵)', () => {
     expect(t.lastFailureStage.value).toBe('no-alarm-device')
     expect(t.lastFailureStatus.value).toBeNull()
     expect(t.lastError.value).toContain('VoiceS3R')
+  })
+
+  it('VoiceS3R が無く Vein Base が繋がっていれば、Vein に署名させて取る', async () => {
+    alarmMock.isConnected.value = false
+    veinMock.isConnected.value = true
+    veinMock.request.mockResolvedValue(`AUTH SIG ${PUBKEY} ${SIG}`)
+    const fetchMock = stubHappyPath()
+
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBe(TOKEN)
+    // 送り先を渡す (= 既定の VoiceS3R ではない)。渡した口は Vein の request に届く
+    const [nonce, request] = signAlarmDeviceNonceMock.mock.calls[0] as [string, (l: string, p: string, ms: number) => Promise<string>]
+    expect(nonce).toBe(NONCE)
+    expect(await request(`AUTH SIGN ${NONCE}`, 'AUTH SIG ', 10_000)).toBe(`AUTH SIG ${PUBKEY} ${SIG}`)
+    expect(veinMock.request).toHaveBeenCalledWith(`AUTH SIGN ${NONCE}`, 'AUTH SIG ', 10_000)
+    expect(alarmMock.request).not.toHaveBeenCalled()
+    expect(JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string)).toEqual({
+      nonce: NONCE, pubkey: PUBKEY, sig: SIG, usage: 'tenko-manager',
+    })
+  })
+
+  it('Vein のポートがキオスクの鍵の署名で応答待ちなら、空くまで待って送り直す', async () => {
+    alarmMock.isConnected.value = false
+    veinMock.isConnected.value = true
+    veinMock.request
+      .mockRejectedValueOnce(new Error('request(vein): 既に応答待ちです'))
+      .mockResolvedValueOnce(`AUTH SIG ${PUBKEY} ${SIG}`)
+    stubHappyPath()
+
+    const t = (await load())()
+    await t.getManagerJwt()
+    const request = signAlarmDeviceNonceMock.mock.calls[0]![1] as (l: string, p: string, ms: number) => Promise<string>
+    expect(await request(`AUTH SIGN ${NONCE}`, 'AUTH SIG ', 10_000)).toBe(`AUTH SIG ${PUBKEY} ${SIG}`)
+    expect(veinMock.request).toHaveBeenCalledTimes(2)
+  })
+
+  it('VoiceS3R と Vein Base の両方が繋がっていれば、VoiceS3R に頼む (今までどおり)', async () => {
+    veinMock.isConnected.value = true
+    stubHappyPath()
+
+    const t = (await load())()
+    await t.getManagerJwt()
+    expect(signAlarmDeviceNonceMock.mock.calls[0]).toEqual([NONCE])
+  })
+
+  it('VoiceS3R も Vein Base も無ければ、理由に両方の名前を出す', async () => {
+    alarmMock.isConnected.value = false
+    vi.stubGlobal('fetch', vi.fn())
+
+    const t = (await load())()
+    expect(await t.getManagerJwt()).toBeNull()
+    expect(t.lastFailureStage.value).toBe('no-alarm-device')
+    expect(t.lastError.value).toContain('Vein Base')
   })
 
   it('usage を nonce の query と token の body の両方に載せる (片方だけだと auth-worker が 401)', async () => {

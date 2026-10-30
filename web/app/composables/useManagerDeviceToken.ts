@@ -37,6 +37,15 @@
  * 「VoiceS3R が署名できない」ではない (#214 は今も VoiceS3R で署名している)。ここは
  * **別の用途 (`tenko-manager`) の別のトークン**なので抵触しない。
  *
+ * ## VoiceS3R の無い席は Vein Base に頼む
+ *
+ * Vein Base (`useVeinSerial`。alc-app のほかの所では Vein Station と呼ぶ機体) も共通の console で
+ * `AUTH SIGN` に答える。VoiceS3R が繋がっていれば今までどおり VoiceS3R、繋がっていなければ Vein に
+ * 署名させる (どちらで頼むかは 1 回の取得の初めに決める)。Vein の鍵を運行管理者席として使うには、
+ * `/device/setup` で用途「運行管理者席」で登録しておく (1 つの鍵は 1 つの用途だけなので、その Vein は
+ * キオスクの鍵には使えない)。Vein のポートはキオスクの鍵の署名 (`useDeviceToken`) と共有で、
+ * 同時に 1 件しか応答を待てないため、空くまで待ってから送る (`requestWhenFree`)。
+ *
  * ## キオスクとは完全に別勘定
  *
  * cache・single-flight・抑止 (backoff)・失敗理由は**すべてこのモジュールに閉じる**。
@@ -46,6 +55,7 @@
  */
 import { ref, readonly, watch } from 'vue'
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
+import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 import { noteDeviceToken } from '~/utils/token-selection'
 
@@ -58,12 +68,15 @@ const DEFAULT_TTL_SECONDS = 900
 const REFRESH_BEFORE_MS = 60_000
 /** 失敗してから、これだけ再試行しない (ms)。`useDeviceToken` の CoreS3 抑止と同じ長さ */
 const BACKOFF_MS = 60_000
+/** Vein のポートがほかの要求 (キオスクの鍵の署名、最大 10 秒) の応答待ちのとき、呼び直す間隔と待つ上限 (ms) */
+const VEIN_BUSY_RETRY_MS = 300
+const VEIN_BUSY_WAIT_MS = 12_000
 
 /**
  * どの段で落ちたか (`useDeviceToken.DeviceTokenFailureStage` と同じ流儀)。
- * - `no-alarm-device`: VoiceS3R が USB で繋がっていない (署名を頼む相手が居ない)
+ * - `no-alarm-device`: VoiceS3R も Vein Base も USB で繋がっていない (署名を頼む相手が居ない)
  * - `nonce`: `/device/alarm-nonce?usage=...` の取得
- * - `sign`: VoiceS3R への署名要求 (`AUTH SIGN`)
+ * - `sign`: VoiceS3R (無ければ Vein Base) への署名要求 (`AUTH SIGN`)
  * - `token-exchange`: `/device/alarm-token` の交換 (**鍵が用途「運行管理者席」で未登録なら 401 でここ**)
  */
 export type ManagerTokenFailureStage = 'no-alarm-device' | 'nonce' | 'sign' | 'token-exchange'
@@ -119,6 +132,15 @@ export function useManagerDeviceToken() {
   // nuxt.config が既定値を持つので fallback は置かない (旧管理者ログイン #353-8 で廃止、と同じ流儀)
   const authWorkerUrl = (config.public.authWorkerUrl as string).replace(/\/$/, '')
   const alarm = useAlarmDevice()
+  const vein = useVeinSerial()
+
+  /** Vein に 1 行送って応答を待つ。ポートが応答待ちで弾かれたときだけ、空くまで呼び直す */
+  function veinRequest(line: string, matchPrefix: string, timeoutMs: number): Promise<string> {
+    return requestWhenFree(
+      () => vein.request(line, matchPrefix, timeoutMs),
+      { intervalMs: VEIN_BUSY_RETRY_MS, deadline: Date.now() + VEIN_BUSY_WAIT_MS },
+    )
+  }
 
   /**
    * 実際に 1 本取りに行く。失敗したら null を返し、`BACKOFF_MS` の間は再試行しない
@@ -129,8 +151,10 @@ export function useManagerDeviceToken() {
 
     // ★ ここでは**抑止 (backoff) を立てない** — 「まだ挿していない」だけのことがあり、
     // 挿した直後の 1 回目で通ってほしいため (`useDeviceToken` の `no-core-s3` と同じ扱い)。
-    if (!alarm.isConnected.value) {
-      lastError.value = 'VoiceS3R が USB で繋がっていません'
+    // 署名を頼む相手: VoiceS3R が繋がっていれば VoiceS3R、無ければ Vein Base
+    const signWithVein = !alarm.isConnected.value
+    if (signWithVein && !vein.isConnected.value) {
+      lastError.value = 'VoiceS3R も Vein Base も USB で繋がっていません'
       lastFailureStage.value = 'no-alarm-device'
       lastFailureStatus.value = null
       warnFailure('no-alarm-device', null)
@@ -160,8 +184,10 @@ export function useManagerDeviceToken() {
       if (!nonceData.nonce) throw new Error('alarm-nonce: nonce 欠落')
 
       stage = 'sign'
-      // 送り先は既定値 = 警告デバイス (VoiceS3R)。署名対象は従来どおり nonce そのもの
-      const signed = await signAlarmDeviceNonce(nonceData.nonce)
+      // 送り先は既定値 = 警告デバイス (VoiceS3R)、無ければ Vein Base。署名対象は従来どおり nonce そのもの
+      const signed = signWithVein
+        ? await signAlarmDeviceNonce(nonceData.nonce, veinRequest)
+        : await signAlarmDeviceNonce(nonceData.nonce)
       if (!signed) throw new Error('AUTH SIG の parse に失敗')
 
       stage = 'token-exchange'
@@ -203,7 +229,7 @@ export function useManagerDeviceToken() {
   }
 
   /**
-   * 運行管理者用 device JWT を返す (cache → VoiceS3R の署名)。取れなければ null。
+   * 運行管理者用 device JWT を返す (cache → VoiceS3R か Vein Base の署名)。取れなければ null。
    * 同時呼び出しは 1 本にまとめる (画面が予定一覧と乗務員一覧を同時に読むため)。
    */
   async function getManagerJwt(): Promise<string | null> {
@@ -217,7 +243,7 @@ export function useManagerDeviceToken() {
   }
 
   /**
-   * 運行管理者用 device JWT を先に取っておく (警告デバイスが繋がったときに `useAlarmWatch` が呼ぶ。
+   * 運行管理者用 device JWT を先に取っておく (警告デバイスか Vein Base が繋がったときに `useAlarmWatch` が呼ぶ。
    * Refs ippoan/alc-app#387)。開発用の印は鍵のトークンを 1 度取ったときに立つが、Google ログイン
    * 済みの席は管理者のトークンで足りてしまい、取りに行く引き金が他に無い。
    *
