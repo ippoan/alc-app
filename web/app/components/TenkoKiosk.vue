@@ -6,8 +6,7 @@ import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement } from '~/utils
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
-import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
-import { identifyVeinEmployee, syncVeinTemplates, VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
+import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -296,77 +295,28 @@ async function onManualSubmit() {
 // NFC と同じ手順 (applyFaceApproval → identifyEmployee) に合流する — 顔の記録・顔認証は変えない。
 // 指静脈が使えないとき (端末が無い・外れ・読み取り失敗) は NFC と社員番号がそのまま逃げ道になる。
 const veinSerial = useVeinSerial()
-const veinBusy = ref(false)
-const veinError = ref<string | null>(null)
-/** 照合の途中でモジュールが撮り直しを求めた (`EVT VEIN AGAIN`)。ボタンの文言を「もう一度」に変える */
-const veinAgain = ref(false)
+// 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)
+const vein = useVeinEmployeeIdentify({
+  missMessage: VEIN_NO_MATCH_MESSAGE,
+  pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`,
+  // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る
+  onEmployee: async (emp) => {
+    if (!applyFaceApproval(emp)) return null
+    await identifyEmployee(emp.id, emp.name)
+    return null
+  },
+  isIdle: () => isKioskIdle.value,
+})
 
 /** ボタンを押せない理由。`null` なら押せる */
 const veinDisabledReason = computed<string | null>(() =>
   veinSerial.isConnected.value ? null : 'Vein Station (指静脈読み取り端末) が接続されていません',
 )
 
-/** あわせて端末のモジュールも揃える (`syncVeinModule`、Refs ippoan/alc-app#436) */
-function syncVein(opts: { ifOlderThanMs?: number } = {}) {
-  return syncVeinTemplates({ ...opts, module: usesVeinModule() ? veinSerial : undefined })
-}
-
-onMounted(() => {
-  void veinSerial.connect()
-  // キオスクの起動時: オフラインの照合に使う写しを取る
-  void syncVein()
-})
-
-// Vein Station がつながったら、モジュールを揃える (起動時はまだつながっていない)
-watch(veinSerial.isConnected, (c) => {
-  if (c) void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
-})
-
 // 点呼の開始時 (最初の画面に戻ったとき): 前回の同期から時間がたっていれば取り直す
 watch(step, (s) => {
-  if (s === 'nfc') void syncVein({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
+  if (s === 'nfc') void vein.sync({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
 })
-
-/** 指静脈で乗務員を特定する。失敗したら画面に出す理由を返す */
-async function identifyByVein(prompt: boolean): Promise<string | null> {
-  const viaModule = usesVeinModule()
-  let read: string | number | null
-  try {
-    // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
-    if (prompt) await veinSerial.say('PLACE')
-    // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
-    read = viaModule ? await veinSerial.identify(() => { veinAgain.value = true }) : await veinSerial.capture()
-  }
-  catch (e) {
-    return `指静脈を読み取れませんでした (${(e as Error).message})`
-  }
-  const outcome = viaModule
-    ? await identifyVeinModuleEmployee(read as number | null)
-    : await identifyVeinEmployee(read as string)
-  if (outcome.kind === 'miss') return VEIN_NO_MATCH_MESSAGE
-  if (outcome.kind === 'pending') {
-    return `${outcome.name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`
-  }
-  if (outcome.kind === 'error') return outcome.message
-  // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る
-  if (!applyFaceApproval(outcome.employee)) return null
-  await identifyEmployee(outcome.employee.id, outcome.employee.name)
-  return null
-}
-
-async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
-  if (veinDisabledReason.value || veinBusy.value) return
-  veinBusy.value = true
-  veinAgain.value = false
-  veinError.value = null
-  const failure = await identifyByVein(prompt)
-  if (failure) {
-    veinError.value = failure
-    // 案内の失敗は握り潰す (画面の理由が主)
-    await veinSerial.say('FAILED').catch(() => {})
-  }
-  veinBusy.value = false
-}
 
 // --- 端末のシリアル OTA (Refs ippoan/alc-app-s3#279) ---
 // 管理者が /device/setup で「最新にする」を押すと、recorder が購読 WS に合図を送る。
@@ -375,7 +325,7 @@ async function onVeinIdentify({ prompt = true }: { prompt?: boolean } = {}) {
 // 購読 WS は打刻一覧の画面 (TodayPunchHistory) と同じもの — 両者は driverSubTab の v-if で
 // 同時に出ない。CoreS3 を繋いだキオスクでは FirmwareOtaHost の購読 (CoreS3 の合図用) が別に
 // 1 本在るので、合わせて 2 本になる (`serialOta` は上の `track` の前で定義)
-const isKioskIdle = computed(() => step.value === 'nfc' && !veinBusy.value)
+const isKioskIdle = computed(() => step.value === 'nfc' && !vein.busy.value)
 const otaWatch = useTimecardWatch({
   getToken: () => useDeviceToken().getDeviceJwt(),
   onSerialOta: (target) => {
@@ -388,11 +338,6 @@ const otaWatch = useTimecardWatch({
 watch(isKioskIdle, (idle) => {
   if (idle) void serialOta.runQueued()
 })
-// 指が置かれた合図 (EVT VEIN FINGER) で照合を始める。待機画面のときだけ。ボタンは古いファーム向けに残す
-const stopFingerWatch = veinSerial.onFingerPlaced(() => {
-  if (isKioskIdle.value) void onVeinIdentify({ prompt: false })
-})
-onUnmounted(stopFingerWatch)
 onMounted(() => {
   // デモは実機が無いので購読しない
   if (!isDemoMode.value) void otaWatch.connect()
@@ -510,7 +455,7 @@ function handleReset() {
   manualIdInput.value = ''
   manualError.value = null
   useManualInput.value = false
-  veinError.value = null
+  vein.error.value = null
   faceSkippable.value = false
   faceSkipNotice.value = null
   medicalInputSource.value = null
@@ -724,14 +669,14 @@ onUnmounted(() => {
           <div v-if="!isDemoMode && veinSerial.isSupported" class="mt-4 pt-4 border-t border-gray-100">
             <button
               data-testid="vein-identify"
-              :disabled="!!veinDisabledReason || veinBusy"
+              :disabled="!!veinDisabledReason || vein.busy.value"
               class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-              @click="onVeinIdentify()"
+              @click="vein.identify()"
             >
-              {{ veinBusy ? (veinAgain ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
+              {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
             </button>
             <p v-if="veinDisabledReason" class="mt-2 text-xs text-gray-500">{{ veinDisabledReason }}</p>
-            <p v-if="veinError" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ veinError }}</p>
+            <p v-if="vein.error.value" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
           </div>
         </div>
       </div>

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
  * 【セキュリティ要件】
- * - manager: NFC/社員番号 + 顔認証が必須。Google ログイン単独では通過不可。
+ * - manager: NFC + 顔認証、または指静脈。Google ログイン単独では通過不可。
+ *   **社員番号の手入力は出さない** (番号を知っていれば誰でも顔認証の段まで進めるため)。
+ *   **指静脈で特定できたら顔認証は挟まない** — 指静脈が本人確認そのもの (血圧測定台と同じ扱い。
+ *   照合の手順は useVeinEmployeeIdentify でキオスク・血圧測定台と共通)。権限は変わらず見る
  *   **顔が未登録でもスキップは認めない** — 認めると、顔写真を一切出さないまま
  *   管理画面へ入れてしまう。乗務員の点呼 (TenkoKiosk) は未登録なら通すが、
  *   管理者のこの入口だけは通さない (Refs ippoan/alc-app-s3#135)。
  *   判定そのものは utils/face-approval.ts に集約したまま、**通すかどうかの方針を
  *   この入口が決める** (判定を 2 系統に割らない)。
- * - admin  : Google ログインで通過 (watch で即時認証)。
+ * - admin  : Google ログインで通過 (watch で即時認証)。NFC/社員番号/指静脈 + 顔認証でも通れる。
  *
  * 注意: Google ログインリンクは admin タブ専用。
  * manager タブでは表示しないこと (バイパス防止)。
@@ -54,7 +57,9 @@ const errorMessage = ref<string | null>(null)
 const employeeId = ref('')
 const employeeName = ref('')
 const manualIdInput = ref('')
-const useManualInput = ref(true)
+/** 社員番号の手入力を出せるか (運行管理者の入口では出さない — 冒頭の【セキュリティ要件】) */
+const allowManualInput = computed(() => props.requiredRole !== 'manager')
+const useManualInput = ref(allowManualInput.value)
 const manualError = ref<string | null>(null)
 const isSubmitting = ref(false)
 const step = ref<'nfc' | 'face_auth'>('nfc')
@@ -74,39 +79,71 @@ const roleLabel: Record<string, string> = {
   admin: 'システム管理者',
 }
 
+/**
+ * 特定できた人 (NFC・社員番号) の権限と顔の登録を見て、顔認証へ進める。
+ * 進めなかったときは画面に出す理由を返す
+ */
+async function beginFaceAuth(emp: { id: string; name: string; role: string[]; face_approval_status?: string }): Promise<string | null> {
+  employeeId.value = emp.id
+  employeeName.value = emp.name
+  if (!hasRole(emp.role)) {
+    return `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
+  }
+  // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
+  const approval = checkFaceApproval(emp)
+  if (approval.kind !== 'require_face') {
+    return approval.kind === 'unregistered'
+      ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
+      : approval.message
+  }
+  authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
+  // **ここだけは待つし、間引きもしない** (Refs ippoan/rust-alc-api#644)。
+  // 管理者の入口の顔認証は必須でスキップの逃げ道が無く、古い顔データで落とすと
+  // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
+  await faceSync({ force: true })
+  step.value = 'face_auth'
+  return null
+}
+
 // NFC 読み取り
 async function onNfcRead(nfcId: string) {
   if (isSubmitting.value) return
   isSubmitting.value = true
   errorMessage.value = null
   try {
-    const emp = await getEmployeeByNfcId(nfcId)
-    employeeId.value = emp.id
-    employeeName.value = emp.name
-    if (!hasRole(emp.role)) {
-      errorMessage.value = `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
-      return
-    }
-    // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
-    const approval = checkFaceApproval(emp)
-    if (approval.kind !== 'require_face') {
-      errorMessage.value = approval.kind === 'unregistered'
-        ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
-        : approval.message
-      return
-    }
-    authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
-    // **ここだけは待つし、間引きもしない** (Refs ippoan/rust-alc-api#644)。
-    // 管理者の入口の顔認証は必須でスキップの逃げ道が無く、古い顔データで落とすと
-    // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
-    await faceSync({ force: true })
-    step.value = 'face_auth'
+    errorMessage.value = await beginFaceAuth(await getEmployeeByNfcId(nfcId))
   } catch (e) {
     errorMessage.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   } finally {
     isSubmitting.value = false
   }
 }
+
+/**
+ * 指静脈で特定できた人を通す。指静脈が本人確認そのものなので顔認証は挟まない (顔の登録も見ない)。
+ * 権限が無ければ理由を返す
+ */
+function grantByVein(emp: { id: string; name: string; role: string[] }): string | null {
+  employeeId.value = emp.id
+  employeeName.value = emp.name
+  if (!hasRole(emp.role)) {
+    return `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
+  }
+  authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
+  grantAccess()
+  return null
+}
+
+// 指静脈 (照合の手順はキオスク・血圧測定台と共通)
+const vein = useVeinEmployeeIdentify({
+  missMessage: '指静脈が一致する人が見つかりません。もう一度置くか、NFC で読み取ってください',
+  pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
+  onEmployee: grantByVein,
+  isIdle: () => step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value,
+  onStart: () => {
+    errorMessage.value = null
+  },
+})
 
 // 手動入力
 async function onManualSubmit() {
@@ -116,27 +153,7 @@ async function onManualSubmit() {
   manualError.value = null
   errorMessage.value = null
   try {
-    const emp = await getEmployeeByCode(input)
-    employeeId.value = emp.id
-    employeeName.value = emp.name
-    if (!hasRole(emp.role)) {
-      errorMessage.value = `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
-      return
-    }
-    // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
-    const approval = checkFaceApproval(emp)
-    if (approval.kind !== 'require_face') {
-      errorMessage.value = approval.kind === 'unregistered'
-        ? `${approval.message}。${roleLabel[props.requiredRole]}の認証には顔認証が必要です。顔データを登録してください`
-        : approval.message
-      return
-    }
-    authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
-    // **ここだけは待つし、間引きもしない** (Refs ippoan/rust-alc-api#644)。
-    // 管理者の入口の顔認証は必須でスキップの逃げ道が無く、古い顔データで落とすと
-    // 管理者が入れなくなる。通常点呼の入口 (NormalMeasurement) とは要件が違う
-    await faceSync({ force: true })
-    step.value = 'face_auth'
+    errorMessage.value = await beginFaceAuth(await getEmployeeByCode(input))
   } catch (e) {
     manualError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
   } finally {
@@ -144,28 +161,34 @@ async function onManualSubmit() {
   }
 }
 
+/** 本人確認が済んだ (顔認証・指紋・指静脈) — 通して、運行管理者なら端末に控える */
+function grantAccess() {
+  authState.value = 'authenticated'
+  if (props.requiredRole === 'manager' && authenticatedEmployee.value) {
+    setManagerId(authenticatedEmployee.value.id)
+    // デバイス登録済みなら最終ログインを記録
+    if (deviceId.value) {
+      updateDeviceLastLogin(
+        deviceId.value,
+        authenticatedEmployee.value.id,
+        authenticatedEmployee.value.name,
+        authenticatedEmployee.value.role,
+      ).catch(() => {})
+    }
+  }
+}
+
 // 顔認証完了
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) {
     if (employeeId.value) authorizeEmployee(employeeId.value)
-    authState.value = 'authenticated'
-    if (props.requiredRole === 'manager' && authenticatedEmployee.value) {
-      setManagerId(authenticatedEmployee.value.id)
-      // デバイス登録済みなら最終ログインを記録
-      if (deviceId.value) {
-        updateDeviceLastLogin(
-          deviceId.value,
-          authenticatedEmployee.value.id,
-          authenticatedEmployee.value.name,
-          authenticatedEmployee.value.role,
-        ).catch(() => {})
-      }
-    }
+    grantAccess()
   } else {
     errorMessage.value = '顔認証に失敗しました。もう一度お試しください。'
     step.value = 'nfc'
   }
 }
+
 
 // 指紋認証 (Android Bridge)
 const {
@@ -204,8 +227,9 @@ function resetAuth() {
   employeeName.value = ''
   manualIdInput.value = ''
   manualError.value = null
-  useManualInput.value = true
+  useManualInput.value = allowManualInput.value
   isSubmitting.value = false
+  vein.error.value = null
   step.value = 'nfc'
 }
 </script>
@@ -227,7 +251,7 @@ function resetAuth() {
       <div class="bg-white rounded-2xl p-6 shadow-sm">
         <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ roleLabel[requiredRole] }}認証</h2>
         <p class="text-sm text-gray-500 mb-4">
-          {{ roleLabel[requiredRole] }}機能にアクセスするには、ID + 顔認証が必要です。
+          {{ roleLabel[requiredRole] }}機能にアクセスするには、{{ allowManualInput ? 'ID + 顔認証' : 'NFC + 顔認証、または指静脈' }}が必要です。
         </p>
 
         <!-- デバイスに保存された管理者情報 -->
@@ -251,6 +275,7 @@ function resetAuth() {
           <div v-if="!useManualInput">
             <NfcStatus @read="onNfcRead" />
             <button
+              v-if="allowManualInput"
               class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
               @click="useManualInput = true"
             >
@@ -280,6 +305,19 @@ function resetAuth() {
             >
               NFC で読み取る
             </button>
+          </div>
+
+          <!-- 指静脈 (Vein Station / Vein Base が繋がっている端末だけ)。特定できたら顔認証を挟まず通す -->
+          <div v-if="vein.ready.value" class="mt-4 pt-4 border-t border-gray-100">
+            <button
+              data-testid="vein-identify"
+              :disabled="vein.busy.value || isSubmitting"
+              class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+              @click="vein.identify()"
+            >
+              {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
+            </button>
+            <p v-if="vein.error.value" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
           </div>
         </div>
 

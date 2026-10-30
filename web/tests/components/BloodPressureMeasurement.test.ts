@@ -857,7 +857,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     expect(readReloadContext().safe).toBe(0)
 
     // disabled を越えて届いても 2 回目は走らない
-    await (wrapper.vm as unknown as { $: { setupState: { onVeinIdentify: () => Promise<void> } } }).$.setupState.onVeinIdentify()
+    await (wrapper.vm as unknown as { $: { setupState: { vein: { identify: () => Promise<void> } } } }).$.setupState.vein.identify()
     expect(vein.capture).toHaveBeenCalledTimes(1)
 
     captured('chara-hex')
