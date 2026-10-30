@@ -6,6 +6,7 @@ import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { identifyVeinModuleEmployee, prepareVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
+import { restartVeinAndReload } from '~/utils/vein-restart'
 
 /**
  * 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
@@ -318,6 +319,22 @@ function onRetrySave() {
 
 // 血圧を待っている間、Vein Station の BLE が止まっていないかを 1 秒ごとに確かめる
 const bleWatch = useBleWatch(veinSerial, computed(() => step.value === 'measure'))
+/** 止まりの警告から Vein Station を再起動している / 頼めなかった理由 */
+const veinRestarting = ref(false)
+const veinRestartError = ref<string | null>(null)
+
+/** 遠隔で操作していると USB の抜き差しができないので、画面から再起動する (後でページを読み直す) */
+async function onRestartVein() {
+  veinRestarting.value = true
+  veinRestartError.value = null
+  try {
+    await restartVeinAndReload(veinSerial.restart)
+  }
+  catch (e) {
+    veinRestartError.value = e instanceof Error ? e.message : String(e)
+    veinRestarting.value = false
+  }
+}
 
 /** BleStatus の「次へ」。血圧が来る前に押されたら進めずに促す */
 function onMeasureNext() {
@@ -465,13 +482,18 @@ function reset() {
         <p class="text-sm text-gray-500 mb-4">{{ employeeName }}さん</p>
         <BleStatus @next="onMeasureNext" @skip="reset" />
         <p v-if="measureNotice" class="mt-3 text-sm text-amber-700 text-center">{{ measureNotice }}</p>
-        <p
-          v-if="bleWatch.state.value !== 'ok'"
-          data-testid="ble-watch-warning"
-          class="mt-3 text-sm text-red-600 text-center"
-        >
-          血圧計との通信が止まっています。Vein Station の USB を挿し直してください
-        </p>
+        <div v-if="bleWatch.state.value !== 'ok'" data-testid="ble-watch-warning" class="mt-3 text-sm text-red-600 text-center">
+          <p>血圧計との通信が止まっています。Vein Station を再起動してください</p>
+          <button
+            data-testid="ble-watch-restart"
+            :disabled="veinRestarting"
+            class="mt-2 w-full px-4 py-3 rounded-xl bg-amber-500 text-white font-medium disabled:opacity-50"
+            @click="onRestartVein"
+          >
+            {{ veinRestarting ? '再起動しています… (数秒後に画面を読み込み直します)' : 'Vein Station を再起動' }}
+          </button>
+          <p v-if="veinRestartError" data-testid="ble-watch-restart-error" class="mt-1">{{ veinRestartError }}</p>
+        </div>
       </div>
 
       <!-- Step 4: 完了 -->

@@ -8,6 +8,8 @@
  * - ペアリング: `PAIR` で受付を開く。**機体の BLE のボンドを全部消してから**受け付けるので、確認を挟む
  */
 
+import { restartVeinAndReload } from '~/utils/vein-restart'
+
 const emit = defineEmits<{ close: [] }>()
 
 const vein = useVeinSerial()
@@ -49,9 +51,9 @@ function setBp(enabled: boolean) {
 
 function restart() {
   return run(async () => {
-    await vein.restart()
+    await restartVeinAndReload(vein.restart)
     needsRestart.value = false
-  }, 'Vein Station を再起動しました。つながり直すまで数秒かかります')
+  }, 'Vein Station を再起動しました。数秒後に画面を読み込み直します')
 }
 
 function startPairing() {
