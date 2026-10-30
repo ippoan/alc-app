@@ -151,6 +151,7 @@
  */
 
 import { isPortBusy, requestWhenFree } from '~/utils/serial-request-when-free'
+import { reloadPage } from '~/utils/page-reload'
 import { parseDeviceLine } from '~/utils/device-line'
 import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
 import type { FirmwareTarget } from '~/utils/firmware-targets'
@@ -243,7 +244,7 @@ const EVT_OTA_SERIAL_PENDING = 'OTA_SERIAL_PENDING'
  */
 export const otaReload = {
   delayMs: 3_000,
-  run: (): void => window.location.reload(),
+  run: reloadPage,
 }
 
 export type SerialOtaResult = 'updated' | 'up_to_date' | 'busy' | 'skipped' | 'unsupported' | 'failed'
