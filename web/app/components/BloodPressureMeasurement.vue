@@ -316,6 +316,9 @@ function onRetrySave() {
   void save(saveJob)
 }
 
+// 血圧を待っている間、Vein Station の BLE が止まっていないかを 1 秒ごとに確かめる
+const bleWatch = useBleWatch(veinSerial, computed(() => step.value === 'measure'))
+
 /** BleStatus の「次へ」。血圧が来る前に押されたら進めずに促す */
 function onMeasureNext() {
   if (latestBloodPressure.value) return
@@ -462,6 +465,13 @@ function reset() {
         <p class="text-sm text-gray-500 mb-4">{{ employeeName }}さん</p>
         <BleStatus @next="onMeasureNext" @skip="reset" />
         <p v-if="measureNotice" class="mt-3 text-sm text-amber-700 text-center">{{ measureNotice }}</p>
+        <p
+          v-if="bleWatch.state.value !== 'ok'"
+          data-testid="ble-watch-warning"
+          class="mt-3 text-sm text-red-600 text-center"
+        >
+          血圧計との通信が止まっています。Vein Station の USB を挿し直してください
+        </p>
       </div>
 
       <!-- Step 4: 完了 -->
