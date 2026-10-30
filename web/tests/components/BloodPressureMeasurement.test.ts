@@ -69,6 +69,12 @@ const vein = vi.hoisted(() => ({
 }))
 mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
 
+// 血圧を待っている間の BLE の見張り。止まりの警告と再起動のボタンを出すかだけを差し替える
+const bleWatchState = ref<'ok' | 'stuck' | 'no-reply'>('ok')
+mockNuxtImport('useBleWatch', () => () => ({ state: bleWatchState, stuckStage: ref(null) }))
+const restartMock = vi.hoisted(() => vi.fn())
+vi.mock('~/utils/vein-restart', () => ({ restartVeinAndReload: restartMock }))
+
 // 照合の振り分け (オンライン/オフライン) は vein-identify.test.ts の領分。ここでは結果だけを差し替える
 const veinIdentify = vi.hoisted(() => ({
   identifyVeinEmployee: vi.fn(),
@@ -158,6 +164,36 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
 
+    wrapper.unmount()
+  })
+
+  it('★ 血圧を待っている間に BLE が止まったら、画面から Vein Station を再起動できる', async () => {
+    restartMock.mockReset()
+    restartMock.mockRejectedValueOnce(new Error('Vein Station がつながっていません')).mockResolvedValue(undefined)
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await wrapper.findComponent(FaceAuthStub).vm.$emit('result', { verified: true, similarity: 0.9 })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="ble-watch-warning"]').exists()).toBe(false)
+
+    bleWatchState.value = 'stuck'
+    await wrapper.vm.$nextTick()
+    const button = () => wrapper.find('[data-testid="ble-watch-restart"]')
+    expect(button().exists()).toBe(true)
+
+    // 頼めなければ理由を出し、もう一度押せる
+    await button().trigger('click')
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="ble-watch-restart-error"]').text()).toBe('Vein Station がつながっていません')
+    expect(button().attributes('disabled')).toBeUndefined()
+
+    await button().trigger('click')
+    await flush(wrapper)
+    expect(restartMock).toHaveBeenCalledTimes(2)
+    expect(button().attributes('disabled')).toBeDefined()
+    expect(button().text()).toContain('読み込み直します')
+
+    bleWatchState.value = 'ok'
     wrapper.unmount()
   })
 

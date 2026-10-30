@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import BpBluetoothSettings from '~/components/BpBluetoothSettings.vue'
+import { veinRestartReload } from '~/utils/vein-restart'
 
 const vein = vi.hoisted(() => ({
   isConnected: null as unknown as { value: boolean },
@@ -24,6 +25,7 @@ describe('BpBluetoothSettings', () => {
     vein.setOmronBp.mockResolvedValue(undefined)
     vein.startPairing.mockResolvedValue(undefined)
     vein.restart.mockResolvedValue(undefined)
+    veinRestartReload.run = vi.fn()
   })
 
   it('いまの設定を出し、同じ値のボタンは押せない。分からなければそう出す', async () => {
@@ -50,7 +52,7 @@ describe('BpBluetoothSettings', () => {
     await flushPromises()
     expect(vein.restart).toHaveBeenCalledTimes(1)
     expect(find(w, 'bp-ble-restart').classes()).not.toContain('bg-amber-500')
-    expect(find(w, 'bp-ble-message').text()).toContain('再起動しました')
+    expect(find(w, 'bp-ble-message').text()).toContain('読み込み直します')
   })
 
   it('「使わない」も書ける。失敗は理由を出す', async () => {
