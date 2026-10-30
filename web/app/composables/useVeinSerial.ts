@@ -33,7 +33,7 @@
  * **使うのは `useSerialOta` だけ**。
  */
 
-import { isThermoDiagLine } from '~/utils/thermo-diag'
+import { bleDiagJson, isBleDiagEvent } from '~/utils/ble-diag'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
@@ -209,13 +209,17 @@ function tapTiming(line: string): void {
 }
 
 /**
- * 体温計への接続の試行と結果 (`EVT THERMO_CONN` / `EVT THERMO_RX`) と体温計の状態の JSON を、
- * CoreS3 と同じく診断ログの置き場 (utils/serialDiagLog) に `dev <行>` で残す。置き場の `dev ` 行は
- * signaling の `/device-log` へも送られ (useDiagUpload)、体温が届かなかった回を後から追える。
- * 測定値の行 (`temperature`) は利用者の情報なので入れない
+ * 体温計・血圧計の各段 (`EVT THERMO_*` / `EVT OMRON_*` 等) と状態の JSON を、CoreS3 と同じく
+ * 診断ログの置き場 (utils/serialDiagLog) に `dev <行>` で残す。置き場の `dev ` 行は signaling の
+ * `/device-log` へも送られ (useDiagUpload)、届かなかった回・遅かった回を後から追える。
+ * 測定値の行は値を落として type だけ残す (判定は utils/ble-diag)
  */
 function tapDiag(line: string): void {
-  if (line.startsWith('EVT THERMO') || (line.startsWith('{') && isThermoDiagLine(line))) appendDiag(`dev ${line}`)
+  if (isBleDiagEvent(line)) appendDiag(`dev ${line}`)
+  else if (line.startsWith('{')) {
+    const diag = bleDiagJson(line)
+    if (diag) appendDiag(`dev ${diag}`)
+  }
 }
 
 export function useVeinSerial() {

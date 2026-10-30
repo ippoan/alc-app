@@ -397,20 +397,28 @@ describe('useVeinSerial', () => {
       ])
     })
 
-    it('体温計の EVT と状態の JSON を診断ログの置き場に `dev ` で残す (体温の値と他の行は残さない)', async () => {
+    it('体温計・血圧計の EVT と状態の JSON を診断ログの置き場に `dev ` で残す (値は落として type だけ・他の行は残さない)', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
       const { readDiag } = await import('~/utils/serialDiagLog')
       localStorage.removeItem('alc_serial_diag')
 
-      dev.emit('EVT THERMO_CONN try\nEVT OMRON CONNECTING\nEVT THERMO_RX err\n')
-      dev.emit('{"type":"connected","device":"thermometer"}\n{"type":"temperature","value":36.5}\n{"type":"connected","device":"blood_pressure"}\n')
+      dev.emit('EVT THERMO_CONN try\nEVT NFC_READY\nEVT THERMO_RX err\n')
+      dev.emit('{"type":"connected","device":"thermometer"}\n{"type":"temperature","value":36.5,"unit":"celsius"}\n')
+      dev.emit('{"type":"found","device":"blood_pressure"}\nEVT OMRON_ENC ok retry=0\nEVT OMRON_SUB n=1\n')
+      dev.emit('{"type":"blood_pressure","systolic":125,"diastolic":77,"pulse":69,"unit":"mmHg"}\nEVT OMRON_END by=peer n=1\n')
       await vi.advanceTimersByTimeAsync(0)
 
       expect(readDiag().map(l => l.replace(/^\S+ /, ''))).toEqual([
         'dev EVT THERMO_CONN try',
         'dev EVT THERMO_RX err',
         'dev {"type":"connected","device":"thermometer"}',
+        'dev {"type":"temperature"}',
+        'dev {"type":"found","device":"blood_pressure"}',
+        'dev EVT OMRON_ENC ok retry=0',
+        'dev EVT OMRON_SUB n=1',
+        'dev {"type":"blood_pressure"}',
+        'dev EVT OMRON_END by=peer n=1',
       ])
     })
 

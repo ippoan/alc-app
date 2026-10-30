@@ -331,6 +331,9 @@ describe('useCoreS3Serial', () => {
       'EVT OTA NG reason=hash',
       'EVT THERMO_CONN try',
       'EVT THERMO_RX none',
+      'EVT OMRON_ENC ok retry=0',
+      'EVT BP_BOND saved',
+      'EVT BLE_SCAN_ERR rc=3',
     ])('許可リストの行 (%s) は `dev <行>` で残し、配送も続ける', async (line) => {
       const dev = createMockPort()
       await connectWithJson(dev)
@@ -379,15 +382,26 @@ describe('useCoreS3Serial', () => {
     })
 
     it.each([
-      // 測定値は利用者の情報なので残さない
-      '{"type":"temperature","value":36.5,"unit":"celsius"}',
-      '{"type":"found","device":"blood_pressure"}',
-      '{"type":"connected","device":"blood_pressure"}',
-      '{"type":"error","message":"blood_pressure: connection failed"}',
+      ['{"type":"found","device":"blood_pressure"}', '{"type":"found","device":"blood_pressure"}'],
+      ['{"type":"error","message":"blood_pressure: connection failed"}', '{"type":"error","message":"blood_pressure: connection failed"}'],
+      // 測定値は利用者の情報なので値を落とし、届いた時刻だけ残す
+      ['{"type":"temperature","value":36.5,"unit":"celsius"}', '{"type":"temperature"}'],
+      ['{"type":"blood_pressure","systolic":125,"diastolic":77,"pulse":69,"unit":"mmHg"}', '{"type":"blood_pressure"}'],
+    ])('血圧計の状態と測定値の JSON (%s) も残す (測定値は type だけ)', async (line, kept) => {
+      const dev = createMockPort()
+      await connectWithJson(dev)
+
+      dev.emit(`${line}\n`)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect((await diag()).filter(l => l.startsWith('dev '))).toEqual([expect.stringContaining(`dev ${kept}`)])
+    })
+
+    it.each([
       '{"type":"error"}',
       '{"type":"reset","message":"Scan restarted"}',
       '{"type":"found"',
-    ])('体温計の状態でない JSON (%s) は残さない', async (line) => {
+    ])('BLE 機器の状態でない JSON (%s) は残さない', async (line) => {
       const dev = createMockPort()
       await connectWithJson(dev)
 

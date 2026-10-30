@@ -53,7 +53,7 @@ import { writeLine } from '~/composables/useSerialArbiter'
 import { findDeviceLine } from '~/utils/device-line'
 import type { DeviceLine } from '~/utils/device-line'
 import { appendDiag, readDiag } from '~/utils/serialDiagLog'
-import { isThermoDiagLine } from '~/utils/thermo-diag'
+import { BLE_DIAG_EVT_PREFIXES, bleDiagJson } from '~/utils/ble-diag'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
 
 /** arbiter に登録する名前 */
@@ -102,9 +102,8 @@ const DIAG_EVENT_PREFIXES = [
   'EVT ALARM_RESTORED',
   'EVT OTA OK',
   'EVT OTA NG',
-  // 体温計への接続の試行と結果 (ファームの hub-ble。体温が届かなかった回の切り分け用)
-  'EVT THERMO_CONN',
-  'EVT THERMO_RX',
+  // 体温計・血圧計の各段 (ファームの hub-ble。届かなかった回・遅かった回の切り分け用)
+  ...BLE_DIAG_EVT_PREFIXES,
 ]
 
 /** 行の素性。機種識別 (`DEVICE <kind>`) は arbiter が行うので、ここはメッセージの
@@ -226,7 +225,8 @@ export function useCoreS3Serial() {
   function handleLine(line: string): void {
     const kind = classify(line)
     if (kind === 'json') {
-      if (isThermoDiagLine(line)) appendDiag(`dev ${line}`)
+      const diag = bleDiagJson(line)
+      if (diag) appendDiag(`dev ${diag}`)
       lineDispatch.dispatchJson(line)
     }
     else if (kind === 'event') {
