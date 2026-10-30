@@ -151,6 +151,7 @@
  */
 
 import { isPortBusy, requestWhenFree } from '~/utils/serial-request-when-free'
+import { reloadPage } from '~/utils/page-reload'
 import { parseDeviceLine } from '~/utils/device-line'
 import { FIRMWARE_TARGETS } from '~/utils/firmware-targets'
 import type { FirmwareTarget } from '~/utils/firmware-targets'
@@ -237,6 +238,15 @@ const EVT_OTA_SERIAL_PENDING = 'OTA_SERIAL_PENDING'
  *   配布ページから 1 回書き直せば、以後は画面から更新できる
  * - `failed` = 失敗の幕 (「更新できませんでした」) が出た回。**幕が出ないまま終わった失敗は `failed` にしない**
  */
+/**
+ * 書き込みが確定まで済んだ後のページの読み込み直し。`delayMs` は完了の幕を見せる間。
+ * 試験は `run` を差し替える (jsdom は `location.reload` を持たない)
+ */
+export const otaReload = {
+  delayMs: 3_000,
+  run: reloadPage,
+}
+
 export type SerialOtaResult = 'updated' | 'up_to_date' | 'busy' | 'skipped' | 'unsupported' | 'failed'
 
 /** CoreS3 の更新に要る引数 (Vein Station は渡さない) */
@@ -580,6 +590,15 @@ export function useSerialOta() {
    * 預かりの動きは変えない。合図の受け (`enqueue` / `runQueued` の呼び手) は捨ててよい。
    */
   async function run(target: string, opts: SerialOtaRunOptions = {}): Promise<SerialOtaResult> {
+    const result = await runOnce(target, opts)
+    // 書き込んで確定まで済んだら、少し置いてページを読み込み直す。機体は再起動したのに画面から見て
+    // USB の口が切れないことがあり (冒頭 doc)、つないだときの準備 (端末の鍵・照合データ・血圧計の
+    // 設定) がやり直されず、再読み込みするまで調子が悪いままだった (2026-10-30)
+    if (result === 'updated') setTimeout(() => otaReload.run(), otaReload.delayMs)
+    return result
+  }
+
+  async function runOnce(target: string, opts: SerialOtaRunOptions): Promise<SerialOtaResult> {
     const entry = runnableTarget(target)
     if (!entry) return 'skipped'
     if (running) return 'busy'

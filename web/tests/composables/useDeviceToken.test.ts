@@ -1975,6 +1975,35 @@ describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
     expect(lastFailureStage.value).toBeNull()
   })
 
+  it('★ 機体が署名に返事をしなかった回 (時間切れ) は 5 秒だけ抑止し、その後に取り直す', async () => {
+    vi.useFakeTimers()
+    try {
+      veinMock.isConnected.value = true
+      signAlarmDeviceNonceMock
+        .mockRejectedValueOnce(new Error('request(timecard): timeout waiting for "AUTH SIG "'))
+        .mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+      stubFetch()
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt, lastFailureStage, failureBackoffUntil } = useDeviceToken()
+
+      const t0 = Date.now()
+      expect(await getDeviceJwt()).toBeNull()
+      expect(lastFailureStage.value).toBe('vein-sign')
+      expect(failureBackoffUntil.value).toBe(t0 + 5_000)
+
+      // 抑止中は試さない
+      expect(await getDeviceJwt()).toBeNull()
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(5_000)
+      expect(await getDeviceJwt()).toBe('vein-jwt')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('ファームの書き込み中 (錠) で断られた回も抑止せず、錠が外れた次の呼び出しで取り直す', async () => {
     const { OTA_LOCKED_MESSAGE } = await import('~/composables/useCoreS3Serial')
     veinMock.isConnected.value = true
