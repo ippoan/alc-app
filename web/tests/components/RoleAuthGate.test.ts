@@ -188,6 +188,15 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     employee.value = { id: 'emp-test-5', name: 'テスト四郎', role: ['manager'], face_approval_status: 'approved' }
   })
 
+  it('指静脈の照合データと照会は、運行管理者の入口は席の鍵、システム管理者は既定の鍵で行う', async () => {
+    const manager = await mountGate('manager')
+    expect(veinOpts!.scope).toBe('manager-device')
+    manager.unmount()
+    const admin = await mountGate('admin')
+    expect(veinOpts!.scope).toBe('default')
+    admin.unmount()
+  })
+
   it('運行管理者の入口は社員番号の手入力を出さない (切り替えのリンクも無い)', async () => {
     const wrapper = await mountGate('manager')
     expect(wrapper.find('input[type="text"]').exists()).toBe(false)

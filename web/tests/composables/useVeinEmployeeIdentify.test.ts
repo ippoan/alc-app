@@ -80,6 +80,14 @@ describe('useVeinEmployeeIdentify', () => {
     app.unmount()
   })
 
+  it('鍵の種類を渡すと、同期と当たった人の照会をその鍵で行う', async () => {
+    const { api, app } = setup({ scope: 'manager-device' })
+    expect(ident.syncVeinTemplates).toHaveBeenCalledWith({ module: vein, scope: 'manager-device' })
+    await api.identify()
+    expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, 'manager-device')
+    app.unmount()
+  })
+
   it('つながったときだけ、古ければ同期し直す', async () => {
     connected.value = false
     const { app } = setup()
@@ -99,7 +107,7 @@ describe('useVeinEmployeeIdentify', () => {
     await api.identify()
     expect(opts.onStart).toHaveBeenCalledTimes(1)
     expect(vein.say).toHaveBeenCalledWith('PLACE')
-    expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12)
+    expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, undefined)
     expect(opts.onEmployee).toHaveBeenCalledWith(EMP)
     expect(api.again.value).toBe(true)
     expect(api.error.value).toBeNull()

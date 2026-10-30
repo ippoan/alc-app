@@ -21,7 +21,7 @@
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
 import { getEmployeeById, getEmployees, getVeinModuleTemplates } from '~/utils/api'
-import type { ApiVeinModuleRecord } from '~/utils/api'
+import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
@@ -70,19 +70,20 @@ function messageOf(e: unknown): string {
 /**
  * モジュールが返した ID (`VEIN IDENTIFY`、不一致は null) から乗務員を引く。
  * 対応表に無い ID は不一致、承認待ちの ID は `pending` (本人確認にはしない)。社員の情報はオンラインは
- * `GET /api/employees/{id}`、ネットワークで失敗したら `getEmployees()` (Service Worker のキャッシュ) から引く
+ * `GET /api/employees/{id}`、ネットワークで失敗したら `getEmployees()` (Service Worker のキャッシュ) から引く。
+ * `scope` はどの鍵で引くか (`syncVeinTemplates` と同じ)
  */
-export async function identifyVeinModuleEmployee(moduleId: number | null): Promise<VeinIdentifyOutcome> {
+export async function identifyVeinModuleEmployee(moduleId: number | null, scope: RequestTokenScope = 'default'): Promise<VeinIdentifyOutcome> {
   if (moduleId === null) return { kind: 'miss' }
   try {
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === moduleId)
     if (!entry) return { kind: 'miss' }
     if (!entry.approved) {
       // 名前は飾り (「○○さんは未承認」)。引けなくても未承認であることは伝える
-      const pending = await findEmployee(entry.employeeId).catch(() => undefined)
+      const pending = await findEmployee(entry.employeeId, scope).catch(() => undefined)
       return { kind: 'pending', employeeId: entry.employeeId, name: pending?.name ?? null }
     }
-    const employee = await findEmployee(entry.employeeId)
+    const employee = await findEmployee(entry.employeeId, scope)
     if (!employee) {
       return { kind: 'error', message: '指静脈は一致しましたが、乗務員の情報が手元にありません。NFC か社員番号で進んでください' }
     }
@@ -94,13 +95,13 @@ export async function identifyVeinModuleEmployee(moduleId: number | null): Promi
 }
 
 /** 社員を引く。オンラインは `GET /api/employees/{id}`、ネットワークの失敗は `getEmployees()` (キャッシュ) から */
-async function findEmployee(employeeId: string): Promise<ApiEmployee | undefined> {
+async function findEmployee(employeeId: string, scope: RequestTokenScope): Promise<ApiEmployee | undefined> {
   try {
-    return await getEmployeeById(employeeId)
+    return await getEmployeeById(employeeId, scope)
   }
   catch (e) {
     if (!(e instanceof TypeError)) throw e
-    return (await getEmployees()).find(emp => emp.id === employeeId)
+    return (await getEmployees(scope)).find(emp => emp.id === employeeId)
   }
 }
 
@@ -149,14 +150,14 @@ let moduleSyncing = false
  * 1 人ずつ書く・消す。1 人の失敗はその人を飛ばして続ける (次の同期で取り直す)。**投げない**
  * (今の `syncVeinTemplates` と同じ流儀)。最後まで回ったら true
  */
-export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs?: number } = {}): Promise<boolean> {
+export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs?: number; scope?: RequestTokenScope } = {}): Promise<boolean> {
   if (!port.isConnected.value || moduleSyncing) return false
   if (opts.ifOlderThanMs !== undefined && lastModuleSyncedAt !== null && Date.now() - lastModuleSyncedAt < opts.ifOlderThanMs) {
     return false
   }
   moduleSyncing = true
   try {
-    const { templates } = await getVeinModuleTemplates()
+    const { templates } = await getVeinModuleTemplates(opts.scope)
     const entries = new Map((await loadVeinModuleEntries()).map(e => [e.employeeId, e]))
     const listed = new Set(templates.map(t => t.employee_id))
 

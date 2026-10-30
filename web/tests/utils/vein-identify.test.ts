@@ -207,4 +207,12 @@ describe('syncVeinTemplates — 端末のモジュール (Refs ippoan/alc-app#43
     expect(await mod.syncVeinTemplates({ ifOlderThanMs: 60_000, module: port })).toBe(false)
     expect(veinModule.syncVeinModule).toHaveBeenCalledWith(port, { ifOlderThanMs: 60_000 })
   })
+
+  it('鍵の種類を渡すと、写しもモジュールもその鍵で取る', async () => {
+    api.getVeinTemplates.mockResolvedValue({ logic_version: '0.1.1', templates: [] })
+    const port = { isConnected: { value: true } } as never
+    await mod.syncVeinTemplates({ module: port, scope: 'manager-device' })
+    expect(api.getVeinTemplates).toHaveBeenLastCalledWith('manager-device')
+    expect(veinModule.syncVeinModule).toHaveBeenLastCalledWith(port, { ifOlderThanMs: undefined, scope: 'manager-device' })
+  })
 })

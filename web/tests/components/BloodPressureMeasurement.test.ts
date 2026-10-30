@@ -1010,7 +1010,7 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       await veinButton(wrapper).trigger('click')
       await flush(wrapper)
       expect(vein.identify).toHaveBeenCalledTimes(1)
-      expect(veinModule.identifyVeinModuleEmployee).toHaveBeenCalledWith(12)
+      expect(veinModule.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, undefined)
       expect(vein.capture).not.toHaveBeenCalled()
       expect(veinIdentify.identifyVeinEmployee).not.toHaveBeenCalled()
       expect(wrapper.findComponent(FaceAuthStub).exists()).toBe(false)
