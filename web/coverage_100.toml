@@ -163,6 +163,10 @@ path = "app/composables/useVeinSerial.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useVeinEmployeeIdentify.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useUsbHub.ts"
 branches = true
 

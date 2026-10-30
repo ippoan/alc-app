@@ -15,10 +15,11 @@ const employee = ref<{ id: string, name: string, role: string[], face_approval_s
   face_approval_status: 'none',
 })
 const getEmployeeByCodeMock = vi.fn(async () => employee.value)
+const getEmployeeByNfcIdMock = vi.fn(async () => employee.value)
 const updateDeviceLastLoginMock = vi.fn(async () => {})
 
 vi.mock('~/utils/api', () => ({
-  getEmployeeByNfcId: vi.fn(async () => employee.value),
+  getEmployeeByNfcId: (...args: unknown[]) => getEmployeeByNfcIdMock(...args as []),
   getEmployeeByCode: (...args: unknown[]) => getEmployeeByCodeMock(...args as []),
   getEmployeeById: vi.fn(async () => { throw new Error('not registered') }),
   updateDeviceLastLogin: (...args: unknown[]) => updateDeviceLastLoginMock(...args as []),
@@ -49,31 +50,74 @@ mockNuxtImport('useFingerprint', () => () => ({
   requestFingerprint: vi.fn(),
 }))
 
-/** 社員番号を入れて「次へ」を押す (step 'nfc' は既定で手動入力) */
+// 指静脈の照合 (手順は useVeinEmployeeIdentify で共通)。入口が渡した設定を控え、特定できた人を渡すのはテストが行う
+type VeinOpts = Parameters<typeof import('~/composables/useVeinEmployeeIdentify').useVeinEmployeeIdentify>[0]
+let veinOpts: VeinOpts | null = null
+const veinState = {
+  ready: ref(false),
+  busy: ref(false),
+  again: ref(false),
+  error: ref<string | null>(null),
+}
+const veinIdentifyMock = vi.fn(async () => {})
+mockNuxtImport('useVeinEmployeeIdentify', () => (opts: VeinOpts) => {
+  veinOpts = opts
+  return { ...veinState, identify: veinIdentifyMock, sync: vi.fn() }
+})
+
+// NFC の読み取りは部品を差し替え、`read` を流す
+const NfcStatusStub = { name: 'NfcStatus', template: '<div data-testid="nfc-status" />', emits: ['read'] }
+const stubs = { NfcStatus: NfcStatusStub }
+
+async function settle(wrapper: Awaited<ReturnType<typeof mountSuspended>>) {
+  await new Promise(resolve => setTimeout(resolve, 0))
+  await wrapper.vm.$nextTick()
+}
+
+/** 社員番号を入れて「次へ」を押す (システム管理者の入口だけ。step 'nfc' は既定で手動入力) */
 async function submitCode(wrapper: Awaited<ReturnType<typeof mountSuspended>>, code: string) {
   await wrapper.find('input[type="text"]').setValue(code)
   const btn = wrapper.findAll('button').find(b => b.text() === '次へ')
   await btn!.trigger('click')
-  await new Promise(resolve => setTimeout(resolve, 0))
-  await wrapper.vm.$nextTick()
+  await settle(wrapper)
 }
+
+/** NFC でカードを読んだことにする */
+async function readNfc(wrapper: Awaited<ReturnType<typeof mountSuspended>>, nfcId: string) {
+  wrapper.findComponent(NfcStatusStub).vm.$emit('read', nfcId)
+  await settle(wrapper)
+}
+
+function mountGate(requiredRole: 'manager' | 'admin') {
+  return mountSuspended(RoleAuthGate, { props: { requiredRole }, global: { stubs } })
+}
+
+beforeEach(() => {
+  veinOpts = null
+  veinState.ready.value = false
+  veinState.busy.value = false
+  veinState.error.value = null
+  veinIdentifyMock.mockClear()
+  getEmployeeByCodeMock.mockClear()
+  getEmployeeByNfcIdMock.mockClear()
+})
 
 const AUTH_FAILED = '端末の鍵が取れませんでした (テスト用の文言)'
 
 describe('RoleAuthGate — 乗務員の照会が失敗したとき (Refs #436)', () => {
   it('席の鍵が取れなかった失敗は「見つかりません」にせず、その文言をそのまま出す', async () => {
-    getEmployeeByCodeMock.mockRejectedValueOnce(new Error(AUTH_FAILED))
-    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
-    await submitCode(wrapper, '0001')
+    getEmployeeByNfcIdMock.mockRejectedValueOnce(new Error(AUTH_FAILED))
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0001')
     expect(wrapper.text()).toContain(AUTH_FAILED)
     expect(wrapper.text()).not.toContain('見つかりません')
   })
 
-  it('404 は「見つかりません」', async () => {
-    getEmployeeByCodeMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (404): x'), { status: 404 }))
-    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
-    await submitCode(wrapper, '0001')
-    expect(wrapper.text()).toContain('見つかりません')
+  it('404 は「登録されていません」(NFC の文言)', async () => {
+    getEmployeeByNfcIdMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (404): x'), { status: 404 }))
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0001')
+    expect(wrapper.text()).toContain('乗務員に登録されていません')
   })
 })
 
@@ -85,8 +129,8 @@ describe('RoleAuthGate — 管理者の入口は顔認証が必須 (Refs ippoan/
   })
 
   it('顔が未登録でも管理者はスキップできない', async () => {
-    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
-    await submitCode(wrapper, '0001')
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0001')
 
     // 顔認証の段へ進まず、スキップの口も出さない
     expect(wrapper.text()).not.toContain('スキップ')
@@ -104,8 +148,8 @@ describe('RoleAuthGate — 管理者の入口は顔認証が必須 (Refs ippoan/
 
   it('face_approval_status が未設定でも管理者はスキップできない', async () => {
     employee.value = { id: 'emp-test-2', name: 'テスト花子', role: ['manager'] }
-    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
-    await submitCode(wrapper, '0002')
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0002')
 
     expect(wrapper.text()).toContain('顔データが未登録です')
     expect(wrapper.text()).not.toContain('スキップ')
@@ -116,8 +160,8 @@ describe('RoleAuthGate — 管理者の入口は顔認証が必須 (Refs ippoan/
 
   it('却下・審査中は従来どおり弾く (スキップの迂回路を作らない)', async () => {
     employee.value = { id: 'emp-test-3', name: 'テスト次郎', role: ['manager'], face_approval_status: 'rejected' }
-    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
-    await submitCode(wrapper, '0003')
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0003')
 
     expect(wrapper.text()).toContain('却下')
     expect(wrapper.text()).not.toContain('スキップ')
@@ -128,12 +172,108 @@ describe('RoleAuthGate — 管理者の入口は顔認証が必須 (Refs ippoan/
 
   it('承認済みなら従来どおり顔認証の段へ進む', async () => {
     employee.value = { id: 'emp-test-4', name: 'テスト三郎', role: ['manager'], face_approval_status: 'approved' }
-    const wrapper = await mountSuspended(RoleAuthGate, { props: { requiredRole: 'manager' as const } })
-    await submitCode(wrapper, '0004')
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0004')
 
     expect(faceSyncMock).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
 
+    wrapper.unmount()
+  })
+})
+
+describe('RoleAuthGate — 運行管理者は社員番号を打てない・指静脈で特定できる', () => {
+  beforeEach(() => {
+    faceSyncMock.mockClear()
+    employee.value = { id: 'emp-test-5', name: 'テスト四郎', role: ['manager'], face_approval_status: 'approved' }
+  })
+
+  it('運行管理者の入口は社員番号の手入力を出さない (切り替えのリンクも無い)', async () => {
+    const wrapper = await mountGate('manager')
+    expect(wrapper.find('input[type="text"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('手動でIDを入力する')
+    expect(wrapper.find('[data-testid="nfc-status"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('NFC か指静脈 + 顔認証が必要です')
+    wrapper.unmount()
+  })
+
+  it('システム管理者の入口は今までどおり社員番号で進める', async () => {
+    employee.value = { ...employee.value, role: ['admin'] }
+    const wrapper = await mountGate('admin')
+    expect(wrapper.text()).toContain('ID + 顔認証が必要です')
+    await submitCode(wrapper, '0005')
+    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('0005')
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('Vein が繋がっていなければ指静脈のボタンを出さず、繋がっていれば出して押すと照合する', async () => {
+    const wrapper = await mountGate('manager')
+    expect(wrapper.find('[data-testid="vein-identify"]').exists()).toBe(false)
+
+    veinState.ready.value = true
+    await wrapper.vm.$nextTick()
+    const button = wrapper.find('[data-testid="vein-identify"]')
+    expect(button.text()).toBe('指静脈で本人確認')
+    await button.trigger('click')
+    expect(veinIdentifyMock).toHaveBeenCalledTimes(1)
+
+    // 読み取り中・撮り直し・理由の表示
+    veinState.busy.value = true
+    veinState.again.value = true
+    veinState.error.value = '一致しません (テスト)'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="vein-identify"]').text()).toBe('もう一度置いてください…')
+    expect(wrapper.find('[data-testid="vein-identify"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('一致しません (テスト)')
+    veinState.again.value = false
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="vein-identify"]').text()).toBe('指を置いてください…')
+    wrapper.unmount()
+  })
+
+  it('指静脈で特定した人は NFC と同じく顔認証へ進む (顔認証は省かない)', async () => {
+    const wrapper = await mountGate('manager')
+    const failure = await veinOpts!.onEmployee(employee.value as never)
+    await settle(wrapper)
+    expect(failure).toBeNull()
+    expect(faceSyncMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('指静脈で特定した人に権限が無い・顔が未登録なら、理由を返して顔認証へ進まない', async () => {
+    const wrapper = await mountGate('manager')
+    employee.value = { ...employee.value, role: ['driver'] }
+    expect(await veinOpts!.onEmployee(employee.value as never)).toContain('運行管理者の権限がありません')
+    employee.value = { ...employee.value, role: ['manager'], face_approval_status: 'none' }
+    expect(await veinOpts!.onEmployee(employee.value as never)).toContain('顔データを登録してください')
+    await settle(wrapper)
+    expect(faceSyncMock).not.toHaveBeenCalled()
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('指静脈の照合を始めるときは前の理由を消し、待機中 (NFC の段で照会も同期もしていない) だけ指の合図を受ける', async () => {
+    const wrapper = await mountGate('manager')
+    expect(veinOpts!.isIdle()).toBe(true)
+    getEmployeeByNfcIdMock.mockRejectedValueOnce(new Error(AUTH_FAILED))
+    await readNfc(wrapper, '0006')
+    expect(wrapper.text()).toContain(AUTH_FAILED)
+    veinOpts!.onStart!()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).not.toContain(AUTH_FAILED)
+
+    veinState.busy.value = true
+    expect(veinOpts!.isIdle()).toBe(false)
+    veinState.busy.value = false
+    await veinOpts!.onEmployee(employee.value as never)
+    await settle(wrapper)
+    // 顔認証の段では受けない
+    expect(veinOpts!.isIdle()).toBe(false)
+    expect(veinOpts!.missMessage).toContain('NFC')
+    expect(veinOpts!.pendingMessage(null)).toContain('この人さん')
+    expect(veinOpts!.pendingMessage('テスト')).toContain('テストさん')
     wrapper.unmount()
   })
 })
