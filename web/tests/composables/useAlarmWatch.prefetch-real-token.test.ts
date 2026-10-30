@@ -16,6 +16,14 @@ mockNuxtImport('useAlarmDevice', () => () => ({
   disconnect: async () => {},
   request: vi.fn(),
 }))
+// Vein Base (席の鍵の機体のもう 1 つ)。テストごとに作り直す接続の ref は veinConnected
+let veinConnected = ref(false)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinConnected),
+  connect: async () => false,
+  request: vi.fn(),
+}))
+
 mockNuxtImport('useActiveRooms', () => () => ({ start: () => {}, stop: () => {} }))
 mockNuxtImport('useAlarmDeviceSetting', () => () => ({ enabled: ref(true), setEnabled: vi.fn() }))
 
@@ -24,6 +32,7 @@ vi.mock('~/utils/alarm-sign', () => ({ signAlarmDeviceNonce: signAlarmDeviceNonc
 
 beforeEach(() => {
   isConnected = ref(false)
+  veinConnected = ref(false)
   vi.resetModules()
   signAlarmDeviceNonceMock.mockReset()
   signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pk', sig: 'sig' })

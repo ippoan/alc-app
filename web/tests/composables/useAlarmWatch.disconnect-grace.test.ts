@@ -16,6 +16,14 @@ mockNuxtImport('useAlarmDevice', () => () => ({
   disconnect: async () => {},
 }))
 
+// Vein Base (席の鍵の機体のもう 1 つ)。テストごとに作り直す接続の ref は veinConnected
+let veinConnected = ref(false)
+mockNuxtImport('useVeinSerial', () => () => ({
+  isConnected: readonly(veinConnected),
+  connect: async () => false,
+  request: vi.fn(),
+}))
+
 mockNuxtImport('useActiveRooms', () => () => ({ start: () => {}, stop: () => {} }))
 
 const enabled = ref<boolean | null>(true)
@@ -59,6 +67,7 @@ describe('useAlarmWatch — 切断の猶予', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     vi.setSystemTime(T0)
     isConnected = ref(false)
+    veinConnected = ref(false)
     enabled.value = true
     calls.length = 0
     vi.resetModules()
@@ -92,6 +101,29 @@ describe('useAlarmWatch — 切断の猶予', () => {
     expect(remainingSeconds.value).toBe(60)
     // 期限を入れるのは切れたときの 1 回だけ (1 秒ごとの処理はトークンに触らない)
     expect(calls).toEqual([`set(${T0 + 120_000})`])
+    app.unmount()
+  })
+
+  it('Vein Base の席: Vein Base が切れたら猶予を始める。VoiceS3R か Vein Base の片方が残っていれば始めない', async () => {
+    const [, app] = withSetup(() => useAlarmWatch())
+    veinConnected.value = true
+    await nextTick()
+    calls.length = 0
+
+    veinConnected.value = false
+    await nextTick()
+    expect(calls).toEqual([`set(${T0 + 120_000})`])
+    expect(remainingSeconds.value).toBe(120)
+
+    // 両方繋がっていて片方だけ切れたときは、席の鍵の機体が残っているので始めない
+    isConnected.value = true
+    veinConnected.value = true
+    await nextTick()
+    calls.length = 0
+    veinConnected.value = false
+    await nextTick()
+    expect(calls).toEqual([])
+    expect(remainingSeconds.value).toBeNull()
     app.unmount()
   })
 
