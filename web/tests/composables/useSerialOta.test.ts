@@ -244,6 +244,7 @@ describe('useSerialOta', () => {
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.resetModules()
     mod = await import('~/composables/useSerialOta')
+    mod.otaReload.run = vi.fn()
     ota = mod.useSerialOta()
   })
 
@@ -267,6 +268,19 @@ describe('useSerialOta', () => {
   const chunkWrites = (): string[] => dev.log.filter(l => l.startsWith('<'))
 
   // ---------- 成功 ----------
+
+  it('★ 確定まで済んだら、少し置いてページを読み込み直す (つないだときの準備をやり直すため)', async () => {
+    expect(await runToEnd()).toBe('updated')
+    await vi.advanceTimersByTimeAsync(mod.otaReload.delayMs)
+    expect(mod.otaReload.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('確定しなかった回は読み込み直さない', async () => {
+    dev.finalLine = 'OTA ERR verify'
+    expect(await runToEnd()).toBe('failed')
+    await vi.advanceTimersByTimeAsync(mod.otaReload.delayMs)
+    expect(mod.otaReload.run).not.toHaveBeenCalled()
+  })
 
   it('版が古ければ書き込み、再接続後に FLAVOR が一致したら確定する', async () => {
     const states: string[] = []
@@ -928,6 +942,7 @@ describe('useSerialOta (cores3)', () => {
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.resetModules()
     mod = await import('~/composables/useSerialOta')
+    mod.otaReload.run = vi.fn()
     ota = mod.useSerialOta()
   })
 

@@ -118,6 +118,14 @@ const DEFAULT_TTL_SECONDS = 3600
 const CORE_S3_DEFAULT_TTL_SECONDS = 900
 /** CoreS3 署名経路が失敗してから、これだけ試さない (ms)。再接続での解除は無い。 */
 const CORE_S3_BACKOFF_MS = 60_000
+/**
+ * 署名の返事が時間切れ (機体が返事をしなかった) の回だけは、これだけで取り直す (ms)。
+ * USB の OTA の直後は 1 回目の `AUTH SIGN` が 10 秒以上返らないことがあり、そこで 60 秒止めると
+ * 画面が「認証できない」のまま残った (2026-10-30 実機。6 秒後には同じ鍵で署名できていた)
+ */
+const SIGN_TIMEOUT_BACKOFF_MS = 5_000
+/** arbiter の request が時間切れで reject したときの文言 (`request(<name>): timeout waiting for "…"`) */
+const SIGN_TIMEOUT_MARK = 'timeout waiting for'
 /** lastFailureDetail に保持する理由の語の長さ上限 (#135 続報)。想定外の長い文字列で画面が壊れないように。 */
 const MAX_FAILURE_DETAIL_LEN = 40
 /**
@@ -595,8 +603,11 @@ export function useDeviceToken() {
       // 一時的 — 抑止しない (#436。更新の直後に署名が 60 秒止まらないように)。
       // `OTA_LOCKED_MESSAGE` は auto-import のまま使う (明示 import は useAlarmDevice を mock する試験の読み込み順を崩す)
       const busy = lastError.value.includes(SERIAL_BUSY_MARK) || lastError.value.includes(OTA_LOCKED_MESSAGE)
-      if (!busy) signer.backoffUntil.value = nowMs + CORE_S3_BACKOFF_MS
-      warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, busy ? 0 : CORE_S3_BACKOFF_MS / 1000)
+      // 署名の段で機体が返事をしなかった回は短く抑止する (上の SIGN_TIMEOUT_BACKOFF_MS)
+      const signTimeout = (stage === 'coreS3-sign' || stage === 'vein-sign') && lastError.value.includes(SIGN_TIMEOUT_MARK)
+      const backoffMs = busy ? 0 : signTimeout ? SIGN_TIMEOUT_BACKOFF_MS : CORE_S3_BACKOFF_MS
+      if (backoffMs > 0) signer.backoffUntil.value = nowMs + backoffMs
+      warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, backoffMs / 1000)
       return null
     }
   }
