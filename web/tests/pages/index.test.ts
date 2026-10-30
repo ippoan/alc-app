@@ -651,7 +651,7 @@ describe('pages/index — 測定台かどうかを端末の名乗りで決める
   //   1. `station` 無しの URL でも、名乗りで決着したら測定台の鍵を使う
   //   2. **未確定のあいだは入れない** (キオスクへ倒れない = 点呼 4 本を落とさない)
   //   3. CoreS3 キオスク (`other`) では入れない
-  //   4. `?station=bp` 付きの既存 URL は従来どおり起動時から測定台
+  //   4. `?station=bp` 付きの既存 URL は従来どおり起動時から測定台 (名乗りが other なら外す)
 
   let wrapper: VueWrapper | null = null
 
@@ -730,6 +730,19 @@ describe('pages/index — 測定台かどうかを端末の名乗りで決める
     expect(arbiterState.arbitratedDeviceKind.value).toBeNull()
     expect(setBpStationJwtGetterSpy).toHaveBeenCalledTimes(1)
     expect(bpStationToken.jwtCalls).toBeGreaterThan(0)
+  })
+
+  it('★ ?station=bp (「血圧測定」の PWA) でも、名乗りが Vein Station 等 (other) なら測定台の getter を外す', async () => {
+    // Vein Station だけ挿した PC で「血圧測定」の PWA を開くと、居ない ATOM S3 の鍵を求めて
+    // 保存が no-bp-station で落ち続けていた (2026-10-30 実測)。外せばその端末の鍵で送る
+    wrapper = await mountIndex('/?role=driver&tab=bp&station=bp')
+    expect(setBpStationJwtGetterSpy).toHaveBeenCalledTimes(1)
+
+    arbiterState.arbitratedDeviceKind.value = 'other'
+    await nextTick()
+
+    expect(setBpStationJwtGetterSpy).toHaveBeenCalledTimes(2)
+    expect(setBpStationJwtGetterSpy.mock.calls[1]![0]).toBeNull()
   })
 
   it('★ 名乗りで測定台になっても URL には station=bp を焼き付けない', async () => {

@@ -7,7 +7,7 @@
 // ここで固定するのは 3 つ:
 //   1. URL 無しでも、名乗りで決着すれば測定台
 //   2. **未確定 (null) では測定台にしない** — probe 前にキオスクを巻き込まない
-//   3. CoreS3 優先で other に倒された PC も測定台にしない
+//   3. CoreS3 優先で other に倒された PC も測定台にしない (`?station=bp` 付きでも)
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ref, readonly } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
@@ -60,11 +60,15 @@ describe('useBpStationMode — 測定台かどうかは URL と端末の名乗�
     expect(isBpStationUrl).toBe(true)
   })
 
-  it('?station=bp 付きなら、名乗りが other でも測定台のまま (URL を壊さない)', () => {
+  it('★ ?station=bp 付きでも、名乗りが other (Vein Station 等) なら測定台にしない (居ない ATOM S3 の鍵を待たない)', () => {
     query.value = { station: 'bp' }
-    arbitratedDeviceKind.value = 'other'
-    const { isBpStation } = useBpStationMode()
+    const { isBpStation, isBpStationUrl } = useBpStationMode()
     expect(isBpStation.value).toBe(true)
+
+    arbitratedDeviceKind.value = 'other'
+    expect(isBpStation.value).toBe(false)
+    // URL の印そのものは残す (URL 同期が station=bp を書き戻し続ける)
+    expect(isBpStationUrl).toBe(true)
   })
 
   it('★ isBpStationUrl は URL のぶんだけ — 名乗りでは true にならない (URL に印を焼き付けないため)', () => {

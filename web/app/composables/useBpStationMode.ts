@@ -23,6 +23,14 @@
  * `?station=bp` 付きの既存 URL とインストール済みの PWA を壊さないことが優先。
  * 名乗りを待たずに起動の時点で測定台として動けるので、既存端末の挙動は変わらない。
  *
+ * # URL の印より名乗りの `other` を優先する
+ *
+ * `?station=bp` で開いても、名乗ったのが測定台以外 (`other` = Vein Station・CoreS3 等の
+ * 運行者端末) なら測定台として扱わない。「血圧測定」の PWA を Vein Station だけ挿した PC で
+ * 開くと、居ない ATOM S3 の鍵を取りに行き続けて保存が `no-bp-station` で落ちていたため
+ * (2026-10-30 実測)。`other` に倒れたら `pages/index.vue` が測定台の getter を外し、
+ * 保存はその端末の鍵 (キオスクの経路) で送る。名乗りの前 (`null`) は従来どおり URL に従う。
+ *
  * # 未確定を測定台に倒さない
  *
  * `arbitratedDeviceKind` は 3 値で、決着前は `null`。この判定が true になるのは
@@ -59,6 +67,7 @@ export function useBpStationMode() {
     /** URL が測定台と言っているか (URL 同期が `station=bp` を書き戻すかの判断に使う) */
     isBpStationUrl,
     /** 測定台として扱うか (URL の印 ∪ 端末の名乗り) */
-    isBpStation: computed(() => isBpStationUrl || arbitratedDeviceKind.value === 'bp-station'),
+    isBpStation: computed(() => arbitratedDeviceKind.value === 'bp-station'
+      || (isBpStationUrl && arbitratedDeviceKind.value !== 'other')),
   }
 }

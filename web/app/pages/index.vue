@@ -80,8 +80,13 @@ function bpStationJwtGetter(): Promise<string | null> {
  * 「血圧を使うか」の唯一の材料で、それまで血圧測定の画面は `checking` (待ち) のまま
  * (`useBpUiEnabled`)。取りに行かないと永久に待ち続ける
  */
-watch(isBpStation, (station) => {
-  if (!station) return
+watch(isBpStation, (station, wasStation) => {
+  // 測定台でなくなった (`?station=bp` で開いたが名乗りは Vein Station 等) ら getter を外し、
+  // その端末の鍵で送る形に戻す。外さないと居ない ATOM S3 の鍵を求めて保存が落ち続ける
+  if (!station) {
+    if (wasStation) setBpStationJwtGetter(null)
+    return
+  }
   setBpStationJwtGetter(bpStationJwtGetter)
   void bpStationJwtGetter()
 }, { immediate: true })
