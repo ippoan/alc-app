@@ -193,7 +193,7 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     expect(wrapper.find('input[type="text"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('手動でIDを入力する')
     expect(wrapper.find('[data-testid="nfc-status"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('NFC か指静脈 + 顔認証が必要です')
+    expect(wrapper.text()).toContain('NFC + 顔認証、または指静脈が必要です')
     wrapper.unmount()
   })
 
@@ -232,25 +232,39 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     wrapper.unmount()
   })
 
-  it('指静脈で特定した人は NFC と同じく顔認証へ進む (顔認証は省かない)', async () => {
+  it('指静脈で特定した人は顔認証を挟まずに通す (顔が未登録でも通す。端末に運行管理者を控える)', async () => {
+    setManagerIdMock.mockClear()
+    updateDeviceLastLoginMock.mockClear()
+    employee.value = { ...employee.value, face_approval_status: 'none' }
     const wrapper = await mountGate('manager')
     const failure = await veinOpts!.onEmployee(employee.value as never)
     await settle(wrapper)
     expect(failure).toBeNull()
-    expect(faceSyncMock).toHaveBeenCalledTimes(1)
-    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
+    expect(faceSyncMock).not.toHaveBeenCalled()
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('テスト四郎 (運行管理者) としてログイン中')
+    expect(setManagerIdMock).toHaveBeenCalledWith('emp-test-5')
+    expect(updateDeviceLastLoginMock).toHaveBeenCalledWith('device-test-1', 'emp-test-5', 'テスト四郎', ['manager'])
     wrapper.unmount()
   })
 
-  it('指静脈で特定した人に権限が無い・顔が未登録なら、理由を返して顔認証へ進まない', async () => {
+  it('システム管理者を指静脈で通しても、運行管理者としては控えない', async () => {
+    setManagerIdMock.mockClear()
+    employee.value = { ...employee.value, role: ['admin'] }
+    const wrapper = await mountGate('admin')
+    expect(await veinOpts!.onEmployee(employee.value as never)).toBeNull()
+    await settle(wrapper)
+    expect(wrapper.text()).toContain('(システム管理者) としてログイン中')
+    expect(setManagerIdMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('指静脈で特定した人に権限が無ければ、理由を返して通さない', async () => {
     const wrapper = await mountGate('manager')
     employee.value = { ...employee.value, role: ['driver'] }
     expect(await veinOpts!.onEmployee(employee.value as never)).toContain('運行管理者の権限がありません')
-    employee.value = { ...employee.value, role: ['manager'], face_approval_status: 'none' }
-    expect(await veinOpts!.onEmployee(employee.value as never)).toContain('顔データを登録してください')
     await settle(wrapper)
-    expect(faceSyncMock).not.toHaveBeenCalled()
-    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('としてログイン中')
     wrapper.unmount()
   })
 
@@ -267,9 +281,8 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     veinState.busy.value = true
     expect(veinOpts!.isIdle()).toBe(false)
     veinState.busy.value = false
-    await veinOpts!.onEmployee(employee.value as never)
-    await settle(wrapper)
     // 顔認証の段では受けない
+    await readNfc(wrapper, '0007')
     expect(veinOpts!.isIdle()).toBe(false)
     expect(veinOpts!.missMessage).toContain('NFC')
     expect(veinOpts!.pendingMessage(null)).toContain('この人さん')

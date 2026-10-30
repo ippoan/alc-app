@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
  * 【セキュリティ要件】
- * - manager: NFC/指静脈 + 顔認証が必須。Google ログイン単独では通過不可。
+ * - manager: NFC + 顔認証、または指静脈。Google ログイン単独では通過不可。
  *   **社員番号の手入力は出さない** (番号を知っていれば誰でも顔認証の段まで進めるため)。
- *   指静脈は人を特定するだけで、顔認証は変わらず必須 (照合の手順は useVeinEmployeeIdentify で
- *   キオスク・血圧測定台と共通)
+ *   **指静脈で特定できたら顔認証は挟まない** — 指静脈が本人確認そのもの (血圧測定台と同じ扱い。
+ *   照合の手順は useVeinEmployeeIdentify でキオスク・血圧測定台と共通)。権限は変わらず見る
  *   **顔が未登録でもスキップは認めない** — 認めると、顔写真を一切出さないまま
  *   管理画面へ入れてしまう。乗務員の点呼 (TenkoKiosk) は未登録なら通すが、
  *   管理者のこの入口だけは通さない (Refs ippoan/alc-app-s3#135)。
@@ -80,7 +80,7 @@ const roleLabel: Record<string, string> = {
 }
 
 /**
- * 特定できた人 (NFC・社員番号・指静脈のどれでも) の権限と顔の登録を見て、顔認証へ進める。
+ * 特定できた人 (NFC・社員番号) の権限と顔の登録を見て、顔認証へ進める。
  * 進めなかったときは画面に出す理由を返す
  */
 async function beginFaceAuth(emp: { id: string; name: string; role: string[]; face_approval_status?: string }): Promise<string | null> {
@@ -119,11 +119,26 @@ async function onNfcRead(nfcId: string) {
   }
 }
 
-// 指静脈 (照合の手順はキオスク・血圧測定台と共通)。特定した後は NFC と同じく顔認証へ進む
+/**
+ * 指静脈で特定できた人を通す。指静脈が本人確認そのものなので顔認証は挟まない (顔の登録も見ない)。
+ * 権限が無ければ理由を返す
+ */
+function grantByVein(emp: { id: string; name: string; role: string[] }): string | null {
+  employeeId.value = emp.id
+  employeeName.value = emp.name
+  if (!hasRole(emp.role)) {
+    return `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
+  }
+  authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
+  grantAccess()
+  return null
+}
+
+// 指静脈 (照合の手順はキオスク・血圧測定台と共通)
 const vein = useVeinEmployeeIdentify({
   missMessage: '指静脈が一致する人が見つかりません。もう一度置くか、NFC で読み取ってください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
-  onEmployee: beginFaceAuth,
+  onEmployee: grantByVein,
   isIdle: () => step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value,
   onStart: () => {
     errorMessage.value = null
@@ -146,28 +161,34 @@ async function onManualSubmit() {
   }
 }
 
+/** 本人確認が済んだ (顔認証・指紋・指静脈) — 通して、運行管理者なら端末に控える */
+function grantAccess() {
+  authState.value = 'authenticated'
+  if (props.requiredRole === 'manager' && authenticatedEmployee.value) {
+    setManagerId(authenticatedEmployee.value.id)
+    // デバイス登録済みなら最終ログインを記録
+    if (deviceId.value) {
+      updateDeviceLastLogin(
+        deviceId.value,
+        authenticatedEmployee.value.id,
+        authenticatedEmployee.value.name,
+        authenticatedEmployee.value.role,
+      ).catch(() => {})
+    }
+  }
+}
+
 // 顔認証完了
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) {
     if (employeeId.value) authorizeEmployee(employeeId.value)
-    authState.value = 'authenticated'
-    if (props.requiredRole === 'manager' && authenticatedEmployee.value) {
-      setManagerId(authenticatedEmployee.value.id)
-      // デバイス登録済みなら最終ログインを記録
-      if (deviceId.value) {
-        updateDeviceLastLogin(
-          deviceId.value,
-          authenticatedEmployee.value.id,
-          authenticatedEmployee.value.name,
-          authenticatedEmployee.value.role,
-        ).catch(() => {})
-      }
-    }
+    grantAccess()
   } else {
     errorMessage.value = '顔認証に失敗しました。もう一度お試しください。'
     step.value = 'nfc'
   }
 }
+
 
 // 指紋認証 (Android Bridge)
 const {
@@ -230,7 +251,7 @@ function resetAuth() {
       <div class="bg-white rounded-2xl p-6 shadow-sm">
         <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ roleLabel[requiredRole] }}認証</h2>
         <p class="text-sm text-gray-500 mb-4">
-          {{ roleLabel[requiredRole] }}機能にアクセスするには、{{ allowManualInput ? 'ID' : 'NFC か指静脈' }} + 顔認証が必要です。
+          {{ roleLabel[requiredRole] }}機能にアクセスするには、{{ allowManualInput ? 'ID + 顔認証' : 'NFC + 顔認証、または指静脈' }}が必要です。
         </p>
 
         <!-- デバイスに保存された管理者情報 -->
@@ -286,7 +307,7 @@ function resetAuth() {
             </button>
           </div>
 
-          <!-- 指静脈 (Vein Station / Vein Base が繋がっている端末だけ)。特定した後は顔認証へ進む -->
+          <!-- 指静脈 (Vein Station / Vein Base が繋がっている端末だけ)。特定できたら顔認証を挟まず通す -->
           <div v-if="vein.ready.value" class="mt-4 pt-4 border-t border-gray-100">
             <button
               data-testid="vein-identify"
