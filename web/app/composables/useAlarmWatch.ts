@@ -42,8 +42,16 @@
  * VoiceS3R の代わりに Vein Base の鍵を運行管理者席として登録した席では、Vein Base が席の鍵を持つ
  * (署名を頼む相手は `useManagerDeviceToken` が選ぶ)。そのため見張りを始めたときに Vein Base も
  * arbiter に登録し、上の先取りと切断の猶予は「席の鍵の機体 (VoiceS3R か Vein Base) が 1 つでも
- * 繋がっているか」で動かす。Vein Base は警告を鳴らさないので、heartbeat と警告は VoiceS3R だけのまま。
+ * 繋がっているか」で動かす。
  * Vein のポートは指静脈・キオスクの鍵と共有なので、見張りをやめても手放さない (`useNfcReader` と同じ)。
+ *
+ * ## Vein Base を警告デバイスにする席
+ *
+ * VoiceS3R が繋がっていない席では、Vein Base が警告デバイスを兼ねる: VoiceS3R と同じ heartbeat
+ * (`useAlarmDevice().heartbeatLine`) を Vein Base へ送る (`useVeinSerial().alarm`)。機体は初回の
+ * `HB OK` で武装し、途切れたら自分で鳴る。VoiceS3R が繋がったら Vein Base へは `HB OFF` を送って
+ * 見張りを解く (送らずにやめると、途切れたとみなして鳴る)。見張りをやめたときは `HB OFF` を送らない —
+ * VoiceS3R の切断と同じく、設定を off にした席は鳴る (ManagerAlarmBar 冒頭の「止める (= デバイスが鳴る)」)。
  *
  * 猶予の 2 分が過ぎてから繋がり直すまでのあいだは `useSeatDisconnectGrace().expired` が true
  * (IT点呼 の受け画面が、開いている点呼を閉じて理由を出すのに読む)。設定を off にして自分で
@@ -172,6 +180,11 @@ export function useAlarmWatch(): void {
         startCountdown(deadlineMs)
       }
     }, { immediate: true }))
+    // VoiceS3R が無い席では Vein Base が警告デバイスを兼ねる (冒頭の「Vein Base を警告デバイスにする席」節)
+    scope.run(() => watch(() => alarm.isConnected.value, (voiceS3R) => {
+      if (voiceS3R) vein.alarm.stop(true)
+      else vein.alarm.start(alarm.heartbeatLine)
+    }, { immediate: true }))
     stopPrefetchWatch = () => scope.stop()
   }
 
@@ -185,6 +198,7 @@ export function useAlarmWatch(): void {
     stopCountdown()
     disconnectExpired.value = false
     seat.setDisconnectDeadline(Date.now())
+    vein.alarm.stop(false)
     void alarm.disconnect()
     // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
     rooms.stop()

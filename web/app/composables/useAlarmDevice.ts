@@ -373,13 +373,14 @@ export function useAlarmDevice() {
   }
 
   /**
-   * 意図した reload の直前に呼ぶ。握っている警告デバイスと CoreS3 の両方へ
-   * ` grace=45` 付きの heartbeat を送り、reload 中の沈黙で鳴らさないよう頼む。
+   * 意図した reload の直前に呼ぶ。握っている警告デバイスと CoreS3、警告デバイスを兼ねる
+   * Vein Base へ ` grace=45` 付きの heartbeat を送り、reload 中の沈黙で鳴らさないよう頼む。
    * 何も握っていなければ何もしない。await しない (reload を止めない)。
    */
   function notifyIntentionalReload(): void {
     sendGrace()
     useCoreS3Serial().sendGrace()
+    useVeinSerial().alarm.sendGrace()
   }
 
   /**
@@ -444,6 +445,8 @@ export function useAlarmDevice() {
     disconnect,
     requestPort,
     notifyIntentionalReload,
+    // 警告デバイスを兼ねる Vein Base へ送る heartbeat の 1 行 (useAlarmWatch が渡す。中身は VoiceS3R と同じ)
+    heartbeatLine,
     request,
     ota: { begin: otaBegin, end: otaEnd, request: otaRequest, rest: otaRest, onEvent: otaEvents.onEvent },
   }

@@ -31,12 +31,23 @@
  * `ota.request()`。useCoreS3Serial・useAlarmDevice の `ota` と同じ形、Refs ippoan/alc-app#436)。
  * 錠の間は `request` (鍵の署名)・`capture`・`say` を `OTA_LOCKED_MESSAGE` で断る。
  * **使うのは `useSerialOta` だけ**。
+ *
+ * ## 警告デバイスを兼ねる (運行管理者席の Vein Base)
+ *
+ * Atom VoiceS3R の無い運行管理者席では、Vein Base が警告デバイスを兼ねる (ファームは
+ * alc-app-s3 の `atoms3-timecard` の `vein` build。正本 `docs/console-protocol.md` §3)。
+ * `alarm.start(line)` のあいだ、預かったポートへ `line()` の heartbeat (`HB OK` …) を
+ * `HEARTBEAT_INTERVAL` ごとに書く (機体は返信しない)。ポートを失えば止め、握り直せば始め直す。
+ * 機体は初回の `HB OK` で武装し、途切れたら自分で鳴る。始める・止めるのは useAlarmWatch だけ。
+ * ファームの書き込み (錠) の前には `HB OK grace=<OTA_GRACE_SEC>` を 1 行書いて見張りを休ませ、
+ * 錠の間は送らない (useAlarmDevice の `ota.rest` と同じ理由)。
  */
 
 import { bleDiagJson, isBleDiagEvent } from '~/utils/ble-diag'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
-import { TIMECARD_DEVICE_KIND } from '~/composables/useSerialArbiter'
+import { TIMECARD_DEVICE_KIND, writeLine } from '~/composables/useSerialArbiter'
+import { HEARTBEAT_INTERVAL, OTA_GRACE_SEC, RELOAD_GRACE_SEC } from '~/composables/useAlarmDevice'
 import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { createLineDispatch } from '~/utils/serial-line-dispatch'
 import { devTiming } from '~/utils/dev-timing'
@@ -132,6 +143,30 @@ const PAIR_REPLY = 'OK PAIR'
  * イメージに混ざって検証で落ちる。掛かっている間に通るのは `ota.request` だけ
  */
 let otaLocked = false
+
+/** 預かったポートの書き口。heartbeat だけが直接書く (応答を待たないので arbiter を通さない) */
+let held: WritableStreamDefaultWriter<Uint8Array> | null = null
+/** 警告の heartbeat の 1 行を作る関数。`alarm.start` のあいだだけ入る */
+let alarmLine: (() => string) | null = null
+/** heartbeat の周期。送っていなければ null */
+let alarmTimer: ReturnType<typeof setInterval> | null = null
+
+/** heartbeat を 1 本書いてから周期で書く。止める理由 (未接続・錠・未開始) があれば何もしない */
+function startAlarmTimer(): void {
+  stopAlarmTimer()
+  const w = held
+  const line = alarmLine
+  if (!w || !line || otaLocked) return
+  void writeLine(w, line())
+  alarmTimer = setInterval(() => { void writeLine(w, line()) }, HEARTBEAT_INTERVAL)
+}
+
+function stopAlarmTimer(): void {
+  if (alarmTimer !== null) {
+    clearInterval(alarmTimer)
+    alarmTimer = null
+  }
+}
 
 /** claim を待っている connect() */
 const waiters = new Set<() => void>()
@@ -234,8 +269,9 @@ export function useVeinSerial() {
   // `{` でも始まらないので、dispatchLine の接頭辞で落ちて二重には配られない。
 
   const claimant: SerialClaimant = {
-    onOpen(port, _reader, _writer, lines) {
+    onOpen(port, _reader, writer, lines) {
       openPort = port
+      held = writer
       // 利用側が配られた行の cb から読めるように、配る前に入れる (useCoreS3Serial と同じ)
       deviceInfo.value = findDeviceLine(lines)
       isConnected.value = true
@@ -248,6 +284,8 @@ export function useVeinSerial() {
       for (const notify of [...waiters]) notify()
       // 鍵の署名は isConnected の watch から先に枠を取るので、こちらは空くまで待つ
       void queryOmronBp()
+      // 警告デバイスを兼ねる席なら heartbeat を始め直す
+      startAlarmTimer()
     },
 
     onLine(line) {
@@ -259,6 +297,8 @@ export function useVeinSerial() {
 
     onClose() {
       openPort = null
+      held = null
+      stopAlarmTimer()
       connectionEpoch++
       omronBp.value = null
       deviceInfo.value = null
@@ -552,14 +592,49 @@ export function useVeinSerial() {
 
   // --- ファームの書き込みだけが使う口 (Refs ippoan/alc-app-s3#279, ippoan/alc-app#436) ---
 
-  /** 錠を掛ける。以後 `otaEnd()` まで、機体へ届くのは `otaRequest` だけ */
+  /**
+   * 錠を掛ける。以後 `otaEnd()` まで、機体へ届くのは `otaRequest` だけ。
+   * 警告の heartbeat を送っていれば、`HB OK grace=<OTA_GRACE_SEC>` を 1 行書いて見張りを休ませてから止める
+   * (書き込みの間は heartbeat が届かず、休ませないと 10 秒で鳴る)
+   */
   function otaBegin(): void {
+    if (alarmTimer !== null && held) void writeLine(held, `HB OK grace=${OTA_GRACE_SEC}`)
+    stopAlarmTimer()
     otaLocked = true
   }
 
-  /** 錠を解く (掛かっていなくても害は無い。Vein Station には始め直す heartbeat が無い) */
+  /** 錠を解く (掛かっていなくても害は無い)。警告デバイスを兼ねる席なら heartbeat を始め直す */
   function otaEnd(): void {
     otaLocked = false
+    startAlarmTimer()
+  }
+
+  // --- 警告デバイスを兼ねる席の heartbeat (冒頭の「警告デバイスを兼ねる」節。使うのは useAlarmWatch だけ) ---
+
+  /** `line()` の heartbeat を始める。未接続なら握ったときに始まる */
+  function alarmStart(line: () => string): void {
+    alarmLine = line
+    startAlarmTimer()
+  }
+
+  /**
+   * heartbeat をやめる。`off` が true なら `HB OFF` を 1 行書いて機体の見張りも解く
+   * (VoiceS3R に替わったとき。書かずにやめると、途切れたとみなして鳴る)
+   */
+  function alarmStop(off: boolean): void {
+    const wasSending = alarmLine !== null
+    alarmLine = null
+    stopAlarmTimer()
+    if (off && wasSending && held && !otaLocked) void writeLine(held, 'HB OFF')
+  }
+
+  /**
+   * 意図した reload の直前に、` grace=<RELOAD_GRACE_SEC>` 付きの heartbeat を 1 行書く
+   * (useAlarmDevice の `notifyIntentionalReload` が呼ぶ)。送っていなければ何もしない
+   */
+  function alarmSendGrace(): void {
+    if (alarmTimer === null || !held || !alarmLine) return
+    void writeLine(held, `${alarmLine()} grace=${RELOAD_GRACE_SEC}`)
   }
 
   /**
@@ -607,6 +682,7 @@ export function useVeinSerial() {
     startPairing,
     restart,
     ota: { begin: otaBegin, end: otaEnd, request: otaRequest },
+    alarm: { start: alarmStart, stop: alarmStop, sendGrace: alarmSendGrace },
     onClose,
     onEvent: lineDispatch.onEvent,
     onFingerPlaced,

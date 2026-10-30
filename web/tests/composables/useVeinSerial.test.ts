@@ -728,6 +728,105 @@ describe('useVeinSerial', () => {
     })
   })
 
+  // ---------- 警告デバイスを兼ねる (運行管理者席の Vein Base) ----------
+
+  describe('alarm (警告の heartbeat)', () => {
+    /** HB で始まる書き込みだけ */
+    function hbWrites(dev: MockPortHandle): string[] {
+      return dev.writes.filter(w => w.startsWith('HB '))
+    }
+
+    it('始めた時点で繋がっていれば即 1 本書き、以後 3 秒ごとに書く (行は渡された関数で作る)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      let line = 'HB OK'
+      vein.alarm.start(() => line)
+      expect(hbWrites(dev)).toEqual(['HB OK\n'])
+
+      line = 'HB OK call=1'
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OK call=1\n'])
+    })
+
+    it('繋がる前に始めたら、握ったときに始まる。ポートを失えば止まり、握り直せば始め直す', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      vein.alarm.start(() => 'HB OK')
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(hbWrites(dev)).toEqual([])
+
+      dev.emit('DEVICE timecard VER=0.1.0\n')
+      expect(await connect()).toBe(true)
+      expect(hbWrites(dev)).toEqual(['HB OK\n'])
+
+      await vein.disconnect()
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(hbWrites(dev)).toEqual(['HB OK\n'])
+
+      const again = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [again.port]) })
+      again.emit('DEVICE timecard VER=0.1.0\n')
+      expect(await connect()).toBe(true)
+      expect(hbWrites(again)).toEqual(['HB OK\n'])
+    })
+
+    it('stop(true) は HB OFF を 1 行書いて見張りを解き、stop(false) は書かずにやめる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      vein.alarm.start(() => 'HB OK')
+      vein.alarm.stop(true)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OFF\n'])
+      // 送っていないときの stop(true) は何も書かない (見張っていない機体へ HB OFF を撃たない)
+      vein.alarm.stop(true)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OFF\n'])
+
+      vein.alarm.start(() => 'HB OK')
+      vein.alarm.stop(false)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OFF\n', 'HB OK\n'])
+    })
+
+    it('ファームの書き込みの前に HB OK grace=120 で見張りを休ませ、錠の間は送らず、外したら始め直す', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      vein.alarm.start(() => 'HB OK')
+      vein.ota.begin()
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OK grace=120\n'])
+      // 錠の間は HB OFF も書かない (イメージに混ざる)
+      vein.alarm.stop(true)
+      vein.alarm.start(() => 'HB OK')
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OK grace=120\n'])
+
+      vein.ota.end()
+      expect(hbWrites(dev)).toEqual(['HB OK\n', 'HB OK grace=120\n', 'HB OK\n'])
+    })
+
+    it('heartbeat を送っていない席のファームの書き込みでは grace を書かない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      vein.ota.begin()
+      vein.ota.end()
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(hbWrites(dev)).toEqual([])
+    })
+
+    it('sendGrace は送っているときだけ今の行に grace=45 を足して書く', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      vein.alarm.sendGrace()
+      expect(hbWrites(dev)).toEqual([])
+
+      vein.alarm.start(() => 'HB OK call=1')
+      vein.alarm.sendGrace()
+      expect(hbWrites(dev)).toEqual(['HB OK call=1\n', 'HB OK call=1 grace=45\n'])
+    })
+  })
+
   // ---------- 照合をモジュールに任せる口 (M-b、Refs ippoan/alc-app#436) ----------
 
   /** 応答を 1 行流して処理させる */

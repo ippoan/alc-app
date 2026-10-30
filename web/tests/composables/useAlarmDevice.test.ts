@@ -424,7 +424,7 @@ describe('useAlarmDevice', () => {
   // ---------- 公開 API の形 ----------
 
   describe('公開 API', () => {
-    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン) + cardRead (読んだカード、どちらも #387) + deviceInfo / ota (画面からの更新、#425) だけ', async () => {
+    it('返すキーは #182 の時点 + buttonPressCount (本体のボタン) + cardRead (読んだカード、どちらも #387) + deviceInfo / ota (画面からの更新、#425) + heartbeatLine (Vein Base へ送る heartbeat) だけ', async () => {
       installSerialMock({ getPorts: vi.fn(async () => []) })
       await load()
       expect(Object.keys(alarm).sort()).toEqual([
@@ -434,6 +434,7 @@ describe('useAlarmDevice', () => {
         'deviceInfo',
         'deviceState',
         'disconnect',
+        'heartbeatLine',
         'isConnected',
         'isSupported',
         'notifyIntentionalReload',

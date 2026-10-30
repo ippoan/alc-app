@@ -11,10 +11,16 @@
  *   PWA を閉じる / reload (app.vue の pagehide → grace=45) / デバイス設定を off にする
  * ロールタブ切替 (このバーの unmount) では切らない (#205)。どのロールタブに居ても
  * 着信 (`call=1`) は鳴る — これは望ましい副作用 (#135)
+ *
+ * VoiceS3R の無い席では Vein Base が警告デバイスを兼ねる (heartbeat を送るのは useAlarmWatch)。
+ * そのときは Vein Base が繋がっていれば「接続」と出す。鳴動の状態 (鳴動中・停止済み) は
+ * VoiceS3R だけが行で知らせるので、Vein Base では出さない。「接続」ボタンのポート選択は
+ * 共通なので、そこで Vein Base を選べば拾われる
  */
 import { splitRooms } from '~/utils/it-tenko'
 
 const alarm = useAlarmDevice()
+const vein = useVeinSerial()
 // Web Serial の無いブラウザではバーを出さない
 const isSupported = alarm.isSupported
 // この端末で警告デバイスを使うか (端末登録 / デバイス設定で選ぶ)。false の端末では
@@ -24,6 +30,11 @@ const { enabled, setEnabled } = useAlarmDeviceSetting()
 const { isWatching, callingRooms } = useActiveRooms()
 // 繋がっていた警告デバイスが切れてからの猶予の残り秒 (数えていないときは null。数えるのは useAlarmWatch)
 const { remainingSeconds: disconnectRemainingSeconds } = useSeatDisconnectGrace()
+
+/** Vein Base が警告デバイスを兼ねている (VoiceS3R が無く、Vein Base が繋がっている) */
+const viaVein = computed(() => !alarm.isConnected.value && vein.isConnected.value)
+/** 警告デバイス (VoiceS3R か、兼ねている Vein Base) が繋がっている */
+const connected = computed(() => alarm.isConnected.value || viaVein.value)
 
 const alarmCauseLabels: Record<string, string> = {
   silence: '無音',
@@ -48,7 +59,7 @@ const callingText = computed(() => {
 })
 
 const alarmStatusText = computed(() => {
-  if (!alarm.isConnected.value) return '未接続'
+  if (!connected.value) return '未接続'
   const s = alarm.deviceState.value
   if (s?.state === 'alarming') return `鳴動中 (${alarmCauseText(s.cause)})`
   if (s?.state === 'muted') return `停止済み (人が止めた・${alarmCauseText(s.cause)})`
@@ -62,7 +73,7 @@ type AlarmVisual = 'disconnected' | 'idle' | 'alarming' | 'muted' | 'calling'
  * 未接続は音が鳴らない状況なので最優先で赤、着信は amber で目立たせる
  */
 const alarmVisual = computed<AlarmVisual>(() => {
-  if (!alarm.isConnected.value) return 'disconnected'
+  if (!connected.value) return 'disconnected'
   const s = alarm.deviceState.value?.state
   if (s === 'alarming') return 'alarming'
   if (s === 'muted') return 'muted'
@@ -109,7 +120,7 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
         data-testid="manager-alarm-ask"
       >
         <p class="flex-1 min-w-0 text-xs text-gray-700">
-          この PC に警告デバイス (Atom VoiceS3R) をつなぎますか?
+          この PC に警告デバイス (Atom VoiceS3R か Vein Base) をつなぎますか?
           <span class="block text-gray-500">運行管理者の PC だけ「つなぐ」を選んでください。後からデバイス設定で変えられます</span>
         </p>
         <button
@@ -154,6 +165,7 @@ const alarmCardClass = computed(() => cardClasses[alarmVisual.value])
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium text-gray-800">警告デバイス</span>
+            <span v-if="viaVein" class="text-xs text-gray-500" data-testid="alarm-via-vein">Vein Base</span>
             <span class="text-xs px-2 py-0.5 rounded-full" :class="alarmPillClass">{{ alarmStatusText }}</span>
           </div>
           <template v-if="alarmVisual === 'disconnected'">
