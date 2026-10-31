@@ -51,6 +51,8 @@ const vein = vi.hoisted(() => ({
   onFingerPlaced: vi.fn((cb: () => void) => { finger.cb = cb; return finger.off }),
   isConnected: null as unknown as { value: boolean },
   connect: vi.fn(),
+  // 直近の照合結果 (キオスクは撮り直しの提案を出さないが、共通の照合手順が via を読む)
+  lastMatch: { value: null },
   say: vi.fn(),
   capture: vi.fn(),
   identify: vi.fn(),

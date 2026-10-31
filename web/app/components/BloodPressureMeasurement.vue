@@ -47,6 +47,8 @@ const { latestBloodPressure } = useBleGateway()
 const veinSerial = useVeinSerial()
 // 「この端末の指を足す」(Refs ippoan/alc-app#558)。カードで決めた人の指が不一致だったときの入口。測定台の鍵で送る
 const fingerAdd = useVeinAddDevice({ scope: 'default' })
+// 指静脈が FP の層でだけ当たったときの「この端末で撮り直す」の提案 (測定は止めない)
+const refresh = useVeinRefreshSuggest({ scope: 'default', label: 'bp' })
 /** 指静脈が不一致だった乗務員 (足すボタンの対象)。次の人・やり直しで null */
 const addFingerEmployee = ref<{ id: string; name: string } | null>(null)
 // 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)。
@@ -55,14 +57,16 @@ const vein = useVeinEmployeeIdentify({
   label: 'bp',
   missMessage: '照合できませんでした。もう一度置くか、下のカードか社員番号で進んでください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。下の「未承認の指静脈」から運行管理者が承認してください`,
-  onEmployee: (emp) => {
+  onEmployee: (emp, via) => {
     proceedWithVeinEmployee(emp)
+    refresh.offer(emp.id, via)
     return null
   },
   // 待機中 (カード待ちで、カードの照会も指静脈の読み取りも走っていない) のときだけ
   // 指を足している間は受けない (登録で置くたびに合図が来て、ポートが登録の応答待ちのまま照合が失敗する)
-  isIdle: () => (step.value === 'nfc' || doneSettled.value) && !vein.busy.value && employeeLookups.value === 0 && !fingerAdd.adding.value,
+  isIdle: () => (step.value === 'nfc' || doneSettled.value) && !vein.busy.value && employeeLookups.value === 0 && !fingerAdd.adding.value && !refresh.adding.value,
   onStart: () => {
+    refresh.clear()
     leaveDone()
     error.value = null
   },
@@ -128,6 +132,7 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
   vein.error.value = null
   addFingerEmployee.value = null
   fingerAdd.reset()
+  refresh.clear()
   try {
     const moduleId = await prepareVeinModuleRecord(veinSerial, emp.id)
     if (moduleId === null) return 'no_record'
@@ -165,7 +170,8 @@ async function proceedWithEmployee(emp: { id: string; name: string; face_approva
       return
     }
     proceedWithVeinEmployee(emp)
-    if (outcome !== 'verified') measureNotice.value = outcome
+    if (outcome === 'verified') refresh.offer(emp.id, veinSerial.lastMatch.value?.via ?? null)
+    else measureNotice.value = outcome
     return
   }
   if (!applyFaceApproval(emp)) return
@@ -340,6 +346,7 @@ function leaveDone() {
 function reset() {
   addFingerEmployee.value = null
   fingerAdd.reset()
+  refresh.clear()
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''
@@ -444,6 +451,7 @@ function reset() {
         <BleStatus @next="onMeasureNext" @skip="reset" />
         <p v-if="measureNotice" class="mt-3 text-sm text-amber-700 text-center">{{ measureNotice }}</p>
         <!-- 指静脈が不一致だった人: この端末の指を足す (足すと次からこの端末でも通りやすい。測定はそのまま進められる) -->
+        <VeinRefreshSuggest v-if="refresh.target.value !== null" :suggest="refresh" class="mt-3" />
         <div v-if="addFingerEmployee && !fingerAdd.added.value" class="mt-3">
           <button
             data-testid="vein-add-device"

@@ -8,8 +8,10 @@ import { withSetup } from '../helpers/with-setup'
 const connected = ref(false)
 let fingerCb: (() => void) | null = null
 const stopFinger = vi.fn()
+const lastMatch = ref<{ via: 'FV' | 'FP' | null } | null>(null)
 const vein = {
   isSupported: true,
+  lastMatch: readonly(lastMatch),
   isConnected: readonly(connected),
   connect: vi.fn(async () => true),
   say: vi.fn(async () => {}),
@@ -60,6 +62,7 @@ describe('useVeinEmployeeIdentify', () => {
     mod.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'hit', employee: EMP })
     ident.identifyVeinEmployee.mockResolvedValue({ kind: 'hit', employee: EMP })
     vein.identify.mockResolvedValue(12)
+    lastMatch.value = null
     vi.resetModules()
     useVeinEmployeeIdentify = (await import('~/composables/useVeinEmployeeIdentify')).useVeinEmployeeIdentify
   })
@@ -108,12 +111,25 @@ describe('useVeinEmployeeIdentify', () => {
     expect(opts.onStart).toHaveBeenCalledTimes(1)
     expect(vein.say).toHaveBeenCalledWith('PLACE')
     expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, undefined)
-    expect(opts.onEmployee).toHaveBeenCalledWith(EMP)
+    expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null)
     expect(api.again.value).toBe(true)
     expect(api.error.value).toBeNull()
     expect(api.busy.value).toBe(false)
     expect(vein.say).not.toHaveBeenCalledWith('FAILED')
     app.unmount()
+  })
+
+  it('モジュールの照合がどの層で当たったか (via) を onEmployee の第 2 引数に渡す。古い構成では前の照合の値を渡さない', async () => {
+    vein.identify.mockImplementationOnce(async () => { lastMatch.value = { via: 'FP' }; return 12 })
+    const a = setup()
+    await a.api.identify()
+    expect(a.opts.onEmployee).toHaveBeenCalledWith(EMP, 'FP')
+    a.app.unmount()
+    mod.usesVeinModule.mockReturnValue(false)
+    const b = setup()
+    await b.api.identify()
+    expect(b.opts.onEmployee).toHaveBeenCalledWith(EMP, null)
+    b.app.unmount()
   })
 
   it('照合の開始を、どの画面かの印つきで [vein] に残す (印が無ければ -)', async () => {
@@ -136,7 +152,7 @@ describe('useVeinEmployeeIdentify', () => {
     expect(vein.say).not.toHaveBeenCalled()
     expect(vein.capture).toHaveBeenCalledTimes(1)
     expect(ident.identifyVeinEmployee).toHaveBeenCalledWith('abcd')
-    expect(opts.onEmployee).toHaveBeenCalledWith(EMP)
+    expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null)
     app.unmount()
   })
 

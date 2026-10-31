@@ -388,6 +388,10 @@ path = "app/composables/useVeinAddDevice.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useVeinRefreshSuggest.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useVeinAddedFingerSetting.ts"
 branches = true
 
