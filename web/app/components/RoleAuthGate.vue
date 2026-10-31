@@ -82,6 +82,8 @@ const roleLabel: Record<string, string> = {
 
 // 「この端末の指を足す」(Refs ippoan/alc-app#558)。NFC で決まった運行管理者に出す (scope は運行管理者席の鍵)
 const fingerAdd = useVeinAddDevice({ scope: 'manager-device' })
+// 指静脈が FP の層でだけ当たったときの「この端末で撮り直す」の提案。ログインは止めない
+const refresh = useVeinRefreshSuggest({ scope: 'manager-device', label: 'manager' })
 /** NFC で決まって、指を足す待ちの運行管理者。ログインはしていない */
 const addFingerTarget = ref<{ id: string; name: string } | null>(null)
 
@@ -135,7 +137,7 @@ async function onNfcRead(nfcId: string) {
  * 指静脈で特定できた人を通す。指静脈が本人確認そのものなので顔認証は挟まない (顔の登録も見ない)。
  * 権限が無ければ理由を返す
  */
-function grantByVein(emp: { id: string; name: string; role: string[] }): string | null {
+function grantByVein(emp: { id: string; name: string; role: string[] }, via: 'FV' | 'FP' | null): string | null {
   employeeId.value = emp.id
   employeeName.value = emp.name
   if (!hasRole(emp.role)) {
@@ -143,6 +145,7 @@ function grantByVein(emp: { id: string; name: string; role: string[] }): string 
   }
   authenticatedEmployee.value = { id: emp.id, name: emp.name, role: emp.role }
   grantAccess()
+  refresh.offer(emp.id, via)
   return null
 }
 
@@ -153,7 +156,7 @@ const vein = useVeinEmployeeIdentify({
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
   onEmployee: grantByVein,
   // 指を足している間は受けない (登録で置くたびに合図が来て、ポートが登録の応答待ちのまま照合が失敗する)
-  isIdle: () => step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value && !fingerAdd.adding.value,
+  isIdle: () => step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value && !fingerAdd.adding.value && !refresh.adding.value,
   // 運行管理者の入口は運行管理者席の鍵で照合データを取り、当たった人を引く (キオスクの鍵が無い席がある)
   scope: props.requiredRole === 'manager' ? 'manager-device' : 'default',
   onStart: () => {
@@ -235,6 +238,7 @@ onMounted(() => {
 
 // リセット
 function resetAuth() {
+  refresh.clear()
   addFingerTarget.value = null
   fingerAdd.reset()
   setManagerId(null)
@@ -260,6 +264,7 @@ function resetAuth() {
       {{ authenticatedEmployee.name }} ({{ roleLabel[requiredRole] }}) としてログイン中
       <button class="ml-2 underline hover:text-green-900" @click="resetAuth">ログアウト</button>
     </div>
+    <VeinRefreshSuggest v-if="refresh.target.value !== null" :suggest="refresh" class="mx-4 mt-2" />
     <slot />
   </div>
 

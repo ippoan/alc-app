@@ -23,9 +23,10 @@ export interface VeinEmployeeIdentifyOptions {
   pendingMessage: (name: string | null) => string
   /**
    * 特定できた人を渡す。先へ進めなかったときは画面に出す理由を返す (`null` なら進めた。
-   * 理由を自分で別の場所に出したときも `null`)
+   * 理由を自分で別の場所に出したときも `null`)。`via` はモジュールの照合がどの層で当たったか
+   * (`FP` = 指紋互換の層だけ → 撮り直しの提案に使う。古いファーム・モジュールを使わない構成は null)
    */
-  onEmployee: (employee: ApiEmployee) => Promise<string | null> | string | null
+  onEmployee: (employee: ApiEmployee, via: 'FV' | 'FP' | null) => Promise<string | null> | string | null
   /** 指が置かれた合図で照合を始めてよいか (待機中か) */
   isIdle: () => boolean
   /** 照合を始める直前に呼ぶ (画面の前の結果を片付ける) */
@@ -81,7 +82,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       ? await identifyVeinModuleEmployee(read as number | null, opts.scope)
       : await identifyVeinEmployee(read as string)
     switch (outcome.kind) {
-      case 'hit': return await opts.onEmployee(outcome.employee)
+      case 'hit': return await opts.onEmployee(outcome.employee, viaModule ? vein.lastMatch.value?.via ?? null : null)
       case 'miss': return opts.missMessage
       case 'pending': return opts.pendingMessage(outcome.name)
       case 'error': return outcome.message

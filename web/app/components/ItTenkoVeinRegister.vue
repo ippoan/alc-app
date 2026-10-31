@@ -20,13 +20,21 @@ const props = defineProps<{
   idle: boolean
 }>()
 
+// 指静脈が FP の層でだけ当たったときの「この端末で撮り直す」の提案
+const refresh = useVeinRefreshSuggest({ scope: 'manager-device', label: 'it-tenko' })
 const vein = useVeinEmployeeIdentify({
   label: 'it-tenko',
   scope: 'manager-device',
   missMessage: '指静脈が一致する人が見つかりません。もう一度置くか、社員番号で登録してください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
-  onEmployee: emp => props.onEmployee(emp),
-  isIdle: () => props.idle && !vein.busy.value,
+  onEmployee: async (emp, via) => {
+    const failure = await props.onEmployee(emp)
+    // 登録できたときだけ、FP の層でだけ当たっていれば撮り直しを勧める (登録は止めない)
+    if (failure === null) refresh.offer(emp.id, via)
+    return failure
+  },
+  isIdle: () => props.idle && !vein.busy.value && !refresh.adding.value,
+  onStart: () => refresh.clear(),
 })
 </script>
 
@@ -41,5 +49,6 @@ const vein = useVeinEmployeeIdentify({
       {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で登録' }}
     </button>
     <p v-if="vein.error.value" data-testid="it-vein-register-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
+    <VeinRefreshSuggest v-if="refresh.target.value !== null" :suggest="refresh" class="mt-2" />
   </div>
 </template>

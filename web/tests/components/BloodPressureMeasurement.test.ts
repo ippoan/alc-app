@@ -67,7 +67,9 @@ const vein = vi.hoisted(() => ({
   verify: vi.fn(),
   onFingerPlaced: vi.fn((cb: () => void) => { finger.cb = cb; return finger.off }),
 }))
-mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
+// 直近の照合結果 (via だけ使う)。FP の層でだけ当たったときの「撮り直し」の提案の材料
+const veinLastMatch = ref<{ via: 'FV' | 'FP' | null } | null>(null)
+mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect, lastMatch: veinLastMatch }))
 
 // 「この端末の指を足す」(Refs ippoan/alc-app#558)。手順は useVeinAddDevice.test.ts の領分で、ここは入口だけ見る
 const addDevice = vi.hoisted(() => ({
@@ -124,7 +126,7 @@ const ThermoTestStub = { name: 'ThermoTest', template: '<div class="thermo-test-
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, ThermoTest: ThermoTestStub, EmployeeCodeKeypad: false } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, ThermoTest: ThermoTestStub, EmployeeCodeKeypad: false, VeinRefreshSuggest: false } },
   })
 }
 
@@ -1103,6 +1105,129 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       expect(veinIdentify.syncVeinTemplates).toHaveBeenCalledTimes(before)
       wrapper.unmount()
     })
+  })
+})
+
+// 指静脈が FP の層でだけ当たったときの「この端末で撮り直す」の提案。測定は止めない
+describe('BloodPressureMeasurement — 指静脈が FP のときの撮り直しの提案', () => {
+  const suggest = (w: Awaited<ReturnType<typeof mountBp>>) => w.find('[data-testid="vein-refresh-suggest"]')
+  const accept = (w: Awaited<ReturnType<typeof mountBp>>) => w.find('[data-testid="vein-refresh-suggest-accept"]')
+
+  beforeEach(() => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = true
+    veinLastMatch.value = null
+    addDevice.add.mockReset().mockResolvedValue(true)
+    addDevice.reset.mockClear()
+    addAdding.value = false
+    addAvailable.value = true
+    addAdded.value = false
+    addError.value = null
+    addNotice.value = null
+    employee.value = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }
+    getEmployeeByNfcIdMock.mockReset()
+    getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
+    veinModule.usesVeinModule.mockReturnValue(true)
+    veinModule.prepareVeinModuleRecord.mockReset().mockResolvedValue(12)
+    vein.verify.mockReset().mockResolvedValue(true)
+    vein.say.mockReset().mockResolvedValue(undefined)
+    vein.identify.mockReset().mockResolvedValue(12)
+    veinModule.identifyVeinModuleEmployee.mockReset().mockResolvedValue({
+      kind: 'hit',
+      employee: { id: 'emp-vein-1', name: 'テスト花子', face_approval_status: 'approved' },
+    })
+    startMeasurementMock.mockReset()
+    startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    veinModule.usesVeinModule.mockReturnValue(false)
+    veinIsConnected.value = false
+    veinLastMatch.value = null
+  })
+
+  /** 指静脈ボタンで 1:N 照合する (照合の途中で機体が via を記録したことにする) */
+  async function identifyWith(wrapper: Awaited<ReturnType<typeof mountBp>>, via: 'FV' | 'FP' | null) {
+    vein.identify.mockImplementationOnce(async () => { veinLastMatch.value = { via }; return 12 })
+    await wrapper.find('[data-testid="vein-identify"]').trigger('click')
+    await flush(wrapper)
+  }
+
+  it('1:N が FP で当たったら、測定へ進んだうえで提案を出す。承認すると当たった人を測定台の鍵で足す', async () => {
+    const wrapper = await mountBp()
+    await identifyWith(wrapper, 'FP')
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    expect(suggest(wrapper).text()).toContain('この端末で指を撮り直すと安定します')
+    expect(console.info).toHaveBeenCalledWith('[vein] 撮り直しの提案 shown screen=bp')
+    expect(addDevice.scope).toBe('default')
+    await accept(wrapper).trigger('click')
+    expect(addDevice.add).toHaveBeenCalledWith('emp-vein-1')
+    expect(console.info).toHaveBeenCalledWith('[vein] 撮り直しの提案 accepted screen=bp')
+    addAdded.value = true
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="vein-refresh-suggest-done"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('1:N が FV・via なしなら出さない', async () => {
+    const wrapper = await mountBp()
+    await identifyWith(wrapper, 'FV')
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    expect(suggest(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+    const old = await mountBp()
+    await identifyWith(old, null)
+    expect(suggest(old).exists()).toBe(false)
+    old.unmount()
+  })
+
+  it('「あとで」で消え、測定はそのまま進められる。次の人 (やり直し) でも消える', async () => {
+    const wrapper = await mountBp()
+    await identifyWith(wrapper, 'FP')
+    await wrapper.find('[data-testid="vein-refresh-suggest-dismiss"]').trigger('click')
+    expect(suggest(wrapper).exists()).toBe(false)
+    expect(console.info).toHaveBeenCalledWith('[vein] 撮り直しの提案 dismissed screen=bp')
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('カードで決めた人の 1:1 が FP で通ったら提案を出す。FV・外れでは出さない', async () => {
+    veinLastMatch.value = { via: 'FP' }
+    const fp = await mountBp()
+    await tapCard(fp)
+    await flush(fp)
+    expect(fp.findComponent(BleStatusStub).exists()).toBe(true)
+    expect(suggest(fp).exists()).toBe(true)
+    await accept(fp).trigger('click')
+    expect(addDevice.add).toHaveBeenCalledWith('emp-test-1')
+    // 次の人へ: 提案は片付く
+    await fp.findComponent(BleStatusStub).vm.$emit('skip')
+    await flush(fp)
+    expect(suggest(fp).exists()).toBe(false)
+    fp.unmount()
+
+    veinLastMatch.value = { via: 'FV' }
+    const fv = await mountBp()
+    await tapCard(fv)
+    await flush(fv)
+    expect(suggest(fv).exists()).toBe(false)
+    fv.unmount()
+
+    veinLastMatch.value = null
+    const old = await mountBp()
+    await tapCard(old)
+    await flush(old)
+    expect(suggest(old).exists()).toBe(false)
+    old.unmount()
+
+    veinLastMatch.value = { via: 'FP' }
+    vein.verify.mockResolvedValue(false)
+    const miss = await mountBp()
+    await tapCard(miss)
+    await flush(miss)
+    expect(suggest(miss).exists()).toBe(false)
+    miss.unmount()
   })
 })
 

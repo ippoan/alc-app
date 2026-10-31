@@ -125,6 +125,86 @@ beforeEach(() => {
 
 const AUTH_FAILED = '端末の鍵が取れませんでした (テスト用の文言)'
 
+// 「この端末で撮り直す」の提案 (指静脈が FP の層でだけ当たったとき)。ログインは止めない
+describe('RoleAuthGate — 指静脈が FP のときの撮り直しの提案', () => {
+  const suggest = (w: Awaited<ReturnType<typeof mountGate>>) => w.find('[data-testid="vein-refresh-suggest"]')
+
+  beforeEach(() => {
+    addDevice.add.mockClear()
+    addDevice.reset.mockClear()
+    addState.added.value = false
+    addState.adding.value = false
+    addState.error.value = null
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('FP ならログインしたうえで帯に提案を出す (運行管理者席の鍵・画面の印つきで shown)', async () => {
+    const wrapper = await mountGate('manager')
+    expect(await veinOpts!.onEmployee(employee.value as never, 'FP')).toBeNull()
+    await settle(wrapper)
+    expect(wrapper.text()).toContain('としてログイン中')
+    expect(suggest(wrapper).text()).toContain('この端末で指を撮り直すと安定します')
+    expect(addDevice.scope).toBe('manager-device')
+    expect(console.info).toHaveBeenCalledWith('[vein] 撮り直しの提案 shown screen=manager')
+    wrapper.unmount()
+  })
+
+  it.each([['FV'], [null]] as const)('via が %s なら出さない', async (via) => {
+    const wrapper = await mountGate('manager')
+    await veinOpts!.onEmployee(employee.value as never, via)
+    await settle(wrapper)
+    expect(wrapper.text()).toContain('としてログイン中')
+    expect(suggest(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('権限が無くて入れなかった人には出さない', async () => {
+    const wrapper = await mountGate('manager')
+    expect(await veinOpts!.onEmployee({ ...employee.value, role: ['driver'] } as never, 'FP')).toContain('権限がありません')
+    await settle(wrapper)
+    expect(wrapper.text()).not.toContain('としてログイン中')
+    expect(suggest(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('「この端末で撮り直す」でその人を足す。足している間は指の合図の自動照合を受けない。足せたら完了表示', async () => {
+    const wrapper = await mountGate('manager')
+    await veinOpts!.onEmployee(employee.value as never, 'FP')
+    await settle(wrapper)
+    await wrapper.find('[data-testid="vein-refresh-suggest-accept"]').trigger('click')
+    expect(addDevice.add).toHaveBeenCalledWith('emp-test-1')
+    expect(console.info).toHaveBeenCalledWith('[vein] 撮り直しの提案 accepted screen=manager')
+    addState.adding.value = true
+    expect(veinOpts!.isIdle()).toBe(false)
+    addState.adding.value = false
+    addState.added.value = true
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-refresh-suggest-done"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="vein-refresh-suggest-accept"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('「あとで」で消える。失敗は理由を出す。ログアウトでも消える', async () => {
+    const wrapper = await mountGate('manager')
+    await veinOpts!.onEmployee(employee.value as never, 'FP')
+    await settle(wrapper)
+    addState.error.value = '失敗の理由 (テスト)'
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-refresh-suggest-error"]').text()).toBe('失敗の理由 (テスト)')
+    await wrapper.find('[data-testid="vein-refresh-suggest-dismiss"]').trigger('click')
+    await settle(wrapper)
+    expect(suggest(wrapper).exists()).toBe(false)
+    expect(console.info).toHaveBeenCalledWith('[vein] 撮り直しの提案 dismissed screen=manager')
+    await veinOpts!.onEmployee(employee.value as never, 'FP')
+    await settle(wrapper)
+    await wrapper.findAll('button').find(b => b.text() === 'ログアウト')!.trigger('click')
+    await settle(wrapper)
+    expect(suggest(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
 describe('RoleAuthGate — 乗務員の照会が失敗したとき (Refs #436)', () => {
   it('席の鍵が取れなかった失敗は「見つかりません」にせず、その文言をそのまま出す', async () => {
     getEmployeeByNfcIdMock.mockRejectedValueOnce(new Error(AUTH_FAILED))
