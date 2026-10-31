@@ -10,7 +10,7 @@ const employeeMap = ref<Record<string, string>>({})
 
 async function loadEmployees() {
   try {
-    const list = await getEmployees()
+    const list = await getEmployees('tenko-monitor')
     employeeMap.value = Object.fromEntries(list.map(e => [e.id, e.name]))
   } catch {}
 }
@@ -23,7 +23,7 @@ async function refresh() {
   isLoading.value = true
   error.value = null
   try {
-    dashboard.value = await getTenkoDashboard()
+    dashboard.value = await getTenkoDashboard('tenko-monitor')
   } catch (e) {
     error.value = e instanceof Error ? e.message : '取得エラー'
   } finally {

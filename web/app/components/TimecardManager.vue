@@ -54,7 +54,7 @@ const employeeMap = computed(() => {
 async function loadCards() {
   isLoadingCards.value = true
   try {
-    const [emps, crds] = await Promise.all([getEmployees(), listTimecardCards()])
+    const [emps, crds] = await Promise.all([getEmployees('tenko-monitor'), listTimecardCards(undefined, 'tenko-monitor')])
     employees.value = emps
     cards.value = crds
   }
@@ -190,7 +190,7 @@ async function loadPunches() {
       employee_id: filterEmployeeId.value || undefined,
       page: punchPage.value,
       per_page: punchPerPage,
-    })
+    }, 'tenko-monitor')
     punches.value = res.punches
     punchTotal.value = res.total
   }
@@ -246,7 +246,7 @@ async function exportCsv() {
     date_from: dateFrom,
     date_to: dateTo,
     employee_id: filterEmployeeId.value || undefined,
-  })
+  }, 'tenko-monitor')
 }
 </script>
 

@@ -419,14 +419,38 @@ async function publicIngestRequest<T>(path: string, options: RequestInit = {}): 
 }
 
 /**
+ * raw fetch (`proxyRawFetch` と CSV) に付ける token を `scope` で選ぶ (`request()` と同じ規則)。
+ *
+ * - `'tenko-monitor'` は {@link resolveTenkoMonitorScope} で `'default'` / `'manager-device'` に解く
+ * - `'manager-device'` (getter あり): 管理者の token を使う場面 (`usesAdminToken`) は管理者の token、
+ *   それ以外は**運行管理者席の鍵**。取れなければ {@link MANAGER_DEVICE_AUTH_FAILED_MESSAGE} を投げる —
+ *   キオスクの鍵にも無認証にも落とさない (fail-closed)
+ * - それ以外: 今までどおり (管理者 → キオスクの鍵。無ければ null)
+ */
+async function rawSendToken(scope: RequestTokenScope): Promise<string | null> {
+  if (scope === 'tenko-monitor') scope = resolveTenkoMonitorScope()
+  if (scope === 'manager-device' && getManagerDeviceJwt) {
+    const jwt = await selectSendToken(getAccessToken?.(), 'manager-device', getManagerDeviceJwt)
+    if (!jwt) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    return jwt
+  }
+  return selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
+}
+
+/**
  * blob / FormData 系の raw fetch を認証付きで投げ Response をそのまま返す (#434 step 3d)。
  * admin browser JWT or device JWT があれば same-origin proxy (/api/proxy) 経由
  * (proxy が X-Tenant-ID 注入 + OIDC mint)。どちらも無ければ従来の `${apiBase}` 直叩き
  * (X-Tenant-ID fallback) に倒す (lockdown 前の非破壊)。
  * どちらを付けるかは `request()` と同じ規則 (`selectSendToken`、Refs ippoan/alc-app#387)。
  */
-async function proxyRawFetch(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
-  const jwt = await selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
+async function proxyRawFetch(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs?: number,
+  scope: RequestTokenScope = 'default',
+): Promise<Response> {
+  const jwt = await rawSendToken(scope)
   if (jwt) {
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${jwt}`)
@@ -536,8 +560,8 @@ export async function getMeasurements(filter: MeasurementFilter = {}): Promise<M
 }
 
 /** 測定結果詳細を取得 */
-export async function getMeasurement(id: string): Promise<ApiMeasurement> {
-  return request<ApiMeasurement>(`/api/measurements/${id}`)
+export async function getMeasurement(id: string, scope: RequestTokenScope = 'default'): Promise<ApiMeasurement> {
+  return request<ApiMeasurement>(`/api/measurements/${id}`, {}, scope)
 }
 
 /** 乗務員一覧を取得 */
@@ -1098,11 +1122,11 @@ export async function reportVeinFleet(report: {
 }
 
 /** 認証付きプロキシ経由でバイナリを取得し、object URL にする (顔写真・録画動画で共用)。 */
-async function fetchObjectUrl(path: string): Promise<string | null> {
+async function fetchObjectUrl(path: string, scope: RequestTokenScope): Promise<string | null> {
   if (!apiBase) return null
 
   try {
-    const res = await proxyRawFetch(path, { cache: 'no-store' })
+    const res = await proxyRawFetch(path, { cache: 'no-store' }, undefined, scope)
     if (!res.ok) return null
     const blob = await res.blob()
     return URL.createObjectURL(blob)
@@ -1112,13 +1136,13 @@ async function fetchObjectUrl(path: string): Promise<string | null> {
 }
 
 /** 測定の顔写真を取得 (認証付きプロキシ経由) */
-export async function fetchFacePhoto(measurementId: string): Promise<string | null> {
-  return fetchObjectUrl(`/api/measurements/${measurementId}/face-photo`)
+export async function fetchFacePhoto(measurementId: string, scope: RequestTokenScope = 'default'): Promise<string | null> {
+  return fetchObjectUrl(`/api/measurements/${measurementId}/face-photo`, scope)
 }
 
 /** 測定の録画動画を取得 (認証付きプロキシ経由) */
-export async function fetchMeasurementVideo(measurementId: string): Promise<string | null> {
-  return fetchObjectUrl(`/api/measurements/${measurementId}/video`)
+export async function fetchMeasurementVideo(measurementId: string, scope: RequestTokenScope = 'default'): Promise<string | null> {
+  return fetchObjectUrl(`/api/measurements/${measurementId}/video`, scope)
 }
 
 /** 顔写真をアップロード */
@@ -1180,8 +1204,8 @@ function toParams(filter: object): string {
 }
 
 /** CSV ダウンロード (blob → ブラウザ保存) */
-async function downloadCsv(path: string, filename: string): Promise<void> {
-  await saveCsvResponse(await proxyRawFetch(path, {}), filename)
+async function downloadCsv(path: string, filename: string, scope: RequestTokenScope = 'default'): Promise<void> {
+  await saveCsvResponse(await proxyRawFetch(path, {}, undefined, scope), filename)
 }
 
 /** CSV の応答を検査してブラウザに保存する (失敗は本文付きで投げる) */
@@ -1353,8 +1377,8 @@ export async function listTenkoSessions(
   return request<TenkoSessionsResponse>(`/api/tenko/sessions${toParams(query)}`, {}, scope)
 }
 
-export async function getTenkoDashboard(): Promise<TenkoDashboard> {
-  return request<TenkoDashboard>('/api/tenko/dashboard')
+export async function getTenkoDashboard(scope: RequestTokenScope = 'default'): Promise<TenkoDashboard> {
+  return request<TenkoDashboard>('/api/tenko/dashboard', {}, scope)
 }
 
 export async function interruptTenkoSession(sessionId: string, data: InterruptSession = {}): Promise<TenkoSession> {
@@ -1429,8 +1453,8 @@ export function apiErrorMessage(e: unknown): string | null {
 
 // --- レコード ---
 
-export async function downloadTenkoRecordsCsv(filter: TenkoRecordFilter = {}): Promise<void> {
-  await downloadCsv(`/api/tenko/records/csv${toParams(filter)}`, 'tenko-records.csv')
+export async function downloadTenkoRecordsCsv(filter: TenkoRecordFilter = {}, scope: RequestTokenScope = 'default'): Promise<void> {
+  await downloadCsv(`/api/tenko/records/csv${toParams(filter)}`, 'tenko-records.csv', scope)
 }
 
 // --- Webhook ---
@@ -1467,8 +1491,8 @@ export async function createBaseline(data: CreateHealthBaseline): Promise<Employ
   })
 }
 
-export async function listBaselines(): Promise<EmployeeHealthBaseline[]> {
-  return request<EmployeeHealthBaseline[]>('/api/tenko/health-baselines')
+export async function listBaselines(scope: RequestTokenScope = 'default'): Promise<EmployeeHealthBaseline[]> {
+  return request<EmployeeHealthBaseline[]>('/api/tenko/health-baselines', {}, scope)
 }
 
 export async function getBaseline(employeeId: string): Promise<EmployeeHealthBaseline> {
@@ -1495,8 +1519,8 @@ export async function createFailure(data: CreateEquipmentFailure): Promise<Equip
   })
 }
 
-export async function listFailures(filter: EquipmentFailureFilter = {}): Promise<EquipmentFailuresResponse> {
-  return request<EquipmentFailuresResponse>(`/api/tenko/equipment-failures${toParams(filter)}`)
+export async function listFailures(filter: EquipmentFailureFilter = {}, scope: RequestTokenScope = 'default'): Promise<EquipmentFailuresResponse> {
+  return request<EquipmentFailuresResponse>(`/api/tenko/equipment-failures${toParams(filter)}`, {}, scope)
 }
 
 export async function getFailure(id: string): Promise<EquipmentFailure> {
@@ -1510,8 +1534,8 @@ export async function resolveFailure(id: string, data: UpdateEquipmentFailure): 
   })
 }
 
-export async function downloadFailuresCsv(filter: EquipmentFailureFilter = {}): Promise<void> {
-  await downloadCsv(`/api/tenko/equipment-failures/csv${toParams(filter)}`, 'equipment-failures.csv')
+export async function downloadFailuresCsv(filter: EquipmentFailureFilter = {}, scope: RequestTokenScope = 'default'): Promise<void> {
+  await downloadCsv(`/api/tenko/equipment-failures/csv${toParams(filter)}`, 'equipment-failures.csv', scope)
 }
 
 // --- タイムカード ---
@@ -1523,9 +1547,9 @@ export async function createTimecardCard(data: CreateTimecardCard): Promise<Time
   })
 }
 
-export async function listTimecardCards(employeeId?: string): Promise<TimecardCard[]> {
+export async function listTimecardCards(employeeId?: string, scope: RequestTokenScope = 'default'): Promise<TimecardCard[]> {
   const params = employeeId ? `?employee_id=${employeeId}` : ''
-  return request<TimecardCard[]>(`/api/timecard/cards${params}`)
+  return request<TimecardCard[]>(`/api/timecard/cards${params}`, {}, scope)
 }
 
 export async function deleteTimecardCard(id: string): Promise<void> {
@@ -1593,8 +1617,8 @@ export async function punchTimecard(cardId: string, measurementId?: string | nul
   }
 }
 
-export async function listTimePunches(filter: TimePunchFilter = {}): Promise<TimePunchesResponse> {
-  return request<TimePunchesResponse>(`/api/timecard/punches${toParams(filter)}`)
+export async function listTimePunches(filter: TimePunchFilter = {}, scope: RequestTokenScope = 'default'): Promise<TimePunchesResponse> {
+  return request<TimePunchesResponse>(`/api/timecard/punches${toParams(filter)}`, {}, scope)
 }
 
 /**
@@ -1603,11 +1627,11 @@ export async function listTimePunches(filter: TimePunchFilter = {}): Promise<Tim
  * (鍵のラベルは auth-worker にしか無く、backend は名前を持たない)。
  * token が無いときは従来どおり backend の CSV を proxy 経由でそのまま落とす。
  */
-export async function downloadTimePunchesCsv(filter: TimePunchFilter = {}): Promise<void> {
+export async function downloadTimePunchesCsv(filter: TimePunchFilter = {}, scope: RequestTokenScope = 'default'): Promise<void> {
   // 付ける token は他の proxy 経路 (`proxyRawFetch`) と同じ規則で選ぶ。route はその Bearer をそのまま proxy へ流す
-  const jwt = await selectSendToken(getAccessToken?.(), 'kiosk', getKioskDeviceJwt)
+  const jwt = await rawSendToken(scope)
   if (!jwt) {
-    await downloadCsv(`/api/timecard/punches/csv${toParams(filter)}`, 'time-punches.csv')
+    await downloadCsv(`/api/timecard/punches/csv${toParams(filter)}`, 'time-punches.csv', scope)
     return
   }
   const res = await fetchWithTimeout(`/api/timecard/punches/csv${toParams(filter)}`, { headers: { Authorization: `Bearer ${jwt}` } })
@@ -1684,12 +1708,12 @@ export async function claimDeviceRegistration(data: ClaimRegistrationRequest): P
 }
 
 // テナント認証付きAPI
-export async function listDevices(): Promise<Device[]> {
-  return request<Device[]>('/api/devices')
+export async function listDevices(scope: RequestTokenScope = 'default'): Promise<Device[]> {
+  return request<Device[]>('/api/devices', {}, scope)
 }
 
-export async function listPendingDeviceRegistrations(): Promise<DeviceRegistrationRequest[]> {
-  return request<DeviceRegistrationRequest[]>('/api/devices/pending')
+export async function listPendingDeviceRegistrations(scope: RequestTokenScope = 'default'): Promise<DeviceRegistrationRequest[]> {
+  return request<DeviceRegistrationRequest[]>('/api/devices/pending', {}, scope)
 }
 
 export async function createDeviceUrlToken(deviceName?: string, opts?: { is_device_owner?: boolean; is_dev_device?: boolean }): Promise<CreateTokenResponse> {
@@ -1835,8 +1859,8 @@ export async function triggerUpdate(opts?: { device_ids?: string[]; dev_only?: b
 
 import type { CarryingItem, CreateCarryingItem, UpdateCarryingItem, CarryingItemCheckInput, DriverInfo } from '~/types'
 
-export async function getCarryingItems(): Promise<CarryingItem[]> {
-  return request('/api/carrying-items')
+export async function getCarryingItems(scope: RequestTokenScope = 'default'): Promise<CarryingItem[]> {
+  return request('/api/carrying-items', {}, scope)
 }
 
 export async function createCarryingItem(data: CreateCarryingItem): Promise<CarryingItem> {
@@ -1868,8 +1892,8 @@ export async function getDriverInfo(employeeId: string, scope: RequestTokenScope
 
 import type { DtakoDriver, DtakoDailyHoursResponse } from '~/types'
 
-export async function getDtakoDrivers(): Promise<DtakoDriver[]> {
-  return request('/api/drivers')
+export async function getDtakoDrivers(scope: RequestTokenScope = 'default'): Promise<DtakoDriver[]> {
+  return request('/api/drivers', {}, scope)
 }
 
 export async function getDtakoDailyHours(filter: {
@@ -1878,14 +1902,14 @@ export async function getDtakoDailyHours(filter: {
   date_to?: string
   page?: number
   per_page?: number
-}): Promise<DtakoDailyHoursResponse> {
-  return request(`/api/daily-hours${toParams(filter)}`)
+}, scope: RequestTokenScope = 'default'): Promise<DtakoDailyHoursResponse> {
+  return request(`/api/daily-hours${toParams(filter)}`, {}, scope)
 }
 
 // --- 車両分類 ---
 
-export async function getVehicleCategories(): Promise<VehicleCategories> {
-  return request<VehicleCategories>('/api/car-inspections/vehicle-categories')
+export async function getVehicleCategories(scope: RequestTokenScope = 'default'): Promise<VehicleCategories> {
+  return request<VehicleCategories>('/api/car-inspections/vehicle-categories', {}, scope)
 }
 
 /**

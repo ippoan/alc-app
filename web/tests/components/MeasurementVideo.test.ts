@@ -47,10 +47,19 @@ describe('MeasurementVideo — 録画の再生', () => {
       props: { measurement: baseMeasurement({ video_url: 'https://example.com/video.webm' }) },
     })
     await flush()
-    expect(fetchMeasurementVideoMock).toHaveBeenCalledWith('m-1')
+    expect(fetchMeasurementVideoMock).toHaveBeenCalledWith('m-1', 'default')
     const video = wrapper.find('video')
     expect(video.exists()).toBe(true)
     expect(video.attributes('src')).toBe('blob:http://localhost/video')
+    wrapper.unmount()
+  })
+
+  it("scope prop を渡すとそのまま取得に使う ('tenko-monitor')", async () => {
+    const wrapper = await mountSuspended(MeasurementVideo, {
+      props: { measurement: baseMeasurement({ video_url: 'https://example.com/video.webm' }), scope: 'tenko-monitor' },
+    })
+    await flush()
+    expect(fetchMeasurementVideoMock).toHaveBeenCalledWith('m-1', 'tenko-monitor')
     wrapper.unmount()
   })
 

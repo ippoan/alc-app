@@ -15,7 +15,7 @@ const employees = ref<ApiEmployee[]>([])
 const employeeMap = ref<Record<string, string>>({})
 async function loadEmployees() {
   try {
-    const list = await getEmployees()
+    const list = await getEmployees('tenko-monitor')
     employees.value = list
     employeeMap.value = Object.fromEntries(list.map(e => [e.id, e.name]))
   } catch {}

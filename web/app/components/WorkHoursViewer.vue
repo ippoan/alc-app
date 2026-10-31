@@ -24,7 +24,7 @@ const driverNameMap = computed(() => {
 
 async function loadDrivers() {
   try {
-    drivers.value = await getDtakoDrivers()
+    drivers.value = await getDtakoDrivers('tenko-monitor')
     if (drivers.value.length > 0 && !selectedDriverId.value) {
       selectedDriverId.value = drivers.value[0]!.id
     }
@@ -47,7 +47,7 @@ async function loadHours() {
       date_to: dateTo,
       page: page.value,
       per_page: perPage,
-    })
+    }, 'tenko-monitor')
     items.value = res.items
     total.value = res.total
   } catch (e) {
