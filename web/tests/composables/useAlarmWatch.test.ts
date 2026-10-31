@@ -117,16 +117,16 @@ describe('useAlarmWatch', () => {
     app.unmount()
   })
 
-  it('設定を off にしたら Vein Base への heartbeat を HB OFF なしでやめ、その後の接続の変化も見ない', async () => {
+  it('設定を off にしたら Vein Base の見張りを HB OFF で解き、その後の接続の変化も見ない', async () => {
     const [, app] = withSetup(() => useAlarmWatch())
     enabled.value = false
     await nextTick()
-    // VoiceS3R の切断と同じく、off にした席は鳴る (HB OFF を送らない)
-    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(false)'])
+    // Vein は挿したままなので、HB OFF を送らないと off にした端末で鳴り続ける
+    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(true)'])
 
     alarmConnected.value = true
     await nextTick()
-    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(false)'])
+    expect(veinAlarmCalls).toEqual(['start(HB OK)', 'stop(true)'])
     app.unmount()
   })
 
