@@ -7,8 +7,8 @@
  *
  * 経路の選び方:
  *   - WebSerial が使えない環境 (Android WebView 等) → useNfcWebSocket をそのまま返す
- *   - 使える環境では CoreS3 を優先し、**直結しているあいだブリッジは購読しない**。
- *     直結が切れたら 9876 へ戻す
+ *   - 使える環境では USB 直結 (CoreS3 / 測定台の Atom S3 / Vein Station) を優先し、
+ *     **どれかが直結しているあいだブリッジは購読しない**。直結が切れたら 9876 へ戻す
  *   - 血圧測定台 (`?station=bp`) には CoreS3 もブリッジも無く、挿さっているのは
  *     Atom S3 だけ。**どちらか一方しか繋がらない端末が普通**なので、`EVT` は
  *     CoreS3 と Atom S3 の**両方**から受ける (Refs ippoan/alc-app#353)。ポートの
@@ -195,8 +195,11 @@ export function useNfcReader() {
     bridgeVersion.value = ws.bridgeVersion.value
   }
 
-  watch(core.isConnected, (connected) => {
-    // 直結しているあいだはブリッジを購読しない (同じ免許証の二重発火を断つ)
+  // 直結しているあいだはブリッジを購読しない (同じ免許証の二重発火を断つ)。直結は CoreS3 に限らない —
+  // Vein Station / 測定台の Atom S3 だけの端末でブリッジへ繋ぎに行くと、ブリッジの無い PC で
+  // NfcStatus を出すたびに 9876 への試し直しが走る (画面は直結を見せるので、失敗は裏で続くだけ)
+  const directConnected = computed(() => nfc.label.value !== null)
+  watch(directConnected, (connected) => {
     if (connected) ws.disconnect()
     else if (wantConnected) ws.connect()
   })
@@ -212,7 +215,7 @@ export function useNfcReader() {
     // Vein Station も登録しないと、arbiter が DEVICE timecard のポートを素通りする
     // (Refs ippoan/alc-app#436)。指静脈と端末の鍵でも共有しているので disconnect では手放さない
     void vein.connect()
-    if (!core.isConnected.value) ws.connect()
+    if (!directConnected.value) ws.connect()
   }
 
   function disconnect(): void {
