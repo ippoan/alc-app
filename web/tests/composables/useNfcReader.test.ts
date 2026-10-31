@@ -509,6 +509,31 @@ describe('useNfcReader', () => {
     expect(wsMock.connect).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['Vein Station', () => { veinState.isConnected.value = true }],
+    ['測定台の Atom S3', () => { atomState.isConnected.value = true }],
+  ])('connect(): %s が直結済みならブリッジは繋がない (ブリッジの無い PC で 9876 を試し直さない)', async (_label, plug) => {
+    plug()
+    const reader = await load()
+    reader.connect()
+
+    expect(wsMock.connect).not.toHaveBeenCalled()
+  })
+
+  it('Vein Station が直結したらブリッジを切り、抜けたらブリッジへ戻す', async () => {
+    const reader = await load()
+    reader.connect()
+    expect(wsMock.connect).toHaveBeenCalledTimes(1)
+
+    veinState.isConnected.value = true
+    await nextTick()
+    expect(wsMock.disconnect).toHaveBeenCalledTimes(1)
+
+    veinState.isConnected.value = false
+    await nextTick()
+    expect(wsMock.connect).toHaveBeenCalledTimes(2)
+  })
+
   it('core.isConnected が既に true の状態で新しく呼ぶと、connect() を呼ばなくても isConnected が即 true になる', async () => {
     // タブを戻して component が再 mount されたときの再現 (Refs ippoan/alc-app#219)
     coreState.isConnected.value = true
