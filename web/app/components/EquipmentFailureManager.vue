@@ -44,7 +44,7 @@ async function fetchData() {
   isLoading.value = true
   error.value = null
   try {
-    const res = await listFailures({ ...buildFilter(), page: page.value, per_page: perPage })
+    const res = await listFailures({ ...buildFilter(), page: page.value, per_page: perPage }, 'tenko-monitor')
     failures.value = res.failures
     total.value = res.total
   } catch (e) {
@@ -104,7 +104,7 @@ async function handleCsvDownload() {
   isDownloading.value = true
   error.value = null
   try {
-    await downloadFailuresCsv(buildFilter())
+    await downloadFailuresCsv(buildFilter(), 'tenko-monitor')
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'CSVダウンロードエラー'
   } finally {

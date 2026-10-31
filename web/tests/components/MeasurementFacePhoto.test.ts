@@ -47,10 +47,19 @@ describe('MeasurementFacePhoto — 顔写真の表示', () => {
       props: { measurement: baseMeasurement({ face_photo_url: 'https://example.com/photo.jpg' }) },
     })
     await flush()
-    expect(fetchFacePhotoMock).toHaveBeenCalledWith('m-1')
+    expect(fetchFacePhotoMock).toHaveBeenCalledWith('m-1', 'default')
     const img = wrapper.find('img')
     expect(img.exists()).toBe(true)
     expect(img.attributes('src')).toBe('blob:http://localhost/photo')
+    wrapper.unmount()
+  })
+
+  it("scope prop を渡すとそのまま取得に使う ('tenko-monitor')", async () => {
+    const wrapper = await mountSuspended(MeasurementFacePhoto, {
+      props: { measurement: baseMeasurement({ face_photo_url: 'https://example.com/photo.jpg' }), scope: 'tenko-monitor' },
+    })
+    await flush()
+    expect(fetchFacePhotoMock).toHaveBeenCalledWith('m-1', 'tenko-monitor')
     wrapper.unmount()
   })
 
@@ -72,7 +81,7 @@ describe('MeasurementFacePhoto — 顔写真の表示', () => {
       props: { measurement: baseMeasurement({ face_photo_url: 'https://example.com/photo.jpg' }) },
     })
     await flush()
-    expect(fetchFacePhotoMock).toHaveBeenCalledWith('m-1')
+    expect(fetchFacePhotoMock).toHaveBeenCalledWith('m-1', 'default')
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.find('svg').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('顔認証なし')

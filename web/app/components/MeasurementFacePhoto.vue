@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { ApiMeasurement } from '~/types'
-import { fetchFacePhoto } from '~/utils/api'
+import { fetchFacePhoto, type RequestTokenScope } from '~/utils/api'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   measurement: ApiMeasurement
-}>()
+  /** 取得に使う鍵の scope (運行管理者席の閲覧は 'tenko-monitor') */
+  scope?: RequestTokenScope
+}>(), { scope: 'default' })
 
 const facePhotoUrl = ref<string | null>(null)
 const isLoadingPhoto = ref(false)
@@ -15,7 +17,7 @@ async function loadFacePhoto() {
   if (!props.measurement.face_photo_url) return
   isLoadingPhoto.value = true
   try {
-    const url = await fetchFacePhoto(props.measurement.id)
+    const url = await fetchFacePhoto(props.measurement.id, props.scope)
     if (unmounted) {
       if (url) URL.revokeObjectURL(url)
       return

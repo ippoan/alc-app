@@ -93,7 +93,7 @@ describe('TenkoSessionMonitor — 行クリックのセッション詳細に動�
     await flush()
     await wrapper.vm.$nextTick()
 
-    expect(getMeasurementMock).toHaveBeenCalledWith('m-1')
+    expect(getMeasurementMock).toHaveBeenCalledWith('m-1', 'tenko-monitor')
     expect(wrapper.text()).toContain('セッション詳細')
     expect(wrapper.findComponent({ name: 'MeasurementFacePhoto' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'MeasurementVideo' }).exists()).toBe(true)

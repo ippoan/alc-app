@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { ApiMeasurement } from '~/types'
-import { fetchMeasurementVideo } from '~/utils/api'
+import { fetchMeasurementVideo, type RequestTokenScope } from '~/utils/api'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   measurement: ApiMeasurement
-}>()
+  /** 取得に使う鍵の scope (運行管理者席の閲覧は 'tenko-monitor') */
+  scope?: RequestTokenScope
+}>(), { scope: 'default' })
 
 const videoUrl = ref<string | null>(null)
 const isLoadingVideo = ref(false)
@@ -15,7 +17,7 @@ async function loadVideo() {
   if (!props.measurement.video_url) return
   isLoadingVideo.value = true
   try {
-    const url = await fetchMeasurementVideo(props.measurement.id)
+    const url = await fetchMeasurementVideo(props.measurement.id, props.scope)
     if (unmounted) {
       if (url) URL.revokeObjectURL(url)
       return

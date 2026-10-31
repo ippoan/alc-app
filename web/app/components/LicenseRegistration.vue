@@ -138,7 +138,7 @@ async function fetchData() {
   isLoading.value = true
   error.value = null
   try {
-    employees.value = await getEmployees()
+    employees.value = await getEmployees('tenko-monitor')
   } catch (e) {
     error.value = e instanceof Error ? e.message : '取得エラー'
   } finally {

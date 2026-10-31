@@ -99,7 +99,7 @@ const filteredItems = computed(() => {
 async function load() {
   loading.value = true
   try {
-    items.value = await getCarryingItems()
+    items.value = await getCarryingItems('tenko-monitor')
   } catch (e) {
     console.error('携行品一覧取得エラー:', e)
   } finally {
@@ -157,7 +157,7 @@ async function removeItem(id: string) {
 
 onMounted(() => {
   load()
-  getVehicleCategories().then(v => { vehicleCats.value = v }).catch(() => {})
+  getVehicleCategories('tenko-monitor').then(v => { vehicleCats.value = v }).catch(() => {})
 })
 </script>
 

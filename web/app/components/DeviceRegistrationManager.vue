@@ -111,7 +111,7 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [d, p] = await Promise.all([listDevices(), listPendingDeviceRegistrations()])
+    const [d, p] = await Promise.all([listDevices('tenko-monitor'), listPendingDeviceRegistrations('tenko-monitor')])
     devices.value = d
     pending.value = p
     fetchWatchers()

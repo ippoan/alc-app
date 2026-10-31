@@ -20,7 +20,7 @@ const employees = ref<ApiEmployee[]>([])
 const employeeMap = ref<Record<string, string>>({})
 async function loadEmployees() {
   try {
-    const list = await getEmployees()
+    const list = await getEmployees('tenko-monitor')
     employees.value = list
     employeeMap.value = Object.fromEntries(list.map(e => [e.id, e.name]))
   } catch {}
@@ -46,7 +46,7 @@ async function fetchData() {
     if (filterTenkoType.value) filter.tenko_type = filterTenkoType.value
     if (filterDateFrom.value) filter.date_from = filterDateFrom.value
     if (filterDateTo.value) filter.date_to = filterDateTo.value
-    const res = await listTenkoSessions(filter)
+    const res = await listTenkoSessions(filter, 'tenko-monitor')
     sessions.value = res.sessions
     total.value = res.total
   } catch (e) {
@@ -73,7 +73,7 @@ async function handleCsvDownload() {
     if (filterTenkoType.value) filter.tenko_type = filterTenkoType.value
     if (filterDateFrom.value) filter.date_from = filterDateFrom.value
     if (filterDateTo.value) filter.date_to = filterDateTo.value
-    await downloadTenkoRecordsCsv(filter)
+    await downloadTenkoRecordsCsv(filter, 'tenko-monitor')
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'CSVダウンロードエラー'
   } finally {
@@ -194,7 +194,7 @@ async function openSessionDetail(s: TenkoSession) {
   if (!s.measurement_id) return
   sessionMeasurementLoading.value = true
   try {
-    const m = await getMeasurement(s.measurement_id)
+    const m = await getMeasurement(s.measurement_id, 'tenko-monitor')
     if (gen !== sessionMeasurementGen) return
     sessionMeasurement.value = m
   } catch {
@@ -499,8 +499,8 @@ onMounted(() => { loadEmployees(); fetchData() })
             <p v-if="sessionMeasurementLoading" class="text-sm text-gray-400">動画・写真を読み込み中…</p>
             <p v-else-if="sessionMeasurementError" class="text-red-600 text-xs">動画・写真を取得できませんでした</p>
             <template v-else-if="sessionMeasurement">
-              <MeasurementFacePhoto :key="`p-${sessionMeasurement.id}`" :measurement="sessionMeasurement" />
-              <MeasurementVideo :key="`v-${sessionMeasurement.id}`" :measurement="sessionMeasurement" />
+              <MeasurementFacePhoto :key="`p-${sessionMeasurement.id}`" :measurement="sessionMeasurement" scope="tenko-monitor" />
+              <MeasurementVideo :key="`v-${sessionMeasurement.id}`" :measurement="sessionMeasurement" scope="tenko-monitor" />
             </template>
           </div>
 
