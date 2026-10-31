@@ -913,6 +913,84 @@ describe('useVeinSerial', () => {
     })
   })
 
+  describe('照合のスコア (SCORE / TH / VIA / THS) と [vein] の記録', () => {
+    let info: ReturnType<typeof vi.spyOn>
+    beforeEach(() => { info = vi.spyOn(console, 'info').mockImplementation(() => {}) })
+    afterEach(() => { info.mockRestore() })
+
+    async function identifyWith(dev: MockPortHandle, text: string) {
+      const p = vein.identify()
+      await reply(dev, text)
+      return p
+    }
+
+    it('identify: 新しい応答は ID を返し、スコアを lastMatch と [vein] の行に残す (THS つきも)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      await expect(identifyWith(dev, 'VEIN IDENTIFIED 10 SCORE=72 TH=60 VIA=FV\n')).resolves.toBe(10)
+      expect(vein.lastMatch.value).toEqual({ kind: 'IDENTIFIED', id: 10, score: 72, threshold: 60, via: 'FV', thresholds: null })
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 IDENTIFIED id=10 score=72 th=60 via=FV')
+      await expect(identifyWith(dev, 'VEIN IDENTIFIED 11 SCORE=5 TH=60 VIA=FP THS=60,70,80\n')).resolves.toBe(11)
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 IDENTIFIED id=11 score=5 th=60 via=FP ths=60,70,80')
+    })
+
+    it('identify: 古い応答 (項目なし) も同じ ID。壊れた項目は null で、成否には響かない', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      await expect(identifyWith(dev, 'VEIN IDENTIFIED 12\n')).resolves.toBe(12)
+      expect(vein.lastMatch.value).toEqual({ kind: 'IDENTIFIED', id: 12, score: null, threshold: null, via: null, thresholds: null })
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 IDENTIFIED id=12')
+      await expect(identifyWith(dev, 'VEIN IDENTIFIED 13 SCORE=x TH= VIA=ZZ THS=1,a FOO=1 BAR\n')).resolves.toBe(13)
+      expect(vein.lastMatch.value).toEqual({ kind: 'IDENTIFIED', id: 13, score: null, threshold: null, via: null, thresholds: null })
+    })
+
+    it('identify: NOMATCH は null で記録。ID が読めない・ERR は失敗の行を残して投げる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      await expect(identifyWith(dev, 'VEIN NOMATCH\n')).resolves.toBeNull()
+      expect(vein.lastMatch.value).toMatchObject({ kind: 'NOMATCH', id: null })
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 NOMATCH')
+
+      const bad = vein.identify()
+      const a1 = expect(bad).rejects.toThrow('IDENTIFY の応答が読めません')
+      await reply(dev, 'VEIN IDENTIFIED 12abc SCORE=1\n')
+      await a1
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 失敗 IDENTIFY の応答が読めません')
+
+      const err = vein.identify()
+      const a2 = expect(err).rejects.toThrow(/^NO_MODULE$/)
+      await reply(dev, 'ERR VEIN NO_MODULE\n')
+      await a2
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 失敗 NO_MODULE')
+    })
+
+    it('verify: 戻り値は今まで通り (true / false)。スコアは lastMatch と [vein] の行へ。失敗は行を残して投げる', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const hit = vein.verify(10)
+      await reply(dev, 'VEIN VERIFIED 10 SCORE=80 TH=60 VIA=FP\n')
+      await expect(hit).resolves.toBe(true)
+      expect(vein.lastMatch.value).toEqual({ kind: 'VERIFIED', id: 10, score: 80, threshold: 60, via: 'FP', thresholds: null })
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 VERIFIED id=10 score=80 th=60 via=FP')
+
+      const old = vein.verify(10)
+      await reply(dev, 'VEIN VERIFIED 10\n')
+      await expect(old).resolves.toBe(true)
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 VERIFIED id=10')
+
+      const miss = vein.verify(10)
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect(miss).resolves.toBe(false)
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 NOMATCH')
+
+      const err = vein.verify(10)
+      const a = expect(err).rejects.toThrow(/^TIMEOUT$/)
+      await reply(dev, 'ERR VEIN TIMEOUT\n')
+      await a
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 失敗 TIMEOUT')
+    })
+  })
+
   describe('syncInfo', () => {
     it('VEIN SYNC INFO の登録人数と上限を返す。読めない行は Error', async () => {
       const dev = createMockPort()

@@ -147,6 +147,14 @@ describe('syncVeinTemplates', () => {
     templates: [{ employee_id: 'emp-1', template: 'AAAA', updated_at: '2026-09-25T00:00:00Z' }],
   }
 
+  it('同期できたら件数を [vein] の 1 行で残す', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    api.getVeinTemplates.mockResolvedValue(RES)
+    expect(await mod.syncVeinTemplates()).toBe(true)
+    expect(info).toHaveBeenCalledWith('[vein] 照合データ同期 完了 件数=1')
+    info.mockRestore()
+  })
+
   it('一覧を取って丸ごと保存し (logic_version も)、wasm を 1 度読んでおく', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(5000)

@@ -21,6 +21,7 @@ const props = defineProps<{
 }>()
 
 const vein = useVeinEmployeeIdentify({
+  label: 'it-tenko',
   scope: 'manager-device',
   missMessage: '指静脈が一致する人が見つかりません。もう一度置くか、社員番号で登録してください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,

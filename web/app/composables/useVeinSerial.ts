@@ -75,6 +75,49 @@ const CAPTURE_TIMEOUT_MS = 20000
  */
 const IDENTIFY_TIMEOUT_MS = 55_000
 
+/** モジュールの照合結果。`SCORE=`・`TH=`・`VIA=`・`THS=` は新しいファームだけが付ける (無ければ null) */
+export interface VeinMatchResult {
+  kind: 'IDENTIFIED' | 'VERIFIED' | 'NOMATCH'
+  /** モジュールの ID。NOMATCH は null */
+  id: number | null
+  score: number | null
+  threshold: number | null
+  via: 'FV' | 'FP' | null
+  thresholds: number[] | null
+}
+
+function toInt(v: string | undefined): number | null {
+  return v !== undefined && /^\d+$/.test(v) ? Number(v) : null
+}
+
+/** 結果の ID の後ろの `KEY=VALUE` を読む。知らない項目・壊れた値は null のまま */
+export function parseVeinMatchFields(tokens: readonly string[]): Pick<VeinMatchResult, 'score' | 'threshold' | 'via' | 'thresholds'> {
+  const kv = new Map<string, string>()
+  for (const t of tokens) {
+    const i = t.indexOf('=')
+    if (i > 0) kv.set(t.slice(0, i), t.slice(i + 1))
+  }
+  const via = kv.get('VIA')
+  const ths = kv.get('THS')?.split(',').map(toInt)
+  return {
+    score: toInt(kv.get('SCORE')),
+    threshold: toInt(kv.get('TH')),
+    via: via === 'FV' || via === 'FP' ? via : null,
+    thresholds: ths && ths.every(n => n !== null) ? (ths as number[]) : null,
+  }
+}
+
+/** 診断ログの 1 行 (`[vein]` は appConsoleCapture が /device-log へ写すタグ) */
+export function formatVeinMatch(r: VeinMatchResult): string {
+  if (r.kind === 'NOMATCH') return '[vein] 照合 NOMATCH'
+  const parts = [`id=${r.id}`]
+  if (r.score !== null) parts.push(`score=${r.score}`)
+  if (r.threshold !== null) parts.push(`th=${r.threshold}`)
+  if (r.via !== null) parts.push(`via=${r.via}`)
+  if (r.thresholds !== null) parts.push(`ths=${r.thresholds.join(',')}`)
+  return `[vein] 照合 ${r.kind} ${parts.join(' ')}`
+}
+
 /** `VEIN SAY` は読み取り中でもすぐ鳴るので capture より短くてよい */
 const SAY_TIMEOUT_MS = 5000
 
@@ -121,6 +164,8 @@ const deviceInfo = ref<DeviceLine | null>(null)
  * ここは設定の値なので 1 になる。
  */
 const omronBp = ref<boolean | null>(null)
+/** 直近の指静脈の照合結果 (成功は SCORE 等つき)。画面の挙動には使わない、記録用 */
+const lastMatch = ref<VeinMatchResult | null>(null)
 
 /** 掴んでいるポート (機体の再起動 {@link restart} に使う)。未接続は null */
 let openPort: SerialPort | null = null
@@ -520,18 +565,42 @@ export function useVeinSerial() {
     })
   }
 
+  /** 照合の結果 1 行を `[vein]` で残す (診断ログ経由で /device-log へ届く。名前は出さない) */
+  function recordMatch(result: VeinMatchResult): void {
+    lastMatch.value = result
+    console.info(formatVeinMatch(result))
+  }
+
+  /** 照合の失敗 (ERR・タイムアウト・読めない応答) を `[vein]` で残して投げ直す */
+  function failMatch(e: unknown): never {
+    console.info(`[vein] 照合 失敗 ${(e as Error).message}`)
+    throw e
+  }
+
+  /**
+   * 結果の末尾の任意の項目 (`SCORE=<n> TH=<n> VIA=FV|FP THS=<a>,<b>,<c>`) を読む。
+   * 古いファームは何も付けないので、無い・読めない項目は null (照合の成否には影響させない)
+   */
   async function identify(onAgain?: () => void): Promise<number | null> {
     const offAgain = watchAgain(onAgain)
     let line: string
     try {
       line = await veinRequest('VEIN IDENTIFY', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
     }
+    catch (e) {
+      return failMatch(e)
+    }
     finally {
       offAgain()
     }
-    if (line.startsWith('VEIN NOMATCH')) return null
-    const id = Number(line.slice('VEIN IDENTIFIED '.length).trim())
-    if (!Number.isInteger(id)) throw new Error('IDENTIFY の応答が読めません')
+    if (line.startsWith('VEIN NOMATCH')) {
+      recordMatch({ kind: 'NOMATCH', id: null, ...parseVeinMatchFields([]) })
+      return null
+    }
+    const [idToken = '', ...rest] = line.slice('VEIN IDENTIFIED '.length).trim().split(/\s+/)
+    if (!/^\d+$/.test(idToken)) return failMatch(new Error('IDENTIFY の応答が読めません'))
+    const id = Number(idToken)
+    recordMatch({ kind: 'IDENTIFIED', id, ...parseVeinMatchFields(rest) })
     return id
   }
 
@@ -541,13 +610,22 @@ export function useVeinSerial() {
    */
   async function verify(id: number, onAgain?: () => void): Promise<boolean> {
     const offAgain = watchAgain(onAgain)
+    let line: string
     try {
-      const line = await veinRequest(`VEIN VERIFY ${id}`, [`VEIN VERIFIED ${id}`, 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
-      return line.startsWith('VEIN VERIFIED')
+      line = await veinRequest(`VEIN VERIFY ${id}`, [`VEIN VERIFIED ${id}`, 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+    }
+    catch (e) {
+      return failMatch(e)
     }
     finally {
       offAgain()
     }
+    const verified = line.startsWith('VEIN VERIFIED')
+    const rest = line.slice(`VEIN VERIFIED ${id}`.length).trim().split(/\s+/)
+    recordMatch(verified
+      ? { kind: 'VERIFIED', id, ...parseVeinMatchFields(rest) }
+      : { kind: 'NOMATCH', id: null, ...parseVeinMatchFields([]) })
+    return verified
   }
 
   /**
@@ -672,6 +750,7 @@ export function useVeinSerial() {
     enroll,
     identify,
     verify,
+    lastMatch: readonly(lastMatch),
     syncWrite,
     syncClear,
     syncInfo,

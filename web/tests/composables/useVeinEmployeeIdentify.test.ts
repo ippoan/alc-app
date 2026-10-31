@@ -116,6 +116,19 @@ describe('useVeinEmployeeIdentify', () => {
     app.unmount()
   })
 
+  it('照合の開始を、どの画面かの印つきで [vein] に残す (印が無ければ -)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const a = setup({ label: 'kiosk' })
+    await a.api.identify()
+    expect(info).toHaveBeenCalledWith('[vein] 照合開始 screen=kiosk prompt=true')
+    a.app.unmount()
+    const b = setup()
+    await b.api.identify({ prompt: false })
+    expect(info).toHaveBeenCalledWith('[vein] 照合開始 screen=- prompt=false')
+    b.app.unmount()
+    info.mockRestore()
+  })
+
   it('古い構成は特徴量を読んで照合する。prompt: false なら「指を置いて」を鳴らさない', async () => {
     mod.usesVeinModule.mockReturnValue(false)
     const { api, app, opts } = setup({ onStart: undefined })

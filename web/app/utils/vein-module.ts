@@ -167,6 +167,7 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     return false
   }
   moduleSyncing = true
+  const stat = { written: 0, cleared: 0, unchanged: 0, failed: 0 }
   try {
     const { templates } = await getVeinModuleTemplates(opts.scope)
     const entries = new Map((await loadVeinModuleEntries()).map(e => [e.employeeId, e]))
@@ -180,8 +181,10 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
         await port.syncClear(entry.moduleId)
         await deleteVeinModuleEntry(entry.employeeId)
         entries.delete(entry.employeeId)
+        stat.cleared += 1
       }
       catch (e) {
+        stat.failed += 1
         console.warn('[vein] モジュールから消せませんでした (次の同期で取り直す):', e)
       }
     }
@@ -189,7 +192,10 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     for (const t of templates) {
       const current = entries.get(t.employee_id)
       // この端末で足した指を「その場で撮った記録」のまま使う設定: サーバーの版が変わっても書き換えない
-      if (keepsOnSpotRecord(current)) continue
+      if (keepsOnSpotRecord(current)) {
+        stat.unchanged += 1
+        continue
+      }
       // native の記録は版が同じでも混ぜた記録とは中身が違うので、設定が mixed なら書き直す (下へ進む)
       if (current?.updatedAt === t.updated_at && !current.native) {
         // この端末で登録した記録が承認された: モジュールには既に在る。登録した端末もサーバーの値に合わせる
@@ -197,10 +203,12 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
         if (!current.approved || (current.registeredDeviceId ?? null) !== registeredDeviceId) {
           await putVeinModuleEntry({ ...current, approved: true, registeredDeviceId })
         }
+        stat.unchanged += 1
         continue
       }
       const id = allocateVeinModuleId([...entries.values()], t.employee_id)
       if (id === null) {
+        stat.failed += 1
         console.warn('[vein] モジュールの ID が空いていません (10〜100)')
         continue
       }
@@ -218,12 +226,15 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
         }
         await putVeinModuleEntry(entry)
         entries.set(t.employee_id, entry)
+        stat.written += 1
       }
       catch (e) {
+        stat.failed += 1
         console.warn('[vein] モジュールへ書けませんでした (次の同期で取り直す):', e)
       }
     }
     lastModuleSyncedAt = Date.now()
+    console.info(`[vein] モジュール同期 完了 書き込み=${stat.written} 消去=${stat.cleared} 変更なし=${stat.unchanged} 失敗=${stat.failed} 対象=${templates.length}`)
     return true
   }
   catch (e) {

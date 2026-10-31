@@ -297,6 +297,7 @@ async function onManualSubmit() {
 const veinSerial = useVeinSerial()
 // 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)
 const vein = useVeinEmployeeIdentify({
+  label: 'kiosk',
   missMessage: VEIN_NO_MATCH_MESSAGE,
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`,
   // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る

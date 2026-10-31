@@ -52,6 +52,7 @@ const addFingerEmployee = ref<{ id: string; name: string } | null>(null)
 // 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)。
 // 読み取り中 (`vein.busy`)・撮り直し・理由は、カードで決めた人の 1:1 の確かめ (下) も使う
 const vein = useVeinEmployeeIdentify({
+  label: 'bp',
   missMessage: '照合できませんでした。もう一度置くか、下のカードか社員番号で進んでください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。下の「未承認の指静脈」から運行管理者が承認してください`,
   onEmployee: (emp) => {

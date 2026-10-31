@@ -59,6 +59,7 @@ export async function syncVeinTemplates(opts: { ifOlderThanMs?: number; module?:
     })
     lastSyncedAt = Date.now()
     await loadVeinWasm()
+    console.info(`[vein] 照合データ同期 完了 件数=${res.templates.length}`)
     return true
   }
   catch (e) {
