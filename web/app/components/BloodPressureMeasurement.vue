@@ -45,6 +45,10 @@ type BpStep = 'nfc' | 'face_auth' | 'measure' | 'done' | 'vein' | 'vein_list' | 
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
 const veinSerial = useVeinSerial()
+// 「この端末の指を足す」(Refs ippoan/alc-app#558)。カードで決めた人の指が不一致だったときの入口。測定台の鍵で送る
+const fingerAdd = useVeinAddDevice({ scope: 'default' })
+/** 指静脈が不一致だった乗務員 (足すボタンの対象)。次の人・やり直しで null */
+const addFingerEmployee = ref<{ id: string; name: string } | null>(null)
 // 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)。
 // 読み取り中 (`vein.busy`)・撮り直し・理由は、カードで決めた人の 1:1 の確かめ (下) も使う
 const vein = useVeinEmployeeIdentify({
@@ -120,12 +124,16 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
   vein.busy.value = true
   vein.again.value = false
   vein.error.value = null
+  addFingerEmployee.value = null
+  fingerAdd.reset()
   try {
     const moduleId = await prepareVeinModuleRecord(veinSerial, emp.id)
     if (moduleId === null) return 'no_record'
     await veinSerial.say('PLACE')
     if (await veinSerial.verify(moduleId, () => { vein.again.value = true })) return 'verified'
     await veinSerial.say('FAILED').catch(() => {})
+    // 別の端末で撮った記録だと通りにくい。この端末の指を足せるようにする (測定は止めない)
+    addFingerEmployee.value = { id: emp.id, name: emp.name }
     return '指静脈は一致しませんでした (カード・社員番号で本人を確認済みのため、このまま測定します)'
   }
   catch (e) {
@@ -328,6 +336,8 @@ function leaveDone() {
 }
 
 function reset() {
+  addFingerEmployee.value = null
+  fingerAdd.reset()
   step.value = 'nfc'
   employeeId.value = ''
   employeeName.value = ''
@@ -431,6 +441,19 @@ function reset() {
         <p class="text-sm text-gray-500 mb-4">{{ employeeName }}さん</p>
         <BleStatus @next="onMeasureNext" @skip="reset" />
         <p v-if="measureNotice" class="mt-3 text-sm text-amber-700 text-center">{{ measureNotice }}</p>
+        <!-- 指静脈が不一致だった人: この端末の指を足す (足すと次からこの端末でも通りやすい。測定はそのまま進められる) -->
+        <div v-if="addFingerEmployee && !fingerAdd.added.value" class="mt-3">
+          <button
+            data-testid="vein-add-device"
+            :disabled="fingerAdd.adding.value || !fingerAdd.available.value"
+            class="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+            @click="fingerAdd.add(addFingerEmployee.id)"
+          >
+            {{ fingerAdd.adding.value ? (fingerAdd.notice.value ?? '指を置いてください…') : 'この端末の指を足す' }}
+          </button>
+        </div>
+        <p v-if="fingerAdd.added.value" data-testid="vein-add-device-done" class="mt-3 text-sm text-emerald-700 text-center">この端末の指を足しました</p>
+        <p v-if="fingerAdd.error.value" data-testid="vein-add-device-error" class="mt-3 text-sm text-red-600 text-center">{{ fingerAdd.error.value }}</p>
         <div v-if="bleWatch.state.value !== 'ok'" data-testid="ble-watch-warning" class="mt-3 text-sm text-red-600 text-center">
           <p>血圧計との通信が止まっています。Vein Station を再起動してください</p>
           <button

@@ -147,6 +147,15 @@ const vein = useVeinEmployeeIdentify({
   },
 })
 
+// 「この端末の指を足す」(Refs ippoan/alc-app#558)。NFC + 顔認証で入った運行管理者に、任意で出す
+// (指静脈で入った人は、この端末の指で通ったので要らない)。ログインは止めない
+const fingerAdd = useVeinAddDevice({ scope: 'manager-device' })
+/** NFC + 顔認証 (または指紋) で入った。足すボタンを出す対象 */
+const enteredByCard = ref(false)
+const canAddFinger = computed(() =>
+  props.requiredRole === 'manager' && enteredByCard.value && !!authenticatedEmployee.value && fingerAdd.available.value,
+)
+
 // 手動入力
 async function onManualSubmit() {
   const input = manualIdInput.value.trim()
@@ -184,6 +193,7 @@ function grantAccess() {
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) {
     if (employeeId.value) authorizeEmployee(employeeId.value)
+    enteredByCard.value = true
     grantAccess()
   } else {
     errorMessage.value = '顔認証に失敗しました。もう一度お試しください。'
@@ -221,6 +231,8 @@ onMounted(() => {
 
 // リセット
 function resetAuth() {
+  enteredByCard.value = false
+  fingerAdd.reset()
   setManagerId(null)
   authState.value = 'pending'
   authenticatedEmployee.value = null
@@ -243,6 +255,19 @@ function resetAuth() {
     <div v-if="authenticatedEmployee" class="bg-green-50 border-b border-green-200 px-4 py-1.5 text-center text-xs text-green-700">
       {{ authenticatedEmployee.name }} ({{ roleLabel[requiredRole] }}) としてログイン中
       <button class="ml-2 underline hover:text-green-900" @click="resetAuth">ログアウト</button>
+      <!-- 任意: この端末で指静脈が通りにくい人が、この端末の指を足す -->
+      <template v-if="canAddFinger">
+        <button
+          data-testid="vein-add-device"
+          :disabled="fingerAdd.adding.value"
+          class="ml-3 underline hover:text-green-900 disabled:opacity-50"
+          @click="fingerAdd.add(authenticatedEmployee!.id)"
+        >
+          {{ fingerAdd.adding.value ? (fingerAdd.notice.value ?? '指を置いてください…') : 'この端末の指を足す' }}
+        </button>
+      </template>
+      <span v-if="fingerAdd.added.value" data-testid="vein-add-device-done" class="ml-3">この端末の指を足しました</span>
+      <span v-if="fingerAdd.error.value" data-testid="vein-add-device-error" class="ml-3 text-red-600">{{ fingerAdd.error.value }}</span>
     </div>
     <slot />
   </div>

@@ -752,6 +752,37 @@ export async function putVeinModuleRecord(
   return request<{ employee_id: string; updated_at: string }>(path, options)
 }
 
+/**
+ * この端末の指を足す: 端末のモジュールで今撮った記録を、**この端末の分として**サーバーへ預ける
+ * (`PUT /api/vein/templates/{id}/module/devices`、Refs ippoan/alc-app#558)。承認は挟まない。
+ *
+ * サーバーは端末を token の `X-Device-Id` から取るので、**必ず端末の token で送る**
+ * (管理者の token や無認証には落とさない)。`scope` で使う鍵を選ぶ: `'manager-device'` = 運行管理者席、
+ * `'bp-station'` = 測定台、それ以外 = キオスク。鍵が取れなければ、その scope の
+ * `*_DEVICE_AUTH_FAILED_MESSAGE` を投げる。
+ *
+ * 承認済みのモジュールの記録がまだ無い人は 409 (`no_approved_module_record`)、記録が壊れていれば 422。
+ * 呼び出し側が {@link apiErrorCode} で読める
+ */
+export async function putVeinModuleDeviceRecord(
+  employeeId: string,
+  record: Uint8Array,
+  scope: RequestTokenScope = 'default',
+): Promise<{ employee_id: string; updated_at: string }> {
+  const [getter, failed] = scope === 'manager-device'
+    ? [getManagerDeviceJwt, MANAGER_DEVICE_AUTH_FAILED_MESSAGE] as const
+    : scope === 'bp-station'
+      ? [getBpStationDeviceJwt, BP_STATION_DEVICE_AUTH_FAILED_MESSAGE] as const
+      : [getKioskDeviceJwt, KIOSK_DEVICE_AUTH_FAILED_MESSAGE] as const
+  const jwt = await getter?.()
+  if (!jwt) throw new Error(failed)
+  return proxyRequest<{ employee_id: string; updated_at: string }>(
+    `/api/vein/templates/${encodeURIComponent(employeeId)}/module/devices`,
+    jwt,
+    { method: 'PUT', body: JSON.stringify({ record: bytesToBase64(record) }) },
+  )
+}
+
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
 export interface ApiVeinModuleRecord {
   employee_id: string
@@ -759,6 +790,11 @@ export interface ApiVeinModuleRecord {
   updated_at: string
   /** 登録した端末の id (端末の token の sub)。分からなければ null / 無し (古いサーバー) */
   registered_device_id?: string | null
+  /**
+   * 端末の token で取ったとき、その端末向けに組んだ記録か (その端末で撮った 3 本 + 他端末の新しい 3 本)。
+   * 端末の token でない・古いサーバーでは無し
+   */
+  composed?: boolean
 }
 
 /** 承認済みのモジュールの記録を全件取る (端末のモジュールへ書き戻す元、Refs ippoan/alc-app#436) */

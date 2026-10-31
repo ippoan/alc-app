@@ -65,6 +65,20 @@ mockNuxtImport('useVeinEmployeeIdentify', () => (opts: VeinOpts) => {
   return { ...veinState, identify: veinIdentifyMock, sync: vi.fn() }
 })
 
+// 「この端末の指を足す」(Refs ippoan/alc-app#558)。手順は useVeinAddDevice.test.ts の領分で、ここは入口だけ見る
+const addDevice = { add: vi.fn(async () => true), reset: vi.fn(), scope: null as string | null }
+const addState = {
+  adding: ref(false),
+  available: ref(true),
+  added: ref(false),
+  error: ref<string | null>(null),
+  notice: ref<string | null>(null),
+}
+mockNuxtImport('useVeinAddDevice', () => (opts: { scope: string }) => {
+  addDevice.scope = opts.scope
+  return { ...addState, add: addDevice.add, reset: addDevice.reset }
+})
+
 // NFC の読み取りは部品を差し替え、`read` を流す
 const NfcStatusStub = { name: 'NfcStatus', template: '<div data-testid="nfc-status" />', emits: ['read'] }
 const stubs = { NfcStatus: NfcStatusStub }
@@ -297,5 +311,88 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     expect(veinOpts!.pendingMessage(null)).toContain('この人さん')
     expect(veinOpts!.pendingMessage('テスト')).toContain('テストさん')
     wrapper.unmount()
+  })
+})
+
+describe('RoleAuthGate — この端末の指を足す (Refs ippoan/alc-app#558)', () => {
+  beforeEach(() => {
+    addDevice.add.mockClear()
+    addDevice.reset.mockClear()
+    addState.adding.value = false
+    addState.available.value = true
+    addState.added.value = false
+    addState.error.value = null
+    addState.notice.value = null
+    employee.value = { id: 'emp-test-6', name: 'テスト五郎', role: ['manager'], face_approval_status: 'approved' }
+  })
+
+  /** NFC → 顔認証の成功まで進める */
+  async function loginByCard(wrapper: Awaited<ReturnType<typeof mountGate>>) {
+    await readNfc(wrapper, '0006')
+    wrapper.findComponent({ name: 'FaceAuth' }).vm.$emit('result', { verified: true, similarity: 0.9 })
+    await settle(wrapper)
+  }
+
+  it('NFC + 顔認証で入った運行管理者には、運行管理者席の鍵で足すボタンを任意で出す (ログインは止めない)', async () => {
+    const wrapper = await mountGate('manager')
+    expect(addDevice.scope).toBe('manager-device')
+    await loginByCard(wrapper)
+    expect(wrapper.text()).toContain('テスト五郎 (運行管理者) としてログイン中')
+    const btn = wrapper.find('[data-testid="vein-add-device"]')
+    expect(btn.text()).toBe('この端末の指を足す')
+    await btn.trigger('click')
+    expect(addDevice.add).toHaveBeenCalledWith('emp-test-6')
+    wrapper.unmount()
+  })
+
+  it('足している間は案内 (置き直し / 既定の文言) を出して押せない。結果と失敗の理由も出る', async () => {
+    const wrapper = await mountGate('manager')
+    await loginByCard(wrapper)
+    addState.adding.value = true
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device"]').text()).toBe('指を置いてください…')
+    expect(wrapper.find('[data-testid="vein-add-device"]').attributes('disabled')).toBeDefined()
+    addState.notice.value = 'もう一度置いてください (2/6)'
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device"]').text()).toBe('もう一度置いてください (2/6)')
+    addState.adding.value = false
+    addState.added.value = true
+    addState.error.value = '失敗の理由'
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device-done"]').text()).toBe('この端末の指を足しました')
+    expect(wrapper.find('[data-testid="vein-add-device-error"]').text()).toBe('失敗の理由')
+    wrapper.unmount()
+  })
+
+  it('Vein の機体が繋がっていなければ出さない。ログアウトで消し、控えも片付ける', async () => {
+    const wrapper = await mountGate('manager')
+    addState.available.value = false
+    await loginByCard(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    addState.available.value = true
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(true)
+    await wrapper.findAll('button').find(b => b.text() === 'ログアウト')!.trigger('click')
+    await settle(wrapper)
+    expect(addDevice.reset).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('指静脈で入った人・システム管理者の入口には出さない', async () => {
+    const byVein = await mountGate('manager')
+    await veinOpts!.onEmployee(employee.value as never)
+    await settle(byVein)
+    expect(byVein.text()).toContain('としてログイン中')
+    expect(byVein.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    byVein.unmount()
+
+    employee.value = { ...employee.value, role: ['admin'] }
+    const admin = await mountGate('admin')
+    await submitCode(admin, '0006')
+    admin.findComponent({ name: 'FaceAuth' }).vm.$emit('result', { verified: true, similarity: 0.9 })
+    await settle(admin)
+    expect(admin.text()).toContain('としてログイン中')
+    expect(admin.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    admin.unmount()
   })
 })

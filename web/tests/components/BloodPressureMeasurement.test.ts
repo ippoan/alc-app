@@ -69,6 +69,22 @@ const vein = vi.hoisted(() => ({
 }))
 mockNuxtImport('useVeinSerial', () => () => ({ ...vein, isConnected: veinIsConnected, connect: veinConnect }))
 
+// 「この端末の指を足す」(Refs ippoan/alc-app#558)。手順は useVeinAddDevice.test.ts の領分で、ここは入口だけ見る
+const addDevice = vi.hoisted(() => ({
+  add: vi.fn(),
+  reset: vi.fn(),
+  scope: null as string | null,
+}))
+const addAdding = ref(false)
+const addAvailable = ref(true)
+const addAdded = ref(false)
+const addError = ref<string | null>(null)
+const addNotice = ref<string | null>(null)
+mockNuxtImport('useVeinAddDevice', () => (opts: { scope: string }) => {
+  addDevice.scope = opts.scope
+  return { adding: addAdding, available: addAvailable, added: addAdded, error: addError, notice: addNotice, add: addDevice.add, reset: addDevice.reset }
+})
+
 // 血圧を待っている間の BLE の見張り。止まりの警告と再起動のボタンを出すかだけを差し替える
 const bleWatchState = ref<'ok' | 'stuck' | 'no-reply'>('ok')
 mockNuxtImport('useBleWatch', () => () => ({ state: bleWatchState, stuckStage: ref(null) }))
@@ -1152,6 +1168,82 @@ describe('BloodPressureMeasurement — カード・社員番号で決まった�
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
     expect(wrapper.text()).toContain('指静脈は一致しませんでした (カード・社員番号で本人を確認済みのため、このまま測定します)')
     wrapper.unmount()
+  })
+
+  it('★ 外れた人には「この端末の指を足す」を出し、押すとその人で足す (測定台の鍵。測定は止めない)', async () => {
+    vein.verify.mockResolvedValue(false)
+    addDevice.add.mockReset().mockResolvedValue(true)
+    addAdding.value = false
+    addAvailable.value = true
+    addAdded.value = false
+    addError.value = null
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(addDevice.scope).toBe('default')
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    const btn = wrapper.find('[data-testid="vein-add-device"]')
+    expect(btn.text()).toBe('この端末の指を足す')
+    await btn.trigger('click')
+    expect(addDevice.add).toHaveBeenCalledWith('emp-test-1')
+    wrapper.unmount()
+  })
+
+  it('足している間は押せず、案内 (置き直し) をボタンに出す。足せない状態でも押せない', async () => {
+    vein.verify.mockResolvedValue(false)
+    addAdding.value = true
+    addNotice.value = 'もう一度置いてください (2/6)'
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    const btn = wrapper.find('[data-testid="vein-add-device"]')
+    expect(btn.text()).toBe('もう一度置いてください (2/6)')
+    expect(btn.attributes('disabled')).toBeDefined()
+    addNotice.value = null
+    await flush(wrapper)
+    expect(btn.text()).toBe('指を置いてください…')
+    addAdding.value = false
+    addAvailable.value = false
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device"]').attributes('disabled')).toBeDefined()
+    addAvailable.value = true
+    wrapper.unmount()
+  })
+
+  it('足せたらボタンを「足しました」に換え、失敗は理由を出す。次の人 (やり直し) で控えを消す', async () => {
+    vein.verify.mockResolvedValue(false)
+    addAdding.value = false
+    addAdded.value = true
+    addError.value = '登録に失敗'
+    const wrapper = await mountBp()
+    await tapCard(wrapper)
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vein-add-device-done"]').text()).toBe('この端末の指を足しました')
+    expect(wrapper.find('[data-testid="vein-add-device-error"]').text()).toBe('登録に失敗')
+    addDevice.reset.mockClear()
+    await wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await flush(wrapper)
+    expect(addDevice.reset).toHaveBeenCalled()
+    addAdded.value = false
+    addError.value = null
+    wrapper.unmount()
+  })
+
+  it('一致した人・失敗で確かめられなかった人には「この端末の指を足す」を出さない', async () => {
+    addAdded.value = false
+    addError.value = null
+    const ok = await mountBp()
+    await tapCard(ok)
+    await flush(ok)
+    expect(ok.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    ok.unmount()
+    veinModule.prepareVeinModuleRecord.mockRejectedValue(new Error('WRITE_SEQ'))
+    const failed = await mountBp()
+    await tapCard(failed)
+    await flush(failed)
+    expect(failed.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    failed.unmount()
   })
 
   it('記録を用意できない・照合で失敗したら、理由を添えて測定へ (顔認証は使わない)', async () => {

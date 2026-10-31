@@ -35,6 +35,8 @@ export const VEIN_ENROLL_RETAKE_MESSAGE = 'もう一度、最初から登録し�
 const VEIN_RC_MESSAGES: Record<string, string> = {
   '11': '静脈が写りませんでした。指を奥までまっすぐ置き、動かさずに、もう一度登録してください',
   '09': '途中で違う指が置かれました。同じ指で、もう一度最初から登録してください',
+  // 登録しようとした指が、既に別の ID に登録されている (ファームの重複検査。Refs ippoan/alc-app#558)
+  '0A': 'この指は、この端末にすでに別の登録があります。別の人として登録されていないか、指を確かめてください',
 }
 
 /** ERR VEIN の理由 (useVeinSerial が message に載せる) / 422 の message (apiErrorMessage) を拾う */
