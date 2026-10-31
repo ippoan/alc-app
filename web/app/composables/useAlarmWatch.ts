@@ -50,8 +50,9 @@
  * VoiceS3R が繋がっていない席では、Vein Base が警告デバイスを兼ねる: VoiceS3R と同じ heartbeat
  * (`useAlarmDevice().heartbeatLine`) を Vein Base へ送る (`useVeinSerial().alarm`)。機体は初回の
  * `HB OK` で武装し、途切れたら自分で鳴る。VoiceS3R が繋がったら Vein Base へは `HB OFF` を送って
- * 見張りを解く (送らずにやめると、途切れたとみなして鳴る)。見張りをやめたときは `HB OFF` を送らない —
- * VoiceS3R の切断と同じく、設定を off にした席は鳴る (ManagerAlarmBar 冒頭の「止める (= デバイスが鳴る)」)。
+ * 見張りを解く (送らずにやめると、途切れたとみなして鳴る)。設定を off にして見張りをやめたときも
+ * `HB OFF` を送って解く。VoiceS3R は抜けば済むが、Vein は運行者端末の指静脈の読み取りにも使い
+ * 挿したままなので、送らないと off にした端末でいつまでも鳴る。
  *
  * 猶予の 2 分が過ぎてから繋がり直すまでのあいだは `useSeatDisconnectGrace().expired` が true
  * (IT点呼 の受け画面が、開いている点呼を閉じて理由を出すのに読む)。設定を off にして自分で
@@ -198,7 +199,7 @@ export function useAlarmWatch(): void {
     stopCountdown()
     disconnectExpired.value = false
     seat.setDisconnectDeadline(Date.now())
-    vein.alarm.stop(false)
+    vein.alarm.stop(true)
     void alarm.disconnect()
     // 参照カウントなので、遠隔点呼タブの子が先に stop していても WebSocket は残る
     rooms.stop()
