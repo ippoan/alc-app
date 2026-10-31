@@ -605,7 +605,11 @@ export function useDeviceToken() {
       const busy = lastError.value.includes(SERIAL_BUSY_MARK) || lastError.value.includes(OTA_LOCKED_MESSAGE)
       // 署名の段で機体が返事をしなかった回は短く抑止する (上の SIGN_TIMEOUT_BACKOFF_MS)
       const signTimeout = (stage === 'coreS3-sign' || stage === 'vein-sign') && lastError.value.includes(SIGN_TIMEOUT_MARK)
-      const backoffMs = busy ? 0 : signTimeout ? SIGN_TIMEOUT_BACKOFF_MS : CORE_S3_BACKOFF_MS
+      // Vein の鍵がキオスクとして断られた (401 invalid_alarm_token) = 鍵が別の用途 (運行管理者席) で登録されている。
+      // 何度頼んでも同じなので、つなぎ直すまで頼まない (接続の watch が 0 に戻す)。頼み続けると、同じ機体に
+      // 運行管理者席の鍵の署名を頼む useManagerDeviceToken がポートを取れず、席の鍵が取れなくなる
+      const notKioskKey = signer.source === 'vein' && stage === 'token-exchange' && status === 401 && code === 'invalid_alarm_token'
+      const backoffMs = notKioskKey ? Number.POSITIVE_INFINITY : busy ? 0 : signTimeout ? SIGN_TIMEOUT_BACKOFF_MS : CORE_S3_BACKOFF_MS
       if (backoffMs > 0) signer.backoffUntil.value = nowMs + backoffMs
       warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, backoffMs / 1000)
       return null

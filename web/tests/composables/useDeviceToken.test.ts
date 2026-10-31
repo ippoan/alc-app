@@ -1957,6 +1957,36 @@ describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
     expect(lastFailureStatus.value).toBe(401)
   })
 
+  it('★ Vein の鍵がキオスクとして断られた (401 invalid_alarm_token) ら、つなぎ直すまで Vein に頼まない (運行管理者席の鍵の署名とポートを取り合わない)', async () => {
+    vi.useFakeTimers()
+    try {
+      veinMock.isConnected.value = true
+      signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-v', sig: 'sig-v' })
+      const fetchMock = stubFetch({ tokenStatus: 401 })
+
+      const useDeviceToken = await load()
+      const { getDeviceJwt, failureBackoffUntil } = useDeviceToken()
+
+      expect(await getDeviceJwt()).toBeNull()
+      expect(failureBackoffUntil.value).toBe(Number.POSITIVE_INFINITY)
+      // いつもの抑止 (60 秒) を過ぎても頼まない
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(await getDeviceJwt()).toBeNull()
+      expect(signAlarmDeviceNonceMock).toHaveBeenCalledTimes(1)
+
+      // つなぎ直したら抑止を解いて取り直す (鍵をキオスクとして登録し直した後など)
+      fetchMock.mockClear()
+      stubFetch()
+      veinMock.isConnected.value = false
+      veinMock.isConnected.value = true
+      await vi.runAllTimersAsync()
+      expect(await getDeviceJwt()).toBe('vein-jwt')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('指静脈の読み取りと重なって断られた回 (既に応答待ちです) は抑止せず、次の呼び出しで取り直す', async () => {
     veinMock.isConnected.value = true
     signAlarmDeviceNonceMock
