@@ -5,6 +5,8 @@ import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import TenkoManagerJudgmentPanel from '~/components/TenkoManagerJudgmentPanel.vue'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
+import { devDeviceJwt } from '../helpers/dummy-jwt'
+import { DEV_DEVICE_MARK_EVENT, noteDeviceToken } from '~/utils/token-selection'
 import { readReloadContext, resetReloadContext } from '~/composables/useKioskScreen'
 
 // 運行管理者側の IT点呼 の受け画面 (Refs ippoan/alc-app#387)。
@@ -102,6 +104,18 @@ mockNuxtImport('useCamera', () => () => ({
   stop: cameraStopMock,
 }))
 
+// 指静脈の照合 (手順は useVeinEmployeeIdentify.test.ts の領分)。部品が渡した設定を控え、特定した人を渡すのはテストが行う。
+// 作られた回数を数える = 本番の席で「同期も自動照合も走らない」ことの確認
+type VeinOpts = Parameters<typeof import('~/composables/useVeinEmployeeIdentify').useVeinEmployeeIdentify>[0]
+const veinInstances: VeinOpts[] = []
+const veinState = { ready: ref(true), busy: ref(false), again: ref(false), error: ref<string | null>(null) }
+const veinIdentifyMock = vi.fn(async () => {})
+const veinSyncMock = vi.fn()
+mockNuxtImport('useVeinEmployeeIdentify', () => (opts: VeinOpts) => {
+  veinInstances.push(opts)
+  return { ...veinState, identify: veinIdentifyMock, sync: veinSyncMock }
+})
+
 // 席の運行管理者 (useItTenkoManager) と共有の ID (useManagerAuth) は実物を使う
 
 const MANAGER_KEY = 'alc_it_tenko_manager_id'
@@ -175,6 +189,12 @@ async function registerOnCard(w: Wrapper, code: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  veinInstances.length = 0
+  veinState.ready.value = true
+  veinState.busy.value = false
+  veinState.again.value = false
+  veinState.error.value = null
+  noteDeviceToken('manager-device', null)
   webRtcRoles.length = 0
   activeRoomsRef.value = []
   callingRoomsRef.value = []
@@ -1932,5 +1952,210 @@ describe('TenkoItAdminView — 「機体を使用中」の申告', () => {
     await click(idModal(w).findAll('button').find(b => b.text() === 'キャンセル')!, w)
     expect(isDeviceBusy.value).toBe(false)
     w.unmount()
+  })
+})
+
+
+describe('TenkoItAdminView — 指静脈での登録 (開発用の運行管理者席だけ)', () => {
+  const veinButtons = (w: Wrapper) => w.findAll('[data-testid="it-vein-register-button"]')
+  const lastOpts = () => veinInstances[veinInstances.length - 1]!
+  const MGR = { id: 'mgr-9', name: '指 管理', role: ['driver', 'manager'] }
+
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  afterEach(() => {
+    noteDeviceToken('manager-device', null)
+  })
+
+  it('★ 本番の席 (印なし): 入口を出さず、照合も同期も作らない。社員番号の登録はそのまま', async () => {
+    getEmployeeByCodeMock.mockResolvedValue({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    expect(veinButtons(w)).toHaveLength(0)
+    expect(w.find('[data-testid="it-vein-register"]').exists()).toBe(false)
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(veinButtons(w)).toHaveLength(0)
+    expect(veinInstances).toHaveLength(0)
+    expect(veinSyncMock).not.toHaveBeenCalled()
+    expect(veinIdentifyMock).not.toHaveBeenCalled()
+    await submitManagerCode(w, '001')
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it('開発用の席: 上部の枠に「指静脈で登録」が出て、押すと照合する (運行管理者席の鍵)', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    const w = await mountView()
+    expect(veinButtons(w)).toHaveLength(1)
+    expect(card(w).find('[data-testid="it-vein-register-button"]').text()).toBe('指静脈で登録')
+    expect(lastOpts().scope).toBe('manager-device')
+    await click(veinButtons(w)[0]!, w)
+    expect(veinIdentifyMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it('機体が繋がっていなければボタンを出さない。読み取り中・撮り直し・失敗の理由を出す', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    veinState.ready.value = false
+    const w = await mountView()
+    expect(veinButtons(w)).toHaveLength(0)
+    veinState.ready.value = true
+    veinState.busy.value = true
+    await flush()
+    expect(veinButtons(w)[0]!.text()).toBe('指を置いてください…')
+    expect(veinButtons(w)[0]!.attributes('disabled')).toBeDefined()
+    veinState.again.value = true
+    await flush()
+    expect(veinButtons(w)[0]!.text()).toBe('もう一度置いてください…')
+    veinState.busy.value = false
+    veinState.error.value = '一致しません (テスト)'
+    await flush()
+    expect(w.find('[data-testid="it-vein-register-error"]').text()).toBe('一致しません (テスト)')
+    w.unmount()
+  })
+
+  it('当たった人が manager なら席に登録される (id だけ保存) — 入力欄は消えて名前が出る', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    const w = await mountView()
+    expect(await lastOpts().onEmployee(MGR as never)).toBeNull()
+    await flush()
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('指 管理')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-9')
+    expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
+    // 登録しただけでは何も開かない
+    expect(connectMock).not.toHaveBeenCalled()
+    // 登録済みの席には入口を出さない (社員番号の入口と同じ)
+    expect(veinButtons(w)).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('権限が無い人は理由を返して登録しない', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    const w = await mountView()
+    const msg = await lastOpts().onEmployee({ id: 'emp-1', name: '山田 太郎', role: ['driver'] } as never)
+    expect(msg).toBe('山田 太郎さんには運行管理者の権限がありません')
+    await flush()
+    expect(card(w).find('[data-testid="it-manager-name"]').exists()).toBe(false)
+    expect(localStorage.getItem(MANAGER_KEY)).toBeNull()
+    w.unmount()
+  })
+
+  it('一致なし・未承認の案内文', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    const w = await mountView()
+    expect(lastOpts().missMessage).toContain('指静脈が一致する人が見つかりません')
+    expect(lastOpts().pendingMessage('山田 太郎')).toContain('山田 太郎さんの指静脈は未承認です')
+    expect(lastOpts().pendingMessage(null)).toContain('この人さんの指静脈は未承認です')
+    w.unmount()
+  })
+
+  it('isIdle: 待機中は true。busy・点呼を開いている間・繋いでいる途中・登録の照会中・画面共有・席の切断では false', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    const w = await mountView()
+    expect(lastOpts().isIdle()).toBe(true)
+    veinState.busy.value = true
+    expect(lastOpts().isIdle()).toBe(false)
+    veinState.busy.value = false
+    // 登録の照会中
+    let resolveCode!: (v: unknown) => void
+    getEmployeeByCodeMock.mockReturnValue(new Promise((r) => { resolveCode = r }))
+    await card(w).find('input').setValue('001')
+    await card(w).findAll('button').find(b => b.text() === '登録')!.trigger('click')
+    await flush()
+    expect(lastOpts().isIdle()).toBe(false)
+    resolveCode({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
+    await flush()
+    // 席の切断
+    await changeButton(w).trigger('click')
+    expect(lastOpts().isIdle()).toBe(true)
+    seatExpiredRef.value = true
+    await flush()
+    expect(lastOpts().isIdle()).toBe(false)
+    seatExpiredRef.value = false
+    // 画面共有を見ている
+    alarmConnectedRef.value = true
+    activeRoomsRef.value = ['screen-abc']
+    await flush()
+    w.findComponent('[data-testid="screen-share-view"]').vm.$emit('update:viewing', true)
+    await flush()
+    expect(lastOpts().isIdle()).toBe(false)
+    w.unmount()
+  })
+
+  it('モーダルで待つ間は上部の枠の自動照合を止め、モーダル側だけが受ける。登録すると点呼を開く', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    localStorage.setItem(MANAGER_KEY, 'mgr-1')
+    activeRoomsRef.value = ['it-session-1']
+    let release!: () => void
+    connectMock.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    const w = await mountView()
+    // 登録済みの席には入口が無いので、登録を外した状態の設定を取り直す
+    await changeButton(w).trigger('click')
+    await flush()
+    const opts = lastOpts()
+    expect(opts.isIdle()).toBe(true)
+    // 未登録で開こうとするとモーダル → モーダル側が自動照合を受け、上部の枠は受けない
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(veinButtons(w)).toHaveLength(2)
+    const modalOpts = lastOpts()
+    expect(opts.isIdle()).toBe(false)
+    expect(modalOpts.isIdle()).toBe(true)
+    // 指静脈で登録 → そのまま開く (繋いでいる途中は false)
+    getEmployeeByIdMock.mockResolvedValue(MGR)
+    const p = modalOpts.onEmployee(MGR as never)
+    await flush()
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    release()
+    await p
+    await flush()
+    w.unmount()
+  })
+
+  it('モーダルにも入口が出て、指静脈で登録できたら待っていた対象をそのまま開く', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    expect(idModal(w).exists()).toBe(true)
+    expect(idModal(w).find('[data-testid="it-vein-register-button"]').text()).toBe('指静脈で登録')
+    expect(await lastOpts().onEmployee(MGR as never)).toBeNull()
+    await flush()
+    expect(idModal(w).exists()).toBe(false)
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(connectMock.mock.calls[0]![1]).toBe('it-session-1')
+    expect(localStorage.getItem(MANAGER_KEY)).toBe('mgr-9')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('指 管理')
+    w.unmount()
+  })
+
+  it('モーダルで権限が無い人は開かず、モーダルに残る', async () => {
+    noteDeviceToken('manager-device', devDeviceJwt())
+    activeRoomsRef.value = ['it-session-1']
+    const w = await mountView()
+    await click(incoming(w).find('button'), w)
+    const msg = await lastOpts().onEmployee({ id: 'emp-1', name: '山田 太郎', role: ['driver'] } as never)
+    expect(msg).toContain('運行管理者の権限がありません')
+    await flush()
+    expect(idModal(w).exists()).toBe(true)
+    expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('印の変化に追随する: 印が付くと出て、外れると消える (部品ごと外れる)', async () => {
+    const w = await mountView()
+    expect(veinButtons(w)).toHaveLength(0)
+    noteDeviceToken('manager-device', devDeviceJwt())
+    await flush()
+    expect(veinButtons(w)).toHaveLength(1)
+    noteDeviceToken('manager-device', null)
+    await flush()
+    expect(veinButtons(w)).toHaveLength(0)
+    w.unmount()
+    // unmount 後のイベントでは何も起きない (listener は外れている)
+    window.dispatchEvent(new Event(DEV_DEVICE_MARK_EVENT))
   })
 })

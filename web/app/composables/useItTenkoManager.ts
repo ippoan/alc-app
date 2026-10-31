@@ -166,6 +166,14 @@ export function useItTenkoManager() {
     return accept(emp)
   }
 
+  /**
+   * すでに特定できた社員 (指静脈で当たった人) を運行管理者として登録し、席に覚えさせる。
+   * 照会は済んでいるので権限の確認と保存 (`accept`) だけ — 社員番号・カードと同じ成功処理
+   */
+  function registerByEmployee(emp: ApiEmployee): ItTenkoManagerRegisterResult {
+    return accept(emp)
+  }
+
   return {
     /** この席の運行管理者。未登録は null */
     manager: readonly(manager),
@@ -173,6 +181,7 @@ export function useItTenkoManager() {
     load,
     registerByCode,
     registerByCardId,
+    registerByEmployee,
     clear,
   }
 }

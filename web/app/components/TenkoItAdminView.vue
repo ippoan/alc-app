@@ -35,6 +35,8 @@ import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployees, getTenkoSession, list
 import { alcoholResultLabel } from '~/utils/alcohol'
 import { IT_TENKO_METHOD, defaultJudgmentMethod, identityMethodLabel, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
+import { DEV_DEVICE_MARK_EVENT, isDevDevice } from '~/utils/token-selection'
+import type { ApiEmployee } from '~/types'
 
 /** 開く対象。`roomId` が在れば通話して開く、null なら通話なしで開く */
 interface Target {
@@ -49,6 +51,7 @@ const {
   load: loadManager,
   registerByCode,
   registerByCardId,
+  registerByEmployee,
   clear: clearManager,
 } = useItTenkoManager()
 // 警告デバイス (本体のボタンの押下と、NFC で読んだカード)
@@ -223,6 +226,39 @@ async function onIdSubmit() {
   if (!await register(idInput, idError)) return
   // 照会を待つあいだにキャンセルされていたら開かない
   if (waiting.value) await open(waiting.value)
+}
+
+// --- 指静脈での登録 (開発用の運行管理者席だけ) ---
+// 本番の席は IT点呼 を使っている体なので、画面も動きも変えない: 印が無い席では部品ごと出さず、
+// 照合データの同期も指の合図での自動照合も走らない。印 (`isDevDevice`) は reactive ではないので、
+// 写しを持って印が変わったときのイベントで読み直す (`useActiveRooms` と同じ)
+const devSeat = ref(isDevDevice('manager-device'))
+function refreshDevSeat() {
+  devSeat.value = isDevDevice('manager-device')
+}
+onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevSeat))
+onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevSeat))
+
+/** 指の合図で照合を始めてよいか (点呼を開いている・繋いでいる途中・登録の照会中・画面共有を見ている間は始めない) */
+const veinIdle = computed(() => opened.value === null
+  && !connecting.value
+  && registering.value === 0
+  && !screenViewing.value
+  && !seatExpired.value)
+
+/**
+ * 指静脈で特定できた人を席に登録する。登録できなければ画面に出す理由を返す。
+ * モーダルで待っていた対象が在れば、社員番号・カードと同じくそのまま開く
+ */
+async function onVeinEmployee(emp: ApiEmployee): Promise<string | null> {
+  const res = registerByEmployee(emp)
+  if (!res.ok) return res.message
+  cardError.value = null
+  idError.value = null
+  cardInput.value = ''
+  idInput.value = ''
+  if (waiting.value) await open(waiting.value)
+  return null
 }
 
 /** 「変更」: 登録を消して未登録の表示に戻す */
@@ -488,6 +524,7 @@ onUnmounted(() => {
             登録
           </button>
         </div>
+        <ItTenkoVeinRegister v-if="devSeat" :on-employee="onVeinEmployee" :idle="veinIdle && waiting === null" />
       </div>
       <!-- 登録の失敗。カードのタッチは登録済みのときも受けるので、どちらの表示でも出す -->
       <p v-if="cardError" class="mt-2 text-sm text-red-700" data-testid="it-manager-card-error">{{ cardError }}</p>
@@ -706,6 +743,7 @@ onUnmounted(() => {
       >
         次へ
       </button>
+      <ItTenkoVeinRegister v-if="devSeat" :on-employee="onVeinEmployee" :idle="veinIdle" />
       <button
         class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
         @click="cancelIdInput"
