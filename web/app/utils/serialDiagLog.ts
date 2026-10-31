@@ -103,6 +103,25 @@ export function appendDiag(msg: string): void {
   }
 }
 
+/** 画面の診断の行 (`app ` 接頭辞) の 1 行の最大文字数。機体の行より長い (エラーの文言が入る) */
+const MAX_APP_LINE_LENGTH = 300
+
+/**
+ * 画面 (PWA) の診断の行を送り待ちにだけ足す (置き場には入れない。Refs ippoan/alc-app#558)。
+ * 鍵の取得・指静脈・警告デバイスの失敗を、端末の前に居なくても後から追うため。`app ` を頭に付け、
+ * 改行は空白に、300 文字で切る。何を入れるかは utils/appConsoleCapture が決める
+ */
+export function appendAppLog(msg: string): void {
+  try {
+    const now = timestamp(new Date())
+    const body = `app ${msg.replace(/[\r\n]/g, ' ')}`.slice(0, MAX_APP_LINE_LENGTH)
+    saveOutbox([...loadOutbox(), `${now} ${body}`])
+  }
+  catch {
+    // 容量超過など。診断が本処理を止めないよう黙って捨てる
+  }
+}
+
 function loadOutbox(): string[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(OUTBOX_KEY) ?? '[]')

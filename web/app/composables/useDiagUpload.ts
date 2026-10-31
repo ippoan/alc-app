@@ -21,10 +21,13 @@ const TAG = 'pwa-diag'
 
 let started = false
 
-/** 端末の鍵の token の `sub`。鍵が無い・読めなければ `(none)` */
+/**
+ * 端末の鍵の token の `sub`。キオスクの鍵が無ければ運行管理者席の鍵 (Vein Base を席にした PC など)。
+ * どちらも無い・読めなければ `(none)`
+ */
 async function deviceIdOf(): Promise<string> {
   try {
-    const token = await useDeviceToken().getDeviceJwt()
+    const token = (await useDeviceToken().getDeviceJwt()) ?? (await useManagerDeviceToken().getManagerJwt())
     const sub = token ? (decodeJwtPayloadFromToken(token) as { sub?: unknown } | null)?.sub : null
     return typeof sub === 'string' ? sub : '(none)'
   }
