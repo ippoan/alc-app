@@ -6,6 +6,11 @@ import { useKioskScreen } from '~/composables/useKioskScreen'
 import { employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
 import { updateMeasurement, startMeasurement, uploadFacePhoto } from '~/utils/api'
 
+// 結果カードは撮った写真 (Blob) を object URL で出す。jsdom には無いので固定の値を返す
+const createObjectURLMock = vi.fn((_: Blob) => 'blob:result-photo')
+URL.createObjectURL = createObjectURLMock
+URL.revokeObjectURL = vi.fn()
+
 // --- API のモック (NFC → 乗務員照合だけを動かす) ---
 
 const getEmployeeByNfcIdMock = vi.fn()
@@ -589,6 +594,14 @@ describe('NormalMeasurement — record_as_tenko (Refs #238)', () => {
       const wrapper = await runToResult()
       expect(uploadFacePhoto).toHaveBeenCalledWith(PHOTO)
       expect(completedBody().face_photo_url).toBe('https://example.com/blow.jpg')
+      wrapper.unmount()
+    })
+
+    it('結果カードの顔写真は保存先の URL (認証が要る) でなく、撮った写真そのものを出す', async () => {
+      createObjectURLMock.mockClear()
+      const wrapper = await runToResult()
+      expect(createObjectURLMock).toHaveBeenCalledWith(PHOTO)
+      expect(wrapper.find('img[alt="認証時の顔写真"]').attributes('src')).toBe('blob:result-photo')
       wrapper.unmount()
     })
 

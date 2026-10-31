@@ -167,6 +167,11 @@ onUnmounted(stopItOfferTimer)
 const step = ref<NormalMeasurementStep>('nfc')
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
+/**
+ * 結果カードに出す吹き込みの写真 (手元の Blob)。サーバーに上げた後の `facePhotoUrl` は認証の要る
+ * 置き場の URL で、`<img src>` に直接入れると読めず壊れた画像になるので、撮った Blob をそのまま出す
+ */
+const resultFacePhoto = ref<Blob | null>(null)
 
 // 点呼種別は choice の段 (免許証タッチの直後) で選び終えている (Refs ippoan/alc-app-s3#135)
 const tenkoType = ref<TenkoType>('normal')
@@ -695,6 +700,7 @@ async function onMeasurementResult(result: MeasurementResult) {
   // (顔がまだ機器の前にある)。控えが無ければここで撮る — 録画を止めるとカメラが落ちるので
   // その前に。upload は保存の中で行う (中断された測定の写真をサーバーに残さないため)
   const blowPhoto = takeMeasuringPhoto() ?? await takeBlowSnapshot().catch(() => null)
+  resultFacePhoto.value = blowPhoto
   result.tenkoType = tenkoType.value
   result.carinsCertNo = carinsCertNo.value
   result.carinsVehicleId = carinsVehicleId.value
@@ -866,6 +872,7 @@ function reset() {
   manualError.value = null
   useManualInput.value = false
   measurementResult.value = null
+  resultFacePhoto.value = null
   saveError.value = null
   saveStatus.value = null
   isSaving.value = false
@@ -1315,6 +1322,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
         <ResultCard
           v-else
           :result="measurementResult"
+          :face-photo-blob="resultFacePhoto"
           :employee-name="employeeName"
           :it-offer="tenkoPending ? { secondsLeft: itOfferSecondsLeft, busy: tenkoConfirming } : null"
           @reset="reset"
