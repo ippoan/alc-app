@@ -209,6 +209,20 @@ describe('syncVeinModule', () => {
     expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith('manager-device')
   })
 
+  it('同期の結果 (書き込み・消去・変更なし・失敗の件数) を [vein] の 1 行で残す。名前は出さない', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    db.loadVeinModuleEntries.mockResolvedValue([entry('same', 11), entry('gone', 13)])
+    api.getVeinModuleTemplates.mockResolvedValue({
+      templates: [
+        { employee_id: 'same', record: B64, updated_at: 'v1' },
+        { employee_id: 'new', record: B64, updated_at: 'v1' },
+      ],
+    })
+    expect(await mod.syncVeinModule(port())).toBe(true)
+    expect(info).toHaveBeenCalledWith('[vein] モジュール同期 完了 書き込み=1 消去=1 変更なし=1 失敗=0 対象=2')
+    info.mockRestore()
+  })
+
   it('★ 新しい記録は空きへ書き、変わった記録は同じ ID に書き直し、消えた承認済みは消す。承認待ちは残す', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([
       entry('pending-approved', 10, { approved: false }), // この端末で登録 → 承認された

@@ -148,6 +148,7 @@ function grantByVein(emp: { id: string; name: string; role: string[] }): string 
 
 // 指静脈 (照合の手順はキオスク・血圧測定台と共通)
 const vein = useVeinEmployeeIdentify({
+  label: 'manager',
   missMessage: '指静脈が一致する人が見つかりません。もう一度置くか、NFC で読み取ってください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
   onEmployee: grantByVein,

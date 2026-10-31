@@ -35,6 +35,8 @@ export interface VeinEmployeeIdentifyOptions {
    * 運行管理者席の鍵 (`manager-device`) — Vein Base を運行管理者席の鍵にした PC にはキオスクの鍵が無い
    */
   scope?: RequestTokenScope
+  /** どの画面の照合か。診断ログ (`[vein] 照合開始 screen=…`) にだけ使う (例: manager / it-tenko / kiosk / bp) */
+  label?: string
 }
 
 export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
@@ -89,6 +91,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
   /** 照合を 1 回走らせる。繋がっていない・読み取り中なら何もしない */
   async function identify({ prompt = true }: { prompt?: boolean } = {}): Promise<void> {
     if (!ready.value || busy.value) return
+    console.info(`[vein] 照合開始 screen=${opts.label ?? '-'} prompt=${prompt}`)
     opts.onStart?.()
     busy.value = true
     again.value = false
