@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 【セキュリティ要件】
- * - manager: NFC + 顔認証、または指静脈。Google ログイン単独では通過不可。
+ * - manager: 指静脈 (NFC は本人を決めて「この端末の指を足す」まで。NFC + 顔認証は MANAGER_NFC_FACE_AUTH で止めている)。Google ログイン単独では通過不可。
  *   **社員番号の手入力は出さない** (番号を知っていれば誰でも顔認証の段まで進めるため)。
  *   **指静脈で特定できたら顔認証は挟まない** — 指静脈が本人確認そのもの (血圧測定台と同じ扱い。
  *   照合の手順は useVeinEmployeeIdentify でキオスク・血圧測定台と共通)。権限は変わらず見る
@@ -18,6 +18,7 @@
  */
 import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, getEmployeeById, updateDeviceLastLogin } from '~/utils/api'
+import { MANAGER_NFC_FACE_AUTH } from '~/utils/manager-nfc-face-auth'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 
@@ -79,6 +80,11 @@ const roleLabel: Record<string, string> = {
   admin: 'システム管理者',
 }
 
+// 「この端末の指を足す」(Refs ippoan/alc-app#558)。NFC で決まった運行管理者に出す (scope は運行管理者席の鍵)
+const fingerAdd = useVeinAddDevice({ scope: 'manager-device' })
+/** NFC で決まって、指を足す待ちの運行管理者。ログインはしていない */
+const addFingerTarget = ref<{ id: string; name: string } | null>(null)
+
 /**
  * 特定できた人 (NFC・社員番号) の権限と顔の登録を見て、顔認証へ進める。
  * 進めなかったときは画面に出す理由を返す
@@ -88,6 +94,12 @@ async function beginFaceAuth(emp: { id: string; name: string; role: string[]; fa
   employeeName.value = emp.name
   if (!hasRole(emp.role)) {
     return `${emp.name}さんには${roleLabel[props.requiredRole]}の権限がありません (現在のロール: ${emp.role.join(', ')})`
+  }
+  // 運行管理者の入口は、顔認証を外している間 NFC ではログインしない。この端末の指を足させて、指静脈で入らせる
+  if (props.requiredRole === 'manager' && !MANAGER_NFC_FACE_AUTH) {
+    addFingerTarget.value = { id: emp.id, name: emp.name }
+    fingerAdd.reset()
+    return null
   }
   // 管理者の入口は顔認証が必須 — 未登録でもスキップは認めない
   const approval = checkFaceApproval(emp)
@@ -147,15 +159,6 @@ const vein = useVeinEmployeeIdentify({
   },
 })
 
-// 「この端末の指を足す」(Refs ippoan/alc-app#558)。NFC + 顔認証で入った運行管理者に、任意で出す
-// (指静脈で入った人は、この端末の指で通ったので要らない)。ログインは止めない
-const fingerAdd = useVeinAddDevice({ scope: 'manager-device' })
-/** NFC + 顔認証 (または指紋) で入った。足すボタンを出す対象 */
-const enteredByCard = ref(false)
-const canAddFinger = computed(() =>
-  props.requiredRole === 'manager' && enteredByCard.value && !!authenticatedEmployee.value && fingerAdd.available.value,
-)
-
 // 手動入力
 async function onManualSubmit() {
   const input = manualIdInput.value.trim()
@@ -193,7 +196,6 @@ function grantAccess() {
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) {
     if (employeeId.value) authorizeEmployee(employeeId.value)
-    enteredByCard.value = true
     grantAccess()
   } else {
     errorMessage.value = '顔認証に失敗しました。もう一度お試しください。'
@@ -231,7 +233,7 @@ onMounted(() => {
 
 // リセット
 function resetAuth() {
-  enteredByCard.value = false
+  addFingerTarget.value = null
   fingerAdd.reset()
   setManagerId(null)
   authState.value = 'pending'
@@ -255,19 +257,6 @@ function resetAuth() {
     <div v-if="authenticatedEmployee" class="bg-green-50 border-b border-green-200 px-4 py-1.5 text-center text-xs text-green-700">
       {{ authenticatedEmployee.name }} ({{ roleLabel[requiredRole] }}) としてログイン中
       <button class="ml-2 underline hover:text-green-900" @click="resetAuth">ログアウト</button>
-      <!-- 任意: この端末で指静脈が通りにくい人が、この端末の指を足す -->
-      <template v-if="canAddFinger">
-        <button
-          data-testid="vein-add-device"
-          :disabled="fingerAdd.adding.value"
-          class="ml-3 underline hover:text-green-900 disabled:opacity-50"
-          @click="fingerAdd.add(authenticatedEmployee!.id)"
-        >
-          {{ fingerAdd.adding.value ? (fingerAdd.notice.value ?? '指を置いてください…') : 'この端末の指を足す' }}
-        </button>
-      </template>
-      <span v-if="fingerAdd.added.value" data-testid="vein-add-device-done" class="ml-3">この端末の指を足しました</span>
-      <span v-if="fingerAdd.error.value" data-testid="vein-add-device-error" class="ml-3 text-red-600">{{ fingerAdd.error.value }}</span>
     </div>
     <slot />
   </div>
@@ -278,7 +267,7 @@ function resetAuth() {
       <div class="bg-white rounded-2xl p-6 shadow-sm">
         <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ roleLabel[requiredRole] }}認証</h2>
         <p class="text-sm text-gray-500 mb-4">
-          {{ roleLabel[requiredRole] }}機能にアクセスするには、{{ allowManualInput ? 'ID + 顔認証' : 'NFC + 顔認証、または指静脈' }}が必要です。
+          {{ roleLabel[requiredRole] }}機能にアクセスするには、{{ allowManualInput ? 'ID + 顔認証' : (MANAGER_NFC_FACE_AUTH ? 'NFC + 顔認証、または指静脈' : '指静脈') }}が必要です。
         </p>
 
         <!-- デバイスに保存された管理者情報 -->
@@ -299,6 +288,25 @@ function resetAuth() {
 
         <!-- Step 1: NFC / 手動入力 -->
         <div v-else-if="step === 'nfc'">
+          <!-- NFC で決まった運行管理者: ログインせず、この端末の指を足させる (足したあとは指静脈で入る) -->
+          <div v-if="addFingerTarget" data-testid="vein-add-device-card" class="mb-4 rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800">
+            <p class="font-medium">{{ addFingerTarget.name }}さん</p>
+            <template v-if="fingerAdd.available.value">
+              <p class="mt-1">NFC ではログインしません。この端末の指を足してから、「指静脈で本人確認」で入ってください。</p>
+              <button
+                data-testid="vein-add-device"
+                :disabled="fingerAdd.adding.value"
+                class="mt-3 w-full px-4 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+                @click="fingerAdd.add(addFingerTarget.id)"
+              >
+                {{ fingerAdd.adding.value ? (fingerAdd.notice.value ?? '指を置いてください…') : 'この端末の指を足す' }}
+              </button>
+              <p v-if="fingerAdd.added.value" data-testid="vein-add-device-done" class="mt-2 text-emerald-700">この端末の指を足しました。「指静脈で本人確認」で入ってください</p>
+            </template>
+            <p v-else data-testid="vein-add-device-unavailable" class="mt-1">NFC だけでは入れません。指静脈の機体 (Vein Station / Vein Base) をつないでください。</p>
+            <p v-if="fingerAdd.error.value" data-testid="vein-add-device-error" class="mt-2 text-red-600">{{ fingerAdd.error.value }}</p>
+            <button class="mt-3 underline text-xs text-blue-700" @click="addFingerTarget = null; fingerAdd.reset()">閉じる</button>
+          </div>
           <div v-if="!useManualInput">
             <NfcStatus @read="onNfcRead" />
             <button

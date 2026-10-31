@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
@@ -6,6 +6,13 @@ import RoleAuthGate from '~/components/RoleAuthGate.vue'
 // 運行管理者の入口は顔認証が必須。顔が未登録でもスキップは認めない
 // (認めると顔写真を一切出さずに管理画面へ入れてしまう。Refs ippoan/alc-app-s3#135)。
 // 乗務員の点呼側 (TenkoKiosk) は未登録なら通す — 方針は入口ごとに分かれる。
+
+// 運行管理者の NFC → 顔認証を止めているか (utils/manager-nfc-face-auth.ts)。既定は顔認証の流れ (従来のテスト) で、
+// 止めた流れは最後の describe が false にして確かめる
+const faceFlag = vi.hoisted(() => ({ on: true }))
+vi.mock('~/utils/manager-nfc-face-auth', () => ({
+  get MANAGER_NFC_FACE_AUTH() { return faceFlag.on },
+}))
 
 // 従業員はすべて合成値 (実在の乗務員名・カード番号は書かない)
 const employee = ref<{ id: string, name: string, role: string[], face_approval_status?: string }>({
@@ -314,8 +321,11 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
   })
 })
 
-describe('RoleAuthGate — この端末の指を足す (Refs ippoan/alc-app#558)', () => {
+describe('RoleAuthGate — NFC ではログインせず、この端末の指を足させる (Refs ippoan/alc-app#558)', () => {
   beforeEach(() => {
+    faceFlag.on = false
+    faceSyncMock.mockClear()
+    setManagerIdMock.mockClear()
     addDevice.add.mockClear()
     addDevice.reset.mockClear()
     addState.adding.value = false
@@ -325,19 +335,17 @@ describe('RoleAuthGate — この端末の指を足す (Refs ippoan/alc-app#558)
     addState.notice.value = null
     employee.value = { id: 'emp-test-6', name: 'テスト五郎', role: ['manager'], face_approval_status: 'approved' }
   })
+  afterEach(() => { faceFlag.on = true })
 
-  /** NFC → 顔認証の成功まで進める */
-  async function loginByCard(wrapper: Awaited<ReturnType<typeof mountGate>>) {
-    await readNfc(wrapper, '0006')
-    wrapper.findComponent({ name: 'FaceAuth' }).vm.$emit('result', { verified: true, similarity: 0.9 })
-    await settle(wrapper)
-  }
-
-  it('NFC + 顔認証で入った運行管理者には、運行管理者席の鍵で足すボタンを任意で出す (ログインは止めない)', async () => {
+  it('運行管理者の NFC は顔認証もログインもせず、運行管理者席の鍵で足すボタンを出す。押すとその人で足す', async () => {
     const wrapper = await mountGate('manager')
     expect(addDevice.scope).toBe('manager-device')
-    await loginByCard(wrapper)
-    expect(wrapper.text()).toContain('テスト五郎 (運行管理者) としてログイン中')
+    await readNfc(wrapper, '0006')
+    expect(faceSyncMock).not.toHaveBeenCalled()
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('としてログイン中')
+    expect(setManagerIdMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="vein-add-device-card"]').text()).toContain('テスト五郎さん')
     const btn = wrapper.find('[data-testid="vein-add-device"]')
     expect(btn.text()).toBe('この端末の指を足す')
     await btn.trigger('click')
@@ -345,9 +353,9 @@ describe('RoleAuthGate — この端末の指を足す (Refs ippoan/alc-app#558)
     wrapper.unmount()
   })
 
-  it('足している間は案内 (置き直し / 既定の文言) を出して押せない。結果と失敗の理由も出る', async () => {
+  it('足している間は案内を出して押せない。結果と失敗の理由も出る。閉じると消える', async () => {
     const wrapper = await mountGate('manager')
-    await loginByCard(wrapper)
+    await readNfc(wrapper, '0006')
     addState.adding.value = true
     await settle(wrapper)
     expect(wrapper.find('[data-testid="vein-add-device"]').text()).toBe('指を置いてください…')
@@ -359,40 +367,51 @@ describe('RoleAuthGate — この端末の指を足す (Refs ippoan/alc-app#558)
     addState.added.value = true
     addState.error.value = '失敗の理由'
     await settle(wrapper)
-    expect(wrapper.find('[data-testid="vein-add-device-done"]').text()).toBe('この端末の指を足しました')
+    expect(wrapper.find('[data-testid="vein-add-device-done"]').text()).toContain('指静脈で本人確認')
     expect(wrapper.find('[data-testid="vein-add-device-error"]').text()).toBe('失敗の理由')
-    wrapper.unmount()
-  })
-
-  it('Vein の機体が繋がっていなければ出さない。ログアウトで消し、控えも片付ける', async () => {
-    const wrapper = await mountGate('manager')
-    addState.available.value = false
-    await loginByCard(wrapper)
-    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(false)
-    addState.available.value = true
+    await wrapper.findAll('button').find(b => b.text() === '閉じる')!.trigger('click')
     await settle(wrapper)
-    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(true)
-    await wrapper.findAll('button').find(b => b.text() === 'ログアウト')!.trigger('click')
-    await settle(wrapper)
+    expect(wrapper.find('[data-testid="vein-add-device-card"]').exists()).toBe(false)
     expect(addDevice.reset).toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('指静脈で入った人・システム管理者の入口には出さない', async () => {
-    const byVein = await mountGate('manager')
-    await veinOpts!.onEmployee(employee.value as never)
-    await settle(byVein)
-    expect(byVein.text()).toContain('としてログイン中')
-    expect(byVein.find('[data-testid="vein-add-device"]').exists()).toBe(false)
-    byVein.unmount()
+  it('Vein の機体が繋がっていなければ、ボタンは出さず機体をつなぐよう案内する (NFC だけでは入れない)', async () => {
+    addState.available.value = false
+    const wrapper = await mountGate('manager')
+    await readNfc(wrapper, '0006')
+    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vein-add-device-unavailable"]').text()).toContain('NFC だけでは入れません')
+    wrapper.unmount()
+  })
 
-    employee.value = { ...employee.value, role: ['admin'] }
+  it('権限が無い人には足させない (理由を出す)。説明文は指静脈のみ', async () => {
+    employee.value = { ...employee.value, role: ['driver'] }
+    const wrapper = await mountGate('manager')
+    expect(wrapper.text()).not.toContain('NFC + 顔認証')
+    await readNfc(wrapper, '0006')
+    expect(wrapper.text()).toContain('運行管理者の権限がありません')
+    expect(wrapper.find('[data-testid="vein-add-device-card"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('指静脈で入る流れは変わらない。ログアウトで控えを片付ける', async () => {
+    const wrapper = await mountGate('manager')
+    await veinOpts!.onEmployee(employee.value as never)
+    await settle(wrapper)
+    expect(wrapper.text()).toContain('としてログイン中')
+    expect(wrapper.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    await wrapper.findAll('button').find(b => b.text() === 'ログアウト')!.trigger('click')
+    expect(addDevice.reset).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('システム管理者の入口は今までどおり (社員番号 + 顔認証)', async () => {
+    employee.value = { ...employee.value, role: ['admin'], face_approval_status: 'approved' }
     const admin = await mountGate('admin')
     await submitCode(admin, '0006')
-    admin.findComponent({ name: 'FaceAuth' }).vm.$emit('result', { verified: true, similarity: 0.9 })
-    await settle(admin)
-    expect(admin.text()).toContain('としてログイン中')
-    expect(admin.find('[data-testid="vein-add-device"]').exists()).toBe(false)
+    expect(admin.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
+    expect(admin.find('[data-testid="vein-add-device-card"]').exists()).toBe(false)
     admin.unmount()
   })
 })
