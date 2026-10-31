@@ -211,6 +211,20 @@ describe('TenkoSessionMonitor — 行クリックのセッション詳細に動�
     wrapper.unmount()
   })
 
+  it('区分の列: IT点呼 を対面で確定した行は対面点呼、遠隔点呼はそのまま出る', async () => {
+    listTenkoSessionsMock.mockResolvedValue({
+      sessions: [
+        { ...SESSION_NORMAL, id: 's-it', tenko_method: 'IT点呼', manager_judgment_method: 'in_person' },
+        { ...SESSION_NORMAL, id: 's-remote', tenko_method: '遠隔点呼' },
+      ],
+      total: 2, page: 1, per_page: 20,
+    })
+    const wrapper = await mountMonitor()
+    const cells = wrapper.findAll('[data-testid="session-tenko-method"]')
+    expect(cells.map(c => c.text())).toEqual(['対面点呼', '遠隔点呼'])
+    wrapper.unmount()
+  })
+
   it('体温・血圧の列: 値が null なら "-" になる', async () => {
     listTenkoSessionsMock.mockResolvedValue({
       sessions: [{ ...SESSION_NORMAL, temperature: null, systolic: null, diastolic: null }],

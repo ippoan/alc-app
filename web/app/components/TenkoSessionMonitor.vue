@@ -2,7 +2,7 @@
 import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
 import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
-import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { tenkoMethodLabel, tenkoTypeLabel } from '~/utils/tenko-type'
 import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 import { expiryTone, EXPIRY_TONE_CLASS, checkLicenseExpiryFromString, type ExpiryTone } from '~/utils/license'
 
@@ -349,6 +349,7 @@ onMounted(() => { loadEmployees(); fetchData() })
               <th class="px-4 py-3 text-left font-medium">開始日時</th>
               <th class="px-4 py-3 text-left font-medium">乗務員</th>
               <th class="px-4 py-3 text-center font-medium">種別</th>
+              <th class="px-4 py-3 text-center font-medium">区分</th>
               <th class="px-4 py-3 text-center font-medium">ステータス</th>
               <th class="px-4 py-3 text-center font-medium">アルコール</th>
               <th class="px-4 py-3 text-center font-medium">体温</th>
@@ -376,6 +377,9 @@ onMounted(() => { loadEmployees(); fetchData() })
                   :class="s.tenko_type === 'pre_operation' ? 'bg-blue-100 text-blue-800' : s.tenko_type === 'post_operation' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-700'">
                   {{ tenkoTypeLabel(s.tenko_type) }}
                 </span>
+              </td>
+              <td class="px-4 py-3 text-center text-gray-700 text-xs" data-testid="session-tenko-method">
+                {{ tenkoMethodLabel(s.tenko_method, s.manager_judgment_method) }}
               </td>
               <td class="px-4 py-3 text-center">
                 <span class="inline-block px-2 py-1 rounded-full text-xs font-medium" :class="statusColor(s.status)">
@@ -475,6 +479,7 @@ onMounted(() => { loadEmployees(); fetchData() })
           <div class="grid grid-cols-2 gap-2">
             <div><span class="text-gray-500">乗務員:</span> {{ employeeName(selectedSession.employee_id) }}</div>
             <div><span class="text-gray-500">種別:</span> {{ tenkoTypeLabel(selectedSession.tenko_type) }}</div>
+            <div><span class="text-gray-500">区分:</span> {{ tenkoMethodLabel(selectedSession.tenko_method, selectedSession.manager_judgment_method) }}</div>
             <div><span class="text-gray-500">ステータス:</span>
               <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium" :class="statusColor(selectedSession.status)">{{ statusLabel(selectedSession.status) }}</span>
             </div>
