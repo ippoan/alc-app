@@ -311,6 +311,11 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     veinState.busy.value = true
     expect(veinOpts!.isIdle()).toBe(false)
     veinState.busy.value = false
+    // 「この端末の指を足す」で登録している間は受けない (置くたびに合図が来る)
+    addState.adding.value = true
+    expect(veinOpts!.isIdle()).toBe(false)
+    addState.adding.value = false
+    expect(veinOpts!.isIdle()).toBe(true)
     // 顔認証の段では受けない
     await readNfc(wrapper, '0007')
     expect(veinOpts!.isIdle()).toBe(false)

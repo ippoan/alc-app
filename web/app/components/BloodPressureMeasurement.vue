@@ -59,7 +59,8 @@ const vein = useVeinEmployeeIdentify({
     return null
   },
   // 待機中 (カード待ちで、カードの照会も指静脈の読み取りも走っていない) のときだけ
-  isIdle: () => (step.value === 'nfc' || doneSettled.value) && !vein.busy.value && employeeLookups.value === 0,
+  // 指を足している間は受けない (登録で置くたびに合図が来て、ポートが登録の応答待ちのまま照合が失敗する)
+  isIdle: () => (step.value === 'nfc' || doneSettled.value) && !vein.busy.value && employeeLookups.value === 0 && !fingerAdd.adding.value,
   onStart: () => {
     leaveDone()
     error.value = null
