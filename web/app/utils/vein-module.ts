@@ -25,6 +25,7 @@ import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
+import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 
 export const VEIN_MODULE_ID_MIN = 10
 export const VEIN_MODULE_ID_MAX = 100
@@ -56,6 +57,15 @@ export function allocateVeinModuleId(entries: readonly VeinModuleEntry[], employ
     if (!used.has(id)) return id
   }
   return null
+}
+
+/**
+ * 同期・用意が、この端末の「その場で撮った記録」を書き換えずに残すか (Refs ippoan/alc-app#558)。
+ * 端末の設定が「その場で撮った記録を使う」(`native`) で、その記録を置いている人だけ。
+ * 設定が「混ぜた記録」(`mixed`) なら false (サーバーが組んだ記録で書き直す)
+ */
+function keepsOnSpotRecord(entry: VeinModuleEntry | undefined): boolean {
+  return entry?.native === true && readVeinAddedFingerMode() === 'native'
 }
 
 /** base64 をバイト列に */
@@ -124,7 +134,8 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
     return own?.approved ? own.moduleId : null
   }
   if (!template) return null
-  if (own?.approved && own.updatedAt === template.updated_at) return own.moduleId
+  // その場の記録 (native) は、同じ版でも混ぜた記録とは中身が違う: 設定が native なら残し、mixed なら書き直す
+  if (own?.approved && (keepsOnSpotRecord(own) || (own.updatedAt === template.updated_at && !own.native))) return own.moduleId
   const id = allocateVeinModuleId(entries, employeeId)
   if (id === null) throw new Error('モジュールの ID が空いていません (10〜100)')
   // 書き込みが途中で落ちても、古い版を承認済みとして引かないよう先に外す
@@ -177,7 +188,10 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
 
     for (const t of templates) {
       const current = entries.get(t.employee_id)
-      if (current?.updatedAt === t.updated_at) {
+      // この端末で足した指を「その場で撮った記録」のまま使う設定: サーバーの版が変わっても書き換えない
+      if (keepsOnSpotRecord(current)) continue
+      // native の記録は版が同じでも混ぜた記録とは中身が違うので、設定が mixed なら書き直す (下へ進む)
+      if (current?.updatedAt === t.updated_at && !current.native) {
         // この端末で登録した記録が承認された: モジュールには既に在る。登録した端末もサーバーの値に合わせる
         const registeredDeviceId = t.registered_device_id ?? null
         if (!current.approved || (current.registeredDeviceId ?? null) !== registeredDeviceId) {

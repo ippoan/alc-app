@@ -46,6 +46,11 @@ export interface VeinModuleEntry {
   approved: boolean
   /** 記録を登録した端末の id (サーバーの `registered_device_id`)。分からなければ null / 無し */
   registeredDeviceId?: string | null
+  /**
+   * この端末で足した指 (「この端末の指を足す」) を、その場で撮った記録のままモジュールに置いている。
+   * 端末の設定が「その場で撮った記録を使う」の間は、同期がこの記録を書き換えない (`vein-module.ts`)
+   */
+  native?: boolean
 }
 
 const DB_NAME = 'alc-vein-db'

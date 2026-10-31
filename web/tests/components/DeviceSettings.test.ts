@@ -362,6 +362,31 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     })
   })
 
+  describe('この端末で足した指の設定 (Refs ippoan/alc-app#558)', () => {
+    beforeEach(() => localStorage.removeItem('alc-vein-added-finger'))
+
+    it('既定は「混ぜた記録を使う」で、切り替えるとこの端末に保存する', async () => {
+      const wrapper = await mountDeviceSettings()
+      const select = wrapper.find<HTMLSelectElement>('[data-testid="vein-added-finger-mode"]')
+      expect(select.element.value).toBe('mixed')
+      expect(select.text()).toContain('混ぜた記録を使う')
+      expect(select.text()).toContain('その場で撮った記録を使う')
+
+      await select.setValue('native')
+      expect(localStorage.getItem('alc-vein-added-finger')).toBe('native')
+      expect(select.element.value).toBe('native')
+
+      await select.setValue('mixed')
+      expect(localStorage.getItem('alc-vein-added-finger')).toBe('mixed')
+    })
+
+    it('保存済みの値で開く', async () => {
+      localStorage.setItem('alc-vein-added-finger', 'native')
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.find<HTMLSelectElement>('[data-testid="vein-added-finger-mode"]').element.value).toBe('native')
+    })
+  })
+
   describe('Omron 血圧計を使うかの設定 (Refs ippoan/alc-app-s3#135)', () => {
     const checkbox = (wrapper: Awaited<ReturnType<typeof mountDeviceSettings>>) =>
       wrapper.find<HTMLInputElement>('[data-testid="omron-bp-checkbox"]')

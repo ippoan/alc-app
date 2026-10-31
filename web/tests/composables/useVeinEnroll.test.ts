@@ -224,6 +224,7 @@ describe('useVeinEnroll', () => {
 describe('veinErrorMessage', () => {
   it('RC の既知のコードは文言 + コード、未知のコード・ほかの理由・Error でないものはそのまま', () => {
     expect(veinErrorMessage(new Error('RC=09'))).toBe('途中で違う指が置かれました。同じ指で、もう一度最初から登録してください (RC=09)')
+    expect(veinErrorMessage(new Error('RC=0a'))).toBe('この指は、この端末にすでに別の登録があります。別の人として登録されていないか、指を確かめてください (RC=0A)')
     expect(veinErrorMessage(new Error('RC=0c'))).toBe('RC=0c')
     expect(veinErrorMessage(new Error('NO_FINGER'))).toBe('NO_FINGER')
     expect(veinErrorMessage('x')).toBe('指静脈登録エラー')

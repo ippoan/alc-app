@@ -1,7 +1,7 @@
 // api.ts — mock + live coverage tests
 import { describe, it, expect, beforeEach, beforeAll, vi, afterEach } from 'vitest'
 import {
-  initApi, KIOSK_DEVICE_AUTH_FAILED_MESSAGE,
+  initApi, KIOSK_DEVICE_AUTH_FAILED_MESSAGE, MANAGER_DEVICE_AUTH_FAILED_MESSAGE, BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
   // Measurements
   saveMeasurement, startMeasurement, updateMeasurement, confirmMeasurementTenko, getMeasurements, getMeasurement,
   // Employees
@@ -76,6 +76,7 @@ import {
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
   putVeinModuleRecord,
+  putVeinModuleDeviceRecord,
   getVeinModuleTemplates,
   identifyVein,
   getVeinTemplates,
@@ -1145,6 +1146,39 @@ describe.skipIf(isLive)('api', () => {
       expect(url).toContain(`/vein/templates/${TEST_EMPLOYEE_ID}/module`)
       expect(init.method).toBe('PUT')
       expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+    })
+
+    // この端末の指を足す (Refs ippoan/alc-app#558)。端末の token でしか送らない。live では書き込まない
+    it.skipIf(isLive)('putVeinModuleDeviceRecord は端末の token で PUT …/module/devices へ base64 の記録を送る (管理者のログインがあっても)', async () => {
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')
+      mockFetch.mockResolvedValueOnce(okJson({ employee_id: TEST_EMPLOYEE_ID, updated_at: 'v2' }))
+      const got = await putVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([0xDE, 0xED, 0xDE, 0xED]))
+      const [url, init] = mockFetch.mock.calls.at(-1)!
+      expect(url).toContain(`/vein/templates/${TEST_EMPLOYEE_ID}/module/devices`)
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(init.body)).toEqual({ record: '3u3e7Q==' })
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+      expect(got).toEqual({ employee_id: TEST_EMPLOYEE_ID, updated_at: 'v2' })
+    })
+
+    it.skipIf(isLive)('putVeinModuleDeviceRecord: scope で運行管理者席・測定台の鍵を選ぶ', async () => {
+      initApi(API_BASE, undefined, () => 'tid', undefined, async () => 'kiosk-jwt', async () => 'manager-jwt', async () => 'bp-jwt')
+      for (const [scope, jwt] of [['manager-device', 'manager-jwt'], ['bp-station', 'bp-jwt'], ['default', 'kiosk-jwt']] as const) {
+        mockFetch.mockResolvedValueOnce(okJson({ employee_id: TEST_EMPLOYEE_ID, updated_at: 'v2' }))
+        await putVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]), scope)
+        expect(new Headers(mockFetch.mock.calls.at(-1)![1].headers).get('Authorization')).toBe(`Bearer ${jwt}`)
+      }
+    })
+
+    it.skipIf(isLive)('putVeinModuleDeviceRecord: 端末の鍵が取れなければ、管理者の token や無認証に落とさずその scope の文言で投げる', async () => {
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => null, async () => null, async () => null)
+      mockFetch.mockClear()
+      await expect(putVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]), 'manager-device')).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+      await expect(putVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]), 'bp-station')).rejects.toThrow(BP_STATION_DEVICE_AUTH_FAILED_MESSAGE)
+      await expect(putVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]))).rejects.toThrow(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+      await expect(putVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]))).rejects.toThrow(KIOSK_DEVICE_AUTH_FAILED_MESSAGE)
+      expect(mockFetch).not.toHaveBeenCalled()
     })
 
     it.skipIf(isLive)('getPendingVeinModuleTemplates は GET …/module-templates/pending の templates を返す', async () => {

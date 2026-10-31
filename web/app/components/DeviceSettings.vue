@@ -18,6 +18,7 @@ const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJ
 // 警告デバイス (Atom VoiceS3R) をこの端末につなぐか。端末登録で選んだ値を後から変えられる (#135)
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 const alarmDevice = useAlarmDevice()
+const { mode: veinAddedFingerMode, setMode: setVeinAddedFingerMode } = useVeinAddedFingerSetting()
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
 const atomS3 = useAtomS3Serial()
@@ -687,6 +688,21 @@ async function syncFc1200Date() {
         <p v-if="alarmDevice.deviceInfo.value?.ver" class="text-xs text-gray-500" data-testid="alarm-device-version">
           警告デバイスの版: {{ alarmDevice.deviceInfo.value.ver }}
         </p>
+
+        <!-- この端末で足した指 (「この端末の指を足す」) を、モジュールに何として置くか (Refs ippoan/alc-app#558)。
+             混ぜた記録: サーバーが組んだ記録 (同期が書き直す) / その場で撮った記録: 静脈 + 指紋互換で、同期は書き換えない -->
+        <label class="flex flex-col gap-1 text-xs text-gray-700">
+          <span>この端末で足した指</span>
+          <select
+            data-testid="vein-added-finger-mode"
+            class="rounded-lg border border-gray-300 px-2 py-1.5 text-xs"
+            :value="veinAddedFingerMode"
+            @change="setVeinAddedFingerMode(($event.target as HTMLSelectElement).value === 'native' ? 'native' : 'mixed')"
+          >
+            <option value="mixed">混ぜた記録を使う</option>
+            <option value="native">その場で撮った記録を使う</option>
+          </select>
+        </label>
 
         <!-- Omron 血圧計を使うか (HEM-6231T / HCR-1901T2。ニプロは対象外)。正本はサーバ
              (devices.bp_enabled、既定 OFF)。端末 (CoreS3 / VoiceS3R / 測定台の Atom S3) が

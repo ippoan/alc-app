@@ -39,6 +39,7 @@ function port(connected = true) {
 }
 
 beforeEach(async () => {
+  localStorage.clear()
   vi.clearAllMocks()
   vi.resetModules()
   mod = await import('~/utils/vein-module')
@@ -325,5 +326,74 @@ describe('syncVeinModule', () => {
   it('一度も同期していなければ ifOlderThanMs があっても動く', async () => {
     api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
     expect(await mod.syncVeinModule(port(), { ifOlderThanMs: 60_000 })).toBe(true)
+  })
+})
+
+// 「この端末の指を足す」で足した指 (native)。設定が native なら同期・用意が書き換えず、mixed なら書き直す
+// (Refs ippoan/alc-app#558)
+describe('その場で撮った記録 (native) の扱い', () => {
+  const B64 = btoa(String.fromCharCode(0xDE, 0xED))
+  const MODE_KEY = 'alc-vein-added-finger'
+
+  it('★ native の設定: 同期はサーバーの版が変わっても native の記録を書き換えない。ほかの人は今までどおり', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { updatedAt: 'v1', native: true }), entry('other', 11)])
+    api.getVeinModuleTemplates.mockResolvedValue({
+      templates: [
+        { employee_id: 'added', record: B64, updated_at: 'v2', composed: true },
+        { employee_id: 'other', record: B64, updated_at: 'v2' },
+      ],
+    })
+    const p = port()
+    expect(await mod.syncVeinModule(p)).toBe(true)
+    expect(p.syncWrite.mock.calls.map(c => c[0])).toEqual([11])
+    expect(db.deleteVeinModuleEntry).not.toHaveBeenCalledWith('added')
+    expect(db.putVeinModuleEntry).not.toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'added' }))
+  })
+
+  it('★ native の設定でも、一覧から消えた (承認の取り消し・退職) native の人はモジュールから消す', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { native: true })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
+    const p = port()
+    await mod.syncVeinModule(p)
+    expect(p.syncClear).toHaveBeenCalledWith(10)
+    expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('added')
+  })
+
+  it('★ mixed の設定: native の記録は版が同じでも、サーバーが組んだ記録で同じ ID に書き直す (native の印は外れる)', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { updatedAt: 'v1', native: true })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'added', record: B64, updated_at: 'v1', composed: true }] })
+    const p = port()
+    await mod.syncVeinModule(p)
+    expect(p.syncWrite).toHaveBeenCalledWith(10, new Uint8Array([0xDE, 0xED]))
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith(entry('added', 10, { registeredDeviceId: null }))
+    expect(db.putVeinModuleEntry.mock.calls[0]![0]).not.toHaveProperty('native')
+  })
+
+  it('用意: native の設定なら版が違っても native の記録をそのまま使う', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { updatedAt: 'v1', native: true })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v9' }] })
+    const p = port()
+    expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
+    expect(p.syncWrite).not.toHaveBeenCalled()
+  })
+
+  it('用意: mixed の設定なら native の記録は版が同じでも書き直す', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { updatedAt: 'v1', native: true })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    const p = port()
+    expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
+    expect(p.syncWrite).toHaveBeenCalledWith(15, new Uint8Array([0xDE, 0xED]))
+  })
+
+  it('用意: native でも、承認待ち (approved: false) の記録は使わず書き直す', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { native: true, approved: false })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    const p = port()
+    await mod.prepareVeinModuleRecord(p, 'emp-1')
+    expect(p.syncWrite).toHaveBeenCalledWith(15, expect.any(Uint8Array))
   })
 })

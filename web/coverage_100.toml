@@ -380,6 +380,18 @@ path = "app/composables/useVeinEnroll.ts"
 branches = true
 
 [[files]]
+path = "app/composables/useVeinAddDevice.ts"
+branches = true
+
+[[files]]
+path = "app/composables/useVeinAddedFingerSetting.ts"
+branches = true
+
+[[files]]
+path = "app/utils/vein-added-finger-mode.ts"
+branches = true
+
+[[files]]
 path = "app/composables/useVeinTest.ts"
 branches = true
 
