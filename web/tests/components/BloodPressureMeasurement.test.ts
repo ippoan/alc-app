@@ -972,6 +972,16 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
       wrapper.unmount()
     })
 
+    it('「この端末の指を足す」で登録している間は始めない (置くたびに合図が来る)', async () => {
+      const wrapper = await mountBp()
+      addAdding.value = true
+      finger.cb!()
+      await flush(wrapper)
+      expect(vein.capture).not.toHaveBeenCalled()
+      addAdding.value = false
+      wrapper.unmount()
+    })
+
     it('照合中・カードの照会中は 2 回目を始めない', async () => {
       let captured!: (chara: string) => void
       vein.capture.mockImplementation(() => new Promise((resolve) => { captured = resolve }))
