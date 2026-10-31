@@ -294,6 +294,10 @@ path = "app/utils/reload-reason.ts"
 branches = true
 
 [[files]]
+path = "app/utils/appConsoleCapture.ts"
+branches = true
+
+[[files]]
 path = "app/utils/serialDiagLog.ts"
 branches = true
 

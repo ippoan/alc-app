@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { appendDiag, readDiag, returnDiagOutbox, takeDiagOutbox } from '~/utils/serialDiagLog'
+import { appendAppLog, appendDiag, readDiag, returnDiagOutbox, takeDiagOutbox } from '~/utils/serialDiagLog'
 
 const KEY = 'alc_serial_diag'
 const OUTBOX = 'alc_serial_diag_outbox'
@@ -138,6 +138,20 @@ describe('serialDiagLog', () => {
     expect(readDiag()).toEqual([])
     expect(() => appendDiag('x')).not.toThrow()
     expect(getItem).toHaveBeenCalled()
+  })
+
+  it('画面の行 (appendAppLog) は送り待ちにだけ `app ` を付けて足し、置き場には入れない。改行は空白に、300 文字で切る', () => {
+    appendAppLog('warn [vein] 失敗\n次の行')
+    appendAppLog('x'.repeat(400))
+    expect(readDiag()).toEqual([])
+    const out = takeDiagOutbox()
+    expect(out[0]).toBe('09:05:07.042 app warn [vein] 失敗 次の行')
+    expect(out[1]).toBe(`09:05:07.042 app ${'x'.repeat(296)}`)
+  })
+
+  it('appendAppLog も localStorage が投げても落ちない', () => {
+    vi.stubGlobal('localStorage', { getItem: vi.fn(() => '[]'), setItem: vi.fn(() => { throw new DOMException('full', 'QuotaExceededError') }) })
+    expect(() => appendAppLog('x')).not.toThrow()
   })
 
   it('容量超過 (setItem が投げる) でも落ちない', () => {

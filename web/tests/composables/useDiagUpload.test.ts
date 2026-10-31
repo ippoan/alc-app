@@ -4,6 +4,9 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 // 診断ログの送り待ちを signaling の /device-log へ送る (Cloudflare のログに 7 日残す)
 const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn() }))
 mockNuxtImport('useDeviceToken', () => () => deviceToken)
+// キオスクの鍵が無い PC (Vein Base を運行管理者席にした PC) は席の鍵で名乗る
+const managerToken = vi.hoisted(() => ({ getManagerJwt: vi.fn() }))
+mockNuxtImport('useManagerDeviceToken', () => () => managerToken)
 
 const OUTBOX = 'alc_serial_diag_outbox'
 
@@ -26,6 +29,7 @@ describe('useDiagUpload', () => {
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 })
     vi.stubGlobal('fetch', fetchMock)
     deviceToken.getDeviceJwt.mockReset().mockResolvedValue(jwtWithSub('alarm:0123456789abcdef'))
+    managerToken.getManagerJwt.mockReset().mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -89,6 +93,17 @@ describe('useDiagUpload', () => {
       await flushDiagOutbox('https://signal.example')
     }
     expect(fetchMock.mock.calls.map(c => JSON.parse(c[1].body).device_id)).toEqual(['(none)', '(none)', '(none)'])
+  })
+
+  it('キオスクの鍵が無ければ運行管理者席の鍵で名乗る (キオスクの鍵があればそちら)', async () => {
+    const { flushDiagOutbox } = await load()
+    managerToken.getManagerJwt.mockResolvedValue(jwtWithSub('alarm:fedcba9876543210'))
+    deviceToken.getDeviceJwt.mockResolvedValueOnce(null)
+    localStorage.setItem(OUTBOX, JSON.stringify(['app x']))
+    await flushDiagOutbox('https://signal.example')
+    localStorage.setItem(OUTBOX, JSON.stringify(['app y']))
+    await flushDiagOutbox('https://signal.example')
+    expect(fetchMock.mock.calls.map(c => JSON.parse(c[1].body).device_id)).toEqual(['alarm:fedcba9876543210', 'alarm:0123456789abcdef'])
   })
 
   it('useDiagUpload は 1 分ごとに送り、2 回呼んでも周期は 1 つ', async () => {
