@@ -164,6 +164,26 @@ describe('useItTenkoManager', () => {
     })
   })
 
+  describe('registerByEmployee (指静脈で特定できた人)', () => {
+    it('manager / admin を登録し、id だけを保存する (再度の照会はしない)', () => {
+      const { manager, registerByEmployee } = useItTenkoManager()
+      expect(registerByEmployee(MANAGER as never)).toEqual({ ok: true })
+      expect(manager.value).toEqual({ id: 'mgr-1', name: '運行 管理' })
+      expect(localStorage.getItem(KEY)).toBe('mgr-1')
+      expect(localStorage.length).toBe(1)
+      expect(registerByEmployee(ADMIN as never)).toEqual({ ok: true })
+      expect(manager.value).toEqual({ id: 'adm-1', name: '管理 者' })
+      expect(getEmployeeByCodeMock).not.toHaveBeenCalled()
+    })
+
+    it('権限が無ければ文言を返し、登録も保存もしない', () => {
+      const { manager, registerByEmployee } = useItTenkoManager()
+      expect(registerByEmployee(DRIVER as never)).toEqual({ ok: false, message: '山田 太郎さんには運行管理者の権限がありません' })
+      expect(manager.value).toBeNull()
+      expect(localStorage.getItem(KEY)).toBeNull()
+    })
+  })
+
   describe('registerByCode', () => {
     it('manager を登録し、id だけを保存する', async () => {
       getEmployeeByCodeMock.mockResolvedValue(MANAGER)
