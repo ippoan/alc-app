@@ -1,4 +1,5 @@
 import type { AlcoholReading, TimePunchWithDevice } from '~/types'
+import { tenkoMethodLabel } from '~/utils/tenko-type'
 
 /** アルコール測定 payload の解析結果 (形が違えば各フィールドは null)。 */
 export interface AlcoholPayload {
@@ -79,8 +80,13 @@ export function alcoholResultClass(result: string, value: number): string {
 
 /** 打刻に結ばれた点呼の表示 (Refs ippoan/alc-app#436)。 */
 export interface PunchTenko {
-  /** 点呼が確定待ちか (結ばれた測定がまだ点呼として記録されていない) */
-  pending: boolean
+  /** 区分のバッジ (`IT点呼` / `対面点呼` / `遠隔点呼` / `自動点呼` / `通常点呼`)。サーバが区分を返さない間は「点呼」 */
+  methodLabel: string
+  /**
+   * 状態の添え書き。記録まで済んだ回は null。`判定待ち` (運行管理者の判定待ち) / `中止` / `点呼中` (セッションが途中) /
+   * `確定待ち` (測定に点呼のセッションがまだ無い)
+   */
+  statusLabel: string | null
   /** アルコールの結果。測定がまだ結果を持たない (測定中・取り止め) ときは null */
   alcohol: { label: string, cls: string, value: string | null } | null
 }
@@ -91,7 +97,10 @@ export interface PunchTenko {
  * 値は吹込不良 (error) では出さない — そのときの値は測定値ではないため (`readAlcohol` の doc)。
  */
 export function punchTenkoOf(
-  p: Pick<TimePunchWithDevice, 'measurement_id' | 'alcohol_level' | 'result' | 'tenko_recorded'>,
+  p: Pick<
+    TimePunchWithDevice,
+    'measurement_id' | 'alcohol_level' | 'result' | 'tenko_recorded' | 'tenko_status' | 'tenko_method' | 'manager_judgment_method'
+  >,
 ): PunchTenko | null {
   if (!p.measurement_id) return null
   const value = typeof p.alcohol_level === 'number' ? p.alcohol_level : null
@@ -102,6 +111,21 @@ export function punchTenkoOf(
         value: p.result !== 'error' && value !== null ? `${value.toFixed(3)} mg/L` : null,
       }
     : null
-  // サーバが欄を返さない間 (null / 欠落) は確定待ちと言わない — 分からないものを待ちと見せない
-  return { pending: p.tenko_recorded === false, alcohol }
+  return {
+    methodLabel: p.tenko_method ? tenkoMethodLabel(p.tenko_method, p.manager_judgment_method) : '点呼',
+    statusLabel: punchTenkoStatusLabel(p.tenko_status, p.tenko_recorded),
+    alcohol,
+  }
+}
+
+/**
+ * 点呼の状態の添え書き (`punchTenkoOf` の `statusLabel`)。backend の CSV の「点呼記録」(済・判定待ち・中止・未) と同じ切り方で、
+ * 済は出さない。サーバが欄を返さない間 (null / 欠落) は確定待ちと言わない — 分からないものを待ちと見せない
+ */
+function punchTenkoStatusLabel(status: string | null | undefined, recorded: boolean | null | undefined): string | null {
+  if (status === 'completed') return null
+  if (status === 'judgment_pending') return '判定待ち'
+  if (status === 'cancelled' || status === 'interrupted') return '中止'
+  if (status) return '点呼中'
+  return recorded === false ? '確定待ち' : null
 }

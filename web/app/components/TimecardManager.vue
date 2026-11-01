@@ -399,7 +399,7 @@ async function exportCsv() {
                 <span
                   class="px-2 py-0.5 rounded text-xs font-medium"
                   :class="row.origin === 'tenko' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'"
-                >{{ row.origin === 'tenko' ? '点呼' : '打刻' }}</span>
+                >{{ row.origin === 'tenko' ? (row.tenko?.methodLabel ?? '点呼') : '打刻' }}</span>
                 <template v-if="row.tenko?.alcohol">
                   <span v-if="row.tenko.alcohol.value" data-testid="punch-alcohol-value" class="ml-1 tabular-nums text-gray-700">{{ row.tenko.alcohol.value }}</span>
                   <span
@@ -408,7 +408,7 @@ async function exportCsv() {
                     :class="row.tenko.alcohol.cls"
                   >{{ row.tenko.alcohol.label }}</span>
                 </template>
-                <span v-if="row.tenko?.pending" data-testid="punch-tenko-pending" class="ml-1 text-xs text-gray-500">確定待ち</span>
+                <span v-if="row.tenko?.statusLabel" data-testid="punch-tenko-status" class="ml-1 text-xs text-gray-500">{{ row.tenko.statusLabel }}</span>
               </td>
               <td class="px-4 py-2">
                 <span

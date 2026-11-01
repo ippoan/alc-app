@@ -124,15 +124,40 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     const detected = rows[0]!.find('[data-testid="today-punch-alcohol-result"]')
     expect(detected.text()).toBe('検知')
     expect(detected.classes()).toContain('bg-red-100')
-    expect(rows[0]!.find('[data-testid="today-punch-tenko-pending"]').exists()).toBe(true)
+    expect(rows[0]!.find('[data-testid="today-punch-tenko-status"]').exists()).toBe(true)
 
     const normal = rows[1]!.find('[data-testid="today-punch-alcohol-result"]')
     expect(normal.text()).toBe('正常')
     expect(normal.classes()).toContain('bg-green-100')
-    expect(rows[1]!.find('[data-testid="today-punch-tenko-pending"]').exists()).toBe(false)
+    expect(rows[1]!.find('[data-testid="today-punch-tenko-status"]').exists()).toBe(false)
 
     expect(rows[2]!.find('[data-testid="today-punch-tenko"]').exists()).toBe(false)
     expect(rows[2]!.text()).toContain('佐藤次郎')
+    wrapper.unmount()
+  })
+
+  it('★ 点呼のバッジは区分 (IT点呼・対面・遠隔)、状態は判定待ち・中止を添える。済は添えない', async () => {
+    const row = (id: string, extra: Record<string, unknown>) => ({
+      id, employee_id: null, employee_name: id, card_id: null, measurement_id: `m-${id}`, punched_at: '2026-10-20T00:00:00Z', ...extra,
+    })
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        row('a', { tenko_method: 'IT点呼', tenko_status: 'judgment_pending', tenko_recorded: true }),
+        row('b', { tenko_method: 'IT点呼', manager_judgment_method: 'in_person', tenko_status: 'completed', tenko_recorded: true }),
+        row('c', { tenko_method: '遠隔点呼', tenko_status: 'cancelled', tenko_recorded: true }),
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    const rows = wrapper.findAll('tbody tr')
+    const badge = (i: number) => rows[i]!.find('[data-testid="today-punch-tenko"]').text()
+    const status = (i: number) => rows[i]!.find('[data-testid="today-punch-tenko-status"]')
+    expect(badge(0)).toBe('IT点呼')
+    expect(status(0).text()).toBe('判定待ち')
+    expect(badge(1)).toBe('対面点呼')
+    expect(status(1).exists()).toBe(false)
+    expect(badge(2)).toBe('遠隔点呼')
+    expect(status(2).text()).toBe('中止')
     wrapper.unmount()
   })
 

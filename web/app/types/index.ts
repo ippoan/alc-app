@@ -880,6 +880,12 @@ export interface TimePunchWithDevice {
   result?: string | null
   /** 結ばれた測定が点呼として記録済みか (false なら確定待ち) */
   tenko_recorded?: boolean | null
+  /** 結ばれた測定の点呼のセッションの状態 (`completed` / `judgment_pending` / `cancelled` ほか)。セッションが無ければ null */
+  tenko_status?: string | null
+  /** 点呼の区分 (`通常点呼` / `IT点呼` / `遠隔点呼` / `自動点呼`) */
+  tenko_method?: string | null
+  /** IT点呼 を運行管理者が通話 (`it`) と対面 (`in_person`) のどちらで確定したか */
+  manager_judgment_method?: string | null
   punched_at: string
   created_at: string
 }

@@ -66,16 +66,34 @@ describe('TimecardManager — 打刻に結ばれた点呼の表示', () => {
     const detected = rows[0]!.find('[data-testid="punch-alcohol-result"]')
     expect(detected.text()).toBe('検知')
     expect(detected.classes()).toContain('bg-red-100')
-    expect(rows[0]!.find('[data-testid="punch-tenko-pending"]').exists()).toBe(true)
+    expect(rows[0]!.find('[data-testid="punch-tenko-status"]').exists()).toBe(true)
 
     const normal = rows[1]!.find('[data-testid="punch-alcohol-result"]')
     expect(normal.text()).toBe('正常')
     expect(normal.classes()).toContain('bg-green-100')
-    expect(rows[1]!.find('[data-testid="punch-tenko-pending"]').exists()).toBe(false)
+    expect(rows[1]!.find('[data-testid="punch-tenko-status"]').exists()).toBe(false)
 
     expect(rows[2]!.text()).toContain('打刻')
     expect(rows[2]!.text()).not.toContain('点呼')
     expect(rows[2]!.find('[data-testid="punch-alcohol-result"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 点呼のバッジは区分 (IT点呼 を対面で確定した回は「対面点呼」)、状態は判定待ちを添える', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        punch('1', '2026-10-20T00:01:00Z', { measurement_id: 'm-1', tenko_method: 'IT点呼', tenko_status: 'judgment_pending', tenko_recorded: true }),
+        punch('2', '2026-10-20T00:00:00Z', { measurement_id: 'm-2', tenko_method: 'IT点呼', manager_judgment_method: 'in_person', tenko_status: 'completed', tenko_recorded: true }),
+      ],
+      total: 2,
+    })
+    const wrapper = await mountSuspended(TimecardManager)
+    await flush()
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0]!.text()).toContain('IT点呼')
+    expect(rows[0]!.find('[data-testid="punch-tenko-status"]').text()).toBe('判定待ち')
+    expect(rows[1]!.text()).toContain('対面点呼')
+    expect(rows[1]!.find('[data-testid="punch-tenko-status"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
