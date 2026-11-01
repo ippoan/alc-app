@@ -118,6 +118,24 @@ export function punchTenkoOf(
   }
 }
 
+/** 打刻日時の出どころの添え書き (`punchTimeSourceOf`) */
+export interface PunchTimeSource {
+  label: '端末' | '受信'
+  title: string
+}
+
+/**
+ * 打刻日時が端末の時計か受信の時刻かの添え書き。backend の CSV の「打刻日時の出どころ」と同じ語。
+ * サーバが欄を返さない間 (null / 欠落) は出さない
+ */
+export function punchTimeSourceOf(p: Pick<TimePunchWithDevice, 'punched_at_source'>): PunchTimeSource | null {
+  if (p.punched_at_source === 'device') return { label: '端末', title: '端末の時計の時刻' }
+  if (p.punched_at_source === 'received') {
+    return { label: '受信', title: 'サーバが受け取った時刻 (画面からの打刻、または端末の時計が合う前の打刻)' }
+  }
+  return null
+}
+
 /**
  * 点呼の状態の添え書き (`punchTenkoOf` の `statusLabel`)。backend の CSV の「点呼記録」(済・判定待ち・中止・未) と同じ切り方で、
  * 済は出さない。サーバが欄を返さない間 (null / 欠落) は確定待ちと言わない — 分からないものを待ちと見せない

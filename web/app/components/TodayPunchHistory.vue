@@ -13,7 +13,7 @@ import { listTimePunches, getEmployees } from '~/utils/api'
 import { jstTodayStartIso } from '~/utils/jst'
 import { selectSendToken } from '~/utils/token-selection'
 import { cardKindOf, type CardKind } from '~/utils/card-kind'
-import { punchTenkoOf, type PunchTenko } from '~/utils/alcohol'
+import { punchTenkoOf, punchTimeSourceOf, type PunchTenko, type PunchTimeSource } from '~/utils/alcohol'
 
 const { accessToken } = useAuth()
 const { getDeviceJwt, hasDeviceJwt } = useDeviceToken()
@@ -45,7 +45,7 @@ const employeeMap = computed(() => {
 })
 
 /** 本日の打刻 (新しい順)。**サーバから引き直したものだけ**を出す。 */
-const recentPunches = ref<{ key: string; name: string; time: string; cardKind: CardKind; tenko: PunchTenko | null }[]>([])
+const recentPunches = ref<{ key: string; name: string; time: string; cardKind: CardKind; tenko: PunchTenko | null; timeSource: PunchTimeSource | null }[]>([])
 /**
  * 直近の取得状態。**「本日の打刻はまだありません」は取得成功で 0 件のときだけ**
  * 出す (Refs ippoan/alc-app#238)。端末 JWT がまだ無い/取得に失敗した間の空を
@@ -109,6 +109,7 @@ async function loadTodayPunches() {
       key: p.id,
       name: displayName(p),
       time: formatTime(p.punched_at),
+      timeSource: punchTimeSourceOf(p),
       cardKind: cardKindOf(p.card_kind),
       // 打刻から点呼に移った行は点呼とアルコール値を添える (Refs ippoan/alc-app#436)
       tenko: punchTenkoOf(p),
@@ -250,7 +251,12 @@ defineExpose({ reload, highlight })
               class="py-2 px-4 text-right tabular-nums transition-colors duration-1000"
               :class="p.key === highlightedKey ? 'text-green-700' : (i === 0 ? 'text-blue-600' : 'text-gray-400')"
             >
-              {{ p.time }}
+              {{ p.time }}<span
+                v-if="p.timeSource"
+                data-testid="today-punch-time-source"
+                class="ml-1 text-xs text-gray-400"
+                :title="p.timeSource.title"
+              >{{ p.timeSource.label }}</span>
             </td>
           </tr>
         </tbody>

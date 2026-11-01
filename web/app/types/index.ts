@@ -887,6 +887,8 @@ export interface TimePunchWithDevice {
   /** IT点呼 を運行管理者が通話 (`it`) と対面 (`in_person`) のどちらで確定したか */
   manager_judgment_method?: string | null
   punched_at: string
+  /** `punched_at` が端末の時計 (`device`) か受信の時刻 (`received`。画面からの打刻・端末の時計が合う前) か。古い backend は返さない */
+  punched_at_source?: 'device' | 'received' | null
   created_at: string
 }
 

@@ -136,6 +136,25 @@ describe('TodayPunchHistory — 今日の打刻の取得と表示', () => {
     wrapper.unmount()
   })
 
+  it('★ 打刻時刻に出どころ (端末 / 受信) を添える。返さない backend では添えない', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        { id: 'p1', employee_id: null, employee_name: 'a', card_id: null, punched_at: '2026-10-20T00:02:00Z', punched_at_source: 'device' },
+        { id: 'p2', employee_id: null, employee_name: 'b', card_id: null, punched_at: '2026-10-20T00:01:00Z', punched_at_source: 'received' },
+        { id: 'p3', employee_id: null, employee_name: 'c', card_id: null, punched_at: '2026-10-20T00:00:00Z' },
+      ],
+    })
+    const wrapper = await mountSuspended(TodayPunchHistory)
+    await flush()
+    const rows = wrapper.findAll('tbody tr')
+    const source = (i: number) => rows[i]!.find('[data-testid="today-punch-time-source"]')
+    expect(source(0).text()).toBe('端末')
+    expect(source(1).text()).toBe('受信')
+    expect(source(1).attributes('title')).toContain('サーバが受け取った時刻')
+    expect(source(2).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('★ 点呼のバッジは区分 (IT点呼・対面・遠隔)、状態は判定待ち・中止を添える。済は添えない', async () => {
     const row = (id: string, extra: Record<string, unknown>) => ({
       id, employee_id: null, employee_name: id, card_id: null, measurement_id: `m-${id}`, punched_at: '2026-10-20T00:00:00Z', ...extra,
