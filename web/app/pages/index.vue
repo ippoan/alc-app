@@ -99,6 +99,8 @@ useFaceSync()
 useAlarmWatch()
 // Vein Station の行を recorder へ上げる (診断ログ。Refs ippoan/alc-app-s3#352)
 useVeinLogUpload().start()
+// Vein がつながったら書き込んだ版を確定する (書き込みの途中の読み込み直しで前の版へ戻らないように)
+useVeinOtaConfirmOnConnect().start()
 // 指静脈モジュールの照合の厳しさを端末設定に合わせる (Refs ippoan/alc-app-s3#352)
 useVeinSecurityLevel().start()
 

@@ -286,7 +286,14 @@ describe('useSerialOta', () => {
     const states: string[] = []
     const stop = watch(() => ota.state.value, s => states.push(s.kind), { flush: 'sync' })
 
+    // 走っている間だけ isSerialOtaRunning が立つ (接続時の確定はその間送らない)
+    expect(mod.isSerialOtaRunning()).toBe(false)
+    const runningSeen: boolean[] = []
+    const stopRunning = watch(() => ota.state.value, () => runningSeen.push(mod.isSerialOtaRunning()), { flush: 'sync' })
     expect(await runToEnd()).toBe('updated')
+    stopRunning()
+    expect(runningSeen).toContain(true)
+    expect(mod.isSerialOtaRunning()).toBe(false)
     stop()
 
     expect(dev.log[0]).toBe('DEVICE')
