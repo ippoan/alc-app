@@ -538,7 +538,7 @@ describe('TenkoKiosk — 遠隔点呼が閉じたら通話の部屋から出る'
   })
 })
 
-describe('TenkoKiosk — 遠隔点呼の判定待ちと通話必須', () => {
+describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     isRemote.value = true
@@ -595,18 +595,10 @@ describe('TenkoKiosk — 遠隔点呼の判定待ちと通話必須', () => {
   it.each([
     ['instruction', 'TenkoInstruction', 'confirm', onInstructionConfirmMock],
     ['report', 'TenkoOperationReport', 'submit', onReportSubmitMock],
-  ] as const)('★ %s: 運行管理者と通話がつながるまで確定させない', async (s, name, ev, handler) => {
+  ] as const)('★ %s: 通話がつながっていなくても乗務員は確定できる (確定してから運行管理者を呼ぶ)', async (s, name, ev, handler) => {
     session.value = { id: 'sess-1', status: 'instruction_pending' }
     step.value = s
     const wrapper = await mountKiosk()
-    expect(wrapper.find('[data-testid="remote-call-required"]').exists()).toBe(true)
-    wrapper.findComponent({ name }).vm.$emit(ev, {})
-    await flushPromises()
-    expect(handler).not.toHaveBeenCalled()
-
-    isPeerConnected.value = true
-    await flushPromises()
-    expect(wrapper.find('[data-testid="remote-call-required"]').exists()).toBe(false)
     wrapper.findComponent({ name }).vm.$emit(ev, {})
     await flushPromises()
     expect(handler).toHaveBeenCalledTimes(1)
@@ -620,8 +612,8 @@ describe('TenkoKiosk — 運行管理者が出ないとき乗務員が点呼を�
     isRemote.value = true
     isPeerConnected.value = false
     kioskError.value = null
-    session.value = { id: 'sess-1', status: 'instruction_pending' }
-    step.value = 'instruction'
+    session.value = { id: 'sess-1', status: 'judgment_pending' }
+    step.value = 'completed'
     const { cancelTenkoSession } = await import('~/utils/api')
     vi.mocked(cancelTenkoSession).mockReset()
   })
@@ -630,7 +622,7 @@ describe('TenkoKiosk — 運行管理者が出ないとき乗務員が点呼を�
     session.value = null
   })
 
-  it('★ 通話を待つ間だけ出し、押すと理由付きで取り消して最初の画面へ戻す', async () => {
+  it('★ 運行管理者を呼んでいる間 (判定待ち・通話なし) だけ出し、押すと理由付きで取り消して最初の画面へ戻す', async () => {
     const { cancelTenkoSession } = await import('~/utils/api')
     vi.mocked(cancelTenkoSession).mockResolvedValue({ id: 'sess-1', status: 'cancelled' } as never)
     const wrapper = await mountKiosk()
@@ -658,26 +650,31 @@ describe('TenkoKiosk — 運行管理者が出ないとき乗務員が点呼を�
   })
 })
 
-describe('TenkoKiosk — 最初から遠隔点呼は最後の段で部屋に入る', () => {
+describe('TenkoKiosk — 最初から遠隔点呼は確定の後に部屋に入って運行管理者を呼ぶ', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     isRemote.value = true
     isPeerConnected.value = false
-    session.value = { id: 'sess-1', status: 'self_declaration_pending' }
+    session.value = { id: 'sess-1', status: 'instruction_pending' }
   })
   afterEach(() => {
     isRemote.value = false
     session.value = null
   })
 
-  it.each(['instruction', 'report'] as const)('★ 自己申告の間は入らず、%s の段で入る', async (final) => {
+  it('★ 自己申告・指示確認・運行報告の間は入らず、判定待ちになったら入る', async () => {
     step.value = 'self_declaration'
     const wrapper = await mountKiosk()
-    await flushPromises()
+    for (const s of ['instruction', 'report'] as const) {
+      step.value = s
+      await flushPromises()
+    }
     expect(webRtcConnectMock).not.toHaveBeenCalled()
-    step.value = final
+    session.value = { id: 'sess-1', status: 'judgment_pending' }
+    step.value = 'completed'
     await flushPromises()
     expect(webRtcConnectMock).toHaveBeenCalledWith(expect.any(String), 'sess-1', 'room', undefined)
+    expect(webRtcDisconnectMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

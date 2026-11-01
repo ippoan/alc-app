@@ -169,31 +169,29 @@ useKioskScreen().track(() => ({
 }))
 
 /**
- * 遠隔点呼で通話の部屋に入る段 (Refs ippoan/alc-app-s3#135)。部屋に入ると運行管理者の画面の「接続待ちデバイス」に
- * 出て、運行管理者席の警告デバイスが着信を鳴らすので、**運行管理者が要る段に来てから入る**。
+ * 運行管理者の判定を待っている (遠隔点呼の乗務員の側は終わり、判定で閉じる)。完了の画面のまま
+ */
+const awaitingJudgment = computed(() => step.value === 'completed' && session.value?.status === 'judgment_pending')
+/**
+ * 遠隔点呼で通話の部屋に入るとき (Refs ippoan/alc-app-s3#135)。部屋に入ると運行管理者の画面の「接続待ちデバイス」に
+ * 出て、運行管理者席の警告デバイスが着信を鳴らすので、**運行管理者を呼ぶときに入る** (2026-11-01 ユーザー決定)。
  *
- * - 最後の確定 (指示確認・運行報告): 通話必須の段 (#579)。最初から遠隔点呼ならここで初めて入る
- *   (体温・血圧の段から入っていたので、乗務員が自己申告をしている間から鳴っていた。2026-11-01 実機)
+ * - 判定待ち: 乗務員が指示確認 (業務後は運行報告) を終えたら入って運行管理者を呼ぶ。運行管理者は通話の中で OK / NG を
+ *   押して点呼を閉じる
  * - 途中で遠隔に切り替えた点呼の血圧の段 (`medical`): 血圧が測れず運行管理者を呼ぶのはこの段。signaling の
  *   部屋は**接続したときに登録される**ため、ここで繋がないと切り替えても運行管理者の一覧に出てこない
  */
-const REMOTE_FINAL_STEPS: TenkoStep[] = ['instruction', 'report']
 const isRemoteCallStep = computed(
-  () => REMOTE_FINAL_STEPS.includes(step.value) || (escalatedToRemote.value && step.value === 'medical'),
+  () => awaitingJudgment.value || (escalatedToRemote.value && step.value === 'medical'),
 )
 /** 映像を繋ぐべき状態か。段だけでなく「いま遠隔か」も見るので、段の途中で切り替えても発火する */
 const shouldConnectRemote = computed(
   () => isRemote.value && isRemoteCallStep.value,
 )
-/**
- * 運行管理者の判定を待っている (遠隔点呼の乗務員の側は終わり、判定で閉じる)。完了の画面のまま、
- * 判定は通話しながら行うので部屋には残る
- */
-const awaitingJudgment = computed(() => step.value === 'completed' && session.value?.status === 'judgment_pending')
 
-/** 通話パネルの表示。繋ぐ段と判定待ちのあいだだけ (閉じた点呼では部屋から出るので出さない) */
+/** 通話パネルの表示。部屋に入っている間だけ (閉じた点呼では部屋から出るので出さない) */
 const showVideoCall = computed(
-  () => isRemote.value && (isRemoteCallStep.value || awaitingJudgment.value),
+  () => isRemote.value && isRemoteCallStep.value,
 )
 
 // 点呼が閉じたら (完了・中止) 通話の部屋から出る。残ると運行管理者の画面の「接続待ちデバイス」に
@@ -205,20 +203,10 @@ watch([step, () => session.value?.status], ([s, status]) => {
 })
 
 /**
- * 遠隔点呼は、運行管理者と通話がつながっていないと最後の確定 (指示確認・運行報告) をさせない
- * (通話必須、2026-11-01 決定)。つながるまで押しても進まず、待つように出す
+ * 運行管理者を呼んでいる間 (判定待ち) に運行管理者が通話に出ないとき、乗務員がこの点呼をやめる
+ * (取り消しの理由を残して最初の画面へ)。運行管理者が通話に入っている間は出さない
  */
-const remoteCallRequired = computed(() => isRemote.value && !webRtc.isPeerConnected.value)
-function confirmInstruction(...args: Parameters<typeof onInstructionConfirm>) {
-  if (remoteCallRequired.value) return
-  return onInstructionConfirm(...args)
-}
-function submitReport(...args: Parameters<typeof onReportSubmit>) {
-  if (remoteCallRequired.value) return
-  return onReportSubmit(...args)
-}
-
-/** 運行管理者が通話に出ないとき、乗務員がこの点呼をやめる (取り消しの理由を残して最初の画面へ) */
+const canCancelForNoManager = computed(() => isRemote.value && awaitingJudgment.value && !webRtc.isPeerConnected.value)
 const NO_MANAGER_CANCEL_REASON = '運行管理者が通話に出なかったため乗務員が中止'
 const cancellingNoManager = ref(false)
 async function cancelForNoManager(): Promise<void> {
@@ -928,24 +916,11 @@ onUnmounted(() => {
       <div v-else-if="step === 'instruction'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">指示事項</h2>
-          <div v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
-            <p>運行管理者と通話がつながるまでお待ちください。つながると確定できます</p>
-            <button
-              data-testid="cancel-no-manager"
-              :disabled="cancellingNoManager"
-              class="mt-2 w-full px-4 py-2 rounded-lg border border-amber-300 bg-white text-amber-800 disabled:opacity-50"
-              @click="cancelForNoManager"
-            >
-              運行管理者が出ないので点呼をやめる
-            </button>
-          </div>
-          <div :class="{ 'pointer-events-none opacity-50': remoteCallRequired }">
-            <TenkoInstruction
-              :instruction="selectedSchedule?.instruction ?? null"
-              :manager-name="selectedSchedule?.responsible_manager_name ?? ''"
-              @confirm="confirmInstruction"
-            />
-          </div>
+          <TenkoInstruction
+            :instruction="selectedSchedule?.instruction ?? null"
+            :manager-name="selectedSchedule?.responsible_manager_name ?? ''"
+            @confirm="onInstructionConfirm"
+          />
         </div>
       </div>
 
@@ -953,20 +928,7 @@ onUnmounted(() => {
       <div v-else-if="step === 'report'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">運行報告</h2>
-          <div v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
-            <p>運行管理者と通話がつながるまでお待ちください。つながると確定できます</p>
-            <button
-              data-testid="cancel-no-manager"
-              :disabled="cancellingNoManager"
-              class="mt-2 w-full px-4 py-2 rounded-lg border border-amber-300 bg-white text-amber-800 disabled:opacity-50"
-              @click="cancelForNoManager"
-            >
-              運行管理者が出ないので点呼をやめる
-            </button>
-          </div>
-          <div :class="{ 'pointer-events-none opacity-50': remoteCallRequired }">
-            <TenkoOperationReport @submit="submitReport" />
-          </div>
+          <TenkoOperationReport @submit="onReportSubmit" />
         </div>
       </div>
 
@@ -978,6 +940,18 @@ onUnmounted(() => {
             :employee-name="employeeName"
             @reset="handleReset"
           />
+          <!-- 運行管理者を呼んでいる間 (遠隔点呼の判定待ち)。出ないときは乗務員がやめられる -->
+          <div v-if="canCancelForNoManager" data-testid="calling-manager" class="mt-3 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
+            <p>運行管理者を呼んでいます。通話がつながると、運行管理者が判定して点呼が終わります</p>
+            <button
+              data-testid="cancel-no-manager"
+              :disabled="cancellingNoManager"
+              class="mt-2 w-full px-4 py-2 rounded-lg border border-amber-300 bg-white text-amber-800 disabled:opacity-50"
+              @click="cancelForNoManager"
+            >
+              運行管理者が出ないので点呼をやめる
+            </button>
+          </div>
           <!-- 医療データ入力元バッジ (業務前のみ) -->
           <div
             v-if="medicalInputSource && isPreOperation && (session.temperature || (showBpUi && session.systolic))"
