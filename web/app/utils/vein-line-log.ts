@@ -26,9 +26,21 @@ function stamp(now: Date): string {
   return `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}.${p(now.getMilliseconds(), 3)}`
 }
 
-/** 1 行を溜め、購読者に渡す */
+/** 伏せる 16 進の長さ (文字数)。登録の記録・特徴量・生画像の塊はこれより長い。署名や ID より長くとる */
+const REDACT_HEX_MIN = 32
+
+/**
+ * 溜める写しから生体の中身を伏せる (Refs ippoan/alc-app-s3#352)。登録の記録 (`VEIN RECORD <id> <offset> <hex>`)・
+ * 特徴量 (`VEIN CHARA <hex>`)・試験の生画像や記録の読み出しは、{@link REDACT_HEX_MIN} 文字以上の 16 進の塊として
+ * 届く。塊を `<hex N B>` (バイト数) に置き換え、行の頭 (種類・ID・offset) は残す。購読者には元の行のまま渡す
+ */
+export function redactVeinLine(line: string): string {
+  return line.replace(new RegExp(`\\b[0-9A-Fa-f]{${REDACT_HEX_MIN},}\\b`, 'g'), hex => `<hex ${Math.floor(hex.length / 2)} B>`)
+}
+
+/** 1 行を溜め、購読者に渡す。溜める写しは生体の中身を伏せる ({@link redactVeinLine}) */
 export function recordVeinLine(line: string, now: Date = new Date()): void {
-  lines.push(`${stamp(now)} ${line}`)
+  lines.push(`${stamp(now)} ${redactVeinLine(line)}`)
   if (lines.length > VEIN_LINE_LOG_MAX_LINES) lines.splice(0, lines.length - VEIN_LINE_LOG_MAX_LINES)
   for (const cb of listeners) cb(line)
 }
