@@ -287,6 +287,7 @@ function skipFaceAuth() {
 }
 
 async function onNfcRead(nfcId: string) {
+  identifiedByVein.value = false
   try {
     const emp = await getEmployeeByNfcId(nfcId)
     if (!applyFaceApproval(emp)) return
@@ -299,6 +300,7 @@ async function onNfcRead(nfcId: string) {
 async function onManualSubmit() {
   const input = manualIdInput.value.trim()
   if (!input) return
+  identifiedByVein.value = false
   manualError.value = null
   try {
     const emp = await getEmployeeByCode(input)
@@ -311,7 +313,9 @@ async function onManualSubmit() {
 
 // --- 指静脈 (Refs ippoan/vein-match#20) ---
 // 本人確認の主は指静脈、顔認証はサブ。NFC・社員番号と並ぶ 3 つ目の手段で、当たったあとは
-// NFC と同じ手順 (applyFaceApproval → identifyEmployee) に合流する — 顔の記録・顔認証は変えない。
+// NFC と同じ手順 (applyFaceApproval → identifyEmployee) に合流する。
+// **指静脈で当たったら、それを本人確認にする** (遠隔点呼・自動点呼とも) — 顔の承認を見ず、顔認証の段に
+// 来たら飛ばす。NFC・社員番号で特定したときは今まで通り顔認証まで。
 // 指静脈が使えないとき (端末が無い・外れ・読み取り失敗) は NFC と社員番号がそのまま逃げ道になる。
 const veinSerial = useVeinSerial()
 // 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)
@@ -319,13 +323,19 @@ const vein = useVeinEmployeeIdentify({
   label: 'kiosk',
   missMessage: VEIN_NO_MATCH_MESSAGE,
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`,
-  // 顔の承認で止めたときは NFC と同じくグローバルエラーに理由が出る
+  // 指静脈が本人確認なので顔の承認は見ない (顔認証の段は下の watch で飛ばす)
   onEmployee: async (emp) => {
-    if (!applyFaceApproval(emp)) return null
+    identifiedByVein.value = true
     await identifyEmployee(emp.id, emp.name)
     return null
   },
   isIdle: () => isKioskIdle.value,
+})
+
+/** この点呼の乗務員を指静脈で特定したか (顔認証の段を飛ばす) */
+const identifiedByVein = ref(false)
+watch(step, (s) => {
+  if (s === 'face_auth' && identifiedByVein.value) onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
 })
 
 /** ボタンを押せない理由。`null` なら押せる */
@@ -483,6 +493,7 @@ function handleReset() {
   isChoosingEscalationReason.value = false
   alcoholMeasurementId.value = null
   sessionMeasurementUsed.value = false
+  identifiedByVein.value = false
   resetBlowRecording()
 }
 
