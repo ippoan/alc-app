@@ -128,7 +128,7 @@ mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBp
 mockNuxtImport('useFingerprint', () => () => ({
   isFingerprintAvailable: ref(false), isEmployeeAuthorized: vi.fn(() => false), authorizeEmployee: vi.fn(), requestFingerprint: vi.fn(),
 }))
-mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
+mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn(), sendMeasurementId: vi.fn() }))
 
 const EMP = { id: 'emp-1', name: '山田 太郎', face_approval_status: 'approved' } as ApiEmployee
 

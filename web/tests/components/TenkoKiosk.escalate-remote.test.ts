@@ -71,7 +71,7 @@ mockNuxtImport('useFingerprint', () => () => ({
 mockNuxtImport('useBloodPressureSetting', () => () => ({ bpEnabled: ref(true), setBpEnabled: vi.fn() }))
 // 血圧を使う端末 = 「遠隔点呼に切り替える」の逃げ道が出る側 (Refs ippoan/alc-app#347)
 mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('show'), showBpUi: ref(true) }))
-mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
+mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn(), sendMeasurementId: vi.fn() }))
 
 // --- 合成データ (実在の乗務員・カード番号は書かない) ---
 const EMPLOYEE = { id: 'emp-test-1', name: 'テスト太郎', face_approval_status: 'approved' }

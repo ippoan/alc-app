@@ -168,6 +168,7 @@ mockNuxtImport('useBleGateway', () => () => ({
 mockNuxtImport('useCoreS3Stage', () => () => ({
   syncStep: vi.fn(),
   sendResult: vi.fn(),
+  sendMeasurementId: vi.fn(),
 }))
 
 // 本人確認前のアルコール測定の通知 (Refs ippoan/rust-alc-api#644、#287)。この回帰テストの

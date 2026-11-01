@@ -285,7 +285,7 @@ async function tryPunch(cardId: string) {
 }
 
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
-const { syncStep, sendResult } = useCoreS3Stage()
+const { syncStep, sendResult, sendMeasurementId } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
 
 // 電子車検証の管理番号・車両 ID (タップで保持。段は進めない。Refs ippoan/alc-app-s3#110)
@@ -432,6 +432,8 @@ async function tryStartMeasurement(empId: string) {
   try {
     const m = await startMeasurement(empId)
     activeMeasurementId.value = m.id
+    // CoreS3 が点呼中の体温・血圧・アルコールの記録にこの id を載せる (サーバが測定に結ぶ)
+    sendMeasurementId(m.id)
     console.log('[Measurement] startMeasurement success, id:', m.id)
   } catch (e) {
     console.warn('[Measurement] startMeasurement failed:', e)

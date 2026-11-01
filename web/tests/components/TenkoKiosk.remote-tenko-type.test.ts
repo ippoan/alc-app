@@ -62,7 +62,7 @@ mockNuxtImport('useFingerprint', () => () => ({
 }))
 mockNuxtImport('useBloodPressureSetting', () => () => ({ bpEnabled: ref(true), setBpEnabled: vi.fn() }))
 mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('show'), showBpUi: ref(true) }))
-mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
+mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn(), sendMeasurementId: vi.fn() }))
 
 // 合成データ (実在の乗務員 ID ではない)
 const EMPLOYEE = { id: 'emp-test-310', name: 'テスト花子', face_approval_status: 'approved' }
