@@ -2,7 +2,7 @@
 import type { FaceAuthResult, MeasurementResult, SubmitMedicalData, TenkoRemoteEscalationReason } from '~/types'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, getTenkoSession, startMeasurement } from '~/utils/api'
+import { cancelTenkoSession, getEmployeeByNfcId, getEmployeeByCode, getTenkoSession, startMeasurement } from '~/utils/api'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
@@ -211,6 +211,25 @@ function confirmInstruction(...args: Parameters<typeof onInstructionConfirm>) {
 function submitReport(...args: Parameters<typeof onReportSubmit>) {
   if (remoteCallRequired.value) return
   return onReportSubmit(...args)
+}
+
+/** 運行管理者が通話に出ないとき、乗務員がこの点呼をやめる (取り消しの理由を残して最初の画面へ) */
+const NO_MANAGER_CANCEL_REASON = '運行管理者が通話に出なかったため乗務員が中止'
+const cancellingNoManager = ref(false)
+async function cancelForNoManager(): Promise<void> {
+  const id = session.value?.id
+  if (!id || cancellingNoManager.value) return
+  cancellingNoManager.value = true
+  try {
+    await cancelTenkoSession(id, { reason: NO_MANAGER_CANCEL_REASON })
+    handleReset()
+  }
+  catch {
+    error.value = '点呼をやめられませんでした。もう一度押してください'
+  }
+  finally {
+    cancellingNoManager.value = false
+  }
 }
 
 // 判定待ちの間はセッションを取り直し、判定が入ったら完了の表示に変える (取り直さないと「判定を待っています」の
@@ -904,9 +923,17 @@ onUnmounted(() => {
       <div v-else-if="step === 'instruction'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">指示事項</h2>
-          <p v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
-            運行管理者と通話がつながるまでお待ちください。つながると確定できます
-          </p>
+          <div v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
+            <p>運行管理者と通話がつながるまでお待ちください。つながると確定できます</p>
+            <button
+              data-testid="cancel-no-manager"
+              :disabled="cancellingNoManager"
+              class="mt-2 w-full px-4 py-2 rounded-lg border border-amber-300 bg-white text-amber-800 disabled:opacity-50"
+              @click="cancelForNoManager"
+            >
+              運行管理者が出ないので点呼をやめる
+            </button>
+          </div>
           <div :class="{ 'pointer-events-none opacity-50': remoteCallRequired }">
             <TenkoInstruction
               :instruction="selectedSchedule?.instruction ?? null"
@@ -921,9 +948,17 @@ onUnmounted(() => {
       <div v-else-if="step === 'report'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">運行報告</h2>
-          <p v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
-            運行管理者と通話がつながるまでお待ちください。つながると確定できます
-          </p>
+          <div v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
+            <p>運行管理者と通話がつながるまでお待ちください。つながると確定できます</p>
+            <button
+              data-testid="cancel-no-manager"
+              :disabled="cancellingNoManager"
+              class="mt-2 w-full px-4 py-2 rounded-lg border border-amber-300 bg-white text-amber-800 disabled:opacity-50"
+              @click="cancelForNoManager"
+            >
+              運行管理者が出ないので点呼をやめる
+            </button>
+          </div>
           <div :class="{ 'pointer-events-none opacity-50': remoteCallRequired }">
             <TenkoOperationReport @submit="submitReport" />
           </div>

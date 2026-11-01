@@ -12,6 +12,7 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   startMeasurement: vi.fn(),
   updateMeasurement: vi.fn(),
   getTenkoSession: vi.fn(),
+  cancelTenkoSession: vi.fn(),
 }))
 
 // TenkoKiosk.vue は多くの composable (WebRTC・カメラ・指紋認証等) に依存するため、
@@ -38,6 +39,8 @@ const session = ref<Partial<TenkoSession> | null>(null)
 
 const onInstructionConfirmMock = vi.fn()
 const onReportSubmitMock = vi.fn()
+const kioskError = ref<string | null>(null)
+const resetMock = vi.fn()
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
   employeeId,
@@ -46,7 +49,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   resumableSessions,
   selectedSchedule: ref(null),
   session,
-  error: ref(null),
+  error: kioskError,
   isLoading: ref(false),
   safetyJudgment: ref(null),
   tenkoType,
@@ -73,7 +76,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   onCarryingItemsSubmit: vi.fn(),
   onInstructionConfirm: onInstructionConfirmMock,
   onReportSubmit: onReportSubmitMock,
-  reset: vi.fn(),
+  reset: resetMock,
 }))
 
 mockNuxtImport('useFaceSync', () => () => ({
@@ -606,6 +609,50 @@ describe('TenkoKiosk — 遠隔点呼の判定待ちと通話必須', () => {
     wrapper.findComponent({ name }).vm.$emit(ev, {})
     await flushPromises()
     expect(handler).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})
+
+describe('TenkoKiosk — 運行管理者が出ないとき乗務員が点呼をやめる', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    isRemote.value = true
+    isPeerConnected.value = false
+    kioskError.value = null
+    session.value = { id: 'sess-1', status: 'instruction_pending' }
+    step.value = 'instruction'
+    const { cancelTenkoSession } = await import('~/utils/api')
+    vi.mocked(cancelTenkoSession).mockReset()
+  })
+  afterEach(() => {
+    isRemote.value = false
+    session.value = null
+  })
+
+  it('★ 通話を待つ間だけ出し、押すと理由付きで取り消して最初の画面へ戻す', async () => {
+    const { cancelTenkoSession } = await import('~/utils/api')
+    vi.mocked(cancelTenkoSession).mockResolvedValue({ id: 'sess-1', status: 'cancelled' } as never)
+    const wrapper = await mountKiosk()
+    await wrapper.find('[data-testid="cancel-no-manager"]').trigger('click')
+    await flushPromises()
+    expect(cancelTenkoSession).toHaveBeenCalledWith('sess-1', { reason: '運行管理者が通話に出なかったため乗務員が中止' })
+    expect(resetMock).toHaveBeenCalled()
+
+    // 通話がつながっている間は出さない
+    isPeerConnected.value = true
+    await flushPromises()
+    expect(wrapper.find('[data-testid="cancel-no-manager"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('取り消せなければ理由を出し、最初の画面へは戻さない', async () => {
+    const { cancelTenkoSession } = await import('~/utils/api')
+    vi.mocked(cancelTenkoSession).mockRejectedValue(new Error('400'))
+    const wrapper = await mountKiosk()
+    await wrapper.find('[data-testid="cancel-no-manager"]').trigger('click')
+    await flushPromises()
+    expect(resetMock).not.toHaveBeenCalled()
+    expect(kioskError.value).toBe('点呼をやめられませんでした。もう一度押してください')
     wrapper.unmount()
   })
 })
