@@ -4,6 +4,7 @@ import {
   onVeinLine,
   persistVeinLines,
   recordVeinLine,
+  redactVeinLine,
   restoreVeinLines,
   snapshotVeinLines,
   VEIN_LINE_LOG_MAX_LINES,
@@ -56,6 +57,24 @@ describe('vein-line-log', () => {
     const get = vi.spyOn(sessionStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
     expect(restoreVeinLines()).toBe(0)
     get.mockRestore()
+  })
+
+  it('★ 生体の中身 (登録の記録・特徴量の 16 進の塊) は溜める写しで伏せ、購読者には元の行を渡す', () => {
+    const hex = 'DEEDDEED'.repeat(64)
+    const got: string[] = []
+    const off = onVeinLine(l => got.push(l))
+    recordVeinLine(`VEIN RECORD 10 0 ${hex}`, new Date(2026, 10, 2, 2, 18, 9, 645))
+    recordVeinLine('VEIN RECORD 10 END 8156', new Date(2026, 10, 2, 2, 18, 9, 800))
+    off()
+    expect(snapshotVeinLines()).toBe('02:18:09.645 VEIN RECORD 10 0 <hex 256 B>\n02:18:09.800 VEIN RECORD 10 END 8156')
+    expect(got[0]).toBe(`VEIN RECORD 10 0 ${hex}`)
+  })
+
+  it('redactVeinLine: 32 文字以上の 16 進だけを伏せ、照合の行・短い 16 進は残す', () => {
+    expect(redactVeinLine(`VEIN CHARA ${'ab'.repeat(16)}`)).toBe('VEIN CHARA <hex 16 B>')
+    expect(redactVeinLine(`VEIN CHARA ${'ab'.repeat(15)}`)).toBe(`VEIN CHARA ${'ab'.repeat(15)}`)
+    expect(redactVeinLine('VEIN IDENTIFIED 10 SCORE=78 TH=71 VIA=FV THS=63,71,81')).toBe('VEIN IDENTIFIED 10 SCORE=78 TH=71 VIA=FV THS=63,71,81')
+    expect(redactVeinLine('VEIN TEST VERIFY 2 RC=00 DATA=0012')).toBe('VEIN TEST VERIFY 2 RC=00 DATA=0012')
   })
 
   it('行数の上限を超えたら古い方から捨てる', () => {
