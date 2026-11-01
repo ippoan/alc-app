@@ -88,6 +88,7 @@ mockNuxtImport('useDemoMode', () => () => ({
   isDemoMode: ref(false),
 }))
 
+const webRtcConnectMock = vi.fn(async () => {})
 const webRtcDisconnectMock = vi.fn()
 // 運行管理者と通話がつながっているか
 const isPeerConnected = ref(false)
@@ -96,7 +97,7 @@ mockNuxtImport('useWebRtc', () => () => ({
   isPeerConnected,
   remoteStream: ref(null),
   error: ref(null),
-  connect: vi.fn(async () => {}),
+  connect: webRtcConnectMock,
   startStreaming: vi.fn(async () => {}),
   disconnect: webRtcDisconnectMock,
 }))
@@ -653,6 +654,30 @@ describe('TenkoKiosk — 運行管理者が出ないとき乗務員が点呼を�
     await flushPromises()
     expect(resetMock).not.toHaveBeenCalled()
     expect(kioskError.value).toBe('点呼をやめられませんでした。もう一度押してください')
+    wrapper.unmount()
+  })
+})
+
+describe('TenkoKiosk — 最初から遠隔点呼は最後の段で部屋に入る', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    isRemote.value = true
+    isPeerConnected.value = false
+    session.value = { id: 'sess-1', status: 'self_declaration_pending' }
+  })
+  afterEach(() => {
+    isRemote.value = false
+    session.value = null
+  })
+
+  it.each(['instruction', 'report'] as const)('★ 自己申告の間は入らず、%s の段で入る', async (final) => {
+    step.value = 'self_declaration'
+    const wrapper = await mountKiosk()
+    await flushPromises()
+    expect(webRtcConnectMock).not.toHaveBeenCalled()
+    step.value = final
+    await flushPromises()
+    expect(webRtcConnectMock).toHaveBeenCalledWith(expect.any(String), 'sess-1', 'room', undefined)
     wrapper.unmount()
   })
 })

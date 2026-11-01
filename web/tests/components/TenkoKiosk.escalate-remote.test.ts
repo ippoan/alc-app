@@ -241,7 +241,8 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
 
   it('端末の鍵が取れる kiosk は、遠隔点呼の部屋に鍵を付けて入る (自己申告の端末 ID は付けない)', async () => {
     getDeviceJwtMock.mockResolvedValue('kiosk.jwt.token')
-    const wrapper = await mountAtMedicalStep({ remoteMode: true })
+    const wrapper = await mountAtMedicalStep()
+    await escalate(wrapper)
     expect(webRtcConnect).toHaveBeenCalledTimes(1)
     expect(webRtcConnect.mock.calls[0]).toEqual([expect.any(String), SESSION_ID, 'room', 'kiosk.jwt.token'])
     wrapper.unmount()
@@ -249,7 +250,8 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
 
   it('端末の鍵の取得が throw しても token 無しで部屋に入る', async () => {
     getDeviceJwtMock.mockRejectedValue(new Error('boom'))
-    const wrapper = await mountAtMedicalStep({ remoteMode: true })
+    const wrapper = await mountAtMedicalStep()
+    await escalate(wrapper)
     expect(webRtcConnect).toHaveBeenCalledTimes(1)
     expect(webRtcConnect.mock.calls[0]).toEqual([expect.any(String), SESSION_ID, 'room', undefined])
     wrapper.unmount()
@@ -310,8 +312,9 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     expect(wrapper.text()).toContain('遠隔点呼モード — 運行管理者がビデオ通話で確認しています')
     // 切り替えボタンは出ない
     expect(escalateButton(wrapper)).toBeUndefined()
-    // 映像は従来どおり自動で繋がる
-    expect(webRtcConnect).toHaveBeenCalledTimes(1)
+    // ★ 最初から遠隔点呼なら、運行管理者が要る最後の段 (指示確認・運行報告) まで部屋に入らない
+    // (入ると運行管理者席の警告デバイスが着信を鳴らす。2026-11-01 実機)
+    expect(webRtcConnect).not.toHaveBeenCalled()
     expect(escalateTenkoSessionToRemote).not.toHaveBeenCalled()
     wrapper.unmount()
   })

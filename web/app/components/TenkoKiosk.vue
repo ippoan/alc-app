@@ -169,16 +169,21 @@ useKioskScreen().track(() => ({
 }))
 
 /**
- * 遠隔点呼で映像を繋ぐ段 (Refs ippoan/alc-app-s3#135)。
+ * 遠隔点呼で通話の部屋に入る段 (Refs ippoan/alc-app-s3#135)。部屋に入ると運行管理者の画面の「接続待ちデバイス」に
+ * 出て、運行管理者席の警告デバイスが着信を鳴らすので、**運行管理者が要る段に来てから入る**。
  *
- * **血圧の段 (`medical`) を含めるのが肝。** 血圧が測れず遠隔へ切り替えるのはこの段で、
- * signaling の部屋は**接続したときに登録される**ため、ここで繋がないと切り替えても
- * 運行管理者の一覧に出てこない。
+ * - 最後の確定 (指示確認・運行報告): 通話必須の段 (#579)。最初から遠隔点呼ならここで初めて入る
+ *   (体温・血圧の段から入っていたので、乗務員が自己申告をしている間から鳴っていた。2026-11-01 実機)
+ * - 途中で遠隔に切り替えた点呼の血圧の段 (`medical`): 血圧が測れず運行管理者を呼ぶのはこの段。signaling の
+ *   部屋は**接続したときに登録される**ため、ここで繋がないと切り替えても運行管理者の一覧に出てこない
  */
-const REMOTE_CONNECT_STEPS: TenkoStep[] = ['medical', 'instruction', 'report']
+const REMOTE_FINAL_STEPS: TenkoStep[] = ['instruction', 'report']
+const isRemoteCallStep = computed(
+  () => REMOTE_FINAL_STEPS.includes(step.value) || (escalatedToRemote.value && step.value === 'medical'),
+)
 /** 映像を繋ぐべき状態か。段だけでなく「いま遠隔か」も見るので、段の途中で切り替えても発火する */
 const shouldConnectRemote = computed(
-  () => isRemote.value && REMOTE_CONNECT_STEPS.includes(step.value),
+  () => isRemote.value && isRemoteCallStep.value,
 )
 /**
  * 運行管理者の判定を待っている (遠隔点呼の乗務員の側は終わり、判定で閉じる)。完了の画面のまま、
@@ -188,7 +193,7 @@ const awaitingJudgment = computed(() => step.value === 'completed' && session.va
 
 /** 通話パネルの表示。繋ぐ段と判定待ちのあいだだけ (閉じた点呼では部屋から出るので出さない) */
 const showVideoCall = computed(
-  () => isRemote.value && (REMOTE_CONNECT_STEPS.includes(step.value) || awaitingJudgment.value),
+  () => isRemote.value && (isRemoteCallStep.value || awaitingJudgment.value),
 )
 
 // 点呼が閉じたら (完了・中止) 通話の部屋から出る。残ると運行管理者の画面の「接続待ちデバイス」に
