@@ -9,15 +9,18 @@ const listTenkoSessionsMock = vi.fn(async () => ({ sessions: [] as any[], total:
 const getEmployeesMock = vi.fn(async () => [] as any[])
 const downloadTenkoRecordsCsvMock = vi.fn(async () => {})
 const getMeasurementMock = vi.fn(async (_id: string) => ({}) as any)
+const interruptTenkoSessionMock = vi.fn(async () => ({}) as any)
+const resumeTenkoSessionMock = vi.fn(async () => ({}) as any)
+const cancelTenkoSessionMock = vi.fn(async () => ({}) as any)
 
 vi.mock('~/utils/api', () => ({
   listTenkoSessions: (...args: any[]) => listTenkoSessionsMock(...args),
   getEmployees: (...args: any[]) => getEmployeesMock(...args),
   downloadTenkoRecordsCsv: (...args: any[]) => downloadTenkoRecordsCsvMock(...args),
   getMeasurement: (...args: any[]) => getMeasurementMock(...args),
-  interruptTenkoSession: vi.fn(),
-  resumeTenkoSession: vi.fn(),
-  cancelTenkoSession: vi.fn(),
+  interruptTenkoSession: (...args: any[]) => interruptTenkoSessionMock(...args),
+  resumeTenkoSession: (...args: any[]) => resumeTenkoSessionMock(...args),
+  cancelTenkoSession: (...args: any[]) => cancelTenkoSessionMock(...args),
 }))
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -328,6 +331,57 @@ describe('TenkoSessionMonitor — 車検の一覧・詳細', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.text()).not.toContain('車検証')
+    wrapper.unmount()
+  })
+})
+
+// 運行管理者席の PC (管理者ログインなし) から一覧の操作を送れるよう、一覧の取得と同じ 'tenko-monitor' で送る
+describe('TenkoSessionMonitor — 取り消し・中断・再開は席の鍵 (tenko-monitor) で送る', () => {
+  const RUNNING = { ...SESSION_NORMAL, id: 's-run', status: 'medical_pending' }
+  const STOPPED = { ...SESSION_NORMAL, id: 's-stop', status: 'interrupted' }
+
+  beforeEach(() => {
+    listTenkoSessionsMock.mockClear()
+    listTenkoSessionsMock.mockResolvedValue({ sessions: [RUNNING, STOPPED], total: 2, page: 1, per_page: 20 })
+    getEmployeesMock.mockResolvedValue([])
+    interruptTenkoSessionMock.mockClear()
+    resumeTenkoSessionMock.mockClear()
+    cancelTenkoSessionMock.mockClear()
+  })
+
+  const button = (row: any, label: string) => row.findAll('button').find((b: any) => b.text() === label)
+
+  it('キャンセルの確定・中断・再開が tenko-monitor を渡す', async () => {
+    const wrapper = await mountMonitor()
+    const rows = () => wrapper.findAll('tbody > tr')
+
+    await button(rows()[0], 'キャンセル').trigger('click')
+    await button(rows()[0], '確定').trigger('click')
+    await flush()
+    expect(cancelTenkoSessionMock).toHaveBeenCalledWith('s-run', { reason: '' }, 'tenko-monitor')
+
+    await button(rows()[0], '中断').trigger('click')
+    await button(rows()[0], '中断').trigger('click')
+    await flush()
+    expect(interruptTenkoSessionMock).toHaveBeenCalledWith('s-run', { reason: undefined }, 'tenko-monitor')
+
+    await button(rows()[1], '再開').trigger('click')
+    await rows()[1].find('input[placeholder="再開理由"]').setValue('確認済み')
+    await button(rows()[1], '再開').trigger('click')
+    await flush()
+    expect(resumeTenkoSessionMock).toHaveBeenCalledWith('s-stop', { reason: '確認済み' }, 'tenko-monitor')
+    wrapper.unmount()
+  })
+
+  it('一括キャンセルも tenko-monitor を渡す', async () => {
+    const wrapper = await mountMonitor()
+    await wrapper.find('thead input[type="checkbox"]').setValue(true)
+    const bulk = wrapper.findAll('button').find(b => b.text().includes('一括キャンセル'))
+    expect(bulk).toBeTruthy()
+    await bulk!.trigger('click')
+    await flush()
+    expect(cancelTenkoSessionMock).toHaveBeenCalledWith('s-run', { reason: '' }, 'tenko-monitor')
+    expect(cancelTenkoSessionMock).toHaveBeenCalledWith('s-stop', { reason: '' }, 'tenko-monitor')
     wrapper.unmount()
   })
 })
