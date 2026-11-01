@@ -2500,6 +2500,13 @@ describe("POST /device-log (機体の診断ログ、Refs ippoan/alc-app-s3#352)"
     expect(await spyIngest()).toEqual([]);
   });
 
+  it("★ 運行管理者席の鍵の JWT でも保存する (席の Vein Base の行)", async () => {
+    const res = await postLog(BODY, "manager-seat-token");
+    expect(res.status).toBe(200);
+    const { stored } = (await res.json()) as { stored: string };
+    expect(stored).toMatch(/^device-log\/tenant-1\/alarm:seat-1\/\d{13}-vein-station\.json$/);
+  });
+
   it("開発用の鍵の JWT なら dev: true で残す", async () => {
     const res = await postLog(BODY, "kiosk-token-dev");
     expect(res.status).toBe(200);

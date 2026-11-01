@@ -197,6 +197,20 @@ describe('prepareVeinModuleRecord', () => {
 describe('syncVeinModule', () => {
   const B64 = btoa(String.fromCharCode(0xDE, 0xED))
 
+  it('★ 書いた記録の種類を、Vein Station の行と同じ溜め場所に PC VEIN RECORD で残す (乗務員の ID は出さない)', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    api.getVeinModuleTemplates.mockResolvedValue({
+      templates: [
+        { employee_id: 'emp-1', record: B64, updated_at: 'v1', composed: true },
+        { employee_id: 'emp-2', record: B64, updated_at: 'v1' },
+      ],
+    })
+    expect(await mod.syncVeinModule(port())).toBe(true)
+    const lines = snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
+    expect(lines).toEqual(['PC VEIN RECORD 10 KIND=composed MODE=mixed', 'PC VEIN RECORD 11 KIND=server MODE=mixed'])
+    expect(snapshotVeinLines()).not.toContain('emp-')
+  })
+
   it('つながっていないときは何もしない', async () => {
     expect(await mod.syncVeinModule(port(false))).toBe(false)
     expect(api.getVeinModuleTemplates).not.toHaveBeenCalled()

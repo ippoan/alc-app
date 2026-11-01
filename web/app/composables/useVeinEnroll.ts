@@ -19,7 +19,7 @@
 
 import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
-import { allocateVeinModuleId, usesVeinModule } from '~/utils/vein-module'
+import { allocateVeinModuleId, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
 import { appendDiag } from '~/utils/serialDiagLog'
 
@@ -133,6 +133,7 @@ export function useVeinEnroll() {
       throw e
     }
     await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved: false })
+    noteVeinModuleRecord(id, 'native')
   }
 
   function reset(): void {
