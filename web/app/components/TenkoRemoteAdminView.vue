@@ -551,6 +551,7 @@ onUnmounted(() => {
         <TenkoManagerJudgmentPanel
           :session="liveSession"
           :manager-id="authenticatedManagerId"
+          wait-for-driver
           @judged="s => { liveSession = s }"
         />
       </div>

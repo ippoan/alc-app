@@ -26,9 +26,21 @@ const props = withDefaults(defineProps<{
   defaultMethod?: ManagerJudgmentMethod
   /** 判定を送る口。渡さなければ遠隔点呼モニターの口 (今までと同じ) */
   scope?: RequestTokenScope
+  /**
+   * 遠隔点呼の画面だけが渡す。乗務員が最後の確定 (指示確認・運行報告) を終えて判定待ちになるまで OK/NG を
+   * 押させない。先に押すと判定だけが記録されて点呼が閉じず、通話を切ると乗務員も確定できなくなった
+   * (2026-11-01 実機)
+   */
+  waitForDriver?: boolean
 }>(), {
   scope: 'tenko-monitor',
+  waitForDriver: false,
 })
+
+/** 乗務員の確定を待っているあいだ (判定を押させない) */
+const waitingForDriver = computed(() =>
+  props.waitForDriver && props.session.status !== 'judgment_pending' && props.session.status !== 'completed',
+)
 
 const emit = defineEmits<{
   judged: [TenkoSession]
@@ -73,6 +85,7 @@ function cancelNg() {
 }
 
 async function submit(judgment: 'ok' | 'ng') {
+  if (waitingForDriver.value) return
   if (submitting.value) return
   if (!props.managerId) {
     error.value = '運行管理者が特定できていません'
@@ -130,11 +143,15 @@ async function submit(judgment: 'ok' | 'ng') {
       </div>
     </div>
 
+    <p v-if="waitingForDriver" data-testid="waiting-for-driver" class="mb-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+      乗務員が最後の確定 (指示確認・運行報告) をするまでお待ちください。確定すると判定できます
+    </p>
+
     <!-- OK/NG ボタン (判定済みでも押し直せる) -->
     <div class="flex gap-2">
       <button
         class="px-4 py-1.5 text-sm rounded-lg bg-green-100 hover:bg-green-200 text-green-800 font-medium transition-colors disabled:opacity-50"
-        :disabled="submitting"
+        :disabled="submitting || waitingForDriver"
         @click="submit('ok')"
       >
         OK
@@ -142,7 +159,7 @@ async function submit(judgment: 'ok' | 'ng') {
       <button
         v-if="!ngMode"
         class="px-4 py-1.5 text-sm rounded-lg bg-red-100 hover:bg-red-200 text-red-800 font-medium transition-colors disabled:opacity-50"
-        :disabled="submitting"
+        :disabled="submitting || waitingForDriver"
         @click="clickNg"
       >
         NG
