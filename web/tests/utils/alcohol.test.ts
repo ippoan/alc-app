@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readAlcohol, toAlcoholReading, alcoholResultLabel, alcoholResultClass, alcoholTone, punchTenkoOf } from '~/utils/alcohol'
+import { readAlcohol, toAlcoholReading, alcoholResultLabel, alcoholResultClass, alcoholTone, punchTenkoOf, punchTimeSourceOf } from '~/utils/alcohol'
 
 describe('readAlcohol', () => {
   it('CoreS3 の payload (正常) を読む', () => {
@@ -107,6 +107,18 @@ describe('alcoholResultClass', () => {
 
   it('未知の値は赤', () => {
     expect(alcoholResultClass('pass', 0)).toBe('bg-red-100 text-red-800')
+  })
+})
+
+describe('punchTimeSourceOf (打刻日時の出どころ)', () => {
+  it('端末の時計は「端末」、受信の時刻は「受信」。返さない backend では出さない', () => {
+    expect(punchTimeSourceOf({ punched_at_source: 'device' })?.label).toBe('端末')
+    expect(punchTimeSourceOf({ punched_at_source: 'received' })).toEqual({
+      label: '受信',
+      title: 'サーバが受け取った時刻 (画面からの打刻、または端末の時計が合う前の打刻)',
+    })
+    expect(punchTimeSourceOf({ punched_at_source: null })).toBeNull()
+    expect(punchTimeSourceOf({})).toBeNull()
   })
 })
 

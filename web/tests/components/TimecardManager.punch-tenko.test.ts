@@ -97,6 +97,26 @@ describe('TimecardManager — 打刻に結ばれた点呼の表示', () => {
     wrapper.unmount()
   })
 
+  it('★ 打刻日時に出どころ (端末 / 受信) を添える。返さない backend では添えない', async () => {
+    listTimePunchesMock.mockResolvedValueOnce({
+      punches: [
+        punch('1', '2026-10-20T00:02:00Z', { punched_at_source: 'device' }),
+        punch('2', '2026-10-20T00:01:00Z', { punched_at_source: 'received' }),
+        punch('3', '2026-10-20T00:00:00Z'),
+      ],
+      total: 3,
+    })
+    const wrapper = await mountSuspended(TimecardManager)
+    await flush()
+    const rows = wrapper.findAll('tbody tr')
+    const source = (i: number) => rows[i]!.find('[data-testid="punch-time-source"]')
+    expect(source(0).text()).toBe('端末')
+    expect(source(1).text()).toBe('受信')
+    expect(source(1).attributes('title')).toContain('サーバが受け取った時刻')
+    expect(source(2).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('吹込不良 (error) は値を出さず「測定エラー」だけ', async () => {
     listTimePunchesMock.mockResolvedValueOnce({
       punches: [punch('1', '2026-10-20T00:00:00Z', { measurement_id: 'm-1', alcohol_level: 0, result: 'error' })],

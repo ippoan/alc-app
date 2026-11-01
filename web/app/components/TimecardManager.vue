@@ -7,7 +7,7 @@ import {
 import { jstTodayDate } from '~/utils/jst'
 import { isDevDevice, usesAdminToken } from '~/utils/token-selection'
 import { cardKindOf } from '~/utils/card-kind'
-import { punchTenkoOf } from '~/utils/alcohol'
+import { punchTenkoOf, punchTimeSourceOf } from '~/utils/alcohol'
 
 type SubTab = 'cards' | 'punches'
 
@@ -138,6 +138,8 @@ interface HistoryRow {
   cardKind: ReturnType<typeof cardKindOf>
   /** 打刻に結ばれた点呼 (Refs ippoan/alc-app#436)。結ばれていない行は null */
   tenko: ReturnType<typeof punchTenkoOf>
+  /** 打刻日時が端末の時計か受信の時刻か (サーバが返さなければ null) */
+  timeSource: ReturnType<typeof punchTimeSourceOf>
 }
 
 /**
@@ -164,6 +166,7 @@ const historyRows = computed<HistoryRow[]>(() =>
       origin: p.kind === 'license' || p.measurement_id ? ('tenko' as const) : ('punch' as const),
       cardKind: cardKindOf(p.card_kind),
       tenko: punchTenkoOf(p),
+      timeSource: punchTimeSourceOf(p),
     }))
     // 表示は日付で絞ってあるので、同日内の新しい順に並べれば足りる
     .sort((a, b) => b.at.localeCompare(a.at)),
@@ -394,7 +397,14 @@ async function exportCsv() {
             </tr>
             <tr v-for="row in historyRows" :key="row.key" class="border-t">
               <td class="px-4 py-2">{{ row.employeeName }}</td>
-              <td class="px-4 py-2">{{ formatTime(row.at) }}</td>
+              <td class="px-4 py-2">
+                {{ formatTime(row.at) }}<span
+                  v-if="row.timeSource"
+                  data-testid="punch-time-source"
+                  class="ml-1 text-xs text-gray-400"
+                  :title="row.timeSource.title"
+                >{{ row.timeSource.label }}</span>
+              </td>
               <td class="px-4 py-2">
                 <span
                   class="px-2 py-0.5 rounded text-xs font-medium"
