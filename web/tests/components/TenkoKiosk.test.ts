@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
@@ -30,6 +30,8 @@ const retryBpRequirementMock = vi.fn()
 const employeeId = ref('')
 const tenkoType = ref<TenkoType | null>(null)
 const onAlcoholMeasuredMock = vi.fn(async () => false)
+// 遠隔点呼か (完了で通話の部屋から出るかの確かめに使う)
+const isRemote = ref(false)
 // 点呼のセッション (サーバが開始で作った測定の `measurement_id` を持つ)
 const session = ref<Partial<TenkoSession> | null>(null)
 
@@ -48,7 +50,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   isPreOperation: ref(true),
   escalatedToRemote: ref(false),
   escalationReason: ref(null),
-  isRemote: ref(false),
+  isRemote,
   escalateToRemote: vi.fn(async () => {}),
   stepLabels: ref(['NFC']),
   currentStepIndex: ref(0),
@@ -80,6 +82,7 @@ mockNuxtImport('useDemoMode', () => () => ({
   isDemoMode: ref(false),
 }))
 
+const webRtcDisconnectMock = vi.fn()
 mockNuxtImport('useWebRtc', () => () => ({
   isConnected: ref(false),
   isPeerConnected: ref(false),
@@ -87,7 +90,7 @@ mockNuxtImport('useWebRtc', () => () => ({
   error: ref(null),
   connect: vi.fn(async () => {}),
   startStreaming: vi.fn(async () => {}),
-  disconnect: vi.fn(),
+  disconnect: webRtcDisconnectMock,
 }))
 
 // 録画のプレビュー用カメラと WebRTC の送信用カメラで同じものを返す (どちらも useCamera)
@@ -492,6 +495,36 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
 
     alc.vm.$emit('state-change', 'blow_waiting')
     expect(startRecordingMock).toHaveBeenCalledWith(cameraStream.value)
+    wrapper.unmount()
+  })
+})
+
+describe('TenkoKiosk — 遠隔点呼が閉じたら通話の部屋から出る', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'medical'
+    isRemote.value = true
+  })
+  afterEach(() => {
+    isRemote.value = false
+  })
+
+  it.each(['completed', 'cancelled'] as const)('★ %s になったら部屋から出て、通話の枠も出さない', async (end) => {
+    const wrapper = await mountKiosk()
+    expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+    step.value = end
+    await flushPromises()
+    expect(webRtcDisconnectMock).toHaveBeenCalled()
+    expect(wrapper.findComponent({ name: 'TenkoVideoCall' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('遠隔でなければ何もしない', async () => {
+    isRemote.value = false
+    const wrapper = await mountKiosk()
+    step.value = 'completed'
+    await flushPromises()
+    expect(webRtcDisconnectMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

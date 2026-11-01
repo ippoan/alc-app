@@ -180,10 +180,16 @@ const REMOTE_CONNECT_STEPS: TenkoStep[] = ['medical', 'instruction', 'report']
 const shouldConnectRemote = computed(
   () => isRemote.value && REMOTE_CONNECT_STEPS.includes(step.value),
 )
-/** 通話パネルの表示。繋ぐ段に加えて完了画面でも残す (従来どおり) */
+/** 通話パネルの表示。繋ぐ段のあいだだけ (完了・中止の画面では部屋から出るので出さない) */
 const showVideoCall = computed(
-  () => isRemote.value && (REMOTE_CONNECT_STEPS.includes(step.value) || step.value === 'completed'),
+  () => isRemote.value && REMOTE_CONNECT_STEPS.includes(step.value),
 )
+
+// 点呼が閉じたら (完了・中止) 通話の部屋から出る。残ると運行管理者の画面の「接続待ちデバイス」に
+// 終わった点呼が出続ける (2026-11-01 実機)。最初の画面に戻るときの handleReset も同じく止める
+watch(step, (s) => {
+  if ((s === 'completed' || s === 'cancelled') && isRemote.value) stopRemoteStreams()
+})
 
 // 遠隔点呼: 繋ぐべき状態になったら WebRTC 接続
 watch(shouldConnectRemote, async (connectNow) => {

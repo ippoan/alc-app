@@ -269,6 +269,26 @@ describe('useWebRtc', () => {
     expect(ws.send).not.toHaveBeenCalled()
   })
 
+  it('★ つなぎ直した後に前の socket の close が遅れて届いても、今の接続を「未接続」にせず ping も止めない', async () => {
+    const rtc = useWebRtc('device')
+    await rtc.connect('wss://sig.example.com', 'room-old')
+    const oldWs = wsInstances[wsInstances.length - 1]!
+    oldWs.onopen?.()
+    await rtc.connect('wss://sig.example.com', 'room-new')
+    const newWs = wsInstances[wsInstances.length - 1]!
+    expect(newWs).not.toBe(oldWs)
+    newWs.onopen?.()
+    expect(rtc.isConnected.value).toBe(true)
+
+    // 実際のブラウザでは前の socket の close は遅れて届く
+    oldWs.onclose?.({ code: 1006 })
+    oldWs.onmessage?.({ data: JSON.stringify({ type: 'peer_left' }) })
+    expect(rtc.isConnected.value).toBe(true)
+    newWs.send.mockClear()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(newWs.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ping' }))
+  })
+
   // --- ws.onmessage: handleSignalingMessage ---
 
   it('handleSignalingMessage: sdp_offer → handleOffer → createAnswer + sendSignaling', async () => {
@@ -364,30 +384,21 @@ describe('useWebRtc', () => {
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sdp_answer', sdp: 'mock-answer-sdp' }))
   })
 
-  it('handleOffer when pc is null → creates new PC then processes offer', async () => {
+  it('★ 切った後に前の socket から届いた sdp_offer は無視する (PC を作り直して答えない)', async () => {
     const rtc = useWebRtc('admin')
     await rtc.connect('wss://sig.example.com', 'room-1')
     const ws = getWs()
     ws.onopen?.()
-
-    // Save the onmessage handler before disconnect nullifies pc
     const savedOnMessage = ws.onmessage
-
-    // Disconnect sets pc=null and ws=null internally
     rtc.disconnect()
-
     const pcCountBefore = pcInstances.length
+    ws.send.mockClear()
 
-    // Simulate a late-arriving sdp_offer message via the saved handler
-    // This exercises the if (!pc) createPeerConnection() path in handleOffer
     savedOnMessage?.({ data: JSON.stringify({ type: 'sdp_offer', sdp: 'late-offer-sdp' }) } as any)
     await vi.advanceTimersByTimeAsync(0)
 
-    // A new PC should have been created by handleOffer
-    expect(pcInstances.length).toBe(pcCountBefore + 1)
-    const newPc = getPc()
-    expect(newPc.setRemoteDescription).toHaveBeenCalledWith({ type: 'offer', sdp: 'late-offer-sdp' })
-    expect(newPc.createAnswer).toHaveBeenCalled()
+    expect(pcInstances.length).toBe(pcCountBefore)
+    expect(ws.send).not.toHaveBeenCalled()
   })
 
   it('handleIceCandidate when pc is null → no-op, no throw', async () => {

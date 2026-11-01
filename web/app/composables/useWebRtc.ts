@@ -344,16 +344,22 @@ export function useWebRtc(role: 'device' | 'admin') {
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
     const url = `${signalingUrl}/${path}/${roomId}?role=${role}${tokenParam}`
     log('connect:', `${signalingUrl}/${path}/${roomId}?role=${role}`, token ? '(token付き)' : '(token無し)')
-    ws = new WebSocket(url)
+    const socket = new WebSocket(url)
+    ws = socket
 
-    ws.onopen = () => {
+    // 以下の受け口は、この socket がまだ今の接続のときだけ働く。つなぎ直し (disconnect → 新しい
+    // socket) の後に古い socket の close が遅れて届くと、新しい接続を「未接続」にし、ping のタイマーまで
+    // 止めていた (2026-11-01 実機: ws.onopen の後も「シグナリング接続中…」のまま、やがて 1006 で切れる)
+    socket.onopen = () => {
+      if (ws !== socket) return
       log('ws.onopen')
       isConnected.value = true
       // Keep-alive ping
       pingTimer = setInterval(() => sendSignaling({ type: 'ping' }), 30000)
     }
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (ws !== socket) return
       try {
         const data: SignalingInMessage = JSON.parse(event.data)
         handleSignalingMessage(data)
@@ -362,12 +368,17 @@ export function useWebRtc(role: 'device' | 'admin') {
       }
     }
 
-    ws.onerror = (event) => {
+    socket.onerror = (event) => {
+      if (ws !== socket) return
       log('ws.onerror', event)
       error.value = 'シグナリングサーバー接続エラー'
     }
 
-    ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (ws !== socket) {
+        log('ws.onclose (前の接続、無視) code=', event?.code)
+        return
+      }
       log('ws.onclose code=', event?.code, 'reason=', event?.reason, 'wasClean=', event?.wasClean)
       isConnected.value = false
       if (pingTimer) {
