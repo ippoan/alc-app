@@ -203,7 +203,7 @@ export function useWebRtc(role: 'device' | 'admin') {
 
   async function handleOffer(sdp: string) {
     log('handleOffer: sdp received, length=', sdp.length)
-    if (!pc) createPeerConnection()
+    // 今の socket から届く間は pc が在る (connect() が socket より先に作り、切ると socket ごと替わる)
     await pc!.setRemoteDescription({ type: 'offer', sdp })
     if (camRoom) {
       // カメラの音を受け、押して話す間だけ声を送る (sendrecv で答えておけば付け外しに再ネゴシエーションは要らない)
@@ -233,20 +233,13 @@ export function useWebRtc(role: 'device' | 'admin') {
 
   async function handleAnswer(sdp: string) {
     log('handleAnswer: sdp received, length=', sdp.length)
-    if (pc) {
-      await pc.setRemoteDescription({ type: 'answer', sdp })
-    } else {
-      log('handleAnswer: pc is null, ignored')
-    }
+    // 今の socket から届く間は pc が在る (切ると socket ごと替わり、前の socket の受け口は働かない)
+    await pc?.setRemoteDescription({ type: 'answer', sdp })
   }
 
   async function handleIceCandidate(candidate: RTCIceCandidateInit) {
     log('handleIceCandidate:', candidate.candidate)
-    if (pc) {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate))
-    } else {
-      log('handleIceCandidate: pc is null, ignored')
-    }
+    await pc?.addIceCandidate(new RTCIceCandidate(candidate))
   }
 
   function handleSignalingMessage(data: SignalingInMessage) {
@@ -344,16 +337,22 @@ export function useWebRtc(role: 'device' | 'admin') {
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
     const url = `${signalingUrl}/${path}/${roomId}?role=${role}${tokenParam}`
     log('connect:', `${signalingUrl}/${path}/${roomId}?role=${role}`, token ? '(token付き)' : '(token無し)')
-    ws = new WebSocket(url)
+    const socket = new WebSocket(url)
+    ws = socket
 
-    ws.onopen = () => {
+    // 以下の受け口は、この socket がまだ今の接続のときだけ働く。つなぎ直し (disconnect → 新しい
+    // socket) の後に古い socket の close が遅れて届くと、新しい接続を「未接続」にし、ping のタイマーまで
+    // 止めていた (2026-11-01 実機: ws.onopen の後も「シグナリング接続中…」のまま、やがて 1006 で切れる)
+    socket.onopen = () => {
+      if (ws !== socket) return
       log('ws.onopen')
       isConnected.value = true
       // Keep-alive ping
       pingTimer = setInterval(() => sendSignaling({ type: 'ping' }), 30000)
     }
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (ws !== socket) return
       try {
         const data: SignalingInMessage = JSON.parse(event.data)
         handleSignalingMessage(data)
@@ -362,12 +361,17 @@ export function useWebRtc(role: 'device' | 'admin') {
       }
     }
 
-    ws.onerror = (event) => {
+    socket.onerror = (event) => {
+      if (ws !== socket) return
       log('ws.onerror', event)
       error.value = 'シグナリングサーバー接続エラー'
     }
 
-    ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (ws !== socket) {
+        log('ws.onclose (前の接続、無視) code=', event?.code)
+        return
+      }
       log('ws.onclose code=', event?.code, 'reason=', event?.reason, 'wasClean=', event?.wasClean)
       isConnected.value = false
       if (pingTimer) {
