@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   clearVeinLines,
   onVeinLine,
+  persistVeinLines,
   recordVeinLine,
+  restoreVeinLines,
   snapshotVeinLines,
   VEIN_LINE_LOG_MAX_LINES,
   VEIN_LINE_LOG_MAX_TEXT,
@@ -10,7 +12,10 @@ import {
 
 // Vein Station の行を時刻付きで溜める (Refs ippoan/alc-app-s3#352)
 describe('vein-line-log', () => {
-  beforeEach(() => clearVeinLines())
+  beforeEach(() => {
+    clearVeinLines()
+    sessionStorage.clear()
+  })
 
   it('受けた時刻 (HH:MM:SS.mmm) を付けて溜め、改行でつないで返す', () => {
     recordVeinLine('EVT THERMO_CONN try', new Date(2026, 10, 1, 22, 16, 53, 7))
@@ -18,6 +23,39 @@ describe('vein-line-log', () => {
     expect(snapshotVeinLines()).toBe(
       '22:16:53.007 EVT THERMO_CONN try\n22:16:53.120 I (248362) NimBLE: GATT procedure initiated: write',
     )
+  })
+
+  it('★ 閉じる直前に退避した行を、開き直したら今の行の前へ戻す (戻したら退避先は消す)', () => {
+    recordVeinLine('VEIN IDENTIFIED 10', new Date(2026, 10, 2, 2, 10, 0, 0))
+    persistVeinLines()
+    clearVeinLines()
+    recordVeinLine('STATUS VER=x', new Date(2026, 10, 2, 2, 13, 0, 0))
+    expect(restoreVeinLines()).toBe(1)
+    expect(snapshotVeinLines()).toBe('02:10:00.000 VEIN IDENTIFIED 10\n02:13:00.000 STATUS VER=x')
+    expect(sessionStorage.getItem('alc-vein-lines-pending')).toBeNull()
+    expect(restoreVeinLines()).toBe(0)
+  })
+
+  it('溜めた行が無ければ退避しない。戻しても行数の上限を守る', () => {
+    persistVeinLines()
+    expect(sessionStorage.getItem('alc-vein-lines-pending')).toBeNull()
+    for (let i = 0; i < VEIN_LINE_LOG_MAX_LINES; i++) recordVeinLine(`L${i}`, new Date(0))
+    persistVeinLines()
+    recordVeinLine('new', new Date(0))
+    restoreVeinLines()
+    const out = snapshotVeinLines().split('\n')
+    expect(out).toHaveLength(VEIN_LINE_LOG_MAX_LINES)
+    expect(out.at(-1)).toMatch(/ new$/)
+  })
+
+  it('sessionStorage が使えなくても投げない', () => {
+    recordVeinLine('x', new Date(0))
+    const set = vi.spyOn(sessionStorage, 'setItem').mockImplementation(() => { throw new Error('quota') })
+    expect(() => persistVeinLines()).not.toThrow()
+    set.mockRestore()
+    const get = vi.spyOn(sessionStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    expect(restoreVeinLines()).toBe(0)
+    get.mockRestore()
   })
 
   it('行数の上限を超えたら古い方から捨てる', () => {
