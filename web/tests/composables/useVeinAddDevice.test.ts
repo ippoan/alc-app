@@ -96,7 +96,8 @@ describe('addThisDeviceFinger', () => {
     expect(port.syncClear).not.toHaveBeenCalled()
   })
 
-  it('mixed (既定) なら、続けて同期を走らせて混ぜた記録を書かせる (同じ鍵で)', async () => {
+  it('mixed の設定なら、続けて同期を走らせて混ぜた記録を書かせる (同じ鍵で)', async () => {
+    localStorage.setItem('alc-vein-added-finger', 'mixed')
     const port = makePort()
     await addThisDeviceFinger(port, 'emp-test-1', 'bp-station')
     expect(db.putVeinModuleEntry).toHaveBeenCalledWith(expect.objectContaining({ moduleId: 11, native: true }))

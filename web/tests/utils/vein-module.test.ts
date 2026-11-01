@@ -236,7 +236,7 @@ describe('syncVeinModule', () => {
     })
     expect(await mod.syncVeinModule(port())).toBe(true)
     const lines = snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
-    expect(lines).toEqual(['PC VEIN RECORD 10 KIND=composed MODE=mixed', 'PC VEIN RECORD 11 KIND=server MODE=mixed'])
+    expect(lines).toEqual(['PC VEIN RECORD 10 KIND=composed MODE=native', 'PC VEIN RECORD 11 KIND=server MODE=native'])
     expect(snapshotVeinLines()).not.toContain('emp-')
   })
 
@@ -419,6 +419,7 @@ describe('その場で撮った記録 (native) の扱い', () => {
   })
 
   it('★ mixed の設定: native の記録は版が同じでも、サーバーが組んだ記録で同じ ID に書き直す (native の印は外れる)', async () => {
+    localStorage.setItem(MODE_KEY, 'mixed')
     db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { updatedAt: 'v1', native: true })])
     api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'added', record: B64, updated_at: 'v1', composed: true }] })
     const p = port()
@@ -438,6 +439,7 @@ describe('その場で撮った記録 (native) の扱い', () => {
   })
 
   it('用意: mixed の設定なら native の記録は版が同じでも書き直す', async () => {
+    localStorage.setItem(MODE_KEY, 'mixed')
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { updatedAt: 'v1', native: true })])
     api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
     const p = port()

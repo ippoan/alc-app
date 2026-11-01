@@ -843,7 +843,7 @@ describe('useVeinSerial', () => {
       const places: Array<[number, number | undefined]> = []
       const p = vein.enroll(10, (n, total) => places.push([n, total]))
       await vi.advanceTimersByTimeAsync(0)
-      expect(dev.writes.at(-1)).toBe('VEIN ENROLL 10\n')
+      expect(dev.writes.at(-1)).toBe('VEIN ENROLL 10 6\n')
 
       // 置き直しの案内。合計を名乗る新しい形と、回目だけの古い形の両方を読む (形の違う EVT は数えない)
       await reply(dev, 'EVT VEIN PLACE 2\nEVT VEIN PLACE\nEVT VEIN FOO 3\nEVT NFC PLACE 9\nEVT VEIN PLACE 3 6\n')
@@ -852,6 +852,24 @@ describe('useVeinSerial', () => {
       await reply(dev, 'VEIN RECORD 11 0 FFFF\nVEIN RECORD 10 2 dead\nEVT NFC_READY VEIN RECORD 10 0 DEED\nVEIN RECORD 10 END 4\n')
       await expect(p).resolves.toEqual(new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]))
       expect(places).toEqual([[2, undefined], [3, 6]])
+    })
+
+    it('★ 本数を受け付けない古いファームには、既定の本数で登録し直す (ほかの失敗はそのまま)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const p = vein.enroll(12)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN ENROLL 12 6\n')
+      await reply(dev, 'ERR VEIN: ENROLL の ID は 10〜100 の数字だけです\n')
+      expect(dev.writes.at(-1)).toBe('VEIN ENROLL 12\n')
+      await reply(dev, 'VEIN RECORD 12 0 0A0B\nVEIN RECORD 12 END 2\n')
+      await expect(p).resolves.toEqual(new Uint8Array([0x0A, 0x0B]))
+      const timeout = vein.enroll(13)
+      const caught = timeout.catch(e => e)
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'ERR VEIN TIMEOUT\n')
+      expect(((await caught) as Error).message).toBe('TIMEOUT')
+      expect(dev.writes.at(-1)).toBe('VEIN ENROLL 13 6\n')
     })
 
     it('onPlace を渡さなくてもよい。END の後の行は集めない', async () => {

@@ -14,12 +14,12 @@ describe('vein-added-finger-mode (Refs ippoan/alc-app#558)', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it('未設定・壊れた値は mixed、native だけ native', () => {
-    expect(readVeinAddedFingerMode()).toBe('mixed')
-    localStorage.setItem(KEY, 'yes')
-    expect(readVeinAddedFingerMode()).toBe('mixed')
-    localStorage.setItem(KEY, 'native')
+  it('★ 未設定・壊れた値は native (この端末で撮った記録)、mixed だけ mixed (Refs ippoan/alc-app-s3#352)', () => {
     expect(readVeinAddedFingerMode()).toBe('native')
+    localStorage.setItem(KEY, 'yes')
+    expect(readVeinAddedFingerMode()).toBe('native')
+    localStorage.setItem(KEY, 'mixed')
+    expect(readVeinAddedFingerMode()).toBe('mixed')
   })
 
   it('write は localStorage へ保存する', () => {
@@ -29,20 +29,20 @@ describe('vein-added-finger-mode (Refs ippoan/alc-app#558)', () => {
     expect(localStorage.getItem(KEY)).toBe('mixed')
   })
 
-  it('クライアントでなければ読まず (mixed)、書かない', () => {
-    localStorage.setItem(KEY, 'native')
+  it('クライアントでなければ読まず (native)、書かない', () => {
+    localStorage.setItem(KEY, 'mixed')
     envMock.isClient = false
-    expect(readVeinAddedFingerMode()).toBe('mixed')
-    writeVeinAddedFingerMode('mixed')
-    expect(localStorage.getItem(KEY)).toBe('native')
+    expect(readVeinAddedFingerMode()).toBe('native')
+    writeVeinAddedFingerMode('native')
+    expect(localStorage.getItem(KEY)).toBe('mixed')
   })
 
   it('localStorage が使えない環境でも投げない', () => {
     const denied = () => { throw new Error('denied') }
     vi.stubGlobal('localStorage', { getItem: denied, setItem: denied })
     try {
-      expect(readVeinAddedFingerMode()).toBe('mixed')
-      expect(() => writeVeinAddedFingerMode('native')).not.toThrow()
+      expect(readVeinAddedFingerMode()).toBe('native')
+      expect(() => writeVeinAddedFingerMode('mixed')).not.toThrow()
     }
     finally {
       vi.unstubAllGlobals()

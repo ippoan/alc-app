@@ -129,6 +129,16 @@ const SAY_TIMEOUT_MS = 5000
  */
 const ENROLL_TIMEOUT_MS = 240_000
 
+/**
+ * 登録で撮るテンプレートの本数 (`VEIN ENROLL <id> <本数>`、ファームは ippoan/alc-app-s3#357 から)。
+ * この機種の 1 人あたりの枠 6 本を、この端末で撮った指で全部埋める。ほかの端末と混ぜた記録や 4 本の記録より、
+ * この端末だけで撮った記録のほうが照合が安定した (2026-11-02、運行管理者席: 混ぜた記録で 1:N 0/8 → 撮り直して 6/6)
+ */
+export const VEIN_ENROLL_TEMPLATES = 6
+
+/** 本数を受け付けない古いファームが `VEIN ENROLL <id> <本数>` に返す理由 (この後に既定の本数で撮り直す) */
+const ENROLL_COUNT_UNSUPPORTED = 'ENROLL の ID は'
+
 /** `VEIN SYNC WRITE` の 1 行・`VEIN SYNC CLEAR` の応答上限 */
 const SYNC_STEP_TIMEOUT_MS = 5000
 
@@ -539,7 +549,15 @@ export function useVeinSerial() {
     })
     let end: string
     try {
-      end = await veinRequest(`VEIN ENROLL ${id}`, endPrefix, ENROLL_TIMEOUT_MS)
+      try {
+        end = await veinRequest(`VEIN ENROLL ${id} ${VEIN_ENROLL_TEMPLATES}`, endPrefix, ENROLL_TIMEOUT_MS)
+      }
+      catch (e) {
+        // 古いファームは本数を付けた行を撮る前に断る — 既定の本数 (4) で撮り直す
+        if (!(e as Error).message.includes(ENROLL_COUNT_UNSUPPORTED)) throw e
+        console.info(`[vein] ファームが登録の本数を受け付けないので、既定の本数で登録します`)
+        end = await veinRequest(`VEIN ENROLL ${id}`, endPrefix, ENROLL_TIMEOUT_MS)
+      }
     }
     finally {
       rawLineTap = null

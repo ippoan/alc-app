@@ -367,10 +367,10 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
   describe('この端末で足した指の設定 (Refs ippoan/alc-app#558)', () => {
     beforeEach(() => localStorage.removeItem('alc-vein-added-finger'))
 
-    it('既定は「混ぜた記録を使う」で、切り替えるとこの端末に保存する', async () => {
+    it('既定は「その場で撮った記録を使う」で、切り替えるとこの端末に保存する', async () => {
       const wrapper = await mountDeviceSettings()
       const select = wrapper.find<HTMLSelectElement>('[data-testid="vein-added-finger-mode"]')
-      expect(select.element.value).toBe('mixed')
+      expect(select.element.value).toBe('native')
       expect(select.text()).toContain('混ぜた記録を使う')
       expect(select.text()).toContain('その場で撮った記録を使う')
 
