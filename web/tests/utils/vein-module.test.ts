@@ -129,6 +129,35 @@ describe('identifyVeinModuleEmployee', () => {
   })
 })
 
+describe('retryOnVeinMiss', () => {
+  it('★ 不一致なら 1 回だけやり直し、やり直す前に onRetry を呼んで PC VEIN RETRY を残す', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    const read = vi.fn<() => Promise<number | null>>().mockResolvedValueOnce(null).mockResolvedValueOnce(15)
+    const onRetry = vi.fn()
+    expect(await mod.retryOnVeinMiss(read, id => id === null, onRetry)).toBe(15)
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(onRetry).toHaveBeenCalledTimes(1)
+    expect(snapshotVeinLines()).toMatch(/ PC VEIN RETRY$/)
+  })
+
+  it('当たれば 1 回で終わる。2 回とも不一致なら不一致を返す (3 回目はしない)', async () => {
+    const hit = vi.fn(async () => true)
+    const onRetry = vi.fn()
+    expect(await mod.retryOnVeinMiss(hit, ok => !ok, onRetry)).toBe(true)
+    expect(hit).toHaveBeenCalledTimes(1)
+    expect(onRetry).not.toHaveBeenCalled()
+    const miss = vi.fn(async () => false)
+    expect(await mod.retryOnVeinMiss(miss, ok => !ok, onRetry)).toBe(false)
+    expect(miss).toHaveBeenCalledTimes(1 + mod.VEIN_NOMATCH_RETRIES)
+  })
+
+  it('照合の失敗 (投げる) はやり直さずそのまま投げる', async () => {
+    const read = vi.fn(async () => { throw new Error('TIMEOUT') })
+    await expect(mod.retryOnVeinMiss(read, () => true, vi.fn())).rejects.toThrow('TIMEOUT')
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('prepareVeinModuleRecord', () => {
   const B64 = btoa(String.fromCharCode(0xDE, 0xED))
 

@@ -438,8 +438,8 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       wrapper.unmount()
     })
 
-    it('VEIN NOMATCH は不一致、読み取りの失敗は理由を出す', async () => {
-      vein.identify.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('TIMEOUT'))
+    it('VEIN NOMATCH は (1 回自動でやり直しても) 不一致、読み取りの失敗は理由を出す', async () => {
+      vein.identify.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('TIMEOUT'))
       const wrapper = await mountKiosk()
       await pressVein(wrapper)
       expect(wrapper.text()).toContain(VEIN_NO_MATCH_MESSAGE)

@@ -13,7 +13,7 @@
  */
 import type { ApiEmployee } from '~/types'
 import type { RequestTokenScope } from '~/utils/api'
-import { identifyVeinModuleEmployee, usesVeinModule } from '~/utils/vein-module'
+import { identifyVeinModuleEmployee, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 export interface VeinEmployeeIdentifyOptions {
@@ -73,7 +73,11 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
       if (prompt) await vein.say('PLACE')
       // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
-      read = viaModule ? await vein.identify(() => { again.value = true }) : await vein.capture()
+      // モジュールの不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
+      const onAgain = () => { again.value = true }
+      read = viaModule
+        ? await retryOnVeinMiss(() => vein.identify(onAgain), id => id === null, onAgain)
+        : await vein.capture()
     }
     catch (e) {
       return `指静脈を読み取れませんでした (${(e as Error).message})`
