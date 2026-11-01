@@ -99,6 +99,8 @@ useFaceSync()
 useAlarmWatch()
 // Vein Station の行を recorder へ上げる (診断ログ。Refs ippoan/alc-app-s3#352)
 useVeinLogUpload().start()
+// 指静脈モジュールの照合の厳しさを端末設定に合わせる (Refs ippoan/alc-app-s3#352)
+useVeinSecurityLevel().start()
 
 // 拠点 PC のカメラ配信の拡張 (alc-cam) へ cam-host の鍵を渡す。CoreS3 が繋がっている間だけ、
 // 拡張に送る口 (chrome.runtime.sendMessage) が在るブラウザでだけ動く

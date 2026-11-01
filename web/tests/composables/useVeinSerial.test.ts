@@ -1007,6 +1007,27 @@ describe('useVeinSerial', () => {
     })
   })
 
+  describe('security', () => {
+    it('VEIN SECURITY で今の値を読み、VEIN SECURITY <n> で書いた値を返す。読めない行は Error', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const read = vein.security()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN SECURITY\n')
+      await reply(dev, 'VEIN SECURITY 1\n')
+      await expect(read).resolves.toBe(1)
+      const write = vein.security(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN SECURITY 0\n')
+      await reply(dev, 'VEIN SECURITY 0\n')
+      await expect(write).resolves.toBe(0)
+      const bad = vein.security()
+      const caught = bad.catch(e => e)
+      await reply(dev, 'VEIN SECURITY x\n')
+      expect(((await caught) as Error).message).toBe('SECURITY の応答が読めません')
+    })
+  })
+
   describe('identify', () => {
     it('VEIN IDENTIFIED <id> は ID、VEIN NOMATCH は null', async () => {
       const dev = createMockPort()

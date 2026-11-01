@@ -71,9 +71,11 @@ const veinConnected = ref(false)
 const veinRequestMock = vi.fn(async (line: string, _matchPrefix: string, _timeoutMs: number) => echoOmron(line))
 const veinConnectMock = vi.fn(async () => true)
 const veinNoteOmronBpMock = vi.fn()
+const veinSecurityMock = vi.fn(async (level?: number) => level ?? 1)
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: veinConnected,
   request: veinRequestMock,
+  security: veinSecurityMock,
   connect: veinConnectMock,
   noteOmronBp: veinNoteOmronBpMock,
 }))
@@ -384,6 +386,24 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       localStorage.setItem('alc-vein-added-finger', 'native')
       const wrapper = await mountDeviceSettings()
       expect(wrapper.find<HTMLSelectElement>('[data-testid="vein-added-finger-mode"]').element.value).toBe('native')
+    })
+  })
+
+  describe('指静脈の照合の厳しさ (Refs ippoan/alc-app-s3#352)', () => {
+    it('既定は「変えない」。選ぶとこの端末に保存し、つながっていればモジュールに書く', async () => {
+      const wrapper = await mountDeviceSettings()
+      const select = wrapper.find<HTMLSelectElement>('[data-testid="vein-security-level"]')
+      expect(select.element.value).toBe('keep')
+      veinConnected.value = true
+      veinSecurityMock.mockClear()
+      await select.setValue('0')
+      await flush()
+      expect(localStorage.getItem('alc-vein-security-level')).toBe('0')
+      expect(veinSecurityMock).toHaveBeenCalledWith(0)
+      expect(wrapper.find('[data-testid="vein-module-security"]').text()).toContain('0')
+      await select.setValue('keep')
+      expect(localStorage.getItem('alc-vein-security-level')).toBe('keep')
+      veinConnected.value = false
     })
   })
 

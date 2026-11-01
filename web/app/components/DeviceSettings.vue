@@ -3,6 +3,7 @@ import type { DeviceSettingsResponse } from '~/types'
 import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
 import { alcoholResultLabel } from '~/utils/alcohol'
 import { requestWhenFree } from '~/utils/serial-request-when-free'
+import { parseVeinSecuritySetting } from '~/utils/vein-security-level'
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
@@ -19,6 +20,7 @@ const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJ
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 const alarmDevice = useAlarmDevice()
 const { mode: veinAddedFingerMode, setMode: setVeinAddedFingerMode } = useVeinAddedFingerSetting()
+const { setting: veinSecuritySetting, moduleLevel: veinModuleLevel, setSetting: setVeinSecuritySetting } = useVeinSecurityLevel()
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
 const atomS3 = useAtomS3Serial()
@@ -702,6 +704,26 @@ async function syncFc1200Date() {
             <option value="mixed">混ぜた記録を使う</option>
             <option value="native">その場で撮った記録を使う</option>
           </select>
+        </label>
+
+        <!-- 指静脈モジュールの照合の厳しさ (安全レベル、Refs ippoan/alc-app-s3#352)。つながるたびに合わせる。
+             0 が最も緩い (本人を落とす率 0.001%・他人を通す率 0.001%)、工場の既定は 1 -->
+        <label class="flex flex-col gap-1 text-xs text-gray-700">
+          <span>指静脈の照合の厳しさ</span>
+          <select
+            data-testid="vein-security-level"
+            class="rounded-lg border border-gray-300 px-2 py-1.5 text-xs"
+            :value="String(veinSecuritySetting)"
+            @change="setVeinSecuritySetting(parseVeinSecuritySetting(($event.target as HTMLSelectElement).value))"
+          >
+            <option value="keep">変えない</option>
+            <option value="0">0 (緩い)</option>
+            <option value="1">1 (工場の既定)</option>
+            <option value="2">2 (厳しい)</option>
+          </select>
+          <span v-if="veinModuleLevel !== null" class="text-gray-500" data-testid="vein-module-security">
+            つながっているモジュールの値: {{ veinModuleLevel }}
+          </span>
         </label>
 
         <!-- Omron 血圧計を使うか (HEM-6231T / HCR-1901T2。ニプロは対象外)。正本はサーバ
