@@ -834,7 +834,7 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk({ remoteMode: true })
       k.selectedTenkoType.value = 'post_operation'
       expect(k.stepKeys.value).toEqual(['nfc', 'face_auth', 'alcohol', 'instruction', 'report', 'completed'])
-      expect(k.stepLabels.value).toEqual(['NFC', '顔認証', 'アルコール', '指示確認', '運行報告', '完了'])
+      expect(k.stepLabels.value).toEqual(['NFC', '本人確認', 'アルコール', '指示確認', '運行報告', '完了'])
     })
 
     it('(d) 回帰: 予定がある枝は従来どおり schedule_id を送り、選んだ種別があっても tenko_type は送らない', async () => {

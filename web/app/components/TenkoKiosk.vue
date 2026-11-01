@@ -3,7 +3,6 @@ import type { FaceAuthResult, MeasurementResult, SubmitMedicalData, TenkoRemoteE
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement } from '~/utils/api'
-import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
@@ -264,33 +263,9 @@ const manualIdInput = ref('')
 const useManualInput = ref(false)
 const manualError = ref<string | null>(null)
 
-// 乗務員の点呼は、顔を登録していない人を止めない — 顔が未登録なら顔認証を飛ばせる
-// (Refs ippoan/alc-app-s3#135)。審査中・却下は登録済みなので従来どおり弾く。
-// 判定は utils/face-approval.ts の 1 か所だけで、**通すかどうかの方針をこの入口が
-// 決める** (運行管理者の入口 RoleAuthGate は未登録でも通さない)。
-const faceSkippable = ref(false)
-const faceSkipNotice = ref<string | null>(null)
-
-/** 通してよければ true。通す場合はスキップ可否も控える */
-function applyFaceApproval(emp: { name: string; face_approval_status?: string }): boolean {
-  const approval = checkFaceApproval(emp)
-  if (approval.kind === 'blocked') { error.value = approval.message; return false }
-  faceSkippable.value = approval.kind === 'unregistered'
-  faceSkipNotice.value = approval.kind === 'unregistered'
-    ? `${approval.message}。顔認証をスキップして進めます`
-    : null
-  return true
-}
-
-function skipFaceAuth() {
-  onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
-}
-
 async function onNfcRead(nfcId: string) {
-  identifiedByVein.value = false
   try {
     const emp = await getEmployeeByNfcId(nfcId)
-    if (!applyFaceApproval(emp)) return
     await identifyEmployee(emp.id, emp.name)
   } catch (e) {
     error.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
@@ -300,11 +275,9 @@ async function onNfcRead(nfcId: string) {
 async function onManualSubmit() {
   const input = manualIdInput.value.trim()
   if (!input) return
-  identifiedByVein.value = false
   manualError.value = null
   try {
     const emp = await getEmployeeByCode(input)
-    if (!applyFaceApproval(emp)) return
     await identifyEmployee(emp.id, emp.name)
   } catch (e) {
     manualError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
@@ -312,36 +285,40 @@ async function onManualSubmit() {
 }
 
 // --- 指静脈 (Refs ippoan/vein-match#20) ---
-// 本人確認の主は指静脈、顔認証はサブ。NFC・社員番号と並ぶ 3 つ目の手段で、当たったあとは
-// NFC と同じ手順 (applyFaceApproval → identifyEmployee) に合流する。
-// **指静脈で当たったら、それを本人確認にする** (遠隔点呼・自動点呼とも) — 顔の承認を見ず、顔認証の段に
-// 来たら飛ばす。NFC・社員番号で特定したときは今まで通り顔認証まで。
-// 指静脈が使えないとき (端末が無い・外れ・読み取り失敗) は NFC と社員番号がそのまま逃げ道になる。
+// 乗務員の特定は最初の段の NFC (免許証)・社員番号で行い、**その後の顔認証を指静脈に置き換える**
+// (遠隔点呼・自動点呼とも)。Vein Station がつながっていれば顔認証の段で指を置かせ、当たった人が
+// 最初の段で特定した人と同じなら本人確認とする。**遠隔点呼・自動点呼は Vein Station でしか行わない**
+// (2026-11-01 決定) — つながっていない端末は顔認証に逃がさず、この段で止める (デモだけは顔認証の画面)。
 const veinSerial = useVeinSerial()
 // 照合の手順・接続・写しの同期・指の合図は 3 つの入口で共通 (useVeinEmployeeIdentify)
 const vein = useVeinEmployeeIdentify({
   label: 'kiosk',
   missMessage: VEIN_NO_MATCH_MESSAGE,
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`,
-  // 指静脈が本人確認なので顔の承認は見ない (顔認証の段は下の watch で飛ばす)
-  onEmployee: async (emp) => {
-    identifiedByVein.value = true
-    await identifyEmployee(emp.id, emp.name)
+  // 最初の段で特定した人と同じなら本人確認 (顔写真は撮らない)。別の人なら理由を出して置き直させる
+  onEmployee: (emp) => {
+    if (emp.id !== employeeId.value) {
+      return `${employeeName.value || '最初に確認した人'}さんの指静脈と一致しません。本人の指を置いてください`
+    }
+    onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
     return null
   },
-  isIdle: () => isKioskIdle.value,
+  // 指が置かれた合図で照合を始めるのは、顔認証の段で指静脈を使っているときだけ
+  isIdle: () => useVeinForIdentity.value && !vein.busy.value,
 })
 
-/** この点呼の乗務員を指静脈で特定したか (顔認証の段を飛ばす) */
-const identifiedByVein = ref(false)
-watch(step, (s) => {
-  if (s === 'face_auth' && identifiedByVein.value) onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
-})
-
-/** ボタンを押せない理由。`null` なら押せる */
-const veinDisabledReason = computed<string | null>(() =>
-  veinSerial.isConnected.value ? null : 'Vein Station (指静脈読み取り端末) が接続されていません',
+/** 指静脈の照合を始めてよいか (本人確認の段・血圧の確認で止めていない・Vein Station がつながっている) */
+const useVeinForIdentity = computed(() =>
+  step.value === 'face_auth' && !bpRequirementUnknown.value && !isDemoMode.value
+  && veinSerial.isSupported && veinSerial.isConnected.value,
 )
+/** 本人確認の段で止めている理由 (Vein Station が無い)。`null` なら止めていない */
+const veinMissingReason = computed<string | null>(() => {
+  if (isDemoMode.value) return null
+  if (!veinSerial.isSupported) return 'この端末では指静脈を読めません (Chrome の Web Serial が要ります)。遠隔点呼・自動点呼は Vein Station をつないだ PC で行ってください'
+  if (!veinSerial.isConnected.value) return 'Vein Station (指静脈読み取り端末) が接続されていません。USB でつないでください'
+  return null
+})
 
 // 点呼の開始時 (最初の画面に戻ったとき): 前回の同期から時間がたっていれば取り直す
 watch(step, (s) => {
@@ -378,38 +355,8 @@ useKioskScreen().declareDeviceBusy(() => !isKioskIdle.value)
 
 // --- 顔認証結果 ---
 function onFaceAuthResult(result: FaceAuthResult) {
-  if (result.verified) {
-    if (employeeId.value) authorizeEmployee(employeeId.value)
-    onFaceAuthComplete(result)
-  }
+  if (result.verified) onFaceAuthComplete(result)
 }
-
-// 指紋認証 (Android Bridge)
-const {
-  isFingerprintAvailable,
-  isEmployeeAuthorized,
-  authorizeEmployee,
-  requestFingerprint: triggerFingerprint,
-} = useFingerprint()
-
-const canUseFingerprint = computed(() =>
-  isFingerprintAvailable.value && employeeId.value && isEmployeeAuthorized(employeeId.value),
-)
-
-function requestFingerprint() {
-  triggerFingerprint()
-}
-
-onMounted(() => {
-  const handler = (e: Event) => {
-    const detail = (e as CustomEvent).detail
-    if (detail?.success) {
-      onFaceAuthComplete({ verified: true, similarity: 1.0 })
-    }
-  }
-  window.addEventListener('fingerprint-result', handler)
-  onUnmounted(() => window.removeEventListener('fingerprint-result', handler))
-})
 
 // --- アルコール測定結果 ---
 async function onMeasurementResult(result: MeasurementResult) {
@@ -486,14 +433,11 @@ function handleReset() {
   manualError.value = null
   useManualInput.value = false
   vein.error.value = null
-  faceSkippable.value = false
-  faceSkipNotice.value = null
   medicalInputSource.value = null
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
   isChoosingEscalationReason.value = false
   alcoholMeasurementId.value = null
   sessionMeasurementUsed.value = false
-  identifiedByVein.value = false
   resetBlowRecording()
 }
 
@@ -697,19 +641,6 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- 指静脈 (Refs ippoan/vein-match#20)。WebSerial が無い端末 (Android 等) には出さない -->
-          <div v-if="!isDemoMode && veinSerial.isSupported" class="mt-4 pt-4 border-t border-gray-100">
-            <button
-              data-testid="vein-identify"
-              :disabled="!!veinDisabledReason || vein.busy.value"
-              class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
-              @click="vein.identify()"
-            >
-              {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
-            </button>
-            <p v-if="veinDisabledReason" class="mt-2 text-xs text-gray-500">{{ veinDisabledReason }}</p>
-            <p v-if="vein.error.value" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
-          </div>
         </div>
       </div>
 
@@ -743,7 +674,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Step 3: 顔認証 -->
+      <!-- Step 3: 本人確認 (指静脈) -->
       <div v-else-if="step === 'face_auth'" class="flex flex-col gap-4">
         <!--
           血圧の要否が確定できない端末は、体温・血圧まで歩かせずここで止める (Refs #336)。
@@ -760,34 +691,30 @@ onUnmounted(() => {
           </button>
         </div>
         <div v-else class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-4">顔認証</h2>
-          <!-- 顔が未登録: 顔写真なしで進める (審査中・却下はここまで来ない) -->
-          <template v-if="faceSkippable">
-            <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
-              {{ faceSkipNotice }}
-            </p>
-            <button
-              class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-              @click="skipFaceAuth"
-            >
-              顔認証をスキップして進む
-            </button>
-          </template>
+          <!-- 本人確認は指静脈 (遠隔点呼・自動点呼は Vein Station でしか行わない)。デモだけ顔認証の画面 -->
           <FaceAuth
-            v-else
+            v-if="isDemoMode"
             :employee-id="employeeId"
             mode="verify"
-            :demo-mode="isDemoMode"
+            :demo-mode="true"
             @result="onFaceAuthResult"
           />
-          <button
-            v-if="canUseFingerprint"
-            class="w-full mt-4 px-4 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
-            @click="requestFingerprint"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11c0-1.1.9-2 2-2s2 .9 2 2v3c0 1.66-1.34 3-3 3"/><path d="M8 15V11c0-2.21 1.79-4 4-4s4 1.79 4 4"/><path d="M2 11c0-5.52 4.48-10 10-10s10 4.48 10 10v3c0 3.31-2.69 6-6 6"/><path d="M12 11v4c0 .55-.45 1-1 1"/><path d="M6 11c0-3.31 2.69-6 6-6s6 2.69 6 6v2"/></svg>
-            指紋認証で本人確認
-          </button>
+          <template v-else>
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">指静脈で本人確認</h2>
+            <p v-if="veinMissingReason" data-testid="vein-missing" class="text-sm text-red-600">{{ veinMissingReason }}</p>
+            <template v-else>
+              <p class="text-sm text-gray-600 mb-4">{{ employeeName }}さん、Vein Station に指を置いてください</p>
+              <button
+                data-testid="vein-identify"
+                :disabled="vein.busy.value"
+                class="w-full px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
+                @click="vein.identify()"
+              >
+                {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
+              </button>
+              <p v-if="vein.error.value" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
+            </template>
+          </template>
         </div>
       </div>
 

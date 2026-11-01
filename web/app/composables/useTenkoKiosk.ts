@@ -186,9 +186,9 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
   const stepLabels = computed(() => {
     const scheduleLabel = remoteMode ? [] : ['予定選択']
     if (isPreOperation.value) {
-      return ['NFC', ...scheduleLabel, '顔認証', '体温・血圧', '自己申告', '日常点検', 'アルコール', '指示確認', '完了']
+      return ['NFC', ...scheduleLabel, '本人確認', '体温・血圧', '自己申告', '日常点検', 'アルコール', '指示確認', '完了']
     }
-    return ['NFC', ...scheduleLabel, '顔認証', 'アルコール', '指示確認', '運行報告', '完了']
+    return ['NFC', ...scheduleLabel, '本人確認', 'アルコール', '指示確認', '運行報告', '完了']
   })
   const stepKeys = computed<TenkoStep[]>(() => {
     const scheduleKey: TenkoStep[] = remoteMode ? [] : ['schedule_select']

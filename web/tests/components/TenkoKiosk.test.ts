@@ -237,11 +237,12 @@ describe('TenkoKiosk — 血圧の要否が確定できないときの顔認証�
     bpRequirementUnknown.value = false
   })
 
-  it('確定していれば従来どおり顔認証を出す', async () => {
+  it('確定していれば本人確認 (指静脈) の段を出す。顔認証は出さない', async () => {
     const wrapper = await mountKiosk()
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('指静脈で本人確認')
     expect(wrapper.findAll('button').some(b => b.text() === 'もう一度試す')).toBe(false)
     wrapper.unmount()
   })
