@@ -187,6 +187,13 @@ export function machineTokenMissing(
 export const DEVICE_ROLE_KIOSK = "device-kiosk";
 
 /**
+ * 運行管理者席の鍵 (VoiceS3R / Vein Base を用途「運行管理者席」で登録したもの) の role
+ * (auth-worker#573)。recorder では機体の診断ログ (`POST /device-log`) を上げるのにだけ使う
+ * — 席の Vein Base にはキオスクの鍵が無い (Refs ippoan/alc-app-s3#352)
+ */
+export const DEVICE_ROLE_TENKO_MANAGER = "device-tenko-manager";
+
+/**
  * 打刻の更新通知を購読してよい **user** role。打刻履歴を出す画面と同じ範囲
  * (`AdminDashboard` / `ManagerDashboard` の「タイムカード」タブ)。
  */

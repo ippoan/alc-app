@@ -185,6 +185,15 @@ const TOKENS = {
     exp: 9999999999,
     dev_device: "true",
   },
+  // 運行管理者席の鍵 (POST /device-log で席の Vein Base の行を上げる)
+  "manager-seat-token": {
+    active: true,
+    tenant_id: "tenant-1",
+    role: "device-tenko-manager",
+    sub: "alarm:seat-1",
+    email: "",
+    exp: 9999999999,
+  },
   "kiosk-token-dev": {
     active: true,
     tenant_id: "tenant-dev",

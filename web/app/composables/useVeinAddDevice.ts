@@ -14,7 +14,7 @@
 import { apiErrorCode, putVeinModuleDeviceRecord } from '~/utils/api'
 import type { RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
-import { allocateVeinModuleId, syncVeinModule } from '~/utils/vein-module'
+import { allocateVeinModuleId, noteVeinModuleRecord, syncVeinModule } from '~/utils/vein-module'
 import type { VeinModulePort } from '~/utils/vein-module'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
@@ -75,6 +75,7 @@ export async function addThisDeviceFinger(
   // どちらの設定でも、まず「その場の記録を置いた」と対応表に残す。設定が mixed なら、続く同期が
   // この人を (native の記録は版が同じでも) 書き直す。書き直せなくても次の同期が直す
   await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved: true, native: true })
+  noteVeinModuleRecord(id, 'native')
   if (readVeinAddedFingerMode() === 'mixed') await syncVeinModule(port, { scope })
 }
 

@@ -26,6 +26,7 @@ import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
+import { recordVeinLine } from '~/utils/vein-line-log'
 
 export const VEIN_MODULE_ID_MIN = 10
 export const VEIN_MODULE_ID_MAX = 100
@@ -66,6 +67,22 @@ export function allocateVeinModuleId(entries: readonly VeinModuleEntry[], employ
  */
 function keepsOnSpotRecord(entry: VeinModuleEntry | undefined): boolean {
   return entry?.native === true && readVeinAddedFingerMode() === 'native'
+}
+
+/**
+ * モジュールのどの ID にどの記録を書いたかを、Vein Station の行と同じ溜め場所に残す
+ * (`PC VEIN RECORD <id> KIND=<種類> MODE=<端末の設定>`。recorder へ上がる診断ログ、`useVeinLogUpload`)。
+ * 続く `VEIN IDENTIFIED <id> SCORE=…` / `VEIN NOMATCH` と並べ、記録の種類ごとの点数を後から集計する。
+ * 種類は `composed` (この端末向けに組んだ混ぜた記録) / `server` (組んでいない記録) / `native` (その場で撮った記録)。
+ * 乗務員の ID は載せない
+ */
+export function noteVeinModuleRecord(id: number, kind: 'composed' | 'server' | 'native'): void {
+  recordVeinLine(`PC VEIN RECORD ${id} KIND=${kind} MODE=${readVeinAddedFingerMode()}`)
+}
+
+/** サーバーの記録の種類 (`composed` が無い古いサーバー・管理者の鍵は `server`) */
+function serverRecordKind(t: ApiVeinModuleRecord): 'composed' | 'server' {
+  return t.composed ? 'composed' : 'server'
 }
 
 /** base64 をバイト列に */
@@ -141,6 +158,7 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
   // 書き込みが途中で落ちても、古い版を承認済みとして引かないよう先に外す
   if (own) await deleteVeinModuleEntry(employeeId)
   await port.syncWrite(id, base64ToBytes(template.record))
+  noteVeinModuleRecord(id, serverRecordKind(template))
   await putVeinModuleEntry({
     employeeId,
     moduleId: id,
@@ -217,6 +235,7 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
         if (current) await deleteVeinModuleEntry(current.employeeId)
         entries.delete(t.employee_id)
         await port.syncWrite(id, base64ToBytes(t.record))
+        noteVeinModuleRecord(id, serverRecordKind(t))
         const entry = {
           employeeId: t.employee_id,
           moduleId: id,

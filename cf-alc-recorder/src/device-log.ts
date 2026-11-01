@@ -5,14 +5,18 @@
  * キオスク PWA が USB で受けた Vein Station の行を時刻付きで溜め、ここへ上げる。保存先は
  * crash_log と同じ R2 (`CRASH_LOGS`) の `device-log/` の下で、backend へは転送しない。
  *
- * 送れる role は recorder に接続できる機体 ({@link RECORDER_DEVICE_ROLES}) とキオスク
- * (`device-kiosk`)。キオスクを下り command の宛先にしない方針はそのまま — ここは上りの保存だけ。
+ * 送れる role は recorder に接続できる機体 ({@link RECORDER_DEVICE_ROLES})・キオスク
+ * (`device-kiosk`)・運行管理者席 (`device-tenko-manager`。席の Vein Base の行を上げる)。キオスクを下り command の宛先にしない方針はそのまま — ここは上りの保存だけ。
  * tenant / 端末の ID は introspect 済みの JWT からだけ取り、本文には名乗らせない。
  */
-import { DEVICE_ROLE_KIOSK, RECORDER_DEVICE_ROLES } from "./auth";
+import { DEVICE_ROLE_KIOSK, DEVICE_ROLE_TENKO_MANAGER, RECORDER_DEVICE_ROLES } from "./auth";
 
 /** 送ってよい role */
-export const DEVICE_LOG_ROLES: ReadonlySet<string> = new Set([...RECORDER_DEVICE_ROLES, DEVICE_ROLE_KIOSK]);
+export const DEVICE_LOG_ROLES: ReadonlySet<string> = new Set([
+  ...RECORDER_DEVICE_ROLES,
+  DEVICE_ROLE_KIOSK,
+  DEVICE_ROLE_TENKO_MANAGER,
+]);
 
 /** どの機体のログか (本文の `source`)。自由文字列にしない */
 export const DEVICE_LOG_SOURCES: ReadonlySet<string> = new Set(["vein-station", "cores3", "kiosk"]);
