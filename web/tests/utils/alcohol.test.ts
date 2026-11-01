@@ -120,14 +120,16 @@ describe('punchTenkoOf (打刻に結ばれた点呼、Refs ippoan/alc-app#436)',
 
   it('値 0 の正常は緑の「正常」、値を mg/L で出す', () => {
     expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0, result: 'normal', tenko_recorded: true })).toEqual({
-      pending: false,
+      methodLabel: '点呼',
+      statusLabel: null,
       alcohol: { label: '正常', cls: 'bg-green-100 text-green-800', value: '0.000 mg/L' },
     })
   })
 
   it('0 より上は赤の「検知」', () => {
     expect(punchTenkoOf({ measurement_id: MID, alcohol_level: 0.05, result: 'normal' })).toEqual({
-      pending: false,
+      methodLabel: '点呼',
+      statusLabel: null,
       alcohol: { label: '検知', cls: 'bg-red-100 text-red-800', value: '0.050 mg/L' },
     })
   })
@@ -142,14 +144,36 @@ describe('punchTenkoOf (打刻に結ばれた点呼、Refs ippoan/alc-app#436)',
 
   it('結果が無い (測定中) なら alcohol は null。確定待ちは tenko_recorded が false のときだけ', () => {
     expect(punchTenkoOf({ measurement_id: MID, alcohol_level: null, result: null, tenko_recorded: false })).toEqual({
-      pending: true,
+      methodLabel: '点呼',
+      statusLabel: '確定待ち',
       alcohol: null,
     })
   })
 
   it('tenko_recorded が null / 欠落 (サーバがまだ返さない) なら確定待ちと言わない', () => {
-    expect(punchTenkoOf({ measurement_id: MID, tenko_recorded: null })?.pending).toBe(false)
-    expect(punchTenkoOf({ measurement_id: MID })?.pending).toBe(false)
+    expect(punchTenkoOf({ measurement_id: MID, tenko_recorded: null })?.statusLabel).toBeNull()
+    expect(punchTenkoOf({ measurement_id: MID })?.statusLabel).toBeNull()
+  })
+
+  it('区分は tenko_method から (IT点呼 を対面で確定した回は「対面点呼」)', () => {
+    const label = (tenko_method: string, manager_judgment_method: string | null = null) =>
+      punchTenkoOf({ measurement_id: MID, tenko_method, manager_judgment_method })?.methodLabel
+    expect(label('IT点呼')).toBe('IT点呼')
+    expect(label('IT点呼', 'it')).toBe('IT点呼')
+    expect(label('IT点呼', 'in_person')).toBe('対面点呼')
+    expect(label('遠隔点呼')).toBe('遠隔点呼')
+    expect(label('自動点呼')).toBe('自動点呼')
+    expect(label('通常点呼')).toBe('通常点呼')
+  })
+
+  it('状態は tenko_status から: 済は出さず、判定待ち・中止・点呼中 (途中)。状態があれば tenko_recorded は見ない', () => {
+    const status = (tenko_status: string) =>
+      punchTenkoOf({ measurement_id: MID, tenko_status, tenko_recorded: true })?.statusLabel
+    expect(status('completed')).toBeNull()
+    expect(status('judgment_pending')).toBe('判定待ち')
+    expect(status('cancelled')).toBe('中止')
+    expect(status('interrupted')).toBe('中止')
+    expect(status('alcohol_testing')).toBe('点呼中')
   })
 
   it('判定はあるが値が無い行は値を出さない (色は値 0 として決める)', () => {

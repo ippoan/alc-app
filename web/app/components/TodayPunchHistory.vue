@@ -230,7 +230,7 @@ defineExpose({ reload, highlight })
                 <span
                   data-testid="today-punch-tenko"
                   class="inline-block ml-1 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
-                >点呼</span><span
+                >{{ p.tenko.methodLabel }}</span><span
                   v-if="p.tenko.alcohol?.value"
                   data-testid="today-punch-alcohol-value"
                   class="ml-1 text-xs tabular-nums"
@@ -240,10 +240,10 @@ defineExpose({ reload, highlight })
                   class="inline-block ml-1 px-1.5 py-0.5 rounded text-xs font-medium"
                   :class="p.tenko.alcohol.cls"
                 >{{ p.tenko.alcohol.label }}</span><span
-                  v-if="p.tenko.pending"
-                  data-testid="today-punch-tenko-pending"
+                  v-if="p.tenko.statusLabel"
+                  data-testid="today-punch-tenko-status"
                   class="ml-1 text-xs text-gray-500"
-                >確定待ち</span>
+                >{{ p.tenko.statusLabel }}</span>
               </template>
             </td>
             <td
