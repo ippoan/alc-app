@@ -29,6 +29,7 @@ const db = vi.hoisted(() => ({
   loadVeinTemplates: vi.fn(),
   saveVeinTemplates: vi.fn(),
   loadVeinModuleEntries: vi.fn(),
+  putVeinModuleEntry: vi.fn(async () => {}),
 }))
 vi.mock('~/utils/vein-db', () => db)
 
@@ -39,10 +40,13 @@ const match = vi.hoisted(() => ({
 vi.mock('~/utils/vein-match', () => match)
 
 // モジュール経路の判定 (usesVeinModule) だけ差し替える (対応表の引き方は本物を通す、Refs ippoan/alc-app#436)
+// 本人が決まった人の記録の用意 (prepareVeinModuleRecord) は prep.fn に差し替える (中身は utils/vein-module.test.ts)
 const viaModule = vi.hoisted(() => ({ on: false }))
+const prep = vi.hoisted(() => ({ fn: vi.fn() }))
 vi.mock('~/utils/vein-module', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-module')>()),
   usesVeinModule: () => viaModule.on,
+  prepareVeinModuleRecord: (...args: unknown[]) => prep.fn(...args),
 }))
 
 // 指が置かれた合図 (EVT VEIN FINGER) の購読は、受けた cb を finger.cb で呼べるようにしておく
@@ -57,6 +61,7 @@ const vein = vi.hoisted(() => ({
   say: vi.fn(),
   capture: vi.fn(),
   identify: vi.fn(),
+  verify: vi.fn(),
   // useDeviceToken が抜線でキャッシュを捨てるために登録する (Refs ippoan/alc-app#436)
   onClose: vi.fn(),
   // useSerialOta が書き込みのポートとして掴む (Refs ippoan/alc-app#436)
@@ -396,30 +401,38 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       api.getEmployeeById.mockResolvedValue(EMP)
     })
 
-    it('VEIN IDENTIFY の ID → 対応表 → 乗務員で、最初の段の人と同じなら本人確認にする', async () => {
+    it('★ 1:1: 最初の段の人の記録をモジュールに用意し、VEIN VERIFY で当たれば本人確認にする (IDENTIFY は使わない)', async () => {
+      prep.fn.mockResolvedValue(12)
+      vein.verify.mockResolvedValue(true)
       const wrapper = await mountKiosk()
+      // 本人確認の段に入った時点で書き始める (指を置くまでの間と重ねる)
+      expect(prep.fn).toHaveBeenCalledWith(vein, 'emp-1', undefined)
       await pressVein(wrapper)
-      expect(vein.identify).toHaveBeenCalledTimes(1)
-      expect(vein.capture).not.toHaveBeenCalled()
-      expect(api.identifyVein).not.toHaveBeenCalled()
+      expect(prep.fn).toHaveBeenCalledTimes(1)
+      expect(vein.verify).toHaveBeenCalledWith(12, expect.any(Function))
+      expect(vein.identify).not.toHaveBeenCalled()
       expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1', 'default')
       expect(onFaceAuthCompleteMock).toHaveBeenCalledWith(VEIN_OK)
+      // 用意は 1 回の照合で使い切る (次の照合はもう一度確かめる)
+      await pressVein(wrapper)
+      expect(prep.fn).toHaveBeenCalledTimes(2)
       wrapper.unmount()
     })
 
-    it('★ 承認待ちの ID に当たっても本人確認にしない (未承認と出す)', async () => {
-      vein.identify.mockResolvedValue(13)
-      api.getEmployeeById.mockRejectedValueOnce(new Error('500'))
+    it('★ 承認済みの記録が無ければ照合せずに理由を出す', async () => {
+      prep.fn.mockResolvedValue(null)
       const wrapper = await mountKiosk()
       await pressVein(wrapper)
+      expect(vein.verify).not.toHaveBeenCalled()
       expect(onFaceAuthCompleteMock).not.toHaveBeenCalled()
-      expect(wrapper.text()).toContain('この人さんの指静脈は未承認です')
+      expect(wrapper.text()).toContain('この人の承認済みの指静脈の記録がありません')
       wrapper.unmount()
     })
 
     it('★ モジュールが撮り直しを求めたら (onAgain)、ボタンを「もう一度置いてください…」にする。次の照合では戻す', async () => {
-      let finish: (id: number | null) => void = () => {}
-      vein.identify.mockImplementationOnce((onAgain?: () => void) => new Promise((resolve) => {
+      prep.fn.mockResolvedValue(12)
+      let finish: (ok: boolean) => void = () => {}
+      vein.verify.mockImplementationOnce((_id: number, onAgain?: () => void) => new Promise((resolve) => {
         finish = resolve
         onAgain?.()
       }))
@@ -428,23 +441,28 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       await button().trigger('click')
       await flushPromises()
       expect(button().text()).toBe('もう一度置いてください…')
-      finish(12)
+      finish(true)
       await flushPromises()
 
-      vein.identify.mockImplementationOnce(() => new Promise(() => {}))
+      vein.verify.mockImplementationOnce(() => new Promise(() => {}))
       await button().trigger('click')
       await flushPromises()
       expect(button().text()).toBe('指を置いてください…')
       wrapper.unmount()
     })
 
-    it('VEIN NOMATCH は (1 回自動でやり直しても) 不一致、読み取りの失敗は理由を出す', async () => {
-      vein.identify.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('TIMEOUT'))
+    it('不一致は (1 回自動でやり直しても) 不一致、読み取り・用意の失敗は理由を出す', async () => {
+      prep.fn.mockResolvedValue(12)
+      vein.verify.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('TIMEOUT'))
       const wrapper = await mountKiosk()
       await pressVein(wrapper)
+      expect(vein.verify).toHaveBeenCalledTimes(2)
       expect(wrapper.text()).toContain(VEIN_NO_MATCH_MESSAGE)
       await pressVein(wrapper)
       expect(wrapper.text()).toContain('指静脈を読み取れませんでした (TIMEOUT)')
+      prep.fn.mockRejectedValue(new Error('WRITE_SEQ'))
+      await pressVein(wrapper)
+      expect(wrapper.text()).toContain('指静脈の記録をこの端末に用意できませんでした (WRITE_SEQ)')
       wrapper.unmount()
     })
 

@@ -149,9 +149,19 @@ describe('useVeinEnroll', () => {
       expect(vein.notice.value).toBeNull()
     })
 
-    it('10〜100 が埋まっていれば読み取らずに「これ以上登録できません」', async () => {
+    it('★ 10〜100 が埋まっていたら、一番長く使っていない承認済みの人の枠を譲らせる (その人は対応表から外す)', async () => {
       db.loadVeinModuleEntries.mockResolvedValue(
-        Array.from({ length: 91 }, (_, i) => ({ employeeId: `e${i}`, moduleId: 10 + i, updatedAt: 'v1', approved: true })),
+        Array.from({ length: 91 }, (_, i) => ({ employeeId: `e${i}`, moduleId: 10 + i, updatedAt: 'v1', approved: true, lastUsedAt: 100 - i })),
+      )
+      const vein = await setup()
+      await vein.enroll('emp-test-1')
+      expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('e90')
+      expect(veinEnroll).toHaveBeenCalledWith(100, expect.any(Function))
+    })
+
+    it('10〜100 が承認待ちで埋まっていれば読み取らずに「これ以上登録できません」(承認済みなら枠を譲らせる)', async () => {
+      db.loadVeinModuleEntries.mockResolvedValue(
+        Array.from({ length: 91 }, (_, i) => ({ employeeId: `e${i}`, moduleId: 10 + i, updatedAt: 'v1', approved: false })),
       )
       const vein = await setup()
       await vein.enroll('emp-test-1')

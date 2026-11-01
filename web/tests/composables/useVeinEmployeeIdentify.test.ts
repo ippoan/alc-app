@@ -16,6 +16,7 @@ const vein = {
   connect: vi.fn(async () => true),
   say: vi.fn(async () => {}),
   identify: vi.fn(async (_onAgain?: () => void) => 12 as number | null),
+  verify: vi.fn(async (_id: number, _onAgain?: () => void) => true),
   capture: vi.fn(async () => 'abcd'),
   onFingerPlaced: vi.fn((cb: () => void) => { fingerCb = cb; return stopFinger }),
 }
@@ -26,6 +27,7 @@ mockNuxtImport('useVeinSerial', () => () => vein)
 const mod = vi.hoisted(() => ({
   usesVeinModule: vi.fn(() => true),
   identifyVeinModuleEmployee: vi.fn(),
+  prepareVeinModuleRecord: vi.fn(async () => 12 as number | null),
 }))
 // 不一致のやり直し (retryOnVeinMiss) は本物を使う
 vi.mock('~/utils/vein-module', async importOriginal => ({
@@ -242,5 +244,46 @@ describe('useVeinEmployeeIdentify', () => {
 
     app.unmount()
     expect(stopFinger).toHaveBeenCalledTimes(1)
+  })
+
+  describe('本人が先に決まっている (expectedEmployeeId、Refs ippoan/alc-app-s3#352)', () => {
+    it('★ その人をモジュールに用意して 1:1 で照合する。指の合図からなら「指を置いて」を鳴らさない', async () => {
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1', scope: 'manager-device' })
+      fingerCb?.()
+      await vi.waitFor(() => expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null))
+      expect(mod.prepareVeinModuleRecord).toHaveBeenCalledWith(vein, 'emp-test-1', 'manager-device')
+      expect(vein.verify).toHaveBeenCalledWith(12, expect.any(Function))
+      expect(vein.identify).not.toHaveBeenCalled()
+      expect(vein.say).not.toHaveBeenCalledWith('PLACE')
+      expect(api.error.value).toBeNull()
+      app.unmount()
+    })
+
+    it('記録が無ければ、noRecordMessage が無い画面は missMessage を出す', async () => {
+      mod.prepareVeinModuleRecord.mockResolvedValueOnce(null)
+      const { api, app } = setup({ expectedEmployeeId: () => 'emp-test-1' })
+      await api.identify()
+      expect(vein.verify).not.toHaveBeenCalled()
+      expect(api.error.value).toBe('一致しません')
+      app.unmount()
+    })
+
+    it('prewrite は先に書き始め、照合はその用意を待って使う。失敗した用意は使い回さない。モジュールを使わない構成は書かない', async () => {
+      const { api, app } = setup({ expectedEmployeeId: () => 'emp-test-1' })
+      mod.prepareVeinModuleRecord.mockRejectedValueOnce(new Error('WRITE_SEQ'))
+      api.prewrite('emp-test-1')
+      await nextTick()
+      await api.identify()
+      // 失敗した用意は捨て、照合のときに取り直す
+      expect(mod.prepareVeinModuleRecord).toHaveBeenCalledTimes(2)
+      expect(api.error.value).toBeNull()
+      api.prewrite('emp-test-1')
+      await api.identify()
+      expect(mod.prepareVeinModuleRecord).toHaveBeenCalledTimes(3)
+      mod.usesVeinModule.mockReturnValue(false)
+      api.prewrite('emp-test-1')
+      expect(mod.prepareVeinModuleRecord).toHaveBeenCalledTimes(3)
+      app.unmount()
+    })
   })
 })

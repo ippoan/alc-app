@@ -51,6 +51,11 @@ export interface VeinModuleEntry {
    * 端末の設定が「その場で撮った記録を使う」の間は、同期がこの記録を書き換えない (`vein-module.ts`)
    */
   native?: boolean
+  /**
+   * 最後に照合に使った時刻 (ms)。枠 (10〜100) が埋まったら、これが一番古い人の枠を譲らせる
+   * (`allocateOrEvictVeinModuleId`)。無ければ 0 と見る
+   */
+  lastUsedAt?: number
 }
 
 const DB_NAME = 'alc-vein-db'
