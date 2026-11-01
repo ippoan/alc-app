@@ -97,6 +97,8 @@ useFaceSync()
 // 警告デバイスの見張り (着信購読 + heartbeat)。ロールタブに関わらず始める —
 // 運行者タブで使う運行管理者 PC でも繋がるように (Refs #231)。ManagerAlarmBar は表示だけ
 useAlarmWatch()
+// Vein Station の行を recorder へ上げる (診断ログ。Refs ippoan/alc-app-s3#352)
+useVeinLogUpload().start()
 
 // 拠点 PC のカメラ配信の拡張 (alc-cam) へ cam-host の鍵を渡す。CoreS3 が繋がっている間だけ、
 // 拡張に送る口 (chrome.runtime.sendMessage) が在るブラウザでだけ動く

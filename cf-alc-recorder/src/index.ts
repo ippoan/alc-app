@@ -78,6 +78,7 @@ import {
   type ParsedMeasurement,
 } from "./measurements";
 import { runBatterySnapshotCron } from "./battery-snapshot";
+import { DEVICE_LOG_ROLES, deviceLogCorsHeaders, parseDeviceLogBody, storeDeviceLog } from "./device-log";
 import { hubStub } from "./hub-stub";
 
 export { RecorderHub } from "./recorder-hub";
@@ -284,6 +285,45 @@ async function handleWatchTimecard(request: Request, env: Env, url: URL): Promis
   return hubStub(env, decision.tenantId).fetch(fwd);
 }
 
+/**
+ * POST /device-log — 機体の診断ログを R2 へ保存する (Refs ippoan/alc-app-s3#352、`device-log.ts`)。
+ * 認証は `/measurements` と同じ introspect。role は {@link DEVICE_LOG_ROLES} (キオスクを含む)
+ */
+async function handleDeviceLogPost(request: Request, env: Env, url: URL): Promise<Response> {
+  const token = bearerToken(request.headers.get("Authorization"));
+  if (!token) return json({ error: "missing_bearer_token" }, 401);
+  const sharedSecret = await resolveSecret(env.INTERNAL_SHARED_SECRET);
+  if (!sharedSecret) return json({ error: "server_error" }, 503);
+  const result = await introspectToken(env.AUTH_WORKER, sharedSecret, token, url.origin);
+  if (result === null) return json({ error: "server_error" }, 503);
+  if (result.active !== true || !result.tenant_id || !result.sub) return json({ error: "invalid_token" }, 401);
+  if (typeof result.role !== "string" || !DEVICE_LOG_ROLES.has(result.role)) {
+    return json({ error: "forbidden_role" }, 403);
+  }
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+  const parsed = parseDeviceLogBody(raw);
+  if (!parsed.ok) return json({ error: parsed.error }, 400);
+  try {
+    const key = await storeDeviceLog(
+      env.CRASH_LOGS,
+      result.tenant_id,
+      result.sub,
+      isDevIntrospect(result),
+      parsed.body,
+      Date.now(),
+    );
+    return json({ stored: key });
+  } catch (e) {
+    console.log(`[device_log] R2 put failed tenant=${result.tenant_id}`, e);
+    return json({ error: "storage_error" }, 502);
+  }
+}
+
 /** POST /measurements 1 リクエストの item 数上限 (WS の 64KB message 上限に相当する暴走ガード)。 */
 const MAX_BATCH_ITEMS = 100;
 
@@ -390,6 +430,15 @@ export default {
 
     if (url.pathname === "/measurements" && request.method === "POST") {
       return handleMeasurementsPost(request, env, url);
+    }
+    if (url.pathname === "/device-log") {
+      const cors = deviceLogCorsHeaders(request.headers.get("Origin"));
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+      if (request.method === "POST") {
+        const res = await handleDeviceLogPost(request, env, url);
+        for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+        return res;
+      }
     }
 
     // ── 内部 HTTP API (shared secret 認証) ──────────────────────────────────

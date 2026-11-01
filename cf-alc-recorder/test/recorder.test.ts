@@ -2461,3 +2461,97 @@ describe("機体の鍵の証明 (X-Machine-Token)", () => {
     expect(machineTokenMissing("1", undefined, bare)).toBe(false);
   });
 });
+
+describe("POST /device-log (機体の診断ログ、Refs ippoan/alc-app-s3#352)", () => {
+  async function postLog(body: unknown, token?: string): Promise<Response> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return SELF.fetch(`${BASE}/device-log`, {
+      method: "POST",
+      headers,
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+  const BODY = { source: "vein-station", reason: "thermo_rx_none", text: "22:16:56.000 EVT THERMO_RX none\n" };
+
+  it("認証: Bearer なし 401 / active:false 401 / 許していない role 403 (機体の鍵の証明だけの JWT)", async () => {
+    expect((await postLog(BODY)).status).toBe(401);
+    expect((await postLog(BODY, "expired-token")).status).toBe(401);
+    const res = await postLog(BODY, "hub-record-token-1");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden_role" });
+  });
+
+  it("★ キオスクの JWT で R2 の device-log/ に保存する (tenant・端末は JWT から、backend へは送らない)", async () => {
+    const res = await postLog({ ...BODY, tenant_id: "spoofed", device_id: "spoofed" }, "kiosk-token");
+    expect(res.status).toBe(200);
+    const { stored } = (await res.json()) as { stored: string };
+    expect(stored).toMatch(/^device-log\/tenant-1\/device-kiosk-1\/\d{13}-vein-station\.json$/);
+    const obj = await env.CRASH_LOGS.get(stored);
+    const saved = JSON.parse(await obj!.text());
+    expect(saved).toMatchObject({
+      tenant_id: "tenant-1",
+      device_id: "device-kiosk-1",
+      dev: false,
+      source: "vein-station",
+      reason: "thermo_rx_none",
+      text: BODY.text,
+    });
+    expect(await spyIngest()).toEqual([]);
+  });
+
+  it("開発用の鍵の JWT なら dev: true で残す", async () => {
+    const res = await postLog(BODY, "kiosk-token-dev");
+    expect(res.status).toBe(200);
+    const { stored } = (await res.json()) as { stored: string };
+    const saved = JSON.parse(await (await env.CRASH_LOGS.get(stored))!.text());
+    expect(saved.dev).toBe(true);
+  });
+
+  it("本文の形が違えば 400 (source は決まった語だけ・reason は短い語・text は空でなく上限以下)", async () => {
+    const cases: Array<[unknown, string]> = [
+      ["not json", "invalid_json"],
+      [[BODY], "invalid_body"],
+      [{ ...BODY, source: "anything" }, "invalid_source"],
+      [{ ...BODY, reason: "has space" }, "invalid_reason"],
+      [{ ...BODY, text: "" }, "invalid_text"],
+      [{ ...BODY, text: "x".repeat(400_001) }, "text_too_large"],
+    ];
+    for (const [body, error] of cases) {
+      const res = await postLog(body, "kiosk-token");
+      expect(res.status, error).toBe(400);
+      expect(await res.json()).toEqual({ error });
+    }
+  });
+});
+
+describe("POST /device-log の CORS (キオスクの画面から送る)", () => {
+  it("ippoan.org の画面には preflight と応答で許可を返し、それ以外には返さない", async () => {
+    const pre = await SELF.fetch(`${BASE}/device-log`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://alc.ippoan.org", "Access-Control-Request-Method": "POST" },
+    });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("Access-Control-Allow-Origin")).toBe("https://alc.ippoan.org");
+    expect(pre.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+
+    const res = await SELF.fetch(`${BASE}/device-log`, {
+      method: "POST",
+      headers: { Origin: "https://alc.ippoan.org", "Content-Type": "application/json", Authorization: "Bearer kiosk-token" },
+      body: JSON.stringify({ source: "vein-station", reason: "periodic", text: "x" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://alc.ippoan.org");
+
+    const other = await SELF.fetch(`${BASE}/device-log`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" },
+    });
+    expect(other.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    const lookalike = await SELF.fetch(`${BASE}/device-log`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://alc.ippoan.org.evil.example", "Access-Control-Request-Method": "POST" },
+    });
+    expect(lookalike.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+});
