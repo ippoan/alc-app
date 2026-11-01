@@ -4,7 +4,7 @@ import { getEmployeeByCode, getEmployeeByNfcId, startMeasurement, updateMeasurem
 import { devTiming } from '~/utils/dev-timing'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
-import { prepareVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
+import { prepareVeinModuleRecord, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 import { restartVeinAndReload } from '~/utils/vein-restart'
 
@@ -137,7 +137,9 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
     const moduleId = await prepareVeinModuleRecord(veinSerial, emp.id)
     if (moduleId === null) return 'no_record'
     await veinSerial.say('PLACE')
-    if (await veinSerial.verify(moduleId, () => { vein.again.value = true })) return 'verified'
+    // 不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
+    const onAgain = () => { vein.again.value = true }
+    if (await retryOnVeinMiss(() => veinSerial.verify(moduleId, onAgain), ok => !ok, onAgain)) return 'verified'
     await veinSerial.say('FAILED').catch(() => {})
     // 別の端末で撮った記録だと通りにくい。この端末の指を足せるようにする (測定は止めない)
     addFingerEmployee.value = { id: emp.id, name: emp.name }

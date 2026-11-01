@@ -27,7 +27,11 @@ const mod = vi.hoisted(() => ({
   usesVeinModule: vi.fn(() => true),
   identifyVeinModuleEmployee: vi.fn(),
 }))
-vi.mock('~/utils/vein-module', () => mod)
+// 不一致のやり直し (retryOnVeinMiss) は本物を使う
+vi.mock('~/utils/vein-module', async importOriginal => ({
+  retryOnVeinMiss: (await importOriginal<typeof import('~/utils/vein-module')>()).retryOnVeinMiss,
+  ...mod,
+}))
 const ident = vi.hoisted(() => ({
   identifyVeinEmployee: vi.fn(),
   syncVeinTemplates: vi.fn(async () => true),
@@ -101,6 +105,23 @@ describe('useVeinEmployeeIdentify', () => {
     connected.value = false
     await nextTick()
     expect(ident.syncVeinTemplates).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
+  it('★ モジュールが不一致なら 1 回だけ自動でやり直す (again が立つ)。2 回とも不一致なら不一致', async () => {
+    vein.identify.mockResolvedValueOnce(null).mockResolvedValueOnce(12)
+    const { api, app, opts } = setup()
+    await api.identify()
+    expect(vein.identify).toHaveBeenCalledTimes(2)
+    expect(api.again.value).toBe(true)
+    expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, undefined)
+    expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null)
+    vein.identify.mockClear()
+    vein.identify.mockResolvedValue(null)
+    mod.identifyVeinModuleEmployee.mockResolvedValue({ kind: 'miss' })
+    await api.identify()
+    expect(vein.identify).toHaveBeenCalledTimes(2)
+    expect(mod.identifyVeinModuleEmployee).toHaveBeenLastCalledWith(null, undefined)
     app.unmount()
   })
 

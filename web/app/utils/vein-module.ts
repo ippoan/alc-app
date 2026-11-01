@@ -80,6 +80,24 @@ export function noteVeinModuleRecord(id: number, kind: 'composed' | 'server' | '
   recordVeinLine(`PC VEIN RECORD ${id} KIND=${kind} MODE=${readVeinAddedFingerMode()}`)
 }
 
+/** 不一致のとき、自動でもう一度照合する回数 (置き方のぶれ・閾値の揺れで落ちた回を拾う) */
+export const VEIN_NOMATCH_RETRIES = 1
+
+/**
+ * モジュールの照合 `read` (`VEIN IDENTIFY` / `VEIN VERIFY`) を、不一致 (`missed`) なら
+ * {@link VEIN_NOMATCH_RETRIES} 回まで自動でやり直す。やり直す前に `onRetry` (画面の「もう一度置いて」) を呼び、
+ * 診断ログに `PC VEIN RETRY` を残す (照合の失敗・別の人に当たった回はやり直さない — 呼び手が決める)
+ */
+export async function retryOnVeinMiss<T>(read: () => Promise<T>, missed: (r: T) => boolean, onRetry: () => void): Promise<T> {
+  let result = await read()
+  for (let i = 0; i < VEIN_NOMATCH_RETRIES && missed(result); i++) {
+    onRetry()
+    recordVeinLine('PC VEIN RETRY')
+    result = await read()
+  }
+  return result
+}
+
 /** サーバーの記録の種類 (`composed` が無い古いサーバー・管理者の鍵は `server`) */
 function serverRecordKind(t: ApiVeinModuleRecord): 'composed' | 'server' {
   return t.composed ? 'composed' : 'server'
