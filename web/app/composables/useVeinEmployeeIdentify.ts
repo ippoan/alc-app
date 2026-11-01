@@ -87,9 +87,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       const promise = prepareVeinModuleRecord(vein, employeeId, opts.scope)
       prepared = { employeeId, promise }
       // 失敗した用意は使い回さない (次の照合で取り直す)
-      promise.catch(() => {
-        if (prepared?.promise === promise) prepared = null
-      })
+      promise.catch(() => { prepared = null })
     }
     return prepared.promise
   }
