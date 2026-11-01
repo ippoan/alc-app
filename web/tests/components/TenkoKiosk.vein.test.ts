@@ -8,7 +8,7 @@ import type { ApiEmployee } from '~/types'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_OFFLINE_STALE_MESSAGE } from '~/utils/vein-identify'
 
 // キオスクの「指静脈で本人確認」(Refs ippoan/vein-match#20)。NFC・社員番号と並ぶ 3 つ目の手段で、
-// 当たったら NFC と同じく applyFaceApproval → identifyEmployee に合流する。
+// 当たったら identifyEmployee に合流し、指静脈を本人確認にして顔認証の段を飛ばす (顔の承認は見ない)。
 // オンライン/オフラインの振り分けは実物の vein-identify を通し、その先 (API・IndexedDB・wasm) を差し替える
 
 const api = vi.hoisted(() => ({
@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   getEmployeeById: vi.fn(),
   getEmployees: vi.fn(),
   getVeinTemplates: vi.fn(),
+  getEmployeeByNfcId: vi.fn(),
 }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -66,6 +67,7 @@ mockNuxtImport('useVeinSerial', () => () => vein)
 const step = ref<TenkoStep>('nfc')
 const error = ref<string | null>(null)
 const identifyEmployeeMock = vi.fn(async () => {})
+const onFaceAuthCompleteMock = vi.fn()
 
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
@@ -93,7 +95,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   selectSchedule: vi.fn(async () => {}),
   resumeSession: vi.fn(),
   proceedWithoutSchedule: vi.fn(),
-  onFaceAuthComplete: vi.fn(),
+  onFaceAuthComplete: onFaceAuthCompleteMock,
   onAlcoholMeasured: vi.fn(async () => false),
   onMedicalSubmit: vi.fn(),
   onSelfDeclarationSubmit: vi.fn(),
@@ -138,6 +140,12 @@ function setOnline(online: boolean) {
 
 async function mountKiosk() {
   const wrapper = await mountSuspended(TenkoKiosk, { shallow: true })
+  await flushPromises()
+  return wrapper
+}
+
+async function mountRemoteKiosk() {
+  const wrapper = await mountSuspended(TenkoKiosk, { shallow: true, props: { remoteMode: true } })
   await flushPromises()
   return wrapper
 }
@@ -267,15 +275,58 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     wrapper.unmount()
   })
 
-  it('顔の承認で止まる社員 → NFC と同じくグローバルエラーに出し、identifyEmployee へ進まない', async () => {
+  it('★ 指静脈で当たったら顔の承認は見ない (顔認証の代わりに指静脈を本人確認にする)', async () => {
     api.identifyVein.mockResolvedValue({ employee_id: 'emp-1', name: '山田 太郎' })
     api.getEmployeeById.mockResolvedValue({ ...EMP, face_approval_status: 'rejected' })
     const wrapper = await mountKiosk()
     await pressVein(wrapper)
 
-    expect(identifyEmployeeMock).not.toHaveBeenCalled()
-    expect(error.value).toBeTruthy()
-    expect(wrapper.find('[data-testid="vein-error"]').exists()).toBe(false)
+    expect(identifyEmployeeMock).toHaveBeenCalledWith('emp-1', '山田 太郎')
+    expect(error.value).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('NFC で特定したときは今まで通り顔認証の段で止まる', async () => {
+    api.identifyVein.mockResolvedValue({ employee_id: 'emp-1', name: '山田 太郎' })
+    api.getEmployeeById.mockResolvedValue(EMP)
+    const wrapper = await mountKiosk()
+    await pressVein(wrapper)
+    // 同じ画面で次の人が NFC で特定した (指静脈の印は消える)
+    api.getEmployeeByNfcId.mockResolvedValue({ ...EMP, id: 'emp-2' })
+    wrapper.findComponent({ name: 'NfcStatus' }).vm.$emit('read', 'nfc-1')
+    await flushPromises()
+    expect(api.getEmployeeByNfcId).toHaveBeenCalledWith('nfc-1')
+    step.value = 'face_auth'
+    await flushPromises()
+    expect(onFaceAuthCompleteMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('★ 遠隔点呼は指静脈を本人確認にする — 顔の承認を見ず、顔認証の段を飛ばして始める', async () => {
+    api.identifyVein.mockResolvedValue({ employee_id: 'emp-1', name: '山田 太郎' })
+    api.getEmployeeById.mockResolvedValue({ ...EMP, face_approval_status: 'rejected' })
+    // 遠隔点呼の identifyEmployee は顔認証の段へ進める
+    identifyEmployeeMock.mockImplementationOnce(async () => { step.value = 'face_auth' })
+    const wrapper = await mountRemoteKiosk()
+    await pressVein(wrapper)
+
+    expect(identifyEmployeeMock).toHaveBeenCalledWith('emp-1', '山田 太郎')
+    expect(error.value).toBeNull()
+    expect(onFaceAuthCompleteMock).toHaveBeenCalledWith({ verified: true, similarity: 0, skipped: true })
+    wrapper.unmount()
+  })
+
+  it('★ 自動点呼も、予定を選んで顔認証の段に来たら飛ばす', async () => {
+    api.identifyVein.mockResolvedValue({ employee_id: 'emp-1', name: '山田 太郎' })
+    api.getEmployeeById.mockResolvedValue(EMP)
+    identifyEmployeeMock.mockImplementationOnce(async () => { step.value = 'schedule_select' })
+    const wrapper = await mountKiosk()
+    await pressVein(wrapper)
+    expect(onFaceAuthCompleteMock).not.toHaveBeenCalled()
+
+    step.value = 'face_auth'
+    await flushPromises()
+    expect(onFaceAuthCompleteMock).toHaveBeenCalledWith({ verified: true, similarity: 0, skipped: true })
     wrapper.unmount()
   })
 
