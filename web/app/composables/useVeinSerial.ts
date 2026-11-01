@@ -662,6 +662,18 @@ export function useVeinSerial() {
   }
 
   /**
+   * モジュールの照合の厳しさ (安全レベル) を読む (`level` なし) / 書いて読み直す (`VEIN SECURITY [<0-2>]`、
+   * ファームは ippoan/alc-app-s3 の `VEIN SECURITY`)。戻り値はモジュールの今の値。古いファームは
+   * `ERR VEIN: …` で失敗する (投げる)
+   */
+  async function security(level?: 0 | 1 | 2): Promise<number> {
+    const line = await veinRequest(level === undefined ? 'VEIN SECURITY' : `VEIN SECURITY ${level}`, 'VEIN SECURITY ', SYNC_STEP_TIMEOUT_MS)
+    const m = /^VEIN SECURITY (\d+)$/.exec(line.trim())
+    if (!m) throw new Error('SECURITY の応答が読めません')
+    return Number(m[1])
+  }
+
+  /**
    * 預かったポートで 1 行送って応答 1 つを待つ (鍵の署名 `AUTH SIGN` が使う、Refs ippoan/alc-app#436)。
    * 同時に 1 件しか待てないのは capture/say と同じ。ファームの書き込み中 (錠) は送らずに reject する。
    * `errPrefix` は失敗行の接頭辞 (省略時は arbiter の既定 = 行の先頭トークンの `ERR <先頭トークン>`)
@@ -757,6 +769,7 @@ export function useVeinSerial() {
     syncWrite,
     syncClear,
     syncInfo,
+    security,
     request,
     omronBp: readonly(omronBp),
     noteOmronBp,
