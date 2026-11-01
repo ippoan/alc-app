@@ -60,6 +60,12 @@ mockNuxtImport('useCamera', () => () => ({
 
 mockNuxtImport('useFaceSync', () => () => ({ isSyncing: ref(false), sync: vi.fn(async () => {}) }))
 mockNuxtImport('useDemoMode', () => () => ({ isDemoMode: ref(false) }))
+// 本人確認の段は指静脈。照合の中身は見ないので、最初の段の人に当たったことにして渡す口を捕まえる
+const veinIdentify = vi.hoisted(() => ({ onEmployee: null as null | ((emp: { id: string, name: string }) => unknown) }))
+mockNuxtImport('useVeinEmployeeIdentify', () => (opts: { onEmployee: (emp: { id: string, name: string }) => unknown }) => {
+  veinIdentify.onEmployee = opts.onEmployee
+  return { busy: ref(false), again: ref(false), error: ref(null), identify: vi.fn(), sync: vi.fn() }
+})
 mockNuxtImport('useBleGateway', () => () => ({ latestTemperature: ref(null), latestBloodPressure: ref(null) }))
 mockNuxtImport('useFingerprint', () => () => ({
   isFingerprintAvailable: ref(false),
@@ -167,7 +173,7 @@ async function mountAtMedicalStep(props: { remoteMode?: boolean } = {}) {
     await settle(wrapper)
   }
 
-  wrapper.findComponent({ name: 'FaceAuth' }).vm.$emit('result', { verified: true, similarity: 1 })
+  await veinIdentify.onEmployee!({ id: EMPLOYEE.id, name: EMPLOYEE.name })
   await settle(wrapper)
 
   return wrapper
