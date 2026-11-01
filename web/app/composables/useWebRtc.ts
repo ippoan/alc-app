@@ -203,7 +203,7 @@ export function useWebRtc(role: 'device' | 'admin') {
 
   async function handleOffer(sdp: string) {
     log('handleOffer: sdp received, length=', sdp.length)
-    if (!pc) createPeerConnection()
+    // 今の socket から届く間は pc が在る (connect() が socket より先に作り、切ると socket ごと替わる)
     await pc!.setRemoteDescription({ type: 'offer', sdp })
     if (camRoom) {
       // カメラの音を受け、押して話す間だけ声を送る (sendrecv で答えておけば付け外しに再ネゴシエーションは要らない)
