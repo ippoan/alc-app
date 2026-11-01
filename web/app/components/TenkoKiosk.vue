@@ -370,6 +370,9 @@ const vein = useVeinEmployeeIdentify({
   },
   // 指が置かれた合図で照合を始めるのは、顔認証の段で指静脈を使っているときだけ
   isIdle: () => useVeinForIdentity.value && !vein.busy.value,
+  // 本人は最初の段で決まっている: その人の記録だけをモジュールに用意して 1:1 で照合する (Refs ippoan/alc-app-s3#352)
+  expectedEmployeeId: () => employeeId.value || null,
+  noRecordMessage: 'この人の承認済みの指静脈の記録がありません。登録して運行管理者の承認を受けてください',
 })
 
 /** 指静脈の照合を始めてよいか (本人確認の段・血圧の確認で止めていない・Vein Station がつながっている) */
@@ -384,6 +387,11 @@ const veinMissingReason = computed<string | null>(() => {
   if (!veinSerial.isConnected.value) return 'Vein Station (指静脈読み取り端末) が接続されていません。USB でつないでください'
   return null
 })
+
+// 本人確認の段に入ったら、その人の記録をすぐモジュールに書き始める (約 2 秒。指を置くまでの間と重ねる)
+watch(useVeinForIdentity, (use) => {
+  if (use && employeeId.value) vein.prewrite(employeeId.value)
+}, { immediate: true })
 
 // 点呼の開始時 (最初の画面に戻ったとき): 前回の同期から時間がたっていれば取り直す
 watch(step, (s) => {

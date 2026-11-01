@@ -6,6 +6,8 @@
  * ここが持つのは:
  * - Vein Station / Vein Base の接続と、照合に使う写しの同期 (起動時・つながったとき)
  * - 読み取り (`VEIN IDENTIFY` か、古い構成の `VEIN CAPTURE`) と、乗務員の特定
+ * - 本人が先に決まっている画面 (`expectedEmployeeId`) では、その 1 人をモジュールに用意して 1:1 (`VEIN VERIFY`) で
+ *   照合する (Refs ippoan/alc-app-s3#352: モジュールの 91 人の上限を超えても照合できる)
  * - 指が置かれた合図 (`EVT VEIN FINGER`) で、待機中なら照合を始めること
  * - 読み取り中・撮り直し・失敗の理由の状態と、失敗の案内の音声 (`VEIN SAY FAILED`)
  *
@@ -13,7 +15,8 @@
  */
 import type { ApiEmployee } from '~/types'
 import type { RequestTokenScope } from '~/utils/api'
-import { identifyVeinModuleEmployee, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
+import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
+import { identifyVeinModuleEmployee, prepareVeinModuleRecord, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 export interface VeinEmployeeIdentifyOptions {
@@ -36,6 +39,13 @@ export interface VeinEmployeeIdentifyOptions {
    * 運行管理者席の鍵 (`manager-device`) — Vein Base を運行管理者席の鍵にした PC にはキオスクの鍵が無い
    */
   scope?: RequestTokenScope
+  /**
+   * 本人が先に (免許証・社員番号で) 決まっていれば、その乗務員の ID。返せば 1:N ではなく、その人の記録を
+   * モジュールに用意して 1:1 で照合する。決まっていなければ null (1:N)
+   */
+  expectedEmployeeId?: () => string | null
+  /** 1:1 で照合しようとした人に、承認済みの指静脈の記録が無かったときに出す理由 (既定は `missMessage`) */
+  noRecordMessage?: string
   /** どの画面の照合か。診断ログ (`[vein] 照合開始 screen=…`) にだけ使う (例: manager / it-tenko / kiosk / bp) */
   label?: string
 }
@@ -65,9 +75,72 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     if (c) void sync({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
   })
 
+  /** 用意しかけの記録 (同じ人なら、免許証を読んだときに始めた書き込みを照合が待つ) */
+  let prepared: { employeeId: string; promise: Promise<number | null> } | null = null
+
+  /**
+   * `employeeId` の記録をモジュールに用意する (無い・古ければサーバーから取って書く。約 2 秒)。
+   * 免許証を読んだ時点で呼んでおけば、「指を置いて」の案内と書き込みが重なる。照合の ID を返す (記録が無ければ null)
+   */
+  function prepare(employeeId: string): Promise<number | null> {
+    if (prepared?.employeeId !== employeeId) {
+      const promise = prepareVeinModuleRecord(vein, employeeId, opts.scope)
+      prepared = { employeeId, promise }
+      // 失敗した用意は使い回さない (次の照合で取り直す)
+      promise.catch(() => {
+        if (prepared?.promise === promise) prepared = null
+      })
+    }
+    return prepared.promise
+  }
+
+  /** 免許証・社員番号で本人が決まった時点で、その人の記録を書き始める (モジュールを使う構成だけ。失敗は照合の時に出す) */
+  function prewrite(employeeId: string): void {
+    if (usesVeinModule()) prepare(employeeId).catch(() => {})
+  }
+
+  /** 本人が決まっている人を 1:1 で照合し、当たれば `onEmployee` へ渡す。先へ進めなかった理由を返す */
+  async function verifyExpected(employeeId: string, prompt: boolean): Promise<string | null> {
+    let moduleId: number | null
+    try {
+      moduleId = await prepare(employeeId)
+    }
+    catch (e) {
+      return `指静脈の記録をこの端末に用意できませんでした (${(e as Error).message})`
+    }
+    finally {
+      // 用意は 1 回の照合で使い切る (次の回までに枠を譲っているかもしれない)
+      prepared = null
+    }
+    if (moduleId === null) return opts.noRecordMessage ?? opts.missMessage
+    const id = moduleId
+    try {
+      if (prompt) await vein.say('PLACE')
+      // 不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
+      const onAgain = () => { again.value = true }
+      if (!await retryOnVeinMiss(() => vein.verify(id, onAgain), ok => !ok, onAgain)) return opts.missMessage
+    }
+    catch (e) {
+      return `指静脈を読み取れませんでした (${(e as Error).message})`
+    }
+    return await deliver(await identifyVeinModuleEmployee(id, opts.scope), true)
+  }
+
+  /** 特定の結果を `onEmployee` へ渡すか、理由にする */
+  async function deliver(outcome: VeinIdentifyOutcome, viaModule: boolean): Promise<string | null> {
+    switch (outcome.kind) {
+      case 'hit': return await opts.onEmployee(outcome.employee, viaModule ? vein.lastMatch.value?.via ?? null : null)
+      case 'miss': return opts.missMessage
+      case 'pending': return opts.pendingMessage(outcome.name)
+      case 'error': return outcome.message
+    }
+  }
+
   /** 読み取って人を特定し、`onEmployee` へ渡す。先へ進めなかった理由を返す */
   async function readAndIdentify(prompt: boolean): Promise<string | null> {
     const viaModule = usesVeinModule()
+    const expected = viaModule ? opts.expectedEmployeeId?.() ?? null : null
+    if (expected) return await verifyExpected(expected, prompt)
     let read: string | number | null
     try {
       // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
@@ -85,12 +158,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     const outcome = viaModule
       ? await identifyVeinModuleEmployee(read as number | null, opts.scope)
       : await identifyVeinEmployee(read as string)
-    switch (outcome.kind) {
-      case 'hit': return await opts.onEmployee(outcome.employee, viaModule ? vein.lastMatch.value?.via ?? null : null)
-      case 'miss': return opts.missMessage
-      case 'pending': return opts.pendingMessage(outcome.name)
-      case 'error': return outcome.message
-    }
+    return await deliver(outcome, viaModule)
   }
 
   /** 照合を 1 回走らせる。繋がっていない・読み取り中なら何もしない */
@@ -123,6 +191,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     again,
     error,
     identify,
+    prewrite,
     sync,
   }
 }

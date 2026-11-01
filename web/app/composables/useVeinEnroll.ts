@@ -19,7 +19,7 @@
 
 import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
-import { allocateVeinModuleId, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
+import { allocateOrEvictVeinModuleId, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
 import { appendDiag } from '~/utils/serialDiagLog'
 
@@ -100,10 +100,13 @@ export function useVeinEnroll() {
 
   /** モジュールの経路: モジュールに登録し、記録をサーバーへ預け、対応表に承認待ちで入れる */
   async function enrollToModule(employeeId: string): Promise<void> {
-    const id = allocateVeinModuleId(await loadVeinModuleEntries(), employeeId)
-    if (id === null) throw new Error(VEIN_ENROLL_FULL_MESSAGE)
+    // 枠が埋まっていたら一番長く使っていない人の枠を譲らせる (その人は次に来たときに書き直す)
+    const slot = allocateOrEvictVeinModuleId(await loadVeinModuleEntries(), employeeId)
+    if (slot === null) throw new Error(VEIN_ENROLL_FULL_MESSAGE)
+    const id = slot.id
     // 登録し直しはモジュールの記録が置き換わる。承認前の記録を承認済みとして引かないよう先に外す
     await deleteVeinModuleEntry(employeeId)
+    if (slot.evicted) await deleteVeinModuleEntry(slot.evicted.employeeId)
     await veinSerial.say('PLACE')
     let record: Uint8Array
     try {

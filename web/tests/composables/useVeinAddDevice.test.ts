@@ -114,9 +114,18 @@ describe('addThisDeviceFinger', () => {
     expect(port.enroll).toHaveBeenCalledWith(10, undefined)
   })
 
-  it('ID が空いていなければ撮らずに「これ以上登録できません」', async () => {
+  it('★ 枠が埋まっていたら一番長く使っていない人の枠を譲らせる (その人は対応表から外す)', async () => {
+    const full = Array.from({ length: 91 }, (_, i) => ({ employeeId: `emp-${i}`, moduleId: 10 + i, updatedAt: 'v', approved: true, lastUsedAt: 100 + i }))
+    db.loadVeinModuleEntries.mockResolvedValue(full)
+    const port = makePort()
+    await addThisDeviceFinger(port, 'emp-test-1', 'default')
+    expect(port.enroll).toHaveBeenCalledWith(10, undefined)
+    expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('emp-0')
+  })
+
+  it('譲らせる人も居なければ (承認待ちばかり) 撮らずに「これ以上登録できません」', async () => {
     db.loadVeinModuleEntries.mockResolvedValue(
-      Array.from({ length: 91 }, (_, i) => ({ employeeId: `emp-${i}`, moduleId: 10 + i, updatedAt: 'v', approved: true })),
+      Array.from({ length: 91 }, (_, i) => ({ employeeId: `emp-${i}`, moduleId: 10 + i, updatedAt: 'v', approved: false })),
     )
     const port = makePort()
     await expect(addThisDeviceFinger(port, 'emp-test-1', 'default')).rejects.toThrow(VEIN_ENROLL_FULL_MESSAGE)

@@ -819,11 +819,32 @@ export interface ApiVeinModuleRecord {
    * 端末の token でない・古いサーバーでは無し
    */
   composed?: boolean
+  /**
+   * `pick: 'own'` で取ったときの出どころ (`own` = その端末で撮った記録 / `other` = 他の端末の最新。混ぜていない)。
+   * `pick` を付けない・古いサーバーでは無し
+   */
+  source?: 'own' | 'other'
 }
 
-/** 承認済みのモジュールの記録を全件取る (端末のモジュールへ書き戻す元、Refs ippoan/alc-app#436) */
-export async function getVeinModuleTemplates(scope: RequestTokenScope = 'default'): Promise<{ templates: ApiVeinModuleRecord[] }> {
-  return request<{ templates: ApiVeinModuleRecord[] }>('/api/vein/module-templates', {}, scope)
+/**
+ * 承認済みのモジュールの記録を全件取る (端末のモジュールへ書き戻す元、Refs ippoan/alc-app#436)。
+ * `pick: 'own'` なら混ぜずに選んだ記録 (その端末で撮った記録、無ければ他の端末の最新。Refs ippoan/alc-app-s3#352)
+ */
+export async function getVeinModuleTemplates(scope: RequestTokenScope = 'default', pick?: 'own'): Promise<{ templates: ApiVeinModuleRecord[] }> {
+  const query = pick ? `?pick=${pick}` : ''
+  return request<{ templates: ApiVeinModuleRecord[] }>(`/api/vein/module-templates${query}`, {}, scope)
+}
+
+/**
+ * 1 人の承認済みのモジュールの記録を取る (免許証・社員番号で決まった人をモジュールへ書く元。Refs ippoan/alc-app-s3#352)。
+ * 全員分 (100 人で 1 MB) を取らずに済む。`employee_id` で絞れない古いサーバーは全件を返すので、その中から引く。
+ * 承認済みの記録が無ければ undefined
+ */
+export async function getVeinModuleTemplate(employeeId: string, opts: { pick?: 'own'; scope?: RequestTokenScope } = {}): Promise<ApiVeinModuleRecord | undefined> {
+  const query = new URLSearchParams({ employee_id: employeeId })
+  if (opts.pick) query.set('pick', opts.pick)
+  const { templates } = await request<{ templates: ApiVeinModuleRecord[] }>(`/api/vein/module-templates?${query}`, {}, opts.scope ?? 'default')
+  return templates.find(t => t.employee_id === employeeId)
 }
 
 /** 指静脈の登録 (1 件分、承認待ち・承認済みの一覧で共通)。`updated_at` は承認するときの版 */

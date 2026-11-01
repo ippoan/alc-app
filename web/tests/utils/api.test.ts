@@ -78,6 +78,7 @@ import {
   putVeinModuleRecord,
   putVeinModuleDeviceRecord,
   getVeinModuleTemplates,
+  getVeinModuleTemplate,
   identifyVein,
   getVeinTemplates,
   getPendingVeinTemplates,
@@ -1206,6 +1207,30 @@ describe.skipIf(isLive)('api', () => {
       await callApi(() => getVeinModuleTemplates())
       assertMock(() => {
         expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/module-templates')
+      })
+    })
+
+    it.skipIf(isLive)('getVeinModuleTemplates は pick を query で渡す', async () => {
+      stubOk({ templates: [] })
+      await callApi(() => getVeinModuleTemplates('default', 'own'))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/module-templates?pick=own')
+      })
+    })
+
+    it.skipIf(isLive)('getVeinModuleTemplate はその 1 人に絞って取り、一覧からその人を引く (古いサーバーの全件でも)', async () => {
+      const own = { employee_id: 'emp-1', record: 'AA==', updated_at: 'v1', source: 'own' }
+      stubOk({ templates: [{ employee_id: 'emp-2', record: 'AA==', updated_at: 'v1' }, own] })
+      const got = await getVeinModuleTemplate('emp-1', { pick: 'own' })
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/module-templates?employee_id=emp-1&pick=own')
+        expect(got).toEqual(own)
+      })
+      stubOk({ templates: [] })
+      const none = await getVeinModuleTemplate('emp-1')
+      assertMock(() => {
+        expect(mockFetch.mock.calls[1][0]).toBe('https://api.example.com/api/vein/module-templates?employee_id=emp-1')
+        expect(none).toBeUndefined()
       })
     })
 

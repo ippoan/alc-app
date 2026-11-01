@@ -10,6 +10,7 @@ import type { VeinModuleEntry } from '~/utils/vein-db'
 const api = vi.hoisted(() => ({
   getEmployeeById: vi.fn(),
   getEmployees: vi.fn(),
+  getVeinModuleTemplate: vi.fn(),
   getVeinModuleTemplates: vi.fn(),
 }))
 vi.mock('~/utils/api', () => api)
@@ -163,33 +164,57 @@ describe('prepareVeinModuleRecord', () => {
 
   it('手元の対応表と版が同じなら、書かずにその ID', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15)])
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v1' })
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
     expect(p.syncWrite).not.toHaveBeenCalled()
+    // 使った印 (枠を譲らせる順) を残す
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ ...entry('emp-1', 15), lastUsedAt: expect.any(Number) })
+  })
+
+  it('★ その 1 人だけを、混ぜずに選んだ記録で頼む (native の設定。鍵も渡す)', async () => {
+    api.getVeinModuleTemplate.mockResolvedValue(undefined)
+    await mod.prepareVeinModuleRecord(port(), 'emp-1', 'manager-device')
+    expect(api.getVeinModuleTemplate).toHaveBeenCalledWith('emp-1', { pick: 'own', scope: 'manager-device' })
+    localStorage.setItem('alc-vein-added-finger', 'mixed')
+    await mod.prepareVeinModuleRecord(port(), 'emp-1')
+    expect(api.getVeinModuleTemplate).toHaveBeenLastCalledWith('emp-1', { pick: undefined, scope: 'default' })
+  })
+
+  it('★ 枠が埋まっていたら、一番長く使っていない承認済みの人の枠を譲らせる (承認待ちは譲らせない)', async () => {
+    const full = Array.from({ length: 91 }, (_, i) => entry(`x${i}`, 10 + i, { lastUsedAt: 1000 + i }))
+    full[5] = entry('pending', 15, { approved: false })
+    full[40] = entry('old', 50, { lastUsedAt: 1 })
+    full[41] = entry('never', 51)
+    db.loadVeinModuleEntries.mockResolvedValue(full)
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v1', source: 'own' })
+    const p = port()
+    // 使った印の無い人 (0 と見る) が一番古い
+    expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(51)
+    expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('never')
+    expect(p.syncWrite).toHaveBeenCalledWith(51, expect.any(Uint8Array))
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'emp-1', moduleId: 51 }))
   })
 
   it('★ 端末に無ければ DB の記録を空きへ書き、対応表に承認済みで入れる', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([entry('other', 10)])
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v3' }] })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v3' })
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(11)
     expect(p.syncWrite).toHaveBeenCalledWith(11, expect.any(Uint8Array))
-    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true, registeredDeviceId: null })
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true, registeredDeviceId: null, lastUsedAt: expect.any(Number) })
   })
 
   it('登録した端末をサーバーの値で対応表に入れる', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([])
-    api.getVeinModuleTemplates.mockResolvedValue({
-      templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v3', registered_device_id: 'alarm:0123456789abcdef' }],
-    })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v3', registered_device_id: 'alarm:0123456789abcdef' })
     expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBe(10)
     expect(db.putVeinModuleEntry).toHaveBeenCalledWith(expect.objectContaining({ registeredDeviceId: 'alarm:0123456789abcdef' }))
   })
 
   it('版が違えば (承認待ちで置いてあった場合も) 同じ ID に書き直す。古い対応は先に外す', async () => {
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 20, { approved: false })])
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v2' }] })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v2' })
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(20)
     expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('emp-1')
@@ -197,12 +222,12 @@ describe('prepareVeinModuleRecord', () => {
   })
 
   it('DB に承認済みの記録が無ければ null', async () => {
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
+    api.getVeinModuleTemplate.mockResolvedValue(undefined)
     expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBeNull()
   })
 
   it('サーバーに届かなければ、手元の承認済みの ID を使う (無い・承認待ちなら null)', async () => {
-    api.getVeinModuleTemplates.mockRejectedValue(new TypeError('Failed to fetch'))
+    api.getVeinModuleTemplate.mockRejectedValue(new TypeError('Failed to fetch'))
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15)])
     expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBe(15)
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { approved: false })])
@@ -210,10 +235,11 @@ describe('prepareVeinModuleRecord', () => {
   })
 
   it('ほかの失敗・ID の空き無し・書き込みの失敗は投げる', async () => {
-    api.getVeinModuleTemplates.mockRejectedValueOnce(new Error('HTTP 500'))
+    api.getVeinModuleTemplate.mockRejectedValueOnce(new Error('HTTP 500'))
     await expect(mod.prepareVeinModuleRecord(port(), 'emp-1')).rejects.toThrow('HTTP 500')
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
-    db.loadVeinModuleEntries.mockResolvedValue(Array.from({ length: 91 }, (_, i) => entry(`x${i}`, 10 + i)))
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v1' })
+    // 承認待ちばかりで譲らせる人が居ない
+    db.loadVeinModuleEntries.mockResolvedValue(Array.from({ length: 91 }, (_, i) => entry(`x${i}`, 10 + i, { approved: false })))
     await expect(mod.prepareVeinModuleRecord(port(), 'emp-1')).rejects.toThrow('モジュールの ID が空いていません')
     db.loadVeinModuleEntries.mockResolvedValue([])
     const p = port()
@@ -249,7 +275,7 @@ describe('syncVeinModule', () => {
     db.loadVeinModuleEntries.mockResolvedValue([])
     api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
     expect(await mod.syncVeinModule(port(), { scope: 'manager-device' })).toBe(true)
-    expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith('manager-device')
+    expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith('manager-device', 'own')
   })
 
   it('同期の結果 (書き込み・消去・変更なし・失敗の件数) を [vein] の 1 行で残す。名前は出さない', async () => {
@@ -262,7 +288,7 @@ describe('syncVeinModule', () => {
       ],
     })
     expect(await mod.syncVeinModule(port())).toBe(true)
-    expect(info).toHaveBeenCalledWith('[vein] モジュール同期 完了 書き込み=1 消去=1 変更なし=1 失敗=0 対象=2')
+    expect(info).toHaveBeenCalledWith('[vein] モジュール同期 完了 書き込み=1 消去=1 変更なし=1 枠なし=0 失敗=0 対象=2')
     info.mockRestore()
   })
 
@@ -285,7 +311,7 @@ describe('syncVeinModule', () => {
     const p = port()
     expect(await mod.syncVeinModule(p)).toBe(true)
     // 既定はキオスクの鍵 (鍵の種類を渡さない)
-    expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith(undefined)
+    expect(api.getVeinModuleTemplates).toHaveBeenLastCalledWith(undefined, 'own')
 
     expect(p.syncClear).toHaveBeenCalledTimes(1)
     expect(p.syncClear).toHaveBeenCalledWith(13)
@@ -356,9 +382,11 @@ describe('syncVeinModule', () => {
       ],
     })
     const p = port()
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     expect(await mod.syncVeinModule(p)).toBe(true)
     expect(p.syncWrite).not.toHaveBeenCalled()
-    expect(console.warn).toHaveBeenCalledWith('[vein] モジュールの ID が空いていません (10〜100)')
+    // 枠を譲らせるのは免許証で決まったとき (prepareVeinModuleRecord) だけ。同期は飛ばす
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('枠なし=1 失敗=0'))
   })
 
   it('一覧が取れなければ false (投げない)', async () => {
@@ -432,7 +460,7 @@ describe('その場で撮った記録 (native) の扱い', () => {
   it('用意: native の設定なら版が違っても native の記録をそのまま使う', async () => {
     localStorage.setItem(MODE_KEY, 'native')
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { updatedAt: 'v1', native: true })])
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v9' }] })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v9' })
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
     expect(p.syncWrite).not.toHaveBeenCalled()
@@ -441,7 +469,7 @@ describe('その場で撮った記録 (native) の扱い', () => {
   it('用意: mixed の設定なら native の記録は版が同じでも書き直す', async () => {
     localStorage.setItem(MODE_KEY, 'mixed')
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { updatedAt: 'v1', native: true })])
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v1' })
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
     expect(p.syncWrite).toHaveBeenCalledWith(15, new Uint8Array([0xDE, 0xED]))
@@ -450,7 +478,7 @@ describe('その場で撮った記録 (native) の扱い', () => {
   it('用意: native でも、承認待ち (approved: false) の記録は使わず書き直す', async () => {
     localStorage.setItem(MODE_KEY, 'native')
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { native: true, approved: false })])
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'emp-1', record: B64, updated_at: 'v1' }] })
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v1' })
     const p = port()
     await mod.prepareVeinModuleRecord(p, 'emp-1')
     expect(p.syncWrite).toHaveBeenCalledWith(15, expect.any(Uint8Array))

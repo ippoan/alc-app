@@ -14,7 +14,7 @@
 import { apiErrorCode, putVeinModuleDeviceRecord } from '~/utils/api'
 import type { RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
-import { allocateVeinModuleId, noteVeinModuleRecord, syncVeinModule } from '~/utils/vein-module'
+import { allocateOrEvictVeinModuleId, noteVeinModuleRecord, syncVeinModule } from '~/utils/vein-module'
 import type { VeinModulePort } from '~/utils/vein-module'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
@@ -42,10 +42,13 @@ export async function addThisDeviceFinger(
   onPlace?: (n: number, total?: number) => void,
 ): Promise<void> {
   const entries = await loadVeinModuleEntries()
-  const id = allocateVeinModuleId(entries, employeeId)
-  if (id === null) throw new Error(VEIN_ENROLL_FULL_MESSAGE)
+  // 枠が埋まっていたら一番長く使っていない人の枠を譲らせる (その人は次に来たときに書き直す)
+  const slot = allocateOrEvictVeinModuleId(entries, employeeId)
+  if (slot === null) throw new Error(VEIN_ENROLL_FULL_MESSAGE)
+  const id = slot.id
   // `VEIN ENROLL` は先にその ID を消す。途中で落ちた記録を承認済みとして引かないよう、対応表から先に外す
   if (entries.some(e => e.employeeId === employeeId)) await deleteVeinModuleEntry(employeeId)
+  if (slot.evicted) await deleteVeinModuleEntry(slot.evicted.employeeId)
   await port.say('PLACE')
   // 以降の失敗は、モジュールに半端な記録を残さない (消せなくても対応表に無いので照合は外れる)
   const clear = () => port.syncClear(id).catch(() => {})

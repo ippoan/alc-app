@@ -13,14 +13,17 @@
  * - 照合: `VEIN IDENTIFY` が返した ID を、手元の対応表 (`vein-db.ts` の `module_ids`) で乗務員に引く。
  *   **承認済みの ID だけ**本人確認にする (承認待ちに当たったら不一致)
  * - 同期: サーバーの承認済みの記録 (`GET /api/vein/module-templates`) と対応表を比べ、新しい・変わった
- *   記録を空いている ID に書き、一覧から消えた乗務員はモジュールから消す
+ *   記録を空いている ID に書き、一覧から消えた乗務員はモジュールから消す。枠が埋まったら書かずに飛ばす
+ * - 免許証・社員番号で本人が決まったら (`prepareVeinModuleRecord`): その 1 人の記録をサーバーから取り、
+ *   モジュールに無い・古ければ書いて 1:1 (`VEIN VERIFY`) で照合する。枠が埋まっていたら一番長く使っていない人の
+ *   枠を譲らせる — **91 人を超えても照合できる** (Refs ippoan/alc-app-s3#352)。記録は PC に持たない
  *
  * モジュールの ID は 1 = 作業用 / 2〜9 = 確認タブの試験 / **10〜100 = ここが割り振る** (ファームの
  * docs/console-protocol.md の「ID の分け方」)。サーバーは端末の ID を知らない。
  */
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
-import { getEmployeeById, getEmployees, getVeinModuleTemplates } from '~/utils/api'
+import { getEmployeeById, getEmployees, getVeinModuleTemplate, getVeinModuleTemplates } from '~/utils/api'
 import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
@@ -61,6 +64,35 @@ export function allocateVeinModuleId(entries: readonly VeinModuleEntry[], employ
 }
 
 /**
+ * {@link allocateVeinModuleId} と同じだが、空きが無ければ一番長く照合に使っていない (`lastUsedAt` が古い)
+ * 承認済みの人の ID を譲らせる。承認待ち (この端末で登録して承認を待つ人) は譲らせない。
+ * 譲らせた人は `evicted` で返す (呼び手が対応表から外す)。譲らせる人も居なければ null
+ */
+export function allocateOrEvictVeinModuleId(
+  entries: readonly VeinModuleEntry[],
+  employeeId: string,
+): { id: number; evicted: VeinModuleEntry | null } | null {
+  const id = allocateVeinModuleId(entries, employeeId)
+  if (id !== null) return { id, evicted: null }
+  let victim: VeinModuleEntry | null = null
+  for (const e of entries) {
+    if (!e.approved || e.employeeId === employeeId) continue
+    if (victim === null || (e.lastUsedAt ?? 0) < (victim.lastUsedAt ?? 0)) victim = e
+  }
+  return victim ? { id: victim.moduleId, evicted: victim } : null
+}
+
+/** 端末の設定が「その場で撮った記録を使う」なら、サーバーに混ぜずに選んだ記録を頼む (混ぜた記録は通りにくい) */
+function recordPick(): 'own' | undefined {
+  return readVeinAddedFingerMode() === 'native' ? 'own' : undefined
+}
+
+/** 照合に使った印 (枠を譲らせる順に使う)。失敗は捨てる (照合は止めない) */
+async function touchVeinModuleEntry(entry: VeinModuleEntry): Promise<void> {
+  await putVeinModuleEntry({ ...entry, lastUsedAt: Date.now() }).catch(() => {})
+}
+
+/**
  * 同期・用意が、この端末の「その場で撮った記録」を書き換えずに残すか (Refs ippoan/alc-app#558)。
  * 端末の設定が「その場で撮った記録を使う」(`native`) で、その記録を置いている人だけ。
  * 設定が「混ぜた記録」(`mixed`) なら false (サーバーが組んだ記録で書き直す)
@@ -73,10 +105,10 @@ function keepsOnSpotRecord(entry: VeinModuleEntry | undefined): boolean {
  * モジュールのどの ID にどの記録を書いたかを、Vein Station の行と同じ溜め場所に残す
  * (`PC VEIN RECORD <id> KIND=<種類> MODE=<端末の設定>`。recorder へ上がる診断ログ、`useVeinLogUpload`)。
  * 続く `VEIN IDENTIFIED <id> SCORE=…` / `VEIN NOMATCH` と並べ、記録の種類ごとの点数を後から集計する。
- * 種類は `composed` (この端末向けに組んだ混ぜた記録) / `server` (組んでいない記録) / `native` (その場で撮った記録)。
- * 乗務員の ID は載せない
+ * 種類は `composed` (この端末向けに組んだ混ぜた記録) / `server` (組んでいない記録) / `native` (その場で撮った記録) /
+ * `own`・`other` (混ぜずに選んだ、この端末の記録・他の端末の最新)。乗務員の ID は載せない
  */
-export function noteVeinModuleRecord(id: number, kind: 'composed' | 'server' | 'native'): void {
+export function noteVeinModuleRecord(id: number, kind: 'composed' | 'server' | 'native' | 'own' | 'other'): void {
   recordVeinLine(`PC VEIN RECORD ${id} KIND=${kind} MODE=${readVeinAddedFingerMode()}`)
 }
 
@@ -98,9 +130,9 @@ export async function retryOnVeinMiss<T>(read: () => Promise<T>, missed: (r: T) 
   return result
 }
 
-/** サーバーの記録の種類 (`composed` が無い古いサーバー・管理者の鍵は `server`) */
-function serverRecordKind(t: ApiVeinModuleRecord): 'composed' | 'server' {
-  return t.composed ? 'composed' : 'server'
+/** サーバーの記録の種類 (`composed` も `source` も無い古いサーバー・管理者の鍵は `server`) */
+function serverRecordKind(t: ApiVeinModuleRecord): 'composed' | 'server' | 'own' | 'other' {
+  return t.source ?? (t.composed ? 'composed' : 'server')
 }
 
 /** base64 をバイト列に */
@@ -123,6 +155,7 @@ export async function identifyVeinModuleEmployee(moduleId: number | null, scope:
   try {
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === moduleId)
     if (!entry) return { kind: 'miss' }
+    await touchVeinModuleEntry(entry)
     if (!entry.approved) {
       // 名前は飾り (「○○さんは未承認」)。引けなくても未承認であることは伝える
       const pending = await findEmployee(entry.employeeId, scope).catch(() => undefined)
@@ -152,39 +185,47 @@ async function findEmployee(employeeId: string, scope: RequestTokenScope): Promi
 
 /**
  * 免許証・社員番号で本人が決まった乗務員の記録を、この端末のモジュールに用意して ID を返す
- * (Refs ippoan/alc-app#436: 端末に無ければ DB から取ってきて書く)。サーバーの承認済みの一覧で版を
- * 確かめ、手元の対応表と版が同じならそのまま、違えば (無ければ) 書き直す。サーバーに承認済みの記録が
- * 無ければ null。サーバーに届かないときは、手元の対応表に承認済みで在ればその ID を使う。
- * 書き込みの失敗は投げる (呼び手が顔認証などへ逃がす)
+ * (Refs ippoan/alc-app#436: 端末に無ければ DB から取ってきて書く)。その 1 人の記録だけをサーバーから取って版を
+ * 確かめ (Refs ippoan/alc-app-s3#352)、手元の対応表と版が同じならそのまま、違えば (無ければ) 書き直す。
+ * 枠が埋まっていたら、一番長く使っていない人の枠を譲らせる。サーバーに承認済みの記録が無ければ null。
+ * サーバーに届かないときは、手元の対応表に承認済みで在ればその ID を使う。
+ * 書き込みの失敗は投げる (呼び手が顔認証などへ逃がす)。`scope` はどの鍵で取るか
  */
-export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: string): Promise<number | null> {
+export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: string, scope: RequestTokenScope = 'default'): Promise<number | null> {
   const entries = await loadVeinModuleEntries()
   const own = entries.find(e => e.employeeId === employeeId)
   let template: ApiVeinModuleRecord | undefined
   try {
-    template = (await getVeinModuleTemplates()).templates.find(t => t.employee_id === employeeId)
+    template = await getVeinModuleTemplate(employeeId, { pick: recordPick(), scope })
   }
   catch (e) {
     if (!(e instanceof TypeError)) throw e
-    return own?.approved ? own.moduleId : null
+    if (!own?.approved) return null
+    await touchVeinModuleEntry(own)
+    return own.moduleId
   }
   if (!template) return null
   // その場の記録 (native) は、同じ版でも混ぜた記録とは中身が違う: 設定が native なら残し、mixed なら書き直す
-  if (own?.approved && (keepsOnSpotRecord(own) || (own.updatedAt === template.updated_at && !own.native))) return own.moduleId
-  const id = allocateVeinModuleId(entries, employeeId)
-  if (id === null) throw new Error('モジュールの ID が空いていません (10〜100)')
-  // 書き込みが途中で落ちても、古い版を承認済みとして引かないよう先に外す
+  if (own?.approved && (keepsOnSpotRecord(own) || (own.updatedAt === template.updated_at && !own.native))) {
+    await touchVeinModuleEntry(own)
+    return own.moduleId
+  }
+  const slot = allocateOrEvictVeinModuleId(entries, employeeId)
+  if (slot === null) throw new Error('モジュールの ID が空いていません (10〜100)')
+  // 書き込みが途中で落ちても、古い版・譲らせた人を承認済みとして引かないよう先に外す
   if (own) await deleteVeinModuleEntry(employeeId)
-  await port.syncWrite(id, base64ToBytes(template.record))
-  noteVeinModuleRecord(id, serverRecordKind(template))
+  if (slot.evicted) await deleteVeinModuleEntry(slot.evicted.employeeId)
+  await port.syncWrite(slot.id, base64ToBytes(template.record))
+  noteVeinModuleRecord(slot.id, serverRecordKind(template))
   await putVeinModuleEntry({
     employeeId,
-    moduleId: id,
+    moduleId: slot.id,
     updatedAt: template.updated_at,
     approved: true,
     registeredDeviceId: template.registered_device_id ?? null,
+    lastUsedAt: Date.now(),
   })
-  return id
+  return slot.id
 }
 
 let lastModuleSyncedAt: number | null = null
@@ -203,9 +244,9 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     return false
   }
   moduleSyncing = true
-  const stat = { written: 0, cleared: 0, unchanged: 0, failed: 0 }
+  const stat = { written: 0, cleared: 0, unchanged: 0, full: 0, failed: 0 }
   try {
-    const { templates } = await getVeinModuleTemplates(opts.scope)
+    const { templates } = await getVeinModuleTemplates(opts.scope, recordPick())
     const entries = new Map((await loadVeinModuleEntries()).map(e => [e.employeeId, e]))
     const listed = new Set(templates.map(t => t.employee_id))
 
@@ -243,9 +284,9 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
         continue
       }
       const id = allocateVeinModuleId([...entries.values()], t.employee_id)
+      // 枠が埋まっている: 書かずに飛ばす (免許証・社員番号で決まったときに prepareVeinModuleRecord が枠を譲らせて書く)
       if (id === null) {
-        stat.failed += 1
-        console.warn('[vein] モジュールの ID が空いていません (10〜100)')
+        stat.full += 1
         continue
       }
       try {
@@ -260,6 +301,7 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
           updatedAt: t.updated_at,
           approved: true,
           registeredDeviceId: t.registered_device_id ?? null,
+          lastUsedAt: current?.lastUsedAt,
         }
         await putVeinModuleEntry(entry)
         entries.set(t.employee_id, entry)
@@ -271,7 +313,7 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
       }
     }
     lastModuleSyncedAt = Date.now()
-    console.info(`[vein] モジュール同期 完了 書き込み=${stat.written} 消去=${stat.cleared} 変更なし=${stat.unchanged} 失敗=${stat.failed} 対象=${templates.length}`)
+    console.info(`[vein] モジュール同期 完了 書き込み=${stat.written} 消去=${stat.cleared} 変更なし=${stat.unchanged} 枠なし=${stat.full} 失敗=${stat.failed} 対象=${templates.length}`)
     return true
   }
   catch (e) {
