@@ -699,10 +699,10 @@ async function syncFc1200Date() {
             data-testid="vein-added-finger-mode"
             class="rounded-lg border border-gray-300 px-2 py-1.5 text-xs"
             :value="veinAddedFingerMode"
-            @change="setVeinAddedFingerMode(($event.target as HTMLSelectElement).value === 'native' ? 'native' : 'mixed')"
+            @change="setVeinAddedFingerMode(($event.target as HTMLSelectElement).value === 'mixed' ? 'mixed' : 'native')"
           >
+            <option value="native">その場で撮った記録を使う (既定)</option>
             <option value="mixed">混ぜた記録を使う</option>
-            <option value="native">その場で撮った記録を使う</option>
           </select>
         </label>
 

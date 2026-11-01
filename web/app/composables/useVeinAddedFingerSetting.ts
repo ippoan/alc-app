@@ -7,7 +7,7 @@ import type { VeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
  */
 
 // 画面をまたいで同じ値を見せる (useAlarmDeviceSetting と同じ)
-const mode = ref<VeinAddedFingerMode>('mixed')
+const mode = ref<VeinAddedFingerMode>('native')
 
 export function useVeinAddedFingerSetting() {
   mode.value = readVeinAddedFingerMode()
