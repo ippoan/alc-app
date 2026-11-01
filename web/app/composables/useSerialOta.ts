@@ -306,6 +306,11 @@ export type SerialOtaState =
 // シングルトン: 1 台の PC で同時に走る OTA は 1 本
 const state = ref<SerialOtaState>({ kind: 'idle' })
 let running = false
+
+/** 書き込み (`run`) が走っているか。走っている間は、ほかの口から機体の確定 (`OTA CONFIRM`) を送らない */
+export function isSerialOtaRunning(): boolean {
+  return running
+}
 let resultTimer: ReturnType<typeof setTimeout> | null = null
 
 export function useSerialOta() {
