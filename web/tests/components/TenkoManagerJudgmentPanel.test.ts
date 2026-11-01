@@ -373,3 +373,49 @@ describe('TenkoManagerJudgmentPanel — 「機体を使用中」の申告', () =
     wrapper.unmount()
   })
 })
+
+describe('TenkoManagerJudgmentPanel — 遠隔点呼は乗務員の確定を待つ (waitForDriver)', () => {
+  beforeEach(() => {
+    submitManagerJudgmentMock.mockClear()
+  })
+
+  async function mountWaiting(status: string) {
+    const wrapper = await mountSuspended(TenkoManagerJudgmentPanel, {
+      props: { session: { ...SESSION_UNJUDGED, status } as any, managerId: MANAGER_ID, waitForDriver: true },
+    })
+    await flush()
+    return wrapper
+  }
+  const okButton = (w: Awaited<ReturnType<typeof mountWaiting>>) => w.findAll('button').find(b => b.text() === 'OK')!
+  const ngButton = (w: Awaited<ReturnType<typeof mountWaiting>>) => w.findAll('button').find(b => b.text() === 'NG')!
+
+  it('★ 乗務員が最後の確定をするまで (instruction_pending) OK/NG を押させない', async () => {
+    const wrapper = await mountWaiting('instruction_pending')
+    expect(wrapper.find('[data-testid="waiting-for-driver"]').exists()).toBe(true)
+    expect(okButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(ngButton(wrapper).attributes('disabled')).toBeDefined()
+    await okButton(wrapper).trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each(['judgment_pending', 'completed'])('%s なら判定できる', async (status) => {
+    const wrapper = await mountWaiting(status)
+    expect(wrapper.find('[data-testid="waiting-for-driver"]').exists()).toBe(false)
+    expect(okButton(wrapper).attributes('disabled')).toBeUndefined()
+    await okButton(wrapper).trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('渡さなければ今までどおり、どの状態でも判定できる', async () => {
+    const wrapper = await mountSuspended(TenkoManagerJudgmentPanel, {
+      props: { session: { ...SESSION_UNJUDGED, status: 'instruction_pending' } as any, managerId: MANAGER_ID },
+    })
+    expect(wrapper.find('[data-testid="waiting-for-driver"]').exists()).toBe(false)
+    expect(okButton(wrapper).attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+})
