@@ -94,13 +94,25 @@ onMounted(() => {
  */
 const alcoholMeasurementId = ref<string | null>(null)
 
+/**
+ * サーバが点呼の開始で作った測定 (体温・血圧・アルコールの値の置き場。セッションの `measurement_id`) を、最初の
+ * アルコール測定に使ったか。測り直しは新しい測定で行う。開始で測定を作らない古いサーバでは使わない
+ */
+const sessionMeasurementUsed = ref(false)
+
 /** 測定レコードを先に作る (best-effort: 失敗しても点呼は続ける) */
 async function startAlcoholMeasurement() {
   if (!employeeId.value || alcoholMeasurementId.value) return
+  const fromSession = session.value?.measurement_id
+  if (fromSession && !sessionMeasurementUsed.value) {
+    sessionMeasurementUsed.value = true
+    alcoholMeasurementId.value = fromSession
+    return
+  }
   try {
     const m = await startMeasurement(employeeId.value)
     alcoholMeasurementId.value = m.id
-    // CoreS3 がこの後のアルコールの記録にこの id を載せる (体温・血圧はこの前の段で測っていて付かない)
+    // CoreS3 がこの後のアルコールの記録にこの id を載せる
     sendMeasurementId(m.id)
   }
   catch (e) {
@@ -138,6 +150,11 @@ watch(step, async (s) => {
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
 const { syncStep, sendResult, sendMeasurementId } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
+
+// セッションの測定を開始の時点で CoreS3 に渡す — 体温・血圧の記録にも載る (段に入ってから作る測定では間に合わない)
+watch(() => session.value?.measurement_id, (id) => {
+  if (id) sendMeasurementId(id)
+})
 
 // 本番 flip 後の新版への載せ替えを「最初の画面に居るとき」だけ許すための現在地 (Refs #338)。
 // `useTenkoKiosk` の state は component ごとの素の ref で外からは読めないので、ここで出す。
@@ -465,6 +482,7 @@ function handleReset() {
   medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
   isChoosingEscalationReason.value = false
   alcoholMeasurementId.value = null
+  sessionMeasurementUsed.value = false
   resetBlowRecording()
 }
 

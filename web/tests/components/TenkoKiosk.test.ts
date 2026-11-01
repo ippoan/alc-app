@@ -30,6 +30,8 @@ const retryBpRequirementMock = vi.fn()
 const employeeId = ref('')
 const tenkoType = ref<TenkoType | null>(null)
 const onAlcoholMeasuredMock = vi.fn(async () => false)
+// 点呼のセッション (サーバが開始で作った測定の `measurement_id` を持つ)
+const session = ref<Partial<TenkoSession> | null>(null)
 
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
@@ -38,7 +40,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   pendingSchedules: ref([]),
   resumableSessions,
   selectedSchedule: ref(null),
-  session: ref(null),
+  session,
   error: ref(null),
   isLoading: ref(false),
   safetyJudgment: ref(null),
@@ -341,6 +343,7 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     step.value = 'nfc'
     employeeId.value = 'emp-1'
     tenkoType.value = 'pre_operation'
+    session.value = null
     cameraStream.value = null
     stopRecordingMock.mockResolvedValue(null)
   })
@@ -439,6 +442,32 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     await flushPromises()
 
     expect(startMeasurement).toHaveBeenCalledTimes(2)
+    emitResult(wrapper)
+    await flushPromises()
+    expect((onAlcoholMeasuredMock.mock.calls[1] as unknown as [string])[0]).toBe('meas-2')
+    wrapper.unmount()
+  })
+
+  it('セッションに測定があれば開始の時点で CoreS3 に渡し、最初のアルコールはその測定に保存する。測り直しは新しい測定で', async () => {
+    const { startMeasurement } = await import('~/utils/api')
+    vi.mocked(startMeasurement).mockResolvedValue({ id: 'meas-2' } as never)
+    onAlcoholMeasuredMock.mockResolvedValueOnce(true)
+
+    const wrapper = await mountKiosk()
+    session.value = { id: 'sess-1', measurement_id: 'meas-s' }
+    await flushPromises()
+    // 体温・血圧の段より前に渡す (端末の記録に載る)
+    expect(sendMeasurementIdMock).toHaveBeenCalledWith('meas-s')
+
+    step.value = 'alcohol'
+    await flushPromises()
+    expect(startMeasurement).not.toHaveBeenCalled()
+    emitResult(wrapper)
+    await flushPromises()
+    expect((onAlcoholMeasuredMock.mock.calls[0] as unknown as [string])[0]).toBe('meas-s')
+
+    // 測り直しはセッションの測定を使い直さない
+    expect(startMeasurement).toHaveBeenCalledTimes(1)
     emitResult(wrapper)
     await flushPromises()
     expect((onAlcoholMeasuredMock.mock.calls[1] as unknown as [string])[0]).toBe('meas-2')
