@@ -105,7 +105,7 @@ import type { Ref } from 'vue'
 import { signAlarmDeviceNonce } from '~/utils/alarm-sign'
 import { withTimeout, AUTH_WORKER_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 import { devTiming } from '~/utils/dev-timing'
-import { noteDeviceToken, setKioskDeviceKeyRequired } from '~/utils/token-selection'
+import { clearDevDeviceMark, noteDeviceToken, setKioskDeviceKeyRequired } from '~/utils/token-selection'
 
 const KIOSK_DEVICE_ID_KEY = 'alc_kiosk_device_id'
 const KIOSK_DEVICE_SECRET_KEY = 'alc_kiosk_device_secret'
@@ -609,6 +609,14 @@ export function useDeviceToken() {
       // 何度頼んでも同じなので、つなぎ直すまで頼まない (接続の watch が 0 に戻す)。頼み続けると、同じ機体に
       // 運行管理者席の鍵の署名を頼む useManagerDeviceToken がポートを取れず、席の鍵が取れなくなる
       const notKioskKey = signer.source === 'vein' && stage === 'token-exchange' && status === 401 && code === 'invalid_alarm_token'
+      // この Vein はキオスクではないので、キオスクとしての印を下ろす: 「キオスクの鍵が取れなければ送らない」と
+      // 「キオスクは開発用 (端末の鍵を管理者のトークンより先に使う)」。残すと、運行管理者席の PC で管理者として
+      // ログインしていても、キオスクの口の送信が「Vein Station で認証できませんでした」で止まる (2026-11-01 実機)。
+      // つなぎ直したら接続の watch がまた「必須」に戻し、取り直す
+      if (notKioskKey) {
+        setKioskDeviceKeyRequired(false)
+        clearDevDeviceMark('kiosk')
+      }
       const backoffMs = notKioskKey ? Number.POSITIVE_INFINITY : busy ? 0 : signTimeout ? SIGN_TIMEOUT_BACKOFF_MS : CORE_S3_BACKOFF_MS
       if (backoffMs > 0) signer.backoffUntil.value = nowMs + backoffMs
       warnCoreS3Failure(stage, status, code, lastFailureDetail.value, Date.now() - nowMs, backoffMs / 1000)

@@ -1967,8 +1967,15 @@ describe('Vein Station の鍵で署名する (Refs ippoan/alc-app#436)', () => {
       const useDeviceToken = await load()
       const { getDeviceJwt, failureBackoffUntil } = useDeviceToken()
 
+      const selection = await import('~/utils/token-selection')
+      const seg = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+      selection.noteDeviceToken('kiosk', `${seg({ alg: 'HS256' })}.${seg({ sub: 'k1', aud: 'device', dev_device: true })}.sig`)
+      expect(selection.isDevDevice('kiosk')).toBe(true)
       expect(await getDeviceJwt()).toBeNull()
       expect(failureBackoffUntil.value).toBe(Number.POSITIVE_INFINITY)
+      // ★ キオスクではないので、キオスクとしての印を下ろす (管理者のログインで送れるように)
+      expect(selection.isKioskDeviceKeyRequired()).toBe(false)
+      expect(selection.isDevDevice('kiosk')).toBe(false)
       // いつもの抑止 (60 秒) を過ぎても頼まない
       vi.advanceTimersByTime(10 * 60_000)
       expect(await getDeviceJwt()).toBeNull()
