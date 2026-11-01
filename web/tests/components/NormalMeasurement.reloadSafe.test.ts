@@ -76,7 +76,7 @@ mockNuxtImport('useBleGateway', () => () => ({
 
 mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBpUi: ref(false) }))
 mockNuxtImport('useStrayAlcohol', () => () => ({ latest: readonly(ref(null)) }))
-mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
+mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn(), sendMeasurementId: vi.fn() }))
 mockNuxtImport('useCoreS3Serial', () => () => ({ onEvent: () => () => {} }))
 
 const NfcStatusStub = defineComponent({

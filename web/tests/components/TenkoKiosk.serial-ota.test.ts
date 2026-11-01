@@ -114,7 +114,7 @@ mockNuxtImport('useBpUiEnabled', () => () => ({ bpUiState: ref('unused'), showBp
 mockNuxtImport('useFingerprint', () => () => ({
   isFingerprintAvailable: ref(false), isEmployeeAuthorized: vi.fn(() => false), authorizeEmployee: vi.fn(), requestFingerprint: vi.fn(),
 }))
-mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn() }))
+mockNuxtImport('useCoreS3Stage', () => () => ({ syncStep: vi.fn(), sendResult: vi.fn(), sendMeasurementId: vi.fn() }))
 
 async function mountKiosk(props: Record<string, unknown> = {}) {
   const wrapper = await mountSuspended(TenkoKiosk, { shallow: true, props })

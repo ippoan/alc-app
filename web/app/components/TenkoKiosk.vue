@@ -100,6 +100,8 @@ async function startAlcoholMeasurement() {
   try {
     const m = await startMeasurement(employeeId.value)
     alcoholMeasurementId.value = m.id
+    // CoreS3 がこの後のアルコールの記録にこの id を載せる (体温・血圧はこの前の段で測っていて付かない)
+    sendMeasurementId(m.id)
   }
   catch (e) {
     console.warn('[TenkoKiosk] startMeasurement failed:', e)
@@ -134,7 +136,7 @@ watch(step, async (s) => {
 })
 
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
-const { syncStep, sendResult } = useCoreS3Stage()
+const { syncStep, sendResult, sendMeasurementId } = useCoreS3Stage()
 watch(step, syncStep, { immediate: true })
 
 // 本番 flip 後の新版への載せ替えを「最初の画面に居るとき」だけ許すための現在地 (Refs #338)。

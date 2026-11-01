@@ -111,9 +111,11 @@ const sendResultMock = vi.fn()
 const veinInfo = vi.hoisted(() => ({ value: null as { ver: string | null, board: string | null, flavor: string | null } | null }))
 mockNuxtImport('useVeinSerial', original => () => ({ ...original(), deviceInfo: veinInfo }))
 
+const sendMeasurementIdMock = vi.fn()
 mockNuxtImport('useCoreS3Stage', () => () => ({
   syncStep: syncStepMock,
   sendResult: sendResultMock,
+  sendMeasurementId: sendMeasurementIdMock,
 }))
 
 // vehicle 段の NFC_CARINS 受け口 (Refs ippoan/alc-app-s3#135)。捕まえた handler に
@@ -1084,6 +1086,8 @@ describe('NormalMeasurement — 打刻と種別の選択 (Refs ippoan/alc-app-s3
 
     expect(punchTimecardMock).toHaveBeenCalledTimes(1)
     expect(punchTimecardMock).toHaveBeenCalledWith('2601012901010', null)
+    // CoreS3 にも渡さない
+    expect(sendMeasurementIdMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="choice-alcohol"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -1327,6 +1331,8 @@ describe('NormalMeasurement — 社員を指定して測定へ入る (IC カー�
     expect(getEmployeeByNfcIdMock).not.toHaveBeenCalled()
     // 測定レコードと顔データ同期は免許証のタッチと同じように走る
     expect(vi.mocked(startMeasurement)).toHaveBeenCalledWith('emp-9')
+    // 始めた測定の id を CoreS3 に渡す (点呼中の体温・血圧・アルコールの記録に載る)
+    expect(sendMeasurementIdMock).toHaveBeenCalledWith('measurement-1')
     expect(faceSyncMock).toHaveBeenCalled()
 
     // 選択画面 (choice) を飛ばして体温 (medical) へ直行する — 始業/終業のボタンは出ない

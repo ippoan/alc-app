@@ -33,6 +33,8 @@ export function stageForStep(step: string): CoreS3Stage | null {
 
 // シングルトン: 直近に送った行 (再送防止 / CoreS3 の再接続時の再送に使う)
 let current: string | null = null
+/** 直近に渡した測定の id の行 (`TENKO MID <id>`)。CoreS3 の掴み直しで段より先に送り直す。`STAGE NFC` で消す */
+let currentMeasurement: string | null = null
 /** onOpen の購読を 1 回だけにする (useCoreS3Stage は複数の component から呼ばれる) */
 let wired = false
 
@@ -50,6 +52,8 @@ export function useCoreS3Stage() {
     wired = true
     // CoreS3 の再起動・掴み直しで、直近に送った段階を取り戻す
     coreS3.onOpen(() => {
+      // 測定の id を先に: CoreS3 は点呼の段に入ってから送る記録に載せる
+      if (currentMeasurement) void coreS3.write(currentMeasurement)
       if (current) void coreS3.write(current)
     })
   }
@@ -66,7 +70,20 @@ export function useCoreS3Stage() {
   function syncStep(step: string): void {
     const stage = stageForStep(step)
     if (stage === null) return
+    // 待機 (NFC) は次の人の始まり。CoreS3 も `STAGE NFC` で測定の id を消す
+    if (stage === 'NFC') currentMeasurement = null
     send(`STAGE ${stage}`)
+  }
+
+  /**
+   * この点呼で始めた測定の id を CoreS3 に `TENKO MID <id>` で渡す。CoreS3 は点呼中に送る体温・血圧・
+   * アルコールの記録にこの id を載せ、サーバ (alc-people-worker の取り込み) が測定に結ぶ。
+   * 古い firmware は知らないコマンドとしてエラーを返すだけ (応答は読まない)。未接続なら覚えておき、掴み直しで送る
+   */
+  function sendMeasurementId(measurementId: string): void {
+    currentMeasurement = `TENKO MID ${measurementId}`
+    if (!coreS3.isConnected.value) return
+    void coreS3.write(currentMeasurement)
   }
 
   /** 測定結果を CoreS3 に伝える (CoreS3 は Screen::Result へ)。`STAGE RESULT` は無い。 */
@@ -79,5 +96,6 @@ export function useCoreS3Stage() {
   return {
     syncStep,
     sendResult,
+    sendMeasurementId,
   }
 }

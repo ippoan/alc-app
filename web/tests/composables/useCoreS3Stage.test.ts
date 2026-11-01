@@ -177,4 +177,46 @@ describe('useCoreS3Stage', () => {
       expect(coreS3Mock.write).not.toHaveBeenCalled()
     })
   })
+
+  describe('sendMeasurementId', () => {
+    const MID = '0f8b2c4e-1a2b-4c3d-8e9f-0123456789ab'
+
+    it('TENKO MID <id> を送る', async () => {
+      const { useCoreS3Stage } = await load()
+      useCoreS3Stage().sendMeasurementId(MID)
+      expect(coreS3Mock.write).toHaveBeenCalledWith(`TENKO MID ${MID}`)
+    })
+
+    it('掴み直し (onOpen) では測定の id を段より先に送り直す', async () => {
+      const { useCoreS3Stage } = await load()
+      const { syncStep, sendMeasurementId } = useCoreS3Stage()
+      sendMeasurementId(MID)
+      syncStep('medical')
+      const onOpenCb = coreS3Mock.onOpen.mock.calls[0]![0] as () => void
+      coreS3Mock.write.mockClear()
+      onOpenCb()
+      expect(coreS3Mock.write.mock.calls.map(c => c[0])).toEqual([`TENKO MID ${MID}`, 'STAGE TEMP'])
+    })
+
+    it('STAGE NFC (次の人の始まり) で忘れる — 掴み直しで前の人の id を送らない', async () => {
+      const { useCoreS3Stage } = await load()
+      const { syncStep, sendMeasurementId } = useCoreS3Stage()
+      sendMeasurementId(MID)
+      syncStep('nfc')
+      const onOpenCb = coreS3Mock.onOpen.mock.calls[0]![0] as () => void
+      coreS3Mock.write.mockClear()
+      onOpenCb()
+      expect(coreS3Mock.write.mock.calls.map(c => c[0])).toEqual(['STAGE NFC'])
+    })
+
+    it('未接続なら送らずに覚えておき、接続後の onOpen で送る', async () => {
+      coreS3Mock.isConnected.value = false
+      const { useCoreS3Stage } = await load()
+      useCoreS3Stage().sendMeasurementId(MID)
+      expect(coreS3Mock.write).not.toHaveBeenCalled()
+      const onOpenCb = coreS3Mock.onOpen.mock.calls[0]![0] as () => void
+      onOpenCb()
+      expect(coreS3Mock.write).toHaveBeenCalledWith(`TENKO MID ${MID}`)
+    })
+  })
 })

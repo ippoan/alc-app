@@ -129,9 +129,11 @@ mockNuxtImport('useFingerprint', () => () => ({
 // PC の段を CoreS3 に送る口 (Refs #238)。ここでは呼ばれたかだけを見る
 const syncStepMock = vi.fn()
 const sendResultMock = vi.fn()
+const sendMeasurementIdMock = vi.fn()
 mockNuxtImport('useCoreS3Stage', () => () => ({
   syncStep: syncStepMock,
   sendResult: sendResultMock,
+  sendMeasurementId: sendMeasurementIdMock,
 }))
 
 async function mountKiosk() {
@@ -362,6 +364,8 @@ describe('TenkoKiosk — アルコール測定の測定レコードと録画 (Re
     await flushPromises()
 
     expect(startMeasurement).toHaveBeenCalledWith('emp-1')
+    // 始めた測定の id を CoreS3 に渡す (この後のアルコールの記録に載る)
+    expect(sendMeasurementIdMock).toHaveBeenCalledWith('meas-1')
     wrapper.unmount()
   })
 
