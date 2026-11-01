@@ -233,20 +233,13 @@ export function useWebRtc(role: 'device' | 'admin') {
 
   async function handleAnswer(sdp: string) {
     log('handleAnswer: sdp received, length=', sdp.length)
-    if (pc) {
-      await pc.setRemoteDescription({ type: 'answer', sdp })
-    } else {
-      log('handleAnswer: pc is null, ignored')
-    }
+    // 今の socket から届く間は pc が在る (切ると socket ごと替わり、前の socket の受け口は働かない)
+    await pc?.setRemoteDescription({ type: 'answer', sdp })
   }
 
   async function handleIceCandidate(candidate: RTCIceCandidateInit) {
     log('handleIceCandidate:', candidate.candidate)
-    if (pc) {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate))
-    } else {
-      log('handleIceCandidate: pc is null, ignored')
-    }
+    await pc?.addIceCandidate(new RTCIceCandidate(candidate))
   }
 
   function handleSignalingMessage(data: SignalingInMessage) {

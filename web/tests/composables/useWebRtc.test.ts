@@ -280,7 +280,10 @@ describe('useWebRtc', () => {
     newWs.onopen?.()
     expect(rtc.isConnected.value).toBe(true)
 
-    // 実際のブラウザでは前の socket の close は遅れて届く
+    // 実際のブラウザでは前の socket の close は遅れて届く (open / error も今の接続に効かせない)
+    oldWs.onerror?.()
+    expect(rtc.error.value).toBeNull()
+    oldWs.onopen?.()
     oldWs.onclose?.({ code: 1006 })
     oldWs.onmessage?.({ data: JSON.stringify({ type: 'peer_left' }) })
     expect(rtc.isConnected.value).toBe(true)
