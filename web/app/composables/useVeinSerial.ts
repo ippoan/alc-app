@@ -44,6 +44,7 @@
  */
 
 import { bleDiagJson, isBleDiagEvent } from '~/utils/ble-diag'
+import { recordVeinLine } from '~/utils/vein-line-log'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND, writeLine } from '~/composables/useSerialArbiter'
@@ -334,6 +335,8 @@ export function useVeinSerial() {
     },
 
     onLine(line) {
+      // 全部の行を時刻付きで溜める (recorder へ上げる診断ログ。useVeinLogUpload、Refs ippoan/alc-app-s3#352)
+      recordVeinLine(line)
       rawLineTap?.(line)
       tapTiming(line)
       tapDiag(line)
