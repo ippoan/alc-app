@@ -11,6 +11,7 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   startMeasurement: vi.fn(),
   updateMeasurement: vi.fn(),
+  getTenkoSession: vi.fn(),
 }))
 
 // TenkoKiosk.vue は多くの composable (WebRTC・カメラ・指紋認証等) に依存するため、
@@ -35,6 +36,8 @@ const isRemote = ref(false)
 // 点呼のセッション (サーバが開始で作った測定の `measurement_id` を持つ)
 const session = ref<Partial<TenkoSession> | null>(null)
 
+const onInstructionConfirmMock = vi.fn()
+const onReportSubmitMock = vi.fn()
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
   employeeId,
@@ -68,8 +71,8 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   carryingItems: ref([]),
   loadCarryingItems: vi.fn(),
   onCarryingItemsSubmit: vi.fn(),
-  onInstructionConfirm: vi.fn(),
-  onReportSubmit: vi.fn(),
+  onInstructionConfirm: onInstructionConfirmMock,
+  onReportSubmit: onReportSubmitMock,
   reset: vi.fn(),
 }))
 
@@ -83,9 +86,11 @@ mockNuxtImport('useDemoMode', () => () => ({
 }))
 
 const webRtcDisconnectMock = vi.fn()
+// 運行管理者と通話がつながっているか
+const isPeerConnected = ref(false)
 mockNuxtImport('useWebRtc', () => () => ({
   isConnected: ref(false),
-  isPeerConnected: ref(false),
+  isPeerConnected,
   remoteStream: ref(null),
   error: ref(null),
   connect: vi.fn(async () => {}),
@@ -525,6 +530,82 @@ describe('TenkoKiosk — 遠隔点呼が閉じたら通話の部屋から出る'
     step.value = 'completed'
     await flushPromises()
     expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('TenkoKiosk — 遠隔点呼の判定待ちと通話必須', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    isRemote.value = true
+    isPeerConnected.value = false
+    session.value = { id: 'sess-1', status: 'judgment_pending' }
+  })
+  beforeEach(async () => {
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession).mockReset()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    isRemote.value = false
+    session.value = null
+  })
+
+  it('★ 判定待ちの間は部屋に残って通話の枠を出し、取り直して判定が入ったら部屋から出る', async () => {
+    vi.useFakeTimers()
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession)
+      .mockResolvedValueOnce({ id: 'sess-1', status: 'judgment_pending' } as never)
+      .mockResolvedValueOnce({ id: 'sess-1', status: 'completed' } as never)
+    step.value = 'medical'
+    const wrapper = await mountKiosk()
+    step.value = 'completed'
+    await flushPromises()
+    expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(getTenkoSession).toHaveBeenCalledWith('sess-1')
+    expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(session.value?.status).toBe('completed')
+    expect(webRtcDisconnectMock).toHaveBeenCalled()
+    // 閉じたら取り直しも止まる
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(getTenkoSession).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('取り直しに失敗しても待ち続ける', async () => {
+    vi.useFakeTimers()
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession).mockRejectedValue(new Error('offline'))
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(getTenkoSession).toHaveBeenCalledTimes(2)
+    expect(session.value?.status).toBe('judgment_pending')
+    expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['instruction', 'TenkoInstruction', 'confirm', onInstructionConfirmMock],
+    ['report', 'TenkoOperationReport', 'submit', onReportSubmitMock],
+  ] as const)('★ %s: 運行管理者と通話がつながるまで確定させない', async (s, name, ev, handler) => {
+    session.value = { id: 'sess-1', status: 'instruction_pending' }
+    step.value = s
+    const wrapper = await mountKiosk()
+    expect(wrapper.find('[data-testid="remote-call-required"]').exists()).toBe(true)
+    wrapper.findComponent({ name }).vm.$emit(ev, {})
+    await flushPromises()
+    expect(handler).not.toHaveBeenCalled()
+
+    isPeerConnected.value = true
+    await flushPromises()
+    expect(wrapper.find('[data-testid="remote-call-required"]').exists()).toBe(false)
+    wrapper.findComponent({ name }).vm.$emit(ev, {})
+    await flushPromises()
+    expect(handler).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

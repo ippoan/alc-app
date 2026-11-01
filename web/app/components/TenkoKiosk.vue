@@ -2,7 +2,7 @@
 import type { FaceAuthResult, MeasurementResult, SubmitMedicalData, TenkoRemoteEscalationReason } from '~/types'
 import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
-import { getEmployeeByNfcId, getEmployeeByCode, startMeasurement } from '~/utils/api'
+import { getEmployeeByNfcId, getEmployeeByCode, getTenkoSession, startMeasurement } from '~/utils/api'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
@@ -180,16 +180,63 @@ const REMOTE_CONNECT_STEPS: TenkoStep[] = ['medical', 'instruction', 'report']
 const shouldConnectRemote = computed(
   () => isRemote.value && REMOTE_CONNECT_STEPS.includes(step.value),
 )
-/** 通話パネルの表示。繋ぐ段のあいだだけ (完了・中止の画面では部屋から出るので出さない) */
+/**
+ * 運行管理者の判定を待っている (遠隔点呼の乗務員の側は終わり、判定で閉じる)。完了の画面のまま、
+ * 判定は通話しながら行うので部屋には残る
+ */
+const awaitingJudgment = computed(() => step.value === 'completed' && session.value?.status === 'judgment_pending')
+
+/** 通話パネルの表示。繋ぐ段と判定待ちのあいだだけ (閉じた点呼では部屋から出るので出さない) */
 const showVideoCall = computed(
-  () => isRemote.value && REMOTE_CONNECT_STEPS.includes(step.value),
+  () => isRemote.value && (REMOTE_CONNECT_STEPS.includes(step.value) || awaitingJudgment.value),
 )
 
 // 点呼が閉じたら (完了・中止) 通話の部屋から出る。残ると運行管理者の画面の「接続待ちデバイス」に
-// 終わった点呼が出続ける (2026-11-01 実機)。最初の画面に戻るときの handleReset も同じく止める
-watch(step, (s) => {
-  if ((s === 'completed' || s === 'cancelled') && isRemote.value) stopRemoteStreams()
+// 終わった点呼が出続ける (2026-11-01 実機)。**判定待ちの間は出ない**。最初の画面に戻るときの
+// handleReset も同じく止める
+watch([step, () => session.value?.status], ([s, status]) => {
+  if (!isRemote.value) return
+  if (s === 'cancelled' || (s === 'completed' && status !== 'judgment_pending')) stopRemoteStreams()
 })
+
+/**
+ * 遠隔点呼は、運行管理者と通話がつながっていないと最後の確定 (指示確認・運行報告) をさせない
+ * (通話必須、2026-11-01 決定)。つながるまで押しても進まず、待つように出す
+ */
+const remoteCallRequired = computed(() => isRemote.value && !webRtc.isPeerConnected.value)
+function confirmInstruction(...args: Parameters<typeof onInstructionConfirm>) {
+  if (remoteCallRequired.value) return
+  return onInstructionConfirm(...args)
+}
+function submitReport(...args: Parameters<typeof onReportSubmit>) {
+  if (remoteCallRequired.value) return
+  return onReportSubmit(...args)
+}
+
+// 判定待ちの間はセッションを取り直し、判定が入ったら完了の表示に変える (取り直さないと「判定を待っています」の
+// まま変わらない)。取れなかった回は次の回に回す
+const JUDGMENT_POLL_MS = 5000
+let judgmentTimer: ReturnType<typeof setInterval> | null = null
+function stopJudgmentPoll(): void {
+  if (judgmentTimer) clearInterval(judgmentTimer)
+  judgmentTimer = null
+}
+watch(awaitingJudgment, (waiting) => {
+  stopJudgmentPoll()
+  if (!waiting) return
+  judgmentTimer = setInterval(async () => {
+    const id = session.value?.id
+    if (!id) return
+    try {
+      const latest = await getTenkoSession(id)
+      if (session.value?.id === id) session.value = latest
+    }
+    catch {
+      // 次の回に取り直す
+    }
+  }, JUDGMENT_POLL_MS)
+}, { immediate: true })
+onUnmounted(stopJudgmentPoll)
 
 // 遠隔点呼: 繋ぐべき状態になったら WebRTC 接続
 watch(shouldConnectRemote, async (connectNow) => {
@@ -857,11 +904,16 @@ onUnmounted(() => {
       <div v-else-if="step === 'instruction'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">指示事項</h2>
-          <TenkoInstruction
-            :instruction="selectedSchedule?.instruction ?? null"
-            :manager-name="selectedSchedule?.responsible_manager_name ?? ''"
-            @confirm="onInstructionConfirm"
-          />
+          <p v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
+            運行管理者と通話がつながるまでお待ちください。つながると確定できます
+          </p>
+          <div :class="{ 'pointer-events-none opacity-50': remoteCallRequired }">
+            <TenkoInstruction
+              :instruction="selectedSchedule?.instruction ?? null"
+              :manager-name="selectedSchedule?.responsible_manager_name ?? ''"
+              @confirm="confirmInstruction"
+            />
+          </div>
         </div>
       </div>
 
@@ -869,7 +921,12 @@ onUnmounted(() => {
       <div v-else-if="step === 'report'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">運行報告</h2>
-          <TenkoOperationReport @submit="onReportSubmit" />
+          <p v-if="remoteCallRequired" data-testid="remote-call-required" class="mb-4 rounded-xl bg-amber-50 text-amber-800 text-sm px-4 py-2">
+            運行管理者と通話がつながるまでお待ちください。つながると確定できます
+          </p>
+          <div :class="{ 'pointer-events-none opacity-50': remoteCallRequired }">
+            <TenkoOperationReport @submit="submitReport" />
+          </div>
         </div>
       </div>
 
