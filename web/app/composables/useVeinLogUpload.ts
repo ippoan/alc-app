@@ -11,12 +11,15 @@
  *   - 体温計につないだのに値が無かった・失敗した (`EVT THERMO_RX none|err` → `thermo_rx_none`)
  *   - 指静脈が不一致 (`VEIN NOMATCH` → `vein_nomatch`)・指紋互換の層でだけ当たった (`VIA=FP` → `vein_fp`)。
  *     照合が不安定な件を、記録の書き直し (`PC VEIN RECORD`、`vein-module.ts`) と並べて後から追う
+ *   - モジュールに記録を書いた (`PC VEIN RECORD` → `vein_record`。撮り直し・同期の書き直し)
+ *
+ * 画面を閉じる・読み込み直すときは、まだ送っていない行を退避し、開き直したら戻す (`vein-line-log.ts`)。
  *
  * 送る鍵はキオスクの鍵。この Vein がキオスクの鍵でない (運行管理者席の Vein Base: キオスクとして
  * 断られて「キオスクの鍵は必須」が下りた) ときは運行管理者席の鍵。どちらも取れないとき・送れないときは
  * 黙って次の回に回す (点呼の画面を止めない)。
  */
-import { onVeinLine, snapshotVeinLines } from '~/utils/vein-line-log'
+import { onVeinLine, persistVeinLines, restoreVeinLines, snapshotVeinLines } from '~/utils/vein-line-log'
 import { isKioskDeviceKeyRequired } from '~/utils/token-selection'
 
 /** 定期に上げる間隔 */
@@ -31,6 +34,7 @@ export function veinLogTriggerReason(line: string): string | null {
   if (/^EVT THERMO_RX (none|err)\b/.test(line)) return 'thermo_rx_none'
   if (/^VEIN NOMATCH\b/.test(line)) return 'vein_nomatch'
   if (/^VEIN (VERIFIED|IDENTIFIED) \d+ .*\bVIA=FP\b/.test(line)) return 'vein_fp'
+  if (/^PC VEIN RECORD\b/.test(line)) return 'vein_record'
   return null
 }
 
@@ -86,6 +90,9 @@ export function useVeinLogUpload() {
   function start(): void {
     if (started || !import.meta.client) return
     started = true
+    // 前の画面が閉じる直前に退避した行を戻し、閉じるときにまた退避する
+    restoreVeinLines()
+    window.addEventListener('pagehide', persistVeinLines)
     watch(vein.isConnected, (connected) => {
       stopPeriodic()
       if (connected) periodicTimer = setInterval(() => { void upload('periodic') }, VEIN_LOG_PERIODIC_MS)

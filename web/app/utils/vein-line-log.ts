@@ -5,7 +5,10 @@
  * (ファームの `I (…) NimBLE: …` などのログも含む全部) をここに溜め、`useVeinLogUpload` が recorder の
  * `POST /device-log` へ上げる。ファームのリングと違い、Vein Station が再起動しても前の行が残る。
  *
- * 溜めるのは画面の中 (メモリ) だけで、localStorage には書かない (行数が多く、残す必要も無い)。
+ * 溜めるのは画面の中 (メモリ)。localStorage には書かない (行数が多く、残す必要も無い)。ただし画面を閉じる・
+ * 読み込み直す瞬間だけ、まだ送っていない分を同じタブの sessionStorage へ退避し、開き直したら戻す
+ * ({@link persistVeinLines} / {@link restoreVeinLines})。送る前に読み込み直すと、撮り直しや照合の行が
+ * 消えていた (2026-11-02、運行管理者席)。閉じる瞬間は鍵の署名を待てないので、送らずに退避する。
  */
 
 /** 溜める行数の上限。超えたら古い方から捨てる */
@@ -45,6 +48,37 @@ export function snapshotVeinLines(): string {
     if (nl >= 0) text = text.slice(nl + 1)
   }
   return text
+}
+
+/** 退避先 (sessionStorage) の key */
+const PERSIST_KEY = 'alc-vein-lines-pending'
+
+/** 溜めた行を sessionStorage へ退避する (画面を閉じる・読み込み直す直前に呼ぶ)。書けなければ黙って諦める */
+export function persistVeinLines(): void {
+  if (lines.length === 0) return
+  try {
+    sessionStorage.setItem(PERSIST_KEY, snapshotVeinLines())
+  }
+  catch {
+    // 容量超え・使えない環境 — 失っても照合は止めない
+  }
+}
+
+/** 退避した行を、今溜めている行の前へ戻して退避先を消す (起動時に 1 回)。戻した行数を返す */
+export function restoreVeinLines(): number {
+  let text: string | null = null
+  try {
+    text = sessionStorage.getItem(PERSIST_KEY)
+    sessionStorage.removeItem(PERSIST_KEY)
+  }
+  catch {
+    return 0
+  }
+  if (!text) return 0
+  const restored = text.split('\n')
+  lines.unshift(...restored)
+  if (lines.length > VEIN_LINE_LOG_MAX_LINES) lines.splice(0, lines.length - VEIN_LINE_LOG_MAX_LINES)
+  return restored.length
 }
 
 /** 溜めた行を捨てる (テスト用) */

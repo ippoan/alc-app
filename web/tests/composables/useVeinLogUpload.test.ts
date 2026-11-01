@@ -41,6 +41,11 @@ describe('veinLogTriggerReason', () => {
     expect(veinLogTriggerReason('VEIN IDENTIFIED 10 SCORE=78 TH=71 VIA=FV THS=63,71,81')).toBeNull()
     expect(veinLogTriggerReason('VEIN IDENTIFIED 10')).toBeNull()
   })
+
+  it('モジュールに記録を書いた行', () => {
+    expect(veinLogTriggerReason('PC VEIN RECORD 10 KIND=native MODE=native')).toBe('vein_record')
+    expect(veinLogTriggerReason('PC VEIN RETRY')).toBeNull()
+  })
 })
 
 describe('useVeinLogUpload', () => {
@@ -96,12 +101,16 @@ describe('useVeinLogUpload', () => {
   })
 
   it('★ start: つながっている間は 10 分ごと、体温計の値が無い・指静脈が不一致なら少し待って上げる (続けて起きても間を空ける)', async () => {
+    // 前の画面が閉じる直前に退避した行は、起動で戻って次に送る本文の頭に載る
+    sessionStorage.setItem('alc-vein-lines-pending', '01:00:00.000 VEIN IDENTIFIED 10')
     useVeinLogUpload().start()
+    expect(sessionStorage.getItem('alc-vein-lines-pending')).toBeNull()
     recordVeinLine('EVT THERMO_CONN try')
     recordVeinLine('EVT THERMO_RX none')
     recordVeinLine('EVT THERMO_RX none')
     await vi.advanceTimersByTimeAsync(VEIN_LOG_EVENT_DELAY_MS)
     expect(sentBodies().map(b => b.reason)).toEqual(['thermo_rx_none'])
+    expect(sentBodies()[0]!.text.split('\n')[0]).toBe('01:00:00.000 VEIN IDENTIFIED 10')
     // 間を空けるまでは出来事で上げない
     recordVeinLine('EVT THERMO_RX err')
     await vi.advanceTimersByTimeAsync(VEIN_LOG_EVENT_DELAY_MS)
@@ -114,6 +123,9 @@ describe('useVeinLogUpload', () => {
     recordVeinLine('VEIN NOMATCH')
     await vi.advanceTimersByTimeAsync(VEIN_LOG_EVENT_DELAY_MS)
     expect(sentBodies().map(b => b.reason)).toEqual(['thermo_rx_none', 'periodic', 'vein_nomatch'])
+    // 画面を閉じる・読み込み直すときは、溜めた行を退避する
+    window.dispatchEvent(new Event('pagehide'))
+    expect(sessionStorage.getItem('alc-vein-lines-pending')).toContain('VEIN NOMATCH')
     // 抜けたら定期の分は止まる
     connected.value = false
     await vi.advanceTimersByTimeAsync(VEIN_LOG_PERIODIC_MS)
