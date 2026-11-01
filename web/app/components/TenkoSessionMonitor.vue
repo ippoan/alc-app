@@ -88,7 +88,7 @@ const interruptReason = ref('')
 async function handleInterrupt(id: string) {
   error.value = null
   try {
-    await interruptTenkoSession(id, { reason: interruptReason.value || undefined })
+    await interruptTenkoSession(id, { reason: interruptReason.value || undefined }, 'tenko-monitor')
     interruptingId.value = null
     interruptReason.value = ''
     await fetchData()
@@ -106,7 +106,7 @@ async function handleResume(id: string) {
   if (!resumeReason.value.trim()) return
   error.value = null
   try {
-    await resumeTenkoSession(id, { reason: resumeReason.value.trim() })
+    await resumeTenkoSession(id, { reason: resumeReason.value.trim() }, 'tenko-monitor')
     resumingId.value = null
     resumeReason.value = ''
     await fetchData()
@@ -123,7 +123,7 @@ const cancelReason = ref('')
 async function handleCancel(id: string) {
   error.value = null
   try {
-    await cancelTenkoSession(id, { reason: cancelReason.value || '' })
+    await cancelTenkoSession(id, { reason: cancelReason.value || '' }, 'tenko-monitor')
     cancellingId.value = null
     cancelReason.value = ''
     await fetchData()
@@ -165,7 +165,7 @@ async function handleBulkCancel() {
   isBulkCancelling.value = true
   error.value = null
   try {
-    await Promise.all([...selectedIds.value].map(id => cancelTenkoSession(id, { reason: '' })))
+    await Promise.all([...selectedIds.value].map(id => cancelTenkoSession(id, { reason: '' }, 'tenko-monitor')))
     selectedIds.value = new Set()
     await fetchData()
     emit('changed')

@@ -1343,11 +1343,19 @@ export async function escalateTenkoSessionToRemote(
   })
 }
 
-export async function cancelTenkoSession(sessionId: string, data: CancelTenkoSession): Promise<TenkoSession> {
+/**
+ * 点呼を取り消す。キオスク (乗務員がやめる) は既定の送り方、運行管理者の点呼の一覧は `'tenko-monitor'`
+ * (席の鍵で送る。触れる範囲は判定と同じで、開発用の席の鍵はどの点呼も、本番の席の鍵は IT点呼 だけ)
+ */
+export async function cancelTenkoSession(
+  sessionId: string,
+  data: CancelTenkoSession,
+  scope: RequestTokenScope = 'default',
+): Promise<TenkoSession> {
   return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/cancel`, {
     method: 'POST',
     body: JSON.stringify(data),
-  })
+  }, scope)
 }
 
 /**
@@ -1381,25 +1389,38 @@ export async function getTenkoDashboard(scope: RequestTokenScope = 'default'): P
   return request<TenkoDashboard>('/api/tenko/dashboard', {}, scope)
 }
 
-export async function interruptTenkoSession(sessionId: string, data: InterruptSession = {}): Promise<TenkoSession> {
+/** 点呼を中断する。運行管理者の点呼の一覧は `'tenko-monitor'` で送る ({@link cancelTenkoSession} と同じ範囲) */
+export async function interruptTenkoSession(
+  sessionId: string,
+  data: InterruptSession = {},
+  scope: RequestTokenScope = 'default',
+): Promise<TenkoSession> {
   return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/interrupt`, {
     method: 'POST',
     body: JSON.stringify(data),
-  })
+  }, scope)
 }
 
-export async function resumeTenkoSession(sessionId: string, data: ResumeSession): Promise<TenkoSession> {
+/**
+ * 中断した点呼を再開する (管理者ログインか運行管理者席の鍵)。運行管理者の点呼の一覧は `'tenko-monitor'` で送る
+ * ({@link cancelTenkoSession} と同じ範囲)。席の鍵で再開したときは `resumed_by_user_id` が空のまま
+ */
+export async function resumeTenkoSession(
+  sessionId: string,
+  data: ResumeSession,
+  scope: RequestTokenScope = 'default',
+): Promise<TenkoSession> {
   return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/resume`, {
     method: 'POST',
     body: JSON.stringify(data),
-  })
+  }, scope)
 }
 
 /**
  * キオスクが自分で拾った点呼を「続きから再開」したことをサーバに残す
  * (Refs ippoan/alc-app#351、口は ippoan/rust-alc-api#676)。
  *
- * 上の `resumeTenkoSession` (管理者用 `/resume`) とは**別の口**。あちらは `AuthUser` 必須で
+ * 上の `resumeTenkoSession` (管理者用 `/resume`) とは**別の口**。あちらは管理者ログインか運行管理者席の鍵で
  * `status` を書き換えるが、こちらは `resumed_at` と `resume_reason` だけを書き、**`status` に
  * 触らない** (段の復元はキオスクがローカルでやる)。キオスクの device token で通る
  * (`auth-worker` の `KIOSK_ROUTES` に登録済み)。
