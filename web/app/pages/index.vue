@@ -887,6 +887,8 @@ function onRoleTabClick(role: RoleTab) {
 
     <!-- 「更新中」の幕。役割に依らず 1 つだけ (運行者の機体にも、席の警告デバイスにも出す) -->
     <FirmwareOtaOverlay />
+    <!-- 開発端末の指静脈の端末を配布中のファームへ自動で更新する (役割に依らない。描くものは無い) -->
+    <DevFirmwareAutoUpdate />
     <!-- 全端末の指静脈の一覧のキオスク側の受け答え (Refs ippoan/alc-app#436)。役割に依らず 1 つだけ —
          同じブラウザでシステム管理者の一覧を開いている間も、このキオスクの対応表を答えられるように -->
     <VeinFleetHost :demo="driverSubTab === 'demo' || driverSubTab === 'remote_demo'" />

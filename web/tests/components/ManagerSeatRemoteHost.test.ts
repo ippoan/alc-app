@@ -18,6 +18,9 @@ mockNuxtImport('useTimecardWatch', () => timecardWatch)
 const vein = vi.hoisted(() => ({ isConnected: null as unknown as { value: boolean } }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 
+const serialOta = vi.hoisted(() => ({ run: vi.fn(async () => 'updated') }))
+mockNuxtImport('useSerialOta', () => () => serialOta)
+
 const SEAT_JWT = `h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef' }))}.s`
 const managerToken = vi.hoisted(() => ({ getManagerJwt: vi.fn() }))
 mockNuxtImport('useManagerDeviceToken', () => () => managerToken)
@@ -60,6 +63,19 @@ describe('ManagerSeatRemoteHost', () => {
     expect(reportKioskCommandResult).toHaveBeenCalledWith(
       'c1',
       { done: true, ok: true, op: 'hello', result: { device_id: 'alarm-0123456789abcdef', vein_connected: true } },
+      'manager-device',
+    )
+  })
+
+  it('firmware_update は Vein の target で更新して席の鍵で答える', async () => {
+    vein.isConnected.value = true
+    await mountSuspended(ManagerSeatRemoteHost)
+    watchOptions().onKioskCommand({ type: 'kiosk_command', id: 'c2', device_id: '*', op: 'firmware_update', args: {} })
+    await flushPromises()
+    expect(serialOta.run).toHaveBeenCalledWith('timecard-station')
+    expect(reportKioskCommandResult).toHaveBeenLastCalledWith(
+      'c2',
+      { done: true, ok: true, op: 'firmware_update', result: { outcome: 'updated' } },
       'manager-device',
     )
   })

@@ -8,10 +8,12 @@
  * 「開発用の遠隔操作を受ける」をオンにした PC だけ (`utils/kiosk-remote`)。描くものは無い。
  */
 import { reportKioskCommandResult } from '~/utils/api'
-import { respondToKioskCommand } from '~/utils/kiosk-remote'
+import { respondToKioskCommand, VEIN_FIRMWARE_TARGET } from '~/utils/kiosk-remote'
 
 const veinSerial = useVeinSerial()
 const managerToken = useManagerDeviceToken()
+/** 遠隔操作の `firmware_update` で使う (画面の更新と同じ手順・同じ「更新中」の印) */
+const serialOta = useSerialOta()
 
 const seatWatch = useTimecardWatch({
   getToken: () => managerToken.getManagerJwt(),
@@ -20,6 +22,7 @@ const seatWatch = useTimecardWatch({
       jwt: () => managerToken.getManagerJwt(),
       port: veinSerial,
       scope: 'manager-device',
+      firmwareUpdate: () => serialOta.run(VEIN_FIRMWARE_TARGET),
       report: (id, payload) => reportKioskCommandResult(id, payload, 'manager-device'),
     })
   },
