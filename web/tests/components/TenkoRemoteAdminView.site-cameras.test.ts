@@ -45,14 +45,14 @@ mockNuxtImport('useCamera', () => () => ({
   stop: vi.fn(),
 }))
 
-// 顔認証はすぐ通ったことにする
-const FaceAuthStub = defineComponent({
-  emits: ['result'],
-  setup(_, { emit }) { onMounted(() => emit('result', { verified: true })) },
+// 通話前の指静脈の確認はすぐ運行管理者が特定できたことにする
+const VeinConfirmStub = defineComponent({
+  props: { onEmployee: { type: Function, required: true } },
+  setup(props) { onMounted(() => { void props.onEmployee({ id: 'mgr-1', name: '運行 管理者', role: ['manager'] }) }) },
   render: () => null,
 })
 const stubs = {
-  FaceAuth: FaceAuthStub,
+  ItTenkoVeinRegister: VeinConfirmStub,
   TenkoVideoCall: { template: '<div />' },
   TenkoSiteCameras: { props: ['deviceId'], template: '<div data-testid="site-cameras-stub">{{ deviceId }}</div>' },
 }

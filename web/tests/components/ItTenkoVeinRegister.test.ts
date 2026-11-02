@@ -92,3 +92,16 @@ describe('ItTenkoVeinRegister — 指静脈が FP のときの撮り直しの提
     wrapper.unmount()
   })
 })
+
+describe('ItTenkoVeinRegister — 文言を渡す (遠隔点呼の通話前の確認)', () => {
+  it('ボタンと一致しなかったときの文言を差し替えられる。渡さなければ IT点呼の文言', async () => {
+    const w = await mountSuspended(ItTenkoVeinRegister, {
+      props: { onEmployee, idle: true, buttonLabel: '指静脈で確認', missMessage: 'もう一度置いてください' },
+    })
+    expect(w.find('[data-testid="it-vein-register-button"]').text()).toBe('指静脈で確認')
+    expect(veinOpts!.missMessage).toBe('もう一度置いてください')
+    const d = await mountRegister()
+    expect(d.find('[data-testid="it-vein-register-button"]').text()).toBe('指静脈で登録')
+    expect(veinOpts!.missMessage).toContain('社員番号で登録してください')
+  })
+})

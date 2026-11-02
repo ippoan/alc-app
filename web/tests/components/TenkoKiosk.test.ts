@@ -579,6 +579,49 @@ describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
     wrapper.unmount()
   })
 
+  it('★ 判定で閉じたら完了の画面で 30 秒数え、次の点呼へ移る。最初の画面に戻ったら数えない', async () => {
+    vi.useFakeTimers()
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    const left = () => wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')
+    try {
+      expect(left()).toBeNull()
+      session.value = { id: 'sess-1', status: 'completed' }
+      await flushPromises()
+      expect(left()).toBe(30)
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(left()).toBe(1)
+      expect(resetMock).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(resetMock).toHaveBeenCalledTimes(1)
+      step.value = 'nfc'
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(resetMock).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      wrapper.unmount()
+      step.value = 'nfc'
+    }
+  })
+
+  it('遠隔でない点呼の完了の画面は数えない', async () => {
+    vi.useFakeTimers()
+    isRemote.value = false
+    session.value = { id: 'sess-1', status: 'completed' }
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    try {
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')).toBeNull()
+      expect(resetMock).not.toHaveBeenCalled()
+    }
+    finally {
+      wrapper.unmount()
+      step.value = 'nfc'
+    }
+  })
+
   it('取り直しに失敗しても待ち続ける', async () => {
     vi.useFakeTimers()
     const { getTenkoSession } = await import('~/utils/api')
