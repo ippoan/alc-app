@@ -2694,3 +2694,63 @@ describe("kiosk-command の命令・返事", () => {
     expect(seat.pending()).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ファームの配信の合図 (Refs ippoan/alc-app-s3#352)
+//
+//   - CI が `POST /firmware-published` (専用の鍵) で知らせる
+//   - 端末は `GET /watch-firmware` (端末の token) で、テナントに依らない部屋 1 つを購読する
+// ---------------------------------------------------------------------------
+
+async function connectFirmwareWatcher(token: string) {
+  const res = await SELF.fetch(`${BASE}/watch-firmware`, {
+    headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `alc.timecard.v1, ${token}` },
+  });
+  return { res, ws: res.webSocket ?? null };
+}
+
+function firmwarePublished(body: unknown, auth: string | null = "Bearer test-firmware-token") {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (auth !== null) headers.Authorization = auth;
+  return SELF.fetch(`${BASE}/firmware-published`, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+describe("firmware-published の合図", () => {
+  it("★ 別テナントのキオスク・運行管理者席にも届き、打刻の購読には届かない", async () => {
+    const { ws: kioskWs } = await connectFirmwareWatcher("kiosk-token-vein");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const kiosk = messageQueue(kioskWs!);
+    const { ws: seatWs } = await connectFirmwareWatcher("manager-seat-token");
+    expect(seatWs).not.toBeNull();
+    openSockets.push(seatWs!);
+    const seat = messageQueue(seatWs!);
+    const { ws: timecardWs } = await connectWatcher("kiosk-token-vein");
+    openSockets.push(timecardWs!);
+    const timecard = messageQueue(timecardWs!);
+
+    const res = await firmwarePublished({ target: "timecard-station" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sent: 2 });
+    expect(await kiosk.next()).toEqual({ type: "firmware_published", target: "timecard-station" });
+    expect(await seat.next()).toEqual({ type: "firmware_published", target: "timecard-station" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(timecard.pending()).toBe(0);
+  });
+
+  it("鍵が無い・違う・形が外れた target は弾く", async () => {
+    expect((await firmwarePublished({ target: "timecard-station" }, null)).status).toBe(401);
+    expect((await firmwarePublished({ target: "timecard-station" }, "Bearer wrong")).status).toBe(401);
+    expect((await firmwarePublished("{")).status).toBe(400);
+    expect(await (await firmwarePublished({ target: "https://evil" })).json()).toEqual({ error: "invalid_target" });
+  });
+
+  it("購読は端末の token が要る", async () => {
+    const { res } = await connectFirmwareWatcher("bad-token");
+    expect(res.status).toBe(401);
+  });
+});

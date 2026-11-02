@@ -95,6 +95,7 @@ describe('useTimecardWatch', () => {
     it('https → wss、末尾スラッシュは落とす', () => {
       expect(mod.toTimecardWatchUrl('https://rec.example.com')).toBe('wss://rec.example.com/watch-timecard')
       expect(mod.toTimecardWatchUrl('https://rec.example.com/')).toBe('wss://rec.example.com/watch-timecard')
+      expect(mod.toTimecardWatchUrl('https://rec.example.com', '/watch-firmware')).toBe('wss://rec.example.com/watch-firmware')
       expect(mod.toTimecardWatchUrl('http://localhost:8788')).toBe('ws://localhost:8788/watch-timecard')
     })
 
@@ -414,6 +415,16 @@ describe('useTimecardWatch', () => {
       expect(() => lastWs().message(JSON.stringify({ type: 'vein_list_request' }))).not.toThrow()
       expect(() => lastWs().message(JSON.stringify({ type: 'vein_list_updated' }))).not.toThrow()
       expect(() => lastWs().message(JSON.stringify({ type: 'kiosk_command', id: 'c1' }))).not.toThrow()
+    })
+
+    it('firmware_published (ファームの配信) は target を受け手に渡す。target が無ければ無視', async () => {
+      const onFirmwarePublished = vi.fn()
+      const { watch } = make({ onFirmwarePublished })
+      await watch.connect()
+      lastWs().open()
+      lastWs().message(JSON.stringify({ type: 'firmware_published', target: 'timecard-station' }))
+      lastWs().message(JSON.stringify({ type: 'firmware_published' }))
+      expect(onFirmwarePublished.mock.calls).toEqual([['timecard-station']])
     })
 
     it('kiosk_command (開発用の遠隔操作) はフレームごと受け手に渡す', async () => {

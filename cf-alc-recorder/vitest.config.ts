@@ -25,7 +25,7 @@ export default defineWorkersConfig({
             RECORDER_HUB: { className: "RecorderHub", useSQLite: true },
           },
           serviceBindings: { AUTH_WORKER: "auth-worker" },
-          bindings: { INTERNAL_SHARED_SECRET: "test-shared-secret" },
+          bindings: { INTERNAL_SHARED_SECRET: "test-shared-secret", FIRMWARE_NOTIFY_TOKEN: "test-firmware-token" },
           r2Buckets: { CRASH_LOGS: "alc-crash-logs", BATTERY_HISTORY: "alc-battery-history" },
           workers: [
             {

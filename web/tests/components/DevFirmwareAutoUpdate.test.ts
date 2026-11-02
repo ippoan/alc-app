@@ -32,6 +32,15 @@ const screen = vi.hoisted(() => ({ isDeviceBusy: null as unknown as { value: boo
 mockNuxtImport('useKioskScreen', () => () => screen)
 const demo = vi.hoisted(() => ({ isDemoMode: null as unknown as { value: boolean } }))
 mockNuxtImport('useDemoMode', () => () => demo)
+const timecardWatch = vi.hoisted(() => vi.fn())
+mockNuxtImport('useTimecardWatch', () => timecardWatch)
+const watchHandle = vi.hoisted(() => ({ connect: vi.fn(async () => {}), stop: vi.fn() }))
+interface FwWatchOptions { path: string, getToken: () => Promise<string | null>, onFirmwarePublished: (target: string) => void }
+const fwWatch = (): FwWatchOptions => timecardWatch.mock.calls.at(-1)![0] as FwWatchOptions
+const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn(async () => 'kiosk-jwt') }))
+mockNuxtImport('useDeviceToken', () => () => deviceToken)
+const managerToken = vi.hoisted(() => ({ getManagerJwt: vi.fn(async () => 'seat-jwt') }))
+mockNuxtImport('useManagerDeviceToken', () => () => managerToken)
 
 const mounted: { unmount: () => void }[] = []
 async function mount() {
@@ -52,6 +61,7 @@ describe('DevFirmwareAutoUpdate', () => {
     screen.isDeviceBusy = ref(false)
     demo.isDemoMode = ref(false)
     updates.fetchLatest.mockResolvedValue({ vein: '0.1.8+new' })
+    timecardWatch.mockReturnValue(watchHandle)
   })
 
   afterEach(() => {
@@ -123,5 +133,38 @@ describe('DevFirmwareAutoUpdate', () => {
     await flushPromises()
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
     expect(updates.fetchLatest).toHaveBeenCalledTimes(2)
+  })
+
+  it('★ 開発端末は配信の合図を購読し、合図を受けたらすぐと CDN の古さを越えるまで取り直す', async () => {
+    vi.useFakeTimers()
+    updates.fetchLatest.mockResolvedValue({ vein: '0.1.8+old' })
+    const w = await mount()
+    expect(fwWatch().path).toBe('/watch-firmware')
+    expect(watchHandle.connect).toHaveBeenCalledTimes(1)
+    expect(await fwWatch().getToken()).toBe('kiosk-jwt')
+    updates.fetchLatest.mockClear()
+    fwWatch().onFirmwarePublished('cores3')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(updates.fetchLatest).not.toHaveBeenCalled()
+    fwWatch().onFirmwarePublished('timecard-station')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updates.fetchLatest).toHaveBeenCalledTimes(1)
+    expect(appendDiag).toHaveBeenCalledWith('[ota] 配信の合図を受けました timecard-station')
+    await vi.advanceTimersByTimeAsync(660_000)
+    expect(updates.fetchLatest).toHaveBeenCalledTimes(5 + 1)
+    w.unmount()
+    expect(watchHandle.stop).toHaveBeenCalled()
+  })
+
+  it('運行管理者席の開発用の鍵なら席の鍵で購読する。本番の端末は購読しない', async () => {
+    marks.dev = { 'kiosk': false, 'manager-device': true }
+    await mount()
+    expect(await fwWatch().getToken()).toBe('seat-jwt')
+    expect(watchHandle.connect).toHaveBeenCalledTimes(1)
+    mounted.splice(0).forEach(w => w.unmount())
+    watchHandle.connect.mockClear()
+    marks.dev = { 'kiosk': false, 'manager-device': false }
+    await mount()
+    expect(watchHandle.connect).not.toHaveBeenCalled()
   })
 })
