@@ -202,6 +202,31 @@ watch([step, () => session.value?.status], ([s, status]) => {
   if (s === 'cancelled' || (s === 'completed' && status !== 'judgment_pending')) stopRemoteStreams()
 })
 
+/** 遠隔点呼の完了の画面から次の点呼へ自動で移るまでの秒数 */
+const REMOTE_COMPLETED_RESET_S = 30
+/** 次の点呼へ移るまでの残り秒数。数えていなければ null */
+const autoResetLeft = ref<number | null>(null)
+let autoResetTimer: ReturnType<typeof setInterval> | null = null
+function stopAutoReset(): void {
+  if (autoResetTimer !== null) clearInterval(autoResetTimer)
+  autoResetTimer = null
+  autoResetLeft.value = null
+}
+/**
+ * 遠隔点呼が閉じた (運行管理者の判定が済んだ) 完了の画面。30 秒で次の点呼へ移る (2026-11-02 ユーザー指示)。
+ * 判定は下の「判定待ちの間はセッションを取り直し」で入る。押せば待たずに移る
+ */
+const remoteClosed = computed(() => isRemote.value && step.value === 'completed' && session.value?.status === 'completed')
+watch(remoteClosed, (closed) => {
+  stopAutoReset()
+  if (!closed) return
+  autoResetLeft.value = REMOTE_COMPLETED_RESET_S
+  autoResetTimer = setInterval(() => {
+    autoResetLeft.value = (autoResetLeft.value ?? 1) - 1
+    if (autoResetLeft.value <= 0) handleReset()
+  }, 1000)
+}, { immediate: true })
+
 /**
  * 運行管理者を呼んでいる間 (判定待ち) に運行管理者が通話に出ないとき、乗務員がこの点呼をやめる
  * (取り消しの理由を残して最初の画面へ)。運行管理者が通話に入っている間は出さない
@@ -515,6 +540,7 @@ function handleReset() {
 }
 
 onUnmounted(() => {
+  stopAutoReset()
   if (isRemote.value) stopRemoteStreams()
 })
 </script>
@@ -946,6 +972,7 @@ onUnmounted(() => {
           <TenkoCompleted
             :session="session"
             :employee-name="employeeName"
+            :auto-reset-seconds="autoResetLeft"
             @reset="handleReset"
           />
           <!-- 運行管理者を呼んでいる間 (遠隔点呼の判定待ち)。出ないときは乗務員がやめられる -->

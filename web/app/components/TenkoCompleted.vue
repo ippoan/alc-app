@@ -5,6 +5,8 @@ import { tenkoTypeLabel } from '~/utils/tenko-type'
 defineProps<{
   session: TenkoSession
   employeeName: string
+  /** 次の点呼へ自動で移るまでの残り秒数 (遠隔点呼が判定で閉じた後)。数えていなければ null / 省略 */
+  autoResetSeconds?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +37,16 @@ function formatTime(iso: string | null): string {
       data-testid="judgment-pending"
     >
       入力は終わりました。運行管理者の判定を待っています
+    </p>
+
+    <!-- 遠隔点呼の運行管理者の判定 (判定で閉じた後) -->
+    <p
+      v-if="session.status === 'completed' && (session.manager_judgment === 'ok' || session.manager_judgment === 'ng')"
+      data-testid="manager-judgment"
+      class="w-full rounded-xl text-sm text-center px-4 py-2"
+      :class="session.manager_judgment === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'"
+    >
+      運行管理者の判定: {{ session.manager_judgment === 'ok' ? 'OK' : 'NG' }}<template v-if="session.manager_judgment_reason"> ({{ session.manager_judgment_reason }})</template>
     </p>
 
     <!-- サマリ -->
@@ -75,5 +87,8 @@ function formatTime(iso: string | null): string {
     >
       次の点呼へ
     </button>
+    <p v-if="autoResetSeconds != null" data-testid="auto-reset-countdown" class="text-sm text-gray-500 text-center">
+      あと {{ autoResetSeconds }} 秒で次の点呼へ移ります
+    </p>
   </div>
 </template>

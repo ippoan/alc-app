@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
  * IT点呼 の受け画面で、この席の運行管理者を指静脈で登録する入口。
+ * 遠隔点呼の受け画面 (`TenkoRemoteAdminView`) の通話前の確認でも使う (文言だけ渡して変える)。
  *
  * **開発用の運行管理者席 (`isDevDevice('manager-device')`) だけ** `TenkoItAdminView` が出す。
  * 本番の席ではこの部品ごと描画しない — 照合データの同期 (`useVeinEmployeeIdentify` の onMounted) も
@@ -18,6 +19,10 @@ const props = defineProps<{
   onEmployee: (employee: ApiEmployee) => Promise<string | null>
   /** 指が置かれた合図で照合を始めてよいか */
   idle: boolean
+  /** ボタンの文言 (既定「指静脈で登録」) */
+  buttonLabel?: string
+  /** 一致する人がいなかったときの文言 (既定は社員番号での登録を勧める) */
+  missMessage?: string
 }>()
 
 // 指静脈が FP の層でだけ当たったときの「この端末で撮り直す」の提案
@@ -25,7 +30,7 @@ const refresh = useVeinRefreshSuggest({ scope: 'manager-device', label: 'it-tenk
 const vein = useVeinEmployeeIdentify({
   label: 'it-tenko',
   scope: 'manager-device',
-  missMessage: '指静脈が一致する人が見つかりません。もう一度置くか、社員番号で登録してください',
+  missMessage: props.missMessage ?? '指静脈が一致する人が見つかりません。もう一度置くか、社員番号で登録してください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
   onEmployee: async (emp, via) => {
     const failure = await props.onEmployee(emp)
@@ -46,7 +51,7 @@ const vein = useVeinEmployeeIdentify({
       class="w-full px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
       @click="vein.identify()"
     >
-      {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で登録' }}
+      {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : (buttonLabel ?? '指静脈で登録') }}
     </button>
     <p v-if="vein.error.value" data-testid="it-vein-register-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
     <VeinRefreshSuggest v-if="refresh.target.value !== null" :suggest="refresh" class="mt-2" />

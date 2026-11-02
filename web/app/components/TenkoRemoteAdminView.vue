@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import type { FaceAuthResult, TenkoSession, DriverInfo } from '~/types'
+import type { ApiEmployee, TenkoSession, DriverInfo } from '~/types'
 import { tenkoStatusLabel } from '~/utils/tenko-status'
-import { getEmployeeByCode, getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
-import { employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
+import { getEmployeeById, getEmployees, getTenkoSession, getDeviceSettings, getDriverInfo } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { alcoholResultLabel, alcoholTone } from '~/utils/alcohol'
 
@@ -46,27 +45,22 @@ onMounted(async () => {
   }
 })
 
-// 顔認証モーダル状態 (セッション接続前確認)
+// 通話前の確認 (指静脈)。運行管理者の画面の入口 (RoleAuthGate) と同じく指静脈だけで本人を確かめる
+// (2026-11-02 ユーザー決定「顔認証外して静脈認証に統一」)
 const pendingRoomId = ref<string | null>(null)
-const faceAuthActive = ref(false)
-const faceAuthError = ref<string | null>(null)
-const modalStep = ref<'id_input' | 'face_auth'>('id_input')
-const modalEmployeeId = ref('')
-const modalEmployeeName = ref('')
-const modalIdInput = ref('')
-const modalIdError = ref<string | null>(null)
+const veinConfirmActive = ref(false)
 
 // 本番 flip 後の新版への載せ替えを、待機中のこの画面でも許す (Refs #345)。
 // 運行管理者席は遠隔点呼の呼び出しを待って画面を開いたまま待機するので、キオスクと同じく
 // ナビゲーションが起きず、申告しないと古い app shell を永久に掴み続ける (#341 の取りこぼし)。
-// 通話中・顔認証中・読み込み中はリロードで失うものがあるので、そのあいだは申告を下ろす。
+// 通話中・確認中・読み込み中はリロードで失うものがあるので、そのあいだは申告を下ろす。
 useKioskScreen().declareSafeToReload(
-  () => !isCallActive.value && !faceAuthActive.value && !isLoading.value,
+  () => !isCallActive.value && !veinConfirmActive.value && !isLoading.value,
 )
-// 通話中・顔認証中・読み込み中は、席の警告デバイスの更新を始めさせない (Refs ippoan/alc-app#425)。
+// 通話中・確認中・読み込み中は、席の警告デバイスの更新を始めさせない (Refs ippoan/alc-app#425)。
 // リロードの申告 (上) とは別の集合
 useKioskScreen().declareDeviceBusy(
-  () => isCallActive.value || faceAuthActive.value || isLoading.value,
+  () => isCallActive.value || veinConfirmActive.value || isLoading.value,
 )
 
 // 運転者情報パネル
@@ -155,59 +149,31 @@ function selfDeclLabel(key: string) {
 // WebSocket用: https://→wss:// または http://→ws://
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
 
-// セッションカードクリック → 顔認証モーダルを表示
+// セッションカードクリック → 指静脈の確認を出す
 function requestCall(roomId: string) {
   pendingRoomId.value = roomId
-  faceAuthError.value = null
-  modalIdError.value = null
-  faceAuthActive.value = true
-  // デバイスから管理者IDを復元 → あれば ID 入力スキップ
-  loadFromDevice()
-  if (authenticatedManagerId.value) {
-    modalEmployeeId.value = authenticatedManagerId.value
-    modalStep.value = 'face_auth'
-  } else {
-    modalStep.value = 'id_input'
-  }
+  veinConfirmActive.value = true
 }
 
-// モーダル内 ID 入力 → 社員検索 → 顔認証へ
-async function onModalIdSubmit() {
-  const input = modalIdInput.value.trim()
-  if (!input) return
-  modalIdError.value = null
-  try {
-    const emp = await getEmployeeByCode(input, 'tenko-monitor')
-    if (!emp.role.includes('manager') && !emp.role.includes('admin')) {
-      modalIdError.value = `${emp.name}さんには運行管理者の権限がありません`
-      return
-    }
-    modalEmployeeId.value = emp.id
-    modalEmployeeName.value = emp.name
-    setManagerId(emp.id)
-    modalStep.value = 'face_auth'
-  } catch (e) {
-    modalIdError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
+/**
+ * 指静脈で特定できた人を確かめて通話を始める。運行管理者・管理者でなければ理由を返す (確認は閉じない)。
+ * 確かめた人をこの端末の運行管理者として控える (判定の記録に使う)
+ */
+async function onManagerVein(emp: ApiEmployee): Promise<string | null> {
+  if (!emp.role.includes('manager') && !emp.role.includes('admin')) {
+    return `${emp.name}さんには運行管理者の権限がありません`
   }
+  setManagerId(emp.id)
+  deviceManagerName.value = emp.name
+  veinConfirmActive.value = false
+  const roomId = pendingRoomId.value
+  if (roomId) await startCall(roomId)
+  return null
 }
 
-function onManagerFaceAuthResult(result: FaceAuthResult) {
-  if (result.verified) {
-    faceAuthActive.value = false
-    startCall(pendingRoomId.value!)
-  } else {
-    faceAuthError.value = '顔認証に失敗しました。もう一度お試しください。'
-  }
-}
-
-function cancelFaceAuth() {
-  faceAuthActive.value = false
+function cancelVeinConfirm() {
+  veinConfirmActive.value = false
   pendingRoomId.value = null
-  faceAuthError.value = null
-  modalIdInput.value = ''
-  modalIdError.value = null
-  modalEmployeeId.value = ''
-  modalEmployeeName.value = ''
 }
 
 async function loadActiveRooms() {
@@ -292,7 +258,7 @@ onMounted(async () => {
 // initialRoomId 指定時、ルームが現れたら自動で requestCall
 const autoConnectTriggered = ref(false)
 watch(activeRooms, (rooms) => {
-  if (props.initialRoomId && !autoConnectTriggered.value && rooms.includes(props.initialRoomId) && !isCallActive.value && !faceAuthActive.value) {
+  if (props.initialRoomId && !autoConnectTriggered.value && rooms.includes(props.initialRoomId) && !isCallActive.value && !veinConfirmActive.value) {
     autoConnectTriggered.value = true
     requestCall(props.initialRoomId)
   }
@@ -558,57 +524,24 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <!-- 顔認証モーダル (セッション接続前の管理者確認) -->
+  <!-- 通話前の確認 (指静脈) -->
   <div
-    v-if="faceAuthActive"
+    v-if="veinConfirmActive"
+    data-testid="remote-vein-confirm"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
   >
     <div class="bg-white rounded-2xl p-4 shadow-xl w-full max-w-lg mx-2 max-h-[95vh] overflow-y-auto">
       <h3 class="text-lg font-semibold text-gray-800 mb-1">点呼開始前の確認</h3>
-
-      <!-- Step 1: 社員番号入力 (authenticatedManagerId が未設定時) -->
-      <div v-if="modalStep === 'id_input'">
-        <div v-if="deviceManagerName" class="mb-3 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-700">
-          登録済み管理者: <strong>{{ deviceManagerName }}</strong>（ID: {{ authenticatedManagerId }}）
-        </div>
-        <p class="text-sm text-gray-500 mb-4">管理者の社員番号を入力してください</p>
-        <div v-if="modalIdError" class="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-          {{ modalIdError }}
-        </div>
-        <input
-          v-model="modalIdInput"
-          type="text"
-          placeholder="社員番号 (例: 001)"
-          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-          @keyup.enter="onModalIdSubmit"
-        >
-        <button
-          :disabled="!modalIdInput.trim()"
-          class="w-full mt-4 px-6 py-3 bg-blue-600 text-white rounded-xl font-medium disabled:opacity-50 hover:bg-blue-700 transition-colors"
-          @click="onModalIdSubmit"
-        >
-          次へ
-        </button>
-      </div>
-
-      <!-- Step 2: 顔認証 -->
-      <div v-if="modalStep === 'face_auth'">
-        <p v-if="modalEmployeeName" class="text-sm text-gray-500 mb-4">{{ modalEmployeeName }} — 顔認証を行ってください</p>
-        <p v-else class="text-sm text-gray-500 mb-4">管理者の顔認証を行ってください</p>
-        <div v-if="faceAuthError" class="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-          {{ faceAuthError }}
-        </div>
-        <FaceAuth
-          :key="pendingRoomId ?? undefined"
-          :employee-id="modalEmployeeId"
-          mode="verify"
-          @result="onManagerFaceAuthResult"
-        />
-      </div>
-
+      <p class="text-sm text-gray-500">運行管理者の指を置いてください</p>
+      <ItTenkoVeinRegister
+        :on-employee="onManagerVein"
+        :idle="veinConfirmActive && !isCallActive"
+        button-label="指静脈で確認"
+        miss-message="指静脈が一致する人が見つかりません。もう一度置いてください"
+      />
       <button
         class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
-        @click="cancelFaceAuth"
+        @click="cancelVeinConfirm"
       >
         キャンセル
       </button>
