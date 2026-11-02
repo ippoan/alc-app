@@ -137,3 +137,17 @@ describe('TenkoRemoteAdminView — 点呼受付で並べたとき', () => {
   })
 })
 
+describe('TenkoRemoteAdminView — 点呼受付に埋め込む (embedded)', () => {
+  it('★ 自前の一覧は出さず、requestCall で呼ばれたら指静脈の確認から通話まで受け持つ', async () => {
+    useManagerAuth().setManagerId('mgr-1')
+    const w = await mountSuspended(TenkoRemoteAdminView, { props: { embedded: true }, global: { stubs } })
+    await flushPromises()
+    expect(w.text()).not.toContain('遠隔点呼モニター')
+    expect(w.text()).not.toContain('接続待ちデバイス')
+    ;(w.vm as unknown as { requestCall: (id: string) => void }).requestCall('session-1')
+    await flushPromises()
+    expect(w.text()).toContain('通話終了')
+    w.unmount()
+  })
+})
+

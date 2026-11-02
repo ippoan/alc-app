@@ -12,6 +12,11 @@ const props = defineProps<{
    * (マイク・カメラと指静脈の機器を取り合わないため)
    */
   blocked?: boolean
+  /**
+   * 点呼受付に埋め込む。自前の一覧と映像の枠は出さず (着信は IT点呼 の画面の一覧に「遠隔」の行で並ぶ)、
+   * `requestCall` で呼ばれたときの確認・全画面の通話・判定だけを受け持つ
+   */
+  embedded?: boolean
 }>()
 const emit = defineEmits<{
   /** 通話中・通話前の確認中か (並べた IT点呼 の画面を止めるため) */
@@ -189,6 +194,8 @@ async function onManagerVein(emp: ApiEmployee): Promise<string | null> {
 }
 
 watch(() => isCallActive.value || veinConfirmActive.value, b => emit('busy', b), { immediate: true })
+// 点呼受付 (embedded) は一覧を IT点呼 の画面が出すので、「通話する」をここへ渡す
+defineExpose({ requestCall })
 
 function cancelVeinConfirm() {
   veinConfirmActive.value = false
@@ -304,7 +311,15 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div v-if="embedded && (blockedByIt || loadError)" class="space-y-2">
+    <div v-if="blockedByIt" class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800" data-testid="remote-blocked-by-it">
+      IT点呼の通話中です。終わってから応答してください
+    </div>
+    <div v-if="loadError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+      {{ loadError }}
+    </div>
+  </div>
+  <div v-if="!embedded" class="space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-bold text-gray-800">遠隔点呼モニター</h2>
       <button

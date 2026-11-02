@@ -44,10 +44,17 @@ const props = defineProps<{
    * (マイク・カメラと指静脈の機器を取り合わないため)
    */
   blocked?: boolean
+  /**
+   * 点呼受付で一緒に受ける遠隔点呼の部屋。渡されると着信の一覧に「遠隔」の行として並べ、押されたら
+   * `remoteCall` を出す (遠隔点呼の確認と通話は `TenkoRemoteAdminView` が受け持つ)。渡さなければ今までどおり
+   */
+  remoteRooms?: readonly string[]
 }>()
 const emit = defineEmits<{
   /** 点呼を開いている・開く途中・社員番号を待っている (並べた遠隔点呼の画面を止めるため) */
   busy: [busy: boolean]
+  /** 着信の一覧の「遠隔」の行の「通話する」 */
+  remoteCall: [roomId: string]
 }>()
 
 /** 開く対象。`roomId` が在れば通話して開く、null なら通話なしで開く */
@@ -88,6 +95,11 @@ const {
 } = useActiveRooms()
 /** 着信 = IT点呼 の部屋だけ (遠隔点呼の部屋は遠隔点呼モニターが受ける) */
 const itRooms = computed(() => splitRooms(activeRooms.value).it)
+/** 着信の一覧の行。点呼受付では遠隔点呼の部屋も並べ、行の印で IT / 遠隔 を見分ける */
+const incomingRows = computed(() => [
+  ...(props.remoteRooms ?? []).map(roomId => ({ roomId, kind: 'remote' as const })),
+  ...itRooms.value.map(roomId => ({ roomId, kind: 'it' as const })),
+])
 
 // --- 画面共有 (見るのは ScreenShareAdminView。ここは出すか・点呼との排他だけ) ---
 
@@ -502,7 +514,7 @@ onUnmounted(() => {
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <h2 class="text-lg font-bold text-gray-800">IT点呼</h2>
+      <h2 class="text-lg font-bold text-gray-800">{{ remoteRooms ? '点呼受付 (IT点呼・遠隔点呼)' : 'IT点呼' }}</h2>
       <button
         class="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
         :disabled="pendingLoading"
@@ -654,32 +666,39 @@ onUnmounted(() => {
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <!-- 着信 (乗務員が通話を待っている IT点呼) -->
+      <!-- 着信 (乗務員が通話を待っている IT点呼。点呼受付では遠隔点呼も並べる) -->
       <div class="space-y-3" data-testid="it-incoming">
         <h3 class="text-sm font-semibold text-gray-600">
           着信
-          <span class="ml-1 text-gray-400">({{ itRooms.length }}件)</span>
+          <span class="ml-1 text-gray-400">({{ incomingRows.length }}件)</span>
         </h3>
-        <div v-if="itRooms.length === 0" class="text-center py-8 text-gray-400 text-sm">
-          通話を待っている IT点呼 はありません
+        <div v-if="incomingRows.length === 0" class="text-center py-8 text-gray-400 text-sm">
+          {{ remoteRooms ? '通話を待っている点呼はありません' : '通話を待っている IT点呼 はありません' }}
         </div>
         <div
-          v-for="roomId in itRooms"
-          :key="roomId"
+          v-for="row in incomingRows"
+          :key="row.roomId"
           class="rounded-xl border p-4 flex items-center justify-between gap-2"
-          :class="opened?.roomId === roomId ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-white'"
+          :class="opened?.roomId === row.roomId ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-white'"
+          :data-kind="row.kind"
+          data-testid="it-incoming-row"
         >
           <div class="min-w-0">
             <div class="flex items-center gap-2">
               <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-              <span class="text-sm font-medium text-gray-800 truncate">{{ roomLabel(roomId) }}</span>
+              <span
+                v-if="remoteRooms"
+                class="shrink-0 text-xs px-2 py-0.5 rounded-full font-medium"
+                :class="row.kind === 'remote' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'"
+              >{{ row.kind === 'remote' ? '遠隔' : 'IT' }}</span>
+              <span class="text-sm font-medium text-gray-800 truncate">{{ row.kind === 'remote' ? '遠隔点呼' : roomLabel(row.roomId) }}</span>
             </div>
-            <div class="mt-1 text-xs text-gray-400 font-mono truncate">{{ roomId }}</div>
+            <div class="mt-1 text-xs text-gray-400 font-mono truncate">{{ row.roomId }}</div>
           </div>
           <button
             class="shrink-0 px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors disabled:opacity-50"
             :disabled="connecting"
-            @click="requestCall(roomId)"
+            @click="row.kind === 'remote' ? emit('remoteCall', row.roomId) : requestCall(row.roomId)"
           >
             通話する
           </button>
