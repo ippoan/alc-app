@@ -12,16 +12,27 @@
  * - `THERMO` を知らない古いファームは断るだけ (体温計はそれまでどおり探す)。描くものは無い
  */
 import { appendDiag } from '~/utils/serialDiagLog'
+import { requestWhenFree } from '~/utils/serial-request-when-free'
 
 /** `THERMO` の応答を待つ上限 (ms)。古いファームは `ERR` ですぐ返る */
 const THERMO_TIMEOUT_MS = 3_000
+/**
+ * ほかの要求 (つながった直後の端末の鍵の署名 `AUTH SIGN` 等、最大 10 秒) の応答待ちで弾かれたときに
+ * 送り直す間隔と回数 (500 ms × 40 = 20 秒)。2026-11-02 実測: 席でつながった直後の THERMO OFF が
+ * 2 回とも「既に応答待ちです」で弾かれ、体温計を探したままだった
+ */
+const THERMO_RETRY_MS = 500
+const THERMO_MAX_RETRIES = 40
 
 const vein = useVeinSerial()
 
 async function setThermo(on: boolean): Promise<void> {
   const want = on ? 'ON' : 'OFF'
   try {
-    const line = await vein.request(`THERMO ${want}`, 'OK THERMO=', THERMO_TIMEOUT_MS, 'ERR')
+    const line = await requestWhenFree(
+      () => vein.request(`THERMO ${want}`, 'OK THERMO=', THERMO_TIMEOUT_MS, 'ERR'),
+      { intervalMs: THERMO_RETRY_MS, maxRetries: THERMO_MAX_RETRIES },
+    )
     appendDiag(`[thermo] 運行管理者の画面 ${line}`)
   }
   catch (e) {

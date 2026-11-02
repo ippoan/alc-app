@@ -55,4 +55,17 @@ describe('ManagerSeatThermoPause', () => {
     await flushPromises()
     expect(vein.request).toHaveBeenCalledTimes(1)
   })
+
+  it('★ ほかの要求の応答待ちで弾かれたら、空くまで送り直す (つながった直後の鍵の署名と重なる)', async () => {
+    vi.useFakeTimers()
+    vein.request
+      .mockRejectedValueOnce(new Error('request(timecard): 既に応答待ちです'))
+      .mockRejectedValueOnce(new Error('request(timecard): 既に応答待ちです'))
+    vein.isConnected.value = true
+    await mountSuspended(ManagerSeatThermoPause)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(vein.request).toHaveBeenCalledTimes(3)
+    expect(appendDiag).toHaveBeenCalledWith('[thermo] 運行管理者の画面 OK THERMO=0')
+    vi.useRealTimers()
+  })
 })
