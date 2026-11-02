@@ -369,6 +369,16 @@ describe('RoleAuthGate — 運行管理者は社員番号を打てない・指�
     wrapper.unmount()
   })
 
+  it('★ 通った後は指の合図を受けない (中の画面の照合と同じ指を取り合わない)', async () => {
+    const wrapper = await mountGate('manager')
+    expect(veinOpts!.isIdle()).toBe(true)
+    expect(await veinOpts!.onEmployee(employee.value as never)).toBeNull()
+    await settle(wrapper)
+    expect(wrapper.text()).toContain('としてログイン中')
+    expect(veinOpts!.isIdle()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('指静脈で特定した人に権限が無ければ、理由を返して通さない', async () => {
     const wrapper = await mountGate('manager')
     employee.value = { ...employee.value, role: ['driver'] }
