@@ -26,9 +26,11 @@ mockNuxtImport('useAuth', () => () => ({
 
 const hasKioskCredential = ref(false)
 const hasDeviceJwt = ref(false)
+const getDeviceJwt = vi.fn(async (): Promise<string | null> => null)
 mockNuxtImport('useDeviceToken', () => () => ({
   hasKioskCredential,
   hasDeviceJwt,
+  getDeviceJwt,
 }))
 
 // 端末へ送った `OMRON BP ON|OFF` をそのまま肯定で返す firmware の既定応答
@@ -386,6 +388,31 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       localStorage.setItem('alc-vein-added-finger', 'native')
       const wrapper = await mountDeviceSettings()
       expect(wrapper.find<HTMLSelectElement>('[data-testid="vein-added-finger-mode"]').element.value).toBe('native')
+    })
+  })
+
+  describe('開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)', () => {
+    beforeEach(() => localStorage.removeItem('alc-kiosk-remote'))
+
+    it('既定はオフ。オンにするとこの端末に保存し、宛先に使う端末の id を出す', async () => {
+      getDeviceJwt.mockResolvedValueOnce(`h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef' }))}.s`)
+      const wrapper = await mountDeviceSettings()
+      const box = wrapper.find<HTMLInputElement>('[data-testid="kiosk-remote-checkbox"]')
+      expect(box.element.checked).toBe(false)
+      expect(wrapper.find('[data-testid="kiosk-remote-device-id"]').exists()).toBe(false)
+      await box.setValue(true)
+      expect(localStorage.getItem('alc-kiosk-remote')).toBe('1')
+      expect(wrapper.find('[data-testid="kiosk-remote-device-id"]').text()).toContain('alarm-0123456789abcdef')
+      await box.setValue(false)
+      expect(localStorage.getItem('alc-kiosk-remote')).toBeNull()
+    })
+
+    it('端末の token が無ければ登録が要る旨を出す', async () => {
+      localStorage.setItem('alc-kiosk-remote', '1')
+      getDeviceJwt.mockRejectedValueOnce(new Error('no key'))
+      const wrapper = await mountDeviceSettings()
+      await new Promise(r => setTimeout(r, 0))
+      expect(wrapper.find('[data-testid="kiosk-remote-device-id"]').text()).toContain('端末の登録が必要です')
     })
   })
 

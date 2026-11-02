@@ -1142,6 +1142,19 @@ export async function reportVeinFleet(report: {
   })
 }
 
+/**
+ * 開発用の遠隔操作の返事を送る (Refs ippoan/alc-app-s3#352)。**キオスクの端末の token だけで送る**
+ * (`reportVeinFleet` と同じ)。どの端末の返事かは server が token から決める
+ */
+export async function reportKioskCommandResult(id: string, payload: Record<string, unknown>): Promise<void> {
+  const jwt = await getKioskDeviceJwt?.()
+  if (!jwt) throw new Error('端末の登録が必要です')
+  await bearerRequest<unknown>('/api/kiosk-remote/result', jwt, {
+    method: 'POST',
+    body: JSON.stringify({ id, payload }),
+  })
+}
+
 /** 認証付きプロキシ経由でバイナリを取得し、object URL にする (顔写真・録画動画で共用)。 */
 async function fetchObjectUrl(path: string, scope: RequestTokenScope): Promise<string | null> {
   if (!apiBase) return null

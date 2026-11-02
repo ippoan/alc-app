@@ -78,6 +78,11 @@ export interface TimecardWatchOptions {
   onVeinListRequest?: () => void
   /** `{"type":"vein_list_updated"}` (キオスクが対応表を報告した) を受けたときに呼ぶ。管理画面だけに届く */
   onVeinListUpdated?: () => void
+  /**
+   * `{"type":"kiosk_command", id, device_id, op, args}` (開発用の遠隔操作の命令) を受けたときに呼ぶ。
+   * キオスクの購読だけに届く。形の検査と実行するかは受け手 (`utils/kiosk-remote`) が決める
+   */
+  onKioskCommand?: (data: unknown) => void
 }
 
 /**
@@ -187,6 +192,7 @@ export function useTimecardWatch(options: TimecardWatchOptions) {
         }
         else if (data.type === 'vein_list_request') options.onVeinListRequest?.()
         else if (data.type === 'vein_list_updated') options.onVeinListUpdated?.()
+        else if (data.type === 'kiosk_command') options.onKioskCommand?.(data)
       }
       catch {
         // 非 JSON は無視

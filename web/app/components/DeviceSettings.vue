@@ -4,6 +4,7 @@ import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
 import { alcoholResultLabel } from '~/utils/alcohol'
 import { requestWhenFree } from '~/utils/serial-request-when-free'
 import { parseVeinSecuritySetting } from '~/utils/vein-security-level'
+import { kioskDeviceIdFromJwt, readKioskRemoteEnabled, writeKioskRemoteEnabled } from '~/utils/kiosk-remote'
 
 const { ports, isSupported, refreshPorts, forgetPort } = useSerialDeviceManager()
 const { isAndroidApp } = useFingerprint()
@@ -21,6 +22,18 @@ const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAl
 const alarmDevice = useAlarmDevice()
 const { mode: veinAddedFingerMode, setMode: setVeinAddedFingerMode } = useVeinAddedFingerSetting()
 const { setting: veinSecuritySetting, moduleLevel: veinModuleLevel, setSetting: setVeinSecuritySetting } = useVeinSecurityLevel()
+
+// 開発用の遠隔操作 (MCP から Vein Station を操る。既定オフ、Refs ippoan/alc-app-s3#352)。
+// 宛先に使う端末の id も出す (MCP の kiosk_command の device_id)
+const kioskRemoteEnabled = ref(readKioskRemoteEnabled())
+const kioskRemoteDeviceId = ref<string | null>(null)
+function setKioskRemote(on: boolean): void {
+  writeKioskRemoteEnabled(on)
+  kioskRemoteEnabled.value = on
+}
+onMounted(async () => {
+  kioskRemoteDeviceId.value = kioskDeviceIdFromJwt(await useDeviceToken().getDeviceJwt().catch(() => null))
+})
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)
 const atomS3 = useAtomS3Serial()
@@ -723,6 +736,24 @@ async function syncFc1200Date() {
           </select>
           <span v-if="veinModuleLevel !== null" class="text-gray-500" data-testid="vein-module-security">
             つながっているモジュールの値: {{ veinModuleLevel }}
+          </span>
+        </label>
+
+        <!-- 開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)。オンにした端末だけが MCP の命令で
+             Vein Station を操られる。開発に使う PC だけでオンにする -->
+        <label class="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+          <input
+            type="checkbox"
+            class="mt-0.5"
+            data-testid="kiosk-remote-checkbox"
+            :checked="kioskRemoteEnabled"
+            @change="setKioskRemote(($event.target as HTMLInputElement).checked)"
+          />
+          <span>
+            開発用の遠隔操作を受ける (MCP から指静脈の端末を操る。開発に使う PC だけ)
+            <span v-if="kioskRemoteEnabled" class="block text-gray-500" data-testid="kiosk-remote-device-id">
+              この端末の id: {{ kioskRemoteDeviceId ?? '(端末の登録が必要です)' }}
+            </span>
           </span>
         </label>
 

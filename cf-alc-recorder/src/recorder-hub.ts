@@ -55,6 +55,8 @@ import {
  *     保存 (端末ごとに 1 件、7 日 TTL、200 件まで) し、キオスク以外の購読へ
  *     `{ type: "vein_list_updated" }` の合図。
  *   - `GET /vein-list-status` → 保存した対応表の一覧。
+ *   - `POST /kiosk-command` → キオスクの購読へ開発用の遠隔操作の命令 `{ type: "kiosk_command", id, device_id, op, args }`。
+ *   - `POST /kiosk-command-result` → キオスクの返事を `cmdres:<id>` に保存 (`GET /command-result/:id` で取る)。
  *
  * Hibernation 復帰: 接続 identity は in-memory に持たず、毎メッセージ
  * `ws.deserializeAttachment()` から読む (= 復帰後も転送先 tenant/device が壊れない)。
@@ -180,6 +182,19 @@ const CMD_RESULT_PREFIX = "cmdres:";
 
 /** command_result の保持期間 (この時間を過ぎたら次の書き込み時に prune)。 */
 const CMD_RESULT_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 開発用の遠隔操作 (`POST /kiosk-command`) で送った命令の宛先の storage key prefix。
+ * 返事 (`POST /kiosk-command-result`) が宛先の端末から来たかをこれで確かめる。保持は返事と同じ
+ * ([`CMD_RESULT_TTL_MS`])。
+ */
+const KIOSK_CMD_PREFIX = "kcmd:";
+
+/** 遠隔操作の宛先「つながっている全キオスク」(返事は端末ごとに `devices` へまとめる)。 */
+const KIOSK_CMD_ALL = "*";
+
+/** 遠隔操作の返事 1 通の上限 (バイト)。指静脈の記録の 16 進はキオスクが伏せて送る */
+const KIOSK_CMD_RESULT_MAX_BYTES = 64 * 1024;
 
 /** ファームの更新の報告 (`POST /ota-report`) の storage key prefix。 */
 const OTA_STATE_PREFIX = "ota-state:";
@@ -490,6 +505,12 @@ export class RecorderHub extends DurableObject<Env> {
     }
     if (url.pathname === "/vein-list-status" && request.method === "GET") {
       return this.handleVeinListStatus();
+    }
+    if (url.pathname === "/kiosk-command" && request.method === "POST") {
+      return this.handleKioskCommand(request);
+    }
+    if (url.pathname === "/kiosk-command-result" && request.method === "POST") {
+      return this.handleKioskCommandResult(request);
     }
     if (url.pathname === "/timecard-punch" && request.method === "POST") {
       return this.handleTimecardPunch(request);
@@ -1049,6 +1070,77 @@ export class RecorderHub extends DurableObject<Env> {
         if (!this.ctx.getTags(ws).includes(KIOSK_TAG)) this.send(ws, { type: "vein_list_updated" });
       }
     }
+    return json({ ok: true });
+  }
+
+  // ── 開発用の遠隔操作 (内部 HTTP API、Refs ippoan/alc-app-s3#352) ─────────────
+
+  /**
+   * キオスクへ命令を送る。**`KIOSK_TAG` の購読にだけ**送り、宛先 (`device_id`) は合図に載せる
+   * (購読の attachment は端末を持たないので、キオスクの側が自分宛てか見る。シリアル OTA と同じ)。
+   * 実行するのは端末設定で遠隔操作をオンにしたキオスクだけ。宛先は `kcmd:<id>` に残し、
+   * 返事がその端末から来たかを確かめる。購読が 1 本も無ければ 404 `kiosk_not_connected`
+   */
+  private async handleKioskCommand(request: Request): Promise<Response> {
+    let body: { device_id?: unknown; id?: unknown; op?: unknown; args?: unknown };
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    const deviceId = body.device_id;
+    if (typeof deviceId !== "string" || !deviceId || deviceId.length > 128) {
+      return json({ error: "invalid_device_id" }, 400);
+    }
+    if (typeof body.op !== "string" || !/^[a-z_]{1,32}$/.test(body.op)) {
+      return json({ error: "invalid_op" }, 400);
+    }
+    const sockets = this.ctx.getWebSockets(KIOSK_TAG);
+    if (sockets.length === 0) return json({ error: "kiosk_not_connected" }, 404);
+    const id =
+      typeof body.id === "string" && body.id && body.id.length <= 128 ? body.id : crypto.randomUUID();
+    const now = Date.now();
+    await this.pruneExpired<{ sent_at_ms?: number }>(KIOSK_CMD_PREFIX, CMD_RESULT_TTL_MS, "sent_at_ms", now);
+    await this.ctx.storage.put(KIOSK_CMD_PREFIX + id, { device_id: deviceId, sent_at_ms: now });
+    const args = body.args && typeof body.args === "object" && !Array.isArray(body.args) ? body.args : {};
+    for (const ws of sockets) {
+      this.send(ws, { type: "kiosk_command", id, device_id: deviceId, op: body.op, args });
+    }
+    return json({ id, sent: sockets.length }, 202);
+  }
+
+  /**
+   * キオスクの返事を `cmdres:<id>` に保存する (`GET /command-result/:id` で取れる。途中経過は同じ id
+   * への上書き)。返す端末は caller (web の server route が token から決めた) の `X-Recorder-Device-Id`。
+   * 宛先と違う端末の返事は 403。宛先が全キオスク (`*`) の命令は、端末ごとに `payload.devices` へまとめる
+   */
+  private async handleKioskCommandResult(request: Request): Promise<Response> {
+    const deviceId = request.headers.get("X-Recorder-Device-Id") ?? "";
+    if (!deviceId) return json({ error: "missing_device_id" }, 400);
+    const text = await request.text();
+    if (text.length > KIOSK_CMD_RESULT_MAX_BYTES) return json({ error: "too_large" }, 413);
+    let body: { id?: unknown; payload?: unknown };
+    try {
+      body = JSON.parse(text) as typeof body;
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    const id = typeof body.id === "string" ? body.id : "";
+    const sent = id ? await this.ctx.storage.get<{ device_id: string }>(KIOSK_CMD_PREFIX + id) : undefined;
+    if (!sent) return json({ error: "unknown_command" }, 404);
+    if (sent.device_id !== KIOSK_CMD_ALL && sent.device_id !== deviceId) {
+      return json({ error: "wrong_device" }, 403);
+    }
+    const now = Date.now();
+    let payload = body.payload ?? null;
+    if (sent.device_id === KIOSK_CMD_ALL) {
+      const prev = await this.ctx.storage.get<{ payload?: { devices?: Record<string, unknown> } }>(
+        CMD_RESULT_PREFIX + id,
+      );
+      payload = { devices: { ...(prev?.payload?.devices ?? {}), [deviceId]: payload } };
+    }
+    await this.pruneExpired<{ received_at_ms?: number }>(CMD_RESULT_PREFIX, CMD_RESULT_TTL_MS, "received_at_ms", now);
+    await this.ctx.storage.put(CMD_RESULT_PREFIX + id, { device_id: sent.device_id, received_at_ms: now, payload });
     return json({ ok: true });
   }
 
