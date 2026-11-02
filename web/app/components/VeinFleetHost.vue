@@ -19,7 +19,7 @@
  */
 import { reportKioskCommandResult, reportVeinFleet } from '~/utils/api'
 import { loadVeinModuleEntries } from '~/utils/vein-db'
-import { respondToKioskCommand } from '~/utils/kiosk-remote'
+import { respondToKioskCommand, VEIN_FIRMWARE_TARGET } from '~/utils/kiosk-remote'
 
 const props = defineProps<{
   /** いまのタブがデモか。デモの間は合図を受けても報告しない */
@@ -27,6 +27,8 @@ const props = defineProps<{
 }>()
 
 const veinSerial = useVeinSerial()
+/** 遠隔操作の `firmware_update` で使う (画面の更新と同じ手順・同じ「更新中」の印) */
+const serialOta = useSerialOta()
 
 async function report(): Promise<void> {
   try {
@@ -55,6 +57,7 @@ function onKioskCommand(data: unknown): void {
     jwt: () => useDeviceToken().getDeviceJwt(),
     port: veinSerial,
     scope: 'default',
+    firmwareUpdate: () => serialOta.run(VEIN_FIRMWARE_TARGET),
     report: (id, payload) => reportKioskCommandResult(id, payload),
   })
 }

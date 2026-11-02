@@ -20,6 +20,9 @@ import type { VeinMatchResult } from '~/composables/useVeinSerial'
 /** 端末設定の key (localStorage)。`'1'` でオン */
 export const KIOSK_REMOTE_KEY = 'alc-kiosk-remote'
 
+/** 指静脈の端末 (Vein Station / Vein Base) のファームの更新の target (機体の FLAVOR で中身を引き分ける) */
+export const VEIN_FIRMWARE_TARGET = 'timecard-station'
+
 /** 指が置かれるのを待つ既定の時間 (人が端末の前に来るまで) */
 export const KIOSK_REMOTE_FINGER_WAIT_MS = 60_000
 /** 指を待てる上限 (MCP 側の待ちより短く) */
@@ -101,6 +104,11 @@ export interface KioskRemoteDeps {
   progress: (payload: Record<string, unknown>) => Promise<void>
   /** 照合データと当たった人の照会に使う鍵 */
   scope?: RequestTokenScope
+  /**
+   * 指静脈の端末のファームを最新にする (`useSerialOta().run('timecard-station')`、画面の更新と同じ手順)。
+   * 渡さない画面では `firmware_update` を断る
+   */
+  firmwareUpdate?: () => Promise<string>
 }
 
 function moduleId(v: unknown): number {
@@ -156,6 +164,7 @@ function matchOf(port: KioskRemotePort): Record<string, unknown> | null {
  * | `kiosk_flow` | `employee_id`, `wait_finger_ms?` | 免許証で決まった後のキオスクの照合 (用意 → 指 → 1:1 → 乗務員の照会) |
  * | `serial` | `line`, `prefix`, `timeout_ms?` | 1 行送って応答 1 行 (伏せて返す) |
  * | `lines` | `n?` | 直近のシリアルの行 (伏せた写し) |
+ * | `firmware_update` | | 指静脈の端末のファームを最新にする (数分かかる。書き終えると画面を読み込み直す) |
  */
 export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps): Promise<Record<string, unknown>> {
   const { port, scope = 'default' } = deps
@@ -226,6 +235,12 @@ export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps):
         result = { lines: snapshotVeinLines().split('\n').filter(Boolean).slice(-n) }
         break
       }
+      case 'firmware_update': {
+        if (!deps.firmwareUpdate) throw new Error('この画面ではファームを更新できません')
+        await deps.progress({ done: false, stage: 'updating' }).catch(() => {})
+        result = { outcome: await deps.firmwareUpdate() }
+        break
+      }
       default:
         throw new Error(`知らない op です: ${cmd.op}`)
     }
@@ -248,6 +263,8 @@ export async function respondToKioskCommand(data: unknown, deps: {
   scope: RequestTokenScope
   /** 返事を送る (途中経過も同じ口) */
   report: (id: string, payload: Record<string, unknown>) => Promise<void>
+  /** 指静脈の端末のファームを最新にする ({@link KioskRemoteDeps.firmwareUpdate}) */
+  firmwareUpdate?: () => Promise<string>
 }): Promise<void> {
   const cmd = parseKioskCommand(data)
   if (!cmd || !readKioskRemoteEnabled()) return
@@ -255,7 +272,13 @@ export async function respondToKioskCommand(data: unknown, deps: {
   if (!deviceId || (cmd.device_id !== '*' && cmd.device_id !== deviceId)) return
   const send = (payload: Record<string, unknown>) => deps.report(cmd.id, payload)
   try {
-    await send(await runKioskCommand(cmd, { port: deps.port, deviceId, progress: send, scope: deps.scope }))
+    await send(await runKioskCommand(cmd, {
+      port: deps.port,
+      deviceId,
+      progress: send,
+      scope: deps.scope,
+      firmwareUpdate: deps.firmwareUpdate,
+    }))
   }
   catch (e) {
     console.warn('[kiosk-remote] 返事を送れませんでした:', e)

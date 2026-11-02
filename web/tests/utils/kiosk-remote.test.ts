@@ -236,6 +236,19 @@ describe('runKioskCommand', () => {
     expect(((await runKioskCommand(cmd('lines'), deps)).result as { lines: string[] }).lines).toHaveLength(50)
   })
 
+  it('firmware_update は途中経過を返してから更新し、結果を返す。渡されていない画面では断る', async () => {
+    const firmwareUpdate = vi.fn(async () => 'updated')
+    const progress = vi.fn(async () => {})
+    const r = await runKioskCommand(cmd('firmware_update'), { port: makePort().port, deviceId: 'k', progress, firmwareUpdate })
+    expect(progress).toHaveBeenCalledWith({ done: false, stage: 'updating' })
+    expect(r).toEqual({ done: true, ok: true, op: 'firmware_update', result: { outcome: 'updated' } })
+    const failingProgress = vi.fn(async () => { throw new Error('net') })
+    expect((await runKioskCommand(cmd('firmware_update'), { port: makePort().port, deviceId: 'k', progress: failingProgress, firmwareUpdate })).result)
+      .toEqual({ outcome: 'updated' })
+    expect(await runKioskCommand(cmd('firmware_update'), { port: makePort().port, deviceId: 'k', progress }))
+      .toMatchObject({ ok: false, error: 'この画面ではファームを更新できません' })
+  })
+
   it('知らない op は ok: false', async () => {
     expect(await runKioskCommand(cmd('nope'), { port: makePort().port, deviceId: 'k', progress: vi.fn() }))
       .toEqual({ done: true, ok: false, op: 'nope', error: '知らない op です: nope' })
@@ -275,6 +288,14 @@ describe('respondToKioskCommand', () => {
     await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => null), report: d.report }))
     await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => { throw new Error('no key') }), report: d.report }))
     expect(d.report).not.toHaveBeenCalled()
+  })
+
+  it('ファームの更新の口を runKioskCommand へ渡す', async () => {
+    writeKioskRemoteEnabled(true)
+    const firmwareUpdate = vi.fn(async () => 'up_to_date')
+    const d = deps({ firmwareUpdate })
+    await respondToKioskCommand(frame('*', 'firmware_update'), d)
+    expect(d.report).toHaveBeenLastCalledWith('c1', { done: true, ok: true, op: 'firmware_update', result: { outcome: 'up_to_date' } })
   })
 
   it('返事の失敗は握る', async () => {

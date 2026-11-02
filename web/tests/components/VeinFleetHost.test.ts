@@ -31,6 +31,9 @@ const vein = vi.hoisted(() => ({
 }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 
+const serialOta = vi.hoisted(() => ({ run: vi.fn(async () => 'updated') }))
+mockNuxtImport('useSerialOta', () => () => serialOta)
+
 const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn(async (): Promise<string> => 'kiosk-jwt') }))
 mockNuxtImport('useDeviceToken', () => () => deviceToken)
 
@@ -143,6 +146,15 @@ describe('VeinFleetHost', () => {
         ['c1', { done: true, ok: true, op: 'hello', result: { device_id: 'alarm-0123456789abcdef', vein_connected: true } }],
         ['c1', { done: true, ok: true, op: 'hello', result: { device_id: 'alarm-0123456789abcdef', vein_connected: true } }],
       ])
+    })
+
+    it('firmware_update は Vein の target で更新する', async () => {
+      vein.isConnected.value = true
+      await mountSuspended(VeinFleetHost)
+      watchOptions().onKioskCommand({ ...hello('*'), op: 'firmware_update' })
+      await flushPromises()
+      expect(serialOta.run).toHaveBeenCalledWith('timecard-station')
+      expect(reportKioskCommandResult).toHaveBeenLastCalledWith('c1', { done: true, ok: true, op: 'firmware_update', result: { outcome: 'updated' } })
     })
 
     it('★ 他の端末宛て・設定がオフ・デモ・形が外れた命令は実行しない', async () => {
