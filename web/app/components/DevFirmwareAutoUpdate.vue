@@ -16,8 +16,9 @@
  * - 同じ「今の版 → 配布中の版」はこの画面を開いている間に 1 回だけ試す (失敗しても繰り返さない)
  * - 書き込みは画面の更新と同じ `useSerialOta` — 「更新中」の幕 (`FirmwareOtaOverlay.vue`) も同じものが出る。
  *   書き終えると画面を読み込み直す
- * - 開発端末では右下に合図の購読の状態 (購読中 / 再接続中 / 未購読) と最後に合図を受けた時刻を小さく出す。
- *   合図が届かなかったときに、購読が無かったのかを画面で見分けるため
+ * - 開発端末では合図の購読の状態 (購読中 / 再接続中 / 未購読) と最後に合図を受けた時刻を、右下の版の表示に足す
+ *   (`useDevFirmwareWatchBadge` → `app.vue` の `VersionBadge` の slot)。合図が届かなかったときに、
+ *   購読が無かったのかを画面で見分けるため。描くものは無い
  */
 import { fetchLatestFirmwareVersions, isFirmwareDifferent } from '~/utils/firmware-updates'
 import { VEIN_FIRMWARE_TARGET } from '~/utils/kiosk-remote'
@@ -70,13 +71,16 @@ const firmwareWatch = useTimecardWatch({
 })
 const subscribed = ref(false)
 
-/** 右下の表示。開発端末でなければ出さない */
-const watchBadge = computed(() => {
-  if (!dev.value || isDemoMode.value) return null
-  if (!subscribed.value) return { on: false, text: 'ファームの合図: 未購読 (指静脈の端末を待っています)' }
-  return firmwareWatch.isConnected.value
-    ? { on: true, text: 'ファームの合図: 購読中' }
-    : { on: false, text: 'ファームの合図: 再接続中' }
+/** 右下の版の表示に足す状態。開発端末でなければ null */
+const badge = useDevFirmwareWatchBadge()
+watchEffect(() => {
+  if (!dev.value || isDemoMode.value) {
+    badge.value = null
+    return
+  }
+  const on = subscribed.value && firmwareWatch.isConnected.value
+  const text = !subscribed.value ? '未購読' : on ? '購読中' : '再接続中'
+  badge.value = { on, text, lastSignalAt: lastSignalAt.value }
 })
 
 async function refreshLatest(): Promise<void> {
@@ -135,16 +139,10 @@ onBeforeUnmount(() => {
   clearNotifyTimers()
   firmwareWatch.stop()
   window.removeEventListener(DEV_DEVICE_MARK_EVENT, readDev)
+  badge.value = null
 })
 </script>
 
 <template>
-  <div
-    v-if="watchBadge"
-    data-testid="dev-firmware-watch-badge"
-    class="fixed bottom-1 right-1 z-50 pointer-events-none rounded bg-white/90 border border-gray-300 px-2 py-0.5 text-xs text-gray-700 shadow"
-  >
-    <span :class="watchBadge.on ? 'text-green-600' : 'text-gray-400'">{{ watchBadge.on ? '●' : '○' }}</span>
-    {{ watchBadge.text }}<template v-if="lastSignalAt">（最後の合図 {{ lastSignalAt }}）</template>
-  </div>
+  <!-- 描くものは無い (状態は右下の版の表示に出す) -->
 </template>
