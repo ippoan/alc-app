@@ -88,3 +88,31 @@ describe('TenkoRemoteAdminView — 拠点カメラ', () => {
     w.unmount()
   })
 })
+
+describe('TenkoRemoteAdminView — 判定のあと', () => {
+  it('★ 判定を送ったら通話を終えて一覧に戻る (IT点呼と同じ。残すと押し直して送信失敗になる)', async () => {
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession).mockResolvedValue({
+      id: 'session-1', employee_id: 'emp-1', status: 'judgment_pending', tenko_type: 'pre_operation',
+    } as never)
+    const judgeStub = {
+      emits: ['judged'],
+      template: '<button data-testid="judge-stub" @click="$emit(\'judged\', { id: \'session-1\', status: \'completed\' })">判定</button>',
+    }
+    useManagerAuth().setManagerId('mgr-1')
+    const w = await mountSuspended(TenkoRemoteAdminView, { global: { stubs: { ...stubs, TenkoManagerJudgmentPanel: judgeStub, TenkoDriverInfoPanel: true } } })
+    await flushPromises()
+    await w.findAll('div').find(d => d.classes().includes('cursor-pointer') && d.text().includes('session-1'))!.trigger('click')
+    await flushPromises()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await flushPromises()
+    expect(w.text()).toContain('通話終了')
+    await w.find('[data-testid="judge-stub"]').trigger('click')
+    await flushPromises()
+    expect(w.text()).not.toContain('通話終了')
+    expect(w.find('[data-testid="judge-stub"]').exists()).toBe(false)
+    vi.mocked(getTenkoSession).mockRejectedValue(new Error('no session'))
+    w.unmount()
+  })
+})
+

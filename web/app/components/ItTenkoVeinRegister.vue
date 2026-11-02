@@ -19,8 +19,8 @@ const props = defineProps<{
   onEmployee: (employee: ApiEmployee) => Promise<string | null>
   /** 指が置かれた合図で照合を始めてよいか */
   idle: boolean
-  /** ボタンの文言 (既定「指静脈で登録」) */
-  buttonLabel?: string
+  /** ボタンを出さず「指を置いてください」だけを出す (指が置かれた合図で照合する。遠隔点呼の通話前の確認) */
+  auto?: boolean
   /** 一致する人がいなかったときの文言 (既定は社員番号での登録を勧める) */
   missMessage?: string
 }>()
@@ -45,13 +45,17 @@ const vein = useVeinEmployeeIdentify({
 
 <template>
   <div v-if="vein.ready.value" class="mt-3" data-testid="it-vein-register">
+    <p v-if="auto" data-testid="it-vein-register-prompt" class="py-3 text-center text-lg font-semibold text-emerald-700">
+      {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '照合しています…') : '指を置いてください' }}
+    </p>
     <button
+      v-else
       data-testid="it-vein-register-button"
       :disabled="vein.busy.value"
       class="w-full px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg font-medium disabled:opacity-50 hover:bg-emerald-700 transition-colors"
       @click="vein.identify()"
     >
-      {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : (buttonLabel ?? '指静脈で登録') }}
+      {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で登録' }}
     </button>
     <p v-if="vein.error.value" data-testid="it-vein-register-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
     <VeinRefreshSuggest v-if="refresh.target.value !== null" :suggest="refresh" class="mt-2" />

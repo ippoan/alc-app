@@ -196,6 +196,17 @@ describe('useTenkoKiosk', () => {
       expect(k.stepLabels.value).not.toContain('日常点検')
     })
 
+    it('★ 段の名前と段の並びは同じ長さで、業務前は携行品の段に「携行品」が光る', () => {
+      const pre = useTenkoKiosk({ remoteMode: true })
+      expect(pre.stepLabels.value).toHaveLength(pre.stepKeys.value.length)
+      pre.step.value = 'carrying_items'
+      expect(pre.stepLabels.value[pre.currentStepIndex.value]).toBe('携行品')
+      pre.step.value = 'alcohol'
+      expect(pre.stepLabels.value[pre.currentStepIndex.value]).toBe('アルコール')
+      const local = useTenkoKiosk()
+      expect(local.stepLabels.value).toHaveLength(local.stepKeys.value.length)
+    })
+
     it('remoteMode では schedule_select / 予定選択 がない', () => {
       const k = useTenkoKiosk({ remoteMode: true })
       expect(k.stepKeys.value).not.toContain('schedule_select')

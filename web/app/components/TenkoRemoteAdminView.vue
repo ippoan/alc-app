@@ -238,6 +238,15 @@ function endCall() {
   setJoined(null)
 }
 
+/**
+ * 判定を送ったら通話を終えて一覧へ戻る (IT点呼の `TenkoItAdminView` の `onJudged` と同じ)。
+ * 残すと画面が閉じず、もう一度押して「判定の送信に失敗しました」になる (2026-11-02 実機)
+ */
+function onJudged(): void {
+  endCall()
+  liveSession.value = null
+}
+
 const { deviceId, deviceSettingsToken } = useAuth()
 
 onMounted(async () => {
@@ -518,7 +527,7 @@ onUnmounted(() => {
           :session="liveSession"
           :manager-id="authenticatedManagerId"
           wait-for-driver
-          @judged="s => { liveSession = s }"
+          @judged="onJudged"
         />
       </div>
     </div>
@@ -532,11 +541,10 @@ onUnmounted(() => {
   >
     <div class="bg-white rounded-2xl p-4 shadow-xl w-full max-w-lg mx-2 max-h-[95vh] overflow-y-auto">
       <h3 class="text-lg font-semibold text-gray-800 mb-1">点呼開始前の確認</h3>
-      <p class="text-sm text-gray-500">運行管理者の指を置いてください</p>
       <ItTenkoVeinRegister
         :on-employee="onManagerVein"
         :idle="veinConfirmActive && !isCallActive"
-        button-label="指静脈で確認"
+        auto
         miss-message="指静脈が一致する人が見つかりません。もう一度置いてください"
       />
       <button

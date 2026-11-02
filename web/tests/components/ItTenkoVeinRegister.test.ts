@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import ItTenkoVeinRegister from '~/components/ItTenkoVeinRegister.vue'
 
@@ -93,12 +93,24 @@ describe('ItTenkoVeinRegister — 指静脈が FP のときの撮り直しの提
   })
 })
 
-describe('ItTenkoVeinRegister — 文言を渡す (遠隔点呼の通話前の確認)', () => {
-  it('ボタンと一致しなかったときの文言を差し替えられる。渡さなければ IT点呼の文言', async () => {
+describe('ItTenkoVeinRegister — 遠隔点呼の通話前の確認 (auto)', () => {
+  it('auto はボタンを出さず「指を置いてください」を出し、照合中・撮り直しで文言が変わる。一致しなかった文言も差し替えられる', async () => {
+    veinState.busy.value = false
+    veinState.again.value = false
     const w = await mountSuspended(ItTenkoVeinRegister, {
-      props: { onEmployee, idle: true, buttonLabel: '指静脈で確認', missMessage: 'もう一度置いてください' },
+      props: { onEmployee, idle: true, auto: true, missMessage: 'もう一度置いてください' },
     })
-    expect(w.find('[data-testid="it-vein-register-button"]').text()).toBe('指静脈で確認')
+    expect(w.find('[data-testid="it-vein-register-button"]').exists()).toBe(false)
+    const prompt = () => w.find('[data-testid="it-vein-register-prompt"]').text()
+    expect(prompt()).toBe('指を置いてください')
+    veinState.busy.value = true
+    await nextTick()
+    expect(prompt()).toBe('照合しています…')
+    veinState.again.value = true
+    await nextTick()
+    expect(prompt()).toBe('もう一度置いてください…')
+    veinState.busy.value = false
+    veinState.again.value = false
     expect(veinOpts!.missMessage).toBe('もう一度置いてください')
     const d = await mountRegister()
     expect(d.find('[data-testid="it-vein-register-button"]').text()).toBe('指静脈で登録')
