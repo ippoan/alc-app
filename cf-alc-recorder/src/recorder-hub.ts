@@ -172,6 +172,12 @@ function watchTagFor(dev: boolean): string {
 const KIOSK_TAG = "watch:kiosk";
 
 /**
+ * 運行管理者席 (`device-tenko-manager`) の購読だけの tag。受けるのは開発用の遠隔操作の命令
+ * (`kiosk_command`) だけ — 打刻・シリアル OTA・対応表の合図の tag は付けない (Refs ippoan/alc-app-s3#352)
+ */
+const MANAGER_SEAT_TAG = "watch:manager-seat";
+
+/**
  * 購読 WS のサブプロトコル名。ブラウザは `["alc.timecard.v1", "<jwt>"]` を送り、
  * サーバはこちらだけを echo し返す (トークンを応答ヘッダーに乗せない)。
  */
@@ -555,14 +561,18 @@ export class RecorderHub extends DurableObject<Env> {
     }
     // worker (src/index.ts) が introspect 済み判定から必ず上書きして付けるヘッダー
     // (Refs #279)。kiosk だけ `KIOSK_TAG` を足す — シリアル OTA の合図の宛先になる。
-    const isKiosk = request.headers.get("X-Recorder-Watcher-Kind") === "kiosk";
+    const kind = request.headers.get("X-Recorder-Watcher-Kind");
+    const isKiosk = kind === "kiosk";
     // 合図の tag は dev / 本番のどちらか片方だけ (Refs ippoan/alc-app#387)。
     // `KIOSK_TAG` (シリアル OTA の合図) は dev を問わない — 端末の firmware の話で、
     // 記録の区別とは関係が無い。
     const dev = request.headers.get(RECORDER_DEV_HEADER) === DEV_HEADER_VALUE;
     const watchTag = watchTagFor(dev);
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], isKiosk ? [watchTag, KIOSK_TAG] : [watchTag]);
+    this.ctx.acceptWebSocket(
+      pair[1],
+      kind === "manager-seat" ? [MANAGER_SEAT_TAG] : isKiosk ? [watchTag, KIOSK_TAG] : [watchTag],
+    );
     pair[1].serializeAttachment(buildAttachment(tenantId, undefined, dev));
     // サブプロトコルを 1 つも返さないとブラウザが即座に閉じる。
     // **トークン側を返してはいけない** (応答ヘッダーに秘密が乗る)
@@ -1076,7 +1086,7 @@ export class RecorderHub extends DurableObject<Env> {
   // ── 開発用の遠隔操作 (内部 HTTP API、Refs ippoan/alc-app-s3#352) ─────────────
 
   /**
-   * キオスクへ命令を送る。**`KIOSK_TAG` の購読にだけ**送り、宛先 (`device_id`) は合図に載せる
+   * キオスクへ命令を送る。**`KIOSK_TAG` と `MANAGER_SEAT_TAG` の購読にだけ**送り、宛先 (`device_id`) は合図に載せる
    * (購読の attachment は端末を持たないので、キオスクの側が自分宛てか見る。シリアル OTA と同じ)。
    * 実行するのは端末設定で遠隔操作をオンにしたキオスクだけ。宛先は `kcmd:<id>` に残し、
    * 返事がその端末から来たかを確かめる。購読が 1 本も無ければ 404 `kiosk_not_connected`
@@ -1095,7 +1105,8 @@ export class RecorderHub extends DurableObject<Env> {
     if (typeof body.op !== "string" || !/^[a-z_]{1,32}$/.test(body.op)) {
       return json({ error: "invalid_op" }, 400);
     }
-    const sockets = this.ctx.getWebSockets(KIOSK_TAG);
+    // キオスクと運行管理者席の購読の両方へ (宛先の見分けは受け手)
+    const sockets = [...this.ctx.getWebSockets(KIOSK_TAG), ...this.ctx.getWebSockets(MANAGER_SEAT_TAG)];
     if (sockets.length === 0) return json({ error: "kiosk_not_connected" }, 404);
     const id =
       typeof body.id === "string" && body.id && body.id.length <= 128 ? body.id : crypto.randomUUID();

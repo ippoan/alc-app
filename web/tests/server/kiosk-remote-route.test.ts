@@ -104,9 +104,20 @@ describe('POST /api/kiosk-remote/result', () => {
     expect(getResponseStatus(event)).toBe(403)
   })
 
-  it('キオスク以外の token は通さない', async () => {
+  it('運行管理者席の token も通す (端末は sub から)', async () => {
+    introspect = { claims: { active: true, tenant_id: 't1', role: 'device-tenko-manager', sub: 'alarm:00000000000000aa' }, status: 200 }
+    await result(makeEvent())
+    const [, init] = recorderFetch.mock.calls[0] as [string, { headers: Record<string, string> }]
+    expect(init.headers['X-Recorder-Device-Id']).toBe('alarm-00000000000000aa')
+  })
+
+  it('端末以外の token は 403、無効な token は 401 (recorder を呼ばない)', async () => {
     introspect = { claims: { active: true, tenant_id: 't1', role: 'admin', sub: 'u1' }, status: 200 }
     await expect(result(makeEvent())).rejects.toMatchObject({ statusCode: 403 })
+    introspect = { claims: { active: true, tenant_id: 't1', sub: 'u1' }, status: 200 }
+    await expect(result(makeEvent())).rejects.toMatchObject({ statusCode: 403 })
+    introspect = { claims: { active: false }, status: 200 }
+    await expect(result(makeEvent())).rejects.toMatchObject({ statusCode: 401 })
     expect(recorderFetch).not.toHaveBeenCalled()
   })
 

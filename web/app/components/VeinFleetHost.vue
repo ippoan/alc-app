@@ -19,7 +19,7 @@
  */
 import { reportKioskCommandResult, reportVeinFleet } from '~/utils/api'
 import { loadVeinModuleEntries } from '~/utils/vein-db'
-import { kioskDeviceIdFromJwt, parseKioskCommand, readKioskRemoteEnabled, runKioskCommand } from '~/utils/kiosk-remote'
+import { respondToKioskCommand } from '~/utils/kiosk-remote'
 
 const props = defineProps<{
   /** いまのタブがデモか。デモの間は合図を受けても報告しない */
@@ -49,18 +49,14 @@ async function report(): Promise<void> {
   }
 }
 
-async function onKioskCommand(data: unknown): Promise<void> {
-  const cmd = parseKioskCommand(data)
-  if (!cmd || props.demo || !readKioskRemoteEnabled()) return
-  const deviceId = kioskDeviceIdFromJwt(await useDeviceToken().getDeviceJwt().catch(() => null))
-  if (!deviceId || (cmd.device_id !== '*' && cmd.device_id !== deviceId)) return
-  const send = (payload: Record<string, unknown>) => reportKioskCommandResult(cmd.id, payload)
-  try {
-    await send(await runKioskCommand(cmd, { port: veinSerial, deviceId, progress: send }))
-  }
-  catch (e) {
-    console.warn('[kiosk-remote] 返事を送れませんでした:', e)
-  }
+function onKioskCommand(data: unknown): void {
+  if (props.demo) return
+  void respondToKioskCommand(data, {
+    jwt: () => useDeviceToken().getDeviceJwt(),
+    port: veinSerial,
+    scope: 'default',
+    report: (id, payload) => reportKioskCommandResult(id, payload),
+  })
 }
 
 const fleetWatch = useTimecardWatch({
@@ -68,7 +64,7 @@ const fleetWatch = useTimecardWatch({
   onVeinListRequest: () => {
     if (!props.demo) void report()
   },
-  onKioskCommand: (data) => { void onKioskCommand(data) },
+  onKioskCommand,
 })
 
 onMounted(() => { void veinSerial.connect() })

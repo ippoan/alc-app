@@ -3391,6 +3391,13 @@ describe.skipIf(isLive)('端末の指静脈の一覧 (#436)', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
   })
 
+  it('reportKioskCommandResult: 運行管理者席は席の鍵で送る', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt', async () => 'seat-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ ok: true }))
+    await reportKioskCommandResult('c1', { done: true }, 'manager-device')
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer seat-jwt')
+  })
+
   it('reportKioskCommandResult: 端末の token が無ければ fetch せずに throw', async () => {
     initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => null)
     await expect(reportKioskCommandResult('c1', {})).rejects.toThrow('端末の登録が必要です')

@@ -324,6 +324,16 @@ const menuRoleTabs: readonly RoleTab[] = ['manager', 'admin', 'general', 'it_ten
 const menuOpen = ref(false)
 const menuRef = ref<HTMLElement | null>(null)
 
+// 運行管理者の画面のハンバーガーメニュー (デバイス設定を開く。Refs ippoan/alc-app-s3#352)。
+// 開いている間は運行管理者の画面 (認証ゲート) の代わりにデバイス設定を出す
+const managerMenuOpen = ref(false)
+const managerMenuRef = ref<HTMLElement | null>(null)
+const managerShowsDevice = ref(false)
+function onManagerMenuSelect(device: boolean) {
+  managerShowsDevice.value = device
+  managerMenuOpen.value = false
+}
+
 // WatchdogService ステータス (Android端末のみ)
 const { isAndroidApp } = useFingerprint()
 const watchdogStatus = ref<string | null>(null)
@@ -402,6 +412,9 @@ function onMenuSelect(tab: DriverSubTab) {
 function onClickOutside(e: Event) {
   if (menuRef.value && !menuRef.value.contains(e.target as Node)) {
     menuOpen.value = false
+  }
+  if (managerMenuRef.value && !managerMenuRef.value.contains(e.target as Node)) {
+    managerMenuOpen.value = false
   }
 }
 
@@ -777,6 +790,42 @@ function onRoleTabClick(role: RoleTab) {
     <ManagerAlarmBar v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
     <!-- 警告デバイスの版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425) -->
     <AlarmDeviceFirmwareNotice v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
+    <!-- 開発用の遠隔操作の受け答え (運行管理者席の鍵。描くものは無い。Refs ippoan/alc-app-s3#352) -->
+    <ManagerSeatRemoteHost v-if="activeRole === 'manager'" />
+    <!-- ハンバーガーメニュー (デバイス設定。運行者の画面と同じ置き方) -->
+    <div v-if="activeRole === 'manager' && !incomingCallMode" class="w-full max-w-lg mx-auto px-4 mt-2 flex justify-end">
+      <div ref="managerMenuRef" class="relative">
+        <button
+          class="p-2 rounded-md transition-colors"
+          :class="managerShowsDevice ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
+          data-testid="manager-menu-button"
+          @click.stop="managerMenuOpen = !managerMenuOpen"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <div v-if="managerMenuOpen" class="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border py-1 z-50">
+          <button
+            class="w-full text-left px-4 py-2 text-sm transition-colors"
+            :class="!managerShowsDevice ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
+            data-testid="manager-menu-dashboard"
+            @click="onManagerMenuSelect(false)"
+          >
+            運行管理者の画面
+          </button>
+          <button
+            class="w-full text-left px-4 py-2 text-sm transition-colors"
+            :class="managerShowsDevice ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
+            data-testid="manager-menu-device"
+            @click="onManagerMenuSelect(true)"
+          >
+            デバイス設定
+          </button>
+        </div>
+      </div>
+    </div>
+    <DeviceSettings v-if="activeRole === 'manager' && !incomingCallMode && managerShowsDevice" class="flex-1 min-h-0" />
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
       v-if="activeRole === 'manager' && incomingCallMode"
@@ -784,7 +833,7 @@ function onRoleTabClick(role: RoleTab) {
       :initial-room-id="incomingCallRoom"
       class="flex-1 min-h-0"
     />
-    <RoleAuthGate v-else-if="activeRole === 'manager'" :key="managerAuthKey" required-role="manager" class="flex-1 min-h-0">
+    <RoleAuthGate v-else-if="activeRole === 'manager' && !managerShowsDevice" :key="managerAuthKey" required-role="manager" class="flex-1 min-h-0">
       <ManagerDashboard />
     </RoleAuthGate>
 

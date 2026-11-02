@@ -21,6 +21,7 @@ import {
   kioskDeviceIdFromSub,
   parseKioskCommand,
   readKioskRemoteEnabled,
+  respondToKioskCommand,
   runKioskCommand,
   writeKioskRemoteEnabled,
   type KioskCommand,
@@ -90,10 +91,12 @@ describe('設定', () => {
   })
 
   it('localStorage が使えなければオフ (書きは黙る)', () => {
-    vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
-    vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('denied') })
+    const get = vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    const set = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('denied') })
     expect(readKioskRemoteEnabled()).toBe(false)
     expect(() => writeKioskRemoteEnabled(true)).not.toThrow()
+    get.mockRestore()
+    set.mockRestore()
   })
 })
 
@@ -236,5 +239,48 @@ describe('runKioskCommand', () => {
   it('知らない op は ok: false', async () => {
     expect(await runKioskCommand(cmd('nope'), { port: makePort().port, deviceId: 'k', progress: vi.fn() }))
       .toEqual({ done: true, ok: false, op: 'nope', error: '知らない op です: nope' })
+  })
+})
+
+describe('respondToKioskCommand', () => {
+  const SEAT_JWT = jwt({ sub: 'alarm:0123456789abcdef' })
+  const frame = (deviceId: string, op = 'hello') => ({ type: 'kiosk_command', id: 'c1', device_id: deviceId, op, args: {} })
+  const deps = (over: Partial<Parameters<typeof respondToKioskCommand>[1]> = {}) => ({
+    jwt: vi.fn(async (): Promise<string | null> => SEAT_JWT),
+    port: makePort().port,
+    scope: 'manager-device' as const,
+    report: vi.fn(async () => {}),
+    ...over,
+  })
+
+  it('★ オンなら自分宛て・全キオスク宛ての命令に、渡された鍵の scope で答える', async () => {
+    writeKioskRemoteEnabled(true)
+    prep.prepare.mockResolvedValue(10)
+    const d = deps()
+    await respondToKioskCommand(frame('alarm-0123456789abcdef'), d)
+    await respondToKioskCommand({ ...frame('*', 'vein_prepare'), args: { employee_id: EMP } }, d)
+    expect(d.report.mock.calls).toEqual([
+      ['c1', { done: true, ok: true, op: 'hello', result: { device_id: 'alarm-0123456789abcdef', vein_connected: true } }],
+      ['c1', { done: true, ok: true, op: 'vein_prepare', result: { module_id: 10 } }],
+    ])
+    expect(prep.prepare).toHaveBeenCalledWith(d.port, EMP, 'manager-device')
+  })
+
+  it('オフ・他の端末宛て・形が外れた命令・token が無いときは答えない', async () => {
+    const d = deps()
+    await respondToKioskCommand(frame('*'), d)
+    writeKioskRemoteEnabled(true)
+    await respondToKioskCommand(frame('alarm-ffffffffffffffff'), d)
+    await respondToKioskCommand({ type: 'kiosk_command' }, d)
+    await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => null), report: d.report }))
+    await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => { throw new Error('no key') }), report: d.report }))
+    expect(d.report).not.toHaveBeenCalled()
+  })
+
+  it('返事の失敗は握る', async () => {
+    writeKioskRemoteEnabled(true)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(respondToKioskCommand(frame('*'), deps({ report: vi.fn(async () => { throw new Error('net') }) }))).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalled()
   })
 })

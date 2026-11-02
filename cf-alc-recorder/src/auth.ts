@@ -199,8 +199,11 @@ export const DEVICE_ROLE_TENKO_MANAGER = "device-tenko-manager";
  */
 export const WATCHER_USER_ROLES: ReadonlySet<string> = new Set(["admin", "manager"]);
 
-/** 同 **device** role。いまはキオスクだけ。 */
-export const WATCHER_DEVICE_ROLES: ReadonlySet<string> = new Set([DEVICE_ROLE_KIOSK]);
+/**
+ * 同 **device** role。キオスクと運行管理者席。運行管理者席は開発用の遠隔操作の命令
+ * (`kiosk_command`) だけを受ける — 打刻やシリアル OTA の合図の宛先にはしない (Refs ippoan/alc-app-s3#352)
+ */
+export const WATCHER_DEVICE_ROLES: ReadonlySet<string> = new Set([DEVICE_ROLE_KIOSK, DEVICE_ROLE_TENKO_MANAGER]);
 
 /** watcher ハンドシェイクの判定結果。device と違い `deviceId` を持たない。 */
 export interface WatcherAuthDecision {
@@ -212,7 +215,7 @@ export interface WatcherAuthDecision {
    * 購読者の区分。DO 側の tag 付け (`KIOSK_TAG` 追加の可否) に使う
    * (Refs ippoan/alc-app-s3#279)。**101 以外では意味を持たない** (`"user"` 固定)。
    */
-  watcherKind: "kiosk" | "user";
+  watcherKind: "kiosk" | "manager-seat" | "user";
 }
 
 /**
@@ -236,6 +239,9 @@ export function decideWatcherAuth(
   }
   const role = result.role;
   if (typeof role !== "string") return { status: 403, tenantId: "", watcherKind: "user" };
+  if (role === DEVICE_ROLE_TENKO_MANAGER) {
+    return { status: 101, tenantId: result.tenant_id, watcherKind: "manager-seat" };
+  }
   if (WATCHER_DEVICE_ROLES.has(role)) {
     return { status: 101, tenantId: result.tenant_id, watcherKind: "kiosk" };
   }
