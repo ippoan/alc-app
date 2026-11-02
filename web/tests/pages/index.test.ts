@@ -19,6 +19,7 @@ import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import VeinTestPanel from '~/components/VeinTestPanel.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
+import TenkoDeskView from '~/components/TenkoDeskView.vue'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
 import ManagerAlarmBar from '~/components/ManagerAlarmBar.vue'
 import AlarmDeviceFirmwareNotice from '~/components/AlarmDeviceFirmwareNotice.vue'
@@ -1394,13 +1395,13 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
   describe('(a) どの端末にも出る', () => {
     it('★ 開発用の印が無い端末でも「汎用管理」の右 (最後) に出る', async () => {
       wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL])
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL, '点呼受付'])
     })
 
     it('★ PC のみ、の制約は掛けない — PC でない端末でも出る (汎用管理は出ない)', async () => {
       setDevice(ANDROID_UA)
       wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', LABEL])
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', LABEL, '点呼受付'])
     })
 
     it.each([
@@ -1410,7 +1411,7 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
     ])('%s でも並びは同じ', async (_name, arrange) => {
       arrange()
       wrapper = await mountIndex('/?role=driver')
-      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL])
+      expect(roleTabLabels(wrapper)).toEqual(['運行者', '運行管理者', 'システム管理者', '汎用管理', LABEL, '点呼受付'])
     })
   })
 
@@ -1434,6 +1435,15 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       finally {
         replaceState.mockRestore()
       }
+    })
+
+    it('★ 「点呼受付」(遠隔点呼と IT点呼 を並べる) も RoleAuthGate なしで出て、警告デバイスのバーも出る', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      await clickRole(wrapper, '点呼受付')
+      expect(wrapper.findAllComponents(TenkoDeskView)).toHaveLength(1)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      expect(wrapper.findComponent(ManagerDashboard).exists()).toBe(false)
+      expect(wrapper.findAllComponents(ManagerAlarmBar)).toHaveLength(1)
     })
 
     it('警告デバイスのバー (ManagerAlarmBar) は IT点呼 の役割タブでも出る', async () => {

@@ -50,6 +50,8 @@ const ROLES: Record<string, Row | 'driver-tabs' | 'manager-tabs'> = {
   admin: { components: ['AdminDashboard'], declares: null, reason: '編集' },
   general: { components: ['GeneralDashboard'], declares: null, reason: '編集' },
   it_tenko: { components: ['TenkoItAdminView'], declares: 'safe', by: 'TenkoItAdminView' },
+  // 点呼受付は並べるだけ。申告は中の TenkoRemoteAdminView と TenkoItAdminView がそれぞれ出す (上の 2 行)
+  tenko_desk: { components: ['TenkoDeskView'], declares: null, reason: '中の遠隔点呼と IT点呼 が申告する' },
 }
 
 /** 運行管理者のタブ (`ManagerDashboard.vue` の `TabKey`) */

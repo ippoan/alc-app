@@ -38,6 +38,18 @@ import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 import { DEV_DEVICE_MARK_EVENT, isDevDevice } from '~/utils/token-selection'
 import type { ApiEmployee } from '~/types'
 
+const props = defineProps<{
+  /**
+   * 並べた遠隔点呼の画面 (`TenkoDeskView`) が通話中・確認中。このあいだは点呼を開かず、指の合図も受けない
+   * (マイク・カメラと指静脈の機器を取り合わないため)
+   */
+  blocked?: boolean
+}>()
+const emit = defineEmits<{
+  /** 点呼を開いている・開く途中・社員番号を待っている (並べた遠隔点呼の画面を止めるため) */
+  busy: [busy: boolean]
+}>()
+
 /** 開く対象。`roomId` が在れば通話して開く、null なら通話なしで開く */
 interface Target {
   sessionId: string
@@ -176,6 +188,11 @@ const managerName = computed(() =>
 function request(target: Target) {
   // 警告デバイスが切れて 2 分たった席では開かない (理由は画面に出ている)
   if (seatExpired.value) return
+  // 並べた遠隔点呼の画面が通話中・確認中なら開かない
+  if (props.blocked) {
+    blockedByRemote.value = true
+    return
+  }
   // 画面共有を見ている間は開かない (着信の警告は鳴り続けるので、視聴をやめてから応答する)
   if (screenViewing.value) {
     screenViewingBlocked.value = true
@@ -241,6 +258,7 @@ onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevSe
 
 /** 指の合図で照合を始めてよいか (点呼を開いている・繋いでいる途中・登録の照会中・画面共有を見ている間は始めない) */
 const veinIdle = computed(() => opened.value === null
+  && !props.blocked
   && !connecting.value
   && registering.value === 0
   && !screenViewing.value
@@ -285,6 +303,10 @@ const isCallActive = ref(false)
 const connecting = ref(false)
 // 点呼を開いている・開く途中・運行管理者の確認を待っている間は、席の警告デバイスの更新を始めさせない (Refs ippoan/alc-app#425)
 useKioskScreen().declareDeviceBusy(() => opened.value !== null || connecting.value || waiting.value !== null)
+watch(() => opened.value !== null || connecting.value || waiting.value !== null, b => emit('busy', b), { immediate: true })
+/** 並べた遠隔点呼の画面が通話中で、点呼を開けなかった */
+const blockedByRemote = ref(false)
+watch(() => props.blocked, (b) => { if (!b) blockedByRemote.value = false })
 const callError = ref<string | null>(null)
 const showDriverInfoPanel = ref(false)
 const localStream = shallowRef<MediaStream | null>(null)  // 映像+音声 (TenkoVideoCall用)
@@ -532,6 +554,10 @@ onUnmounted(() => {
 
     <div v-if="seatExpired" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700" data-testid="it-seat-expired">
       警告デバイスの接続が切れたため、この席では点呼の確認と判定ができません。USB をつなぎ直してください
+    </div>
+
+    <div v-if="blockedByRemote" class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800" data-testid="it-blocked-by-remote">
+      遠隔点呼の通話中です。終わってから応答してください
     </div>
 
     <div v-if="screenViewingBlocked" class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800" data-testid="it-screen-viewing-block">
