@@ -235,3 +235,29 @@ export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps):
     return { done: true, ok: false, op: cmd.op, error: (e as Error).message }
   }
 }
+
+/**
+ * 購読 WS で受けた `kiosk_command` に答える (キオスクの VeinFleetHost と運行管理者席の ManagerSeatRemoteHost で共通)。
+ * 端末設定がオフ・形が外れた命令・自分宛てでない命令・端末の token が無いときは何もしない。返事の失敗は握る
+ */
+export async function respondToKioskCommand(data: unknown, deps: {
+  /** この端末の token (宛先の見分けに使う) */
+  jwt: () => Promise<string | null>
+  port: KioskRemotePort
+  /** 照合データと当たった人の照会に使う鍵 */
+  scope: RequestTokenScope
+  /** 返事を送る (途中経過も同じ口) */
+  report: (id: string, payload: Record<string, unknown>) => Promise<void>
+}): Promise<void> {
+  const cmd = parseKioskCommand(data)
+  if (!cmd || !readKioskRemoteEnabled()) return
+  const deviceId = kioskDeviceIdFromJwt(await deps.jwt().catch(() => null))
+  if (!deviceId || (cmd.device_id !== '*' && cmd.device_id !== deviceId)) return
+  const send = (payload: Record<string, unknown>) => deps.report(cmd.id, payload)
+  try {
+    await send(await runKioskCommand(cmd, { port: deps.port, deviceId, progress: send, scope: deps.scope }))
+  }
+  catch (e) {
+    console.warn('[kiosk-remote] 返事を送れませんでした:', e)
+  }
+}

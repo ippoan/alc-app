@@ -1143,11 +1143,15 @@ export async function reportVeinFleet(report: {
 }
 
 /**
- * 開発用の遠隔操作の返事を送る (Refs ippoan/alc-app-s3#352)。**キオスクの端末の token だけで送る**
- * (`reportVeinFleet` と同じ)。どの端末の返事かは server が token から決める
+ * 開発用の遠隔操作の返事を送る (Refs ippoan/alc-app-s3#352)。**端末の token だけで送る** — キオスクの鍵
+ * (`reportVeinFleet` と同じ)、運行管理者席は `scope: 'manager-device'` で席の鍵。どの端末の返事かは server が token から決める
  */
-export async function reportKioskCommandResult(id: string, payload: Record<string, unknown>): Promise<void> {
-  const jwt = await getKioskDeviceJwt?.()
+export async function reportKioskCommandResult(
+  id: string,
+  payload: Record<string, unknown>,
+  scope: 'default' | 'manager-device' = 'default',
+): Promise<void> {
+  const jwt = await (scope === 'manager-device' ? getManagerDeviceJwt : getKioskDeviceJwt)?.()
   if (!jwt) throw new Error('端末の登録が必要です')
   await bearerRequest<unknown>('/api/kiosk-remote/result', jwt, {
     method: 'POST',

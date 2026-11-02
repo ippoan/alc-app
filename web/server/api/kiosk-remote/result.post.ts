@@ -1,8 +1,8 @@
 /**
  * キオスクのブラウザが、開発用の遠隔操作の命令への返事を送る (Refs ippoan/alc-app-s3#352)。
  *
- * 経路: キオスク (端末の token を Bearer + `{id, payload}`)
- *   → 本 route: introspect → **role が `device-kiosk` の token だけ**通す
+ * 経路: キオスク / 運行管理者席 (端末の token を Bearer + `{id, payload}`)
+ *   → 本 route: introspect → **role が `device-kiosk` か `device-tenko-manager` の token だけ**通す
  *   → cf-alc-recorder `POST /tenants/:t/kiosk-command-result` (`X-Recorder-Device-Id` = この端末)
  *   → recorder が「その命令の宛先がこの端末か」を確かめて `cmdres:<id>` に保存 (違えば 403)
  *
@@ -12,18 +12,23 @@
  */
 // setResponseStatus は h3 から明示的に取る (firmware/report.post.ts と同じ理由)
 import { setResponseStatus } from 'h3'
-import { decideFirmwareReportAccess, isFirmwareDeviceId } from '../../utils/firmware-relay'
+import { isFirmwareDeviceId } from '../../utils/firmware-relay'
 import { introspectCaller } from '../../utils/introspect-route'
 import { RECORDER_BASE } from '../../utils/print-relay'
 
 /** 鍵で取った端末の token の `sub` (`alarm:<鍵の指紋 16 hex>`。vein-fleet/report.post.ts と同じ) */
 const ALARM_SUB_RE = /^alarm:([0-9a-f]{16})$/
 
+/** 返事を送ってよい端末の role (キオスクと運行管理者席) */
+const KIOSK_REMOTE_ROLES: ReadonlySet<string> = new Set(['device-kiosk', 'device-tenko-manager'])
+
 export default defineEventHandler(async (event) => {
   const { claims, sharedSecret, recorder } = await introspectCaller(event)
-  const access = decideFirmwareReportAccess(claims)
-  if (!access.ok) {
-    throw createError({ statusCode: access.status, statusMessage: access.message })
+  if (!claims.active || !claims.tenant_id) {
+    throw createError({ statusCode: 401, statusMessage: 'token が無効です' })
+  }
+  if (typeof claims.role !== 'string' || !KIOSK_REMOTE_ROLES.has(claims.role)) {
+    throw createError({ statusCode: 403, statusMessage: '端末の token で送ってください' })
   }
   const keyFingerprint = typeof claims.sub === 'string' ? ALARM_SUB_RE.exec(claims.sub)?.[1] : undefined
   const deviceId = keyFingerprint ? `alarm-${keyFingerprint}` : claims.sub
@@ -35,7 +40,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'id がありません' })
   }
   const res = await recorder.fetch(
-    `${RECORDER_BASE}/tenants/${encodeURIComponent(access.tenantId)}/kiosk-command-result`,
+    `${RECORDER_BASE}/tenants/${encodeURIComponent(claims.tenant_id)}/kiosk-command-result`,
     {
       method: 'POST',
       headers: { 'Authorization': sharedSecret, 'Content-Type': 'application/json', 'X-Recorder-Device-Id': deviceId },

@@ -9,6 +9,7 @@ import {
   machineTokenMissing,
   RECORDER_DEVICE_ROLES,
   DEVICE_ROLE_KIOSK,
+  DEVICE_ROLE_TENKO_MANAGER,
   isDevIntrospect,
   resolveSecret,
 } from "../src/auth";
@@ -780,6 +781,15 @@ describe("decideWatcherAuth", () => {
     // sub を要求すると、DO の attachment に deviceId を載せたくなる。
     // 載せると currentDeviceIds() が拾い、キオスクが「接続中デバイス」に現れる
     expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_KIOSK, tenant_id: "t" }).status).toBe(101);
+  });
+
+  it("運行管理者席の鍵は manager-seat で受ける (下り command の宛先にはしない)", () => {
+    expect(decideWatcherAuth({ active: true, role: DEVICE_ROLE_TENKO_MANAGER, tenant_id: "t" })).toEqual({
+      status: 101,
+      tenantId: "t",
+      watcherKind: "manager-seat",
+    });
+    expect(RECORDER_DEVICE_ROLES.has(DEVICE_ROLE_TENKO_MANAGER)).toBe(false);
   });
 
   it("watcherKind: キオスクは kiosk、admin/manager は user (DO の KIOSK_TAG 付与に使う、#279)", () => {
@@ -2669,5 +2679,18 @@ describe("kiosk-command の命令・返事", () => {
 
   it("内部の秘密が無ければ 401", async () => {
     expect((await kioskCommandViaHttp("tenant-vein", { device_id: "k", op: "hello" }, null)).status).toBe(401);
+  });
+
+  it("★ 運行管理者席の購読は命令だけを受け、シリアル OTA と対応表の合図は受けない", async () => {
+    const { ws } = await connectWatcher("manager-seat-token");
+    expect(ws).not.toBeNull();
+    openSockets.push(ws!);
+    const seat = messageQueue(ws!);
+    const res = await kioskCommandViaHttp("tenant-1", { device_id: "alarm-seat-1", id: "seat-1", op: "hello" });
+    expect(res.status).toBe(202);
+    expect(await seat.next()).toEqual({ type: "kiosk_command", id: "seat-1", device_id: "alarm-seat-1", op: "hello", args: {} });
+    await veinListViaHttp("tenant-1", "request");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seat.pending()).toBe(0);
   });
 });

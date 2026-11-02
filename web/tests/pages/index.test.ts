@@ -1502,6 +1502,23 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
       expect(wrapper.findComponent(TenkoItAdminView).exists()).toBe(false)
     })
+
+    it('★ 運行管理者タブのハンバーガーからデバイス設定を開け、戻ると RoleAuthGate に戻る (Refs ippoan/alc-app-s3#352)', async () => {
+      wrapper = await mountIndex('/?role=manager')
+      expect(wrapper.findComponent(DeviceSettings).exists()).toBe(false)
+      await wrapper.find('[data-testid="manager-menu-button"]').trigger('click')
+      await wrapper.find('[data-testid="manager-menu-device"]').trigger('click')
+      await nextTick()
+      expect(wrapper.findComponent(DeviceSettings).exists()).toBe(true)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      expect(wrapper.find('[data-testid="manager-menu-device"]').exists()).toBe(false)
+
+      await wrapper.find('[data-testid="manager-menu-button"]').trigger('click')
+      await wrapper.find('[data-testid="manager-menu-dashboard"]').trigger('click')
+      await nextTick()
+      expect(wrapper.findComponent(DeviceSettings).exists()).toBe(false)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
+    })
   })
 
   describe('(c) Android 横画面のハンバーガーの「ロール切替」', () => {
