@@ -34,7 +34,7 @@ const demo = vi.hoisted(() => ({ isDemoMode: null as unknown as { value: boolean
 mockNuxtImport('useDemoMode', () => () => demo)
 const timecardWatch = vi.hoisted(() => vi.fn())
 mockNuxtImport('useTimecardWatch', () => timecardWatch)
-const watchHandle = vi.hoisted(() => ({ connect: vi.fn(async () => {}), stop: vi.fn() }))
+const watchHandle = vi.hoisted(() => ({ connect: vi.fn(async () => {}), stop: vi.fn(), isConnected: null as unknown as { value: boolean } }))
 interface FwWatchOptions { path: string, getToken: () => Promise<string | null>, onFirmwarePublished: (target: string) => void }
 const fwWatch = (): FwWatchOptions => timecardWatch.mock.calls.at(-1)![0] as FwWatchOptions
 const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn(async () => 'kiosk-jwt') }))
@@ -61,6 +61,7 @@ describe('DevFirmwareAutoUpdate', () => {
     screen.isDeviceBusy = ref(false)
     demo.isDemoMode = ref(false)
     updates.fetchLatest.mockResolvedValue({ vein: '0.1.8+new' })
+    watchHandle.isConnected = ref(true)
     timecardWatch.mockReturnValue(watchHandle)
   })
 
@@ -69,9 +70,8 @@ describe('DevFirmwareAutoUpdate', () => {
     vi.useRealTimers()
   })
 
-  it('★ 開発端末で版が違えば、押さずに 1 回だけ更新する (描くものは無い)', async () => {
-    const w = await mount()
-    expect(w.text()).toBe('')
+  it('★ 開発端末で版が違えば、押さずに 1 回だけ更新する', async () => {
+    await mount()
     expect(updates.fetchLatest).toHaveBeenCalledWith('timecard-station')
     expect(serialOta.run).toHaveBeenCalledTimes(1)
     expect(serialOta.run.mock.calls[0]![0]).toBe('timecard-station')
@@ -166,5 +166,39 @@ describe('DevFirmwareAutoUpdate', () => {
     marks.dev = { 'kiosk': false, 'manager-device': false }
     await mount()
     expect(watchHandle.connect).not.toHaveBeenCalled()
+  })
+
+  it('★ 開発端末は右下に合図の購読の状態と最後の合図の時刻を出す。本番の端末は出さない', async () => {
+    vein.isConnected.value = false
+    const w = await mount()
+    const badge = () => w.find('[data-testid="dev-firmware-watch-badge"]')
+    expect(badge().text()).toContain('未購読')
+    vein.isConnected.value = true
+    await flushPromises()
+    expect(badge().text()).toContain('購読中')
+    expect(badge().text()).not.toContain('最後の合図')
+    fwWatch().onFirmwarePublished('timecard-station')
+    await flushPromises()
+    expect(badge().text()).toMatch(/最後の合図 \d{1,2}:\d{2}:\d{2}/)
+    watchHandle.isConnected.value = false
+    await flushPromises()
+    expect(badge().text()).toContain('再接続中')
+    mounted.splice(0).forEach(m => m.unmount())
+    marks.dev = { 'kiosk': false, 'manager-device': false }
+    const prod = await mount()
+    expect(prod.find('[data-testid="dev-firmware-watch-badge"]').exists()).toBe(false)
+  })
+
+  it('★ 合図の購読がつながった時点で取り直す (張る前の配信を拾う)', async () => {
+    watchHandle.isConnected.value = false
+    updates.fetchLatest.mockResolvedValue({ vein: '0.1.8+old' })
+    await mount()
+    updates.fetchLatest.mockClear()
+    watchHandle.isConnected.value = true
+    await flushPromises()
+    expect(updates.fetchLatest).toHaveBeenCalledTimes(1)
+    watchHandle.isConnected.value = false
+    await flushPromises()
+    expect(updates.fetchLatest).toHaveBeenCalledTimes(1)
   })
 })
