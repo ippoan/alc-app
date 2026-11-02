@@ -116,3 +116,24 @@ describe('TenkoRemoteAdminView — 判定のあと', () => {
   })
 })
 
+describe('TenkoRemoteAdminView — 点呼受付で並べたとき', () => {
+  it('★ 並べた IT点呼 が通話中 (blocked) の間は確認を出さず理由を出す。確認中・通話中は busy を知らせる', async () => {
+    useManagerAuth().setManagerId('mgr-1')
+    const w = await mountSuspended(TenkoRemoteAdminView, { props: { blocked: true }, global: { stubs } })
+    await flushPromises()
+    expect(w.emitted('busy')!.at(-1)).toEqual([false])
+    const row = () => w.findAll('div').find(d => d.classes().includes('cursor-pointer') && d.text().includes('session-1'))!
+    await row().trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="remote-blocked-by-it"]').text()).toContain('IT点呼の通話中')
+    expect(w.text()).not.toContain('通話終了')
+    await w.setProps({ blocked: false })
+    expect(w.find('[data-testid="remote-blocked-by-it"]').exists()).toBe(false)
+    await row().trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('通話終了')
+    expect(w.emitted('busy')!.at(-1)).toEqual([true])
+    w.unmount()
+  })
+})
+

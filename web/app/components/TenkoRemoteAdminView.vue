@@ -7,6 +7,15 @@ import { alcoholResultLabel, alcoholTone } from '~/utils/alcohol'
 
 const props = defineProps<{
   initialRoomId?: string | null
+  /**
+   * 並べた IT点呼 の画面 (`TenkoDeskView`) が通話中・確認中。このあいだは通話を始めず、指の合図も受けない
+   * (マイク・カメラと指静脈の機器を取り合わないため)
+   */
+  blocked?: boolean
+}>()
+const emit = defineEmits<{
+  /** 通話中・通話前の確認中か (並べた IT点呼 の画面を止めるため) */
+  busy: [busy: boolean]
 }>()
 
 const config = useRuntimeConfig()
@@ -149,8 +158,16 @@ function selfDeclLabel(key: string) {
 // WebSocket用: https://→wss:// または http://→ws://
 const signalingWsUrl = (config.public.signalingUrl as string).replace(/^https/, 'wss').replace(/^http:/, 'ws:')
 
+/** 並べた IT点呼 の画面が通話中で、通話を始められなかった */
+const blockedByIt = ref(false)
+watch(() => props.blocked, (b) => { if (!b) blockedByIt.value = false })
+
 // セッションカードクリック → 指静脈の確認を出す
 function requestCall(roomId: string) {
+  if (props.blocked) {
+    blockedByIt.value = true
+    return
+  }
   pendingRoomId.value = roomId
   veinConfirmActive.value = true
 }
@@ -170,6 +187,8 @@ async function onManagerVein(emp: ApiEmployee): Promise<string | null> {
   if (roomId) await startCall(roomId)
   return null
 }
+
+watch(() => isCallActive.value || veinConfirmActive.value, b => emit('busy', b), { immediate: true })
 
 function cancelVeinConfirm() {
   veinConfirmActive.value = false
@@ -297,6 +316,9 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <div v-if="blockedByIt" class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800" data-testid="remote-blocked-by-it">
+      IT点呼の通話中です。終わってから応答してください
+    </div>
     <div v-if="loadError" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
       {{ loadError }}
     </div>
@@ -543,7 +565,7 @@ onUnmounted(() => {
       <h3 class="text-lg font-semibold text-gray-800 mb-1">点呼開始前の確認</h3>
       <ItTenkoVeinRegister
         :on-employee="onManagerVein"
-        :idle="veinConfirmActive && !isCallActive"
+        :idle="veinConfirmActive && !isCallActive && !blocked"
         auto
         miss-message="指静脈が一致する人が見つかりません。もう一度置いてください"
       />

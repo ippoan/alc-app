@@ -661,6 +661,21 @@ describe('TenkoItAdminView — 通話', () => {
     w.unmount()
   })
 
+  it('★ 点呼受付で並べた遠隔点呼が通話中 (blocked) の間は開かず理由を出す。開いている間は busy を知らせる', async () => {
+    const w = await mountView()
+    expect(w.emitted('busy')!.at(-1)).toEqual([false])
+    await w.setProps({ blocked: true })
+    await click(incoming(w).find('button'), w)
+    expect(cameraStartMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="it-blocked-by-remote"]').text()).toContain('遠隔点呼の通話中')
+    await w.setProps({ blocked: false })
+    expect(w.find('[data-testid="it-blocked-by-remote"]').exists()).toBe(false)
+    await click(incoming(w).find('button'), w)
+    expect(cameraStartMock).toHaveBeenCalledTimes(1)
+    expect(w.emitted('busy')!.at(-1)).toEqual([true])
+    w.unmount()
+  })
+
   it('未完了の行でも、部屋が在れば着信と同じ動き (通話する)', async () => {
     listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-1')], total: 1, page: 1, per_page: 50 })
     const w = await mountView()

@@ -116,8 +116,8 @@ const incomingCallMode = ref(route.query.mode === 'incoming_call')
 const incomingCallRoom = ref<string | null>((route.query.room as string) || null)
 
 // --- ロールタブ ---
-type RoleTab = 'driver' | 'manager' | 'admin' | 'general' | 'it_tenko'
-const roleTabOptions: RoleTab[] = ['driver', 'manager', 'admin', 'general', 'it_tenko']
+type RoleTab = 'driver' | 'manager' | 'admin' | 'general' | 'it_tenko' | 'tenko_desk'
+const roleTabOptions: RoleTab[] = ['driver', 'manager', 'admin', 'general', 'it_tenko', 'tenko_desk']
 const activeRole = ref<RoleTab>(
   incomingCallMode.value ? 'manager'
   : roleTabOptions.includes(route.query.role as RoleTab)
@@ -312,13 +312,14 @@ const roleLabels: Record<RoleTab, string> = {
   admin: 'システム管理者',
   general: '汎用管理',
   it_tenko: 'IT点呼',
+  tenko_desk: '点呼受付',
 }
 
 // 汎用管理は PC だけ。IT点呼 (運行管理者側の受け画面) はどの端末にも出す (PC に限らない)
 const visibleRoleTabs = computed(() => roleTabOptions.filter(r => r !== 'general' || isPC.value))
 // Android 横画面のハンバーガーの「ロール切替」。運行者以外を並べる (汎用管理は今までどおり
 // PC でなくても出す)。IT点呼 は最後
-const menuRoleTabs: readonly RoleTab[] = ['manager', 'admin', 'general', 'it_tenko']
+const menuRoleTabs: readonly RoleTab[] = ['manager', 'admin', 'general', 'it_tenko', 'tenko_desk']
 
 // ハンバーガーメニュー
 const menuOpen = ref(false)
@@ -787,13 +788,13 @@ function onRoleTabClick(role: RoleTab) {
     <!-- 警告デバイスの heartbeat と着信購読は認証ゲートの外 (タブに入った時点) で動かす。
          RoleAuthGate の :key 再マウントや着信通知モードの分岐に巻き込まれない位置に 1 つだけ置く -->
     <!-- IT点呼 の役割タブでも出す (受け画面の席で、警告デバイスの接続ボタンと状態が見えるように) -->
-    <ManagerAlarmBar v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
+    <ManagerAlarmBar v-if="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
     <!-- 警告デバイスの版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425) -->
-    <AlarmDeviceFirmwareNotice v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
+    <AlarmDeviceFirmwareNotice v-if="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
     <!-- 開発用の遠隔操作の受け答え (運行管理者席の鍵。描くものは無い。Refs ippoan/alc-app-s3#352) -->
     <ManagerSeatRemoteHost v-if="activeRole === 'manager'" />
     <!-- 運行管理者の画面の間は席の Vein Base に体温計へつながせない (キオスクに体温を譲る。描くものは無い) -->
-    <ManagerSeatThermoPause v-if="activeRole === 'manager'" />
+    <ManagerSeatThermoPause v-if="activeRole === 'manager' || activeRole === 'tenko_desk'" />
     <!-- ハンバーガーメニュー (デバイス設定。運行者の画面と同じ置き方) -->
     <div v-if="activeRole === 'manager' && !incomingCallMode" class="w-full max-w-lg mx-auto px-4 mt-2 flex justify-end">
       <div ref="managerMenuRef" class="relative">
@@ -883,6 +884,11 @@ function onRoleTabClick(role: RoleTab) {
          受け画面が通話・判定の手前で自分で聞く -->
     <div v-if="activeRole === 'it_tenko'" class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
       <TenkoItAdminView />
+    </div>
+
+    <!-- 点呼受付: 遠隔点呼と IT点呼 を並べて受ける (ログインなし。将来 IT点呼 のタブはこちらへ寄せる) -->
+    <div v-if="activeRole === 'tenko_desk'" class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
+      <TenkoDeskView />
     </div>
 
     <!-- 「更新中」の幕。役割に依らず 1 つだけ (運行者の機体にも、席の警告デバイスにも出す) -->
