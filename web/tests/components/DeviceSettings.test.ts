@@ -27,6 +27,8 @@ mockNuxtImport('useAuth', () => () => ({
 const hasKioskCredential = ref(false)
 const hasDeviceJwt = ref(false)
 const getDeviceJwt = vi.fn(async (): Promise<string | null> => null)
+const getManagerJwt = vi.fn(async (): Promise<string | null> => null)
+mockNuxtImport('useManagerDeviceToken', () => () => ({ getManagerJwt }))
 mockNuxtImport('useDeviceToken', () => () => ({
   hasKioskCredential,
   hasDeviceJwt,
@@ -162,9 +164,10 @@ afterEach(() => {
   mountedWrappers.splice(0).forEach(w => w.unmount())
 })
 
-async function mountDeviceSettings(route?: string) {
+async function mountDeviceSettings(route?: string, props?: { managerSeat?: boolean }) {
   const wrapper = await mountSuspended(DeviceSettings, {
     ...(route ? { route } : {}),
+    ...(props ? { props } : {}),
     global: { stubs: { GwStatusCard: true } },
   })
   mountedWrappers.push(wrapper)
@@ -405,6 +408,15 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
       expect(wrapper.find('[data-testid="kiosk-remote-device-id"]').text()).toContain('alarm-0123456789abcdef')
       await box.setValue(false)
       expect(localStorage.getItem('alc-kiosk-remote')).toBeNull()
+    })
+
+    it('運行管理者の画面から開いたときは、運行管理者席の鍵の id を出す', async () => {
+      localStorage.setItem('alc-kiosk-remote', '1')
+      getManagerJwt.mockResolvedValueOnce(`h.${btoa(JSON.stringify({ sub: 'alarm:00000000000000aa' }))}.s`)
+      getDeviceJwt.mockClear()
+      const wrapper = await mountDeviceSettings(undefined, { managerSeat: true })
+      expect(wrapper.find('[data-testid="kiosk-remote-device-id"]').text()).toContain('alarm-00000000000000aa')
+      expect(getDeviceJwt).not.toHaveBeenCalled()
     })
 
     it('端末の token が無ければ登録が要る旨を出す', async () => {

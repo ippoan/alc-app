@@ -24,7 +24,9 @@ const { mode: veinAddedFingerMode, setMode: setVeinAddedFingerMode } = useVeinAd
 const { setting: veinSecuritySetting, moduleLevel: veinModuleLevel, setSetting: setVeinSecuritySetting } = useVeinSecurityLevel()
 
 // 開発用の遠隔操作 (MCP から Vein Station を操る。既定オフ、Refs ippoan/alc-app-s3#352)。
-// 宛先に使う端末の id も出す (MCP の kiosk_command の device_id)
+// 宛先に使う端末の id も出す (MCP の kiosk_command の device_id)。運行管理者の画面から開いたときは
+// 運行管理者席の鍵の id (席は席の鍵で命令を受ける。ManagerSeatRemoteHost)
+const props = defineProps<{ managerSeat?: boolean }>()
 const kioskRemoteEnabled = ref(readKioskRemoteEnabled())
 const kioskRemoteDeviceId = ref<string | null>(null)
 function setKioskRemote(on: boolean): void {
@@ -32,7 +34,8 @@ function setKioskRemote(on: boolean): void {
   kioskRemoteEnabled.value = on
 }
 onMounted(async () => {
-  kioskRemoteDeviceId.value = kioskDeviceIdFromJwt(await useDeviceToken().getDeviceJwt().catch(() => null))
+  const jwt = props.managerSeat ? useManagerDeviceToken().getManagerJwt() : useDeviceToken().getDeviceJwt()
+  kioskRemoteDeviceId.value = kioskDeviceIdFromJwt(await jwt.catch(() => null))
 })
 // 血圧測定台 (Atom S3、claimant 名 `bp-station`)。CoreS3 も警告デバイスも挿さらない
 // 専用 PC なので、ここが繋がっているときだけ使う (Refs ippoan/alc-app#353)

@@ -825,7 +825,7 @@ function onRoleTabClick(role: RoleTab) {
         </div>
       </div>
     </div>
-    <DeviceSettings v-if="activeRole === 'manager' && !incomingCallMode && managerShowsDevice" class="flex-1 min-h-0" />
+    <DeviceSettings v-if="activeRole === 'manager' && !incomingCallMode && managerShowsDevice" manager-seat class="flex-1 min-h-0" />
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
       v-if="activeRole === 'manager' && incomingCallMode"
