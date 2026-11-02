@@ -152,6 +152,17 @@ describe('retryOnVeinMiss', () => {
     expect(miss).toHaveBeenCalledTimes(1 + mod.VEIN_NOMATCH_RETRIES)
   })
 
+  it('onRetry が Promise を返すなら、終わるのを待ってからやり直す (機器の案内とやり直しの照合が重ならない)', async () => {
+    const order: string[] = []
+    const read = vi.fn(async () => { order.push('read'); return order.length > 1 })
+    const onRetry = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      order.push('say')
+    })
+    expect(await mod.retryOnVeinMiss(read, ok => !ok, onRetry)).toBe(true)
+    expect(order).toEqual(['read', 'say', 'read'])
+  })
+
   it('照合の失敗 (投げる) はやり直さずそのまま投げる', async () => {
     const read = vi.fn(async () => { throw new Error('TIMEOUT') })
     await expect(mod.retryOnVeinMiss(read, () => true, vi.fn())).rejects.toThrow('TIMEOUT')

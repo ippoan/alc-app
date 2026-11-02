@@ -139,7 +139,12 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
     await veinSerial.say('PLACE')
     // 不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
     const onAgain = () => { vein.again.value = true }
-    if (await retryOnVeinMiss(() => veinSerial.verify(moduleId, onAgain), ok => !ok, onAgain)) return 'verified'
+    // やり直しの前に機器でも「もう一度置いてください」を鳴らす (黙って待つと止まったように見える)
+    const sayAgain = async () => {
+      onAgain()
+      await veinSerial.say('AGAIN').catch(() => {})
+    }
+    if (await retryOnVeinMiss(() => veinSerial.verify(moduleId, onAgain), ok => !ok, sayAgain)) return 'verified'
     await veinSerial.say('FAILED').catch(() => {})
     // 別の端末で撮った記録だと通りにくい。この端末の指を足せるようにする (測定は止めない)
     addFingerEmployee.value = { id: emp.id, name: emp.name }

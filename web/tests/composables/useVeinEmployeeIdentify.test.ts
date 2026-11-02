@@ -116,6 +116,8 @@ describe('useVeinEmployeeIdentify', () => {
     await api.identify()
     expect(vein.identify).toHaveBeenCalledTimes(2)
     expect(api.again.value).toBe(true)
+    // やり直しの前に機器でも「もう一度置いて」を鳴らす (黙って待つと止まったように見える)
+    expect(vein.say).toHaveBeenCalledWith('AGAIN')
     expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, undefined)
     expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null)
     vein.identify.mockClear()

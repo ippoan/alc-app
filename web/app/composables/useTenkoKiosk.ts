@@ -183,10 +183,11 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
   const isPreOperation = computed(() => tenkoType.value === 'pre_operation')
 
   // --- ステップ定義 (点呼タイプ別) ---
+  // stepLabels と stepKeys は同じ並び・同じ長さ (ずれると今の段と違う段が光る。2026-11-02 に「携行品」が抜けていた)
   const stepLabels = computed(() => {
     const scheduleLabel = remoteMode ? [] : ['予定選択']
     if (isPreOperation.value) {
-      return ['NFC', ...scheduleLabel, '本人確認', '体温・血圧', '自己申告', '日常点検', 'アルコール', '指示確認', '完了']
+      return ['NFC', ...scheduleLabel, '本人確認', '体温・血圧', '自己申告', '日常点検', '携行品', 'アルコール', '指示確認', '完了']
     }
     return ['NFC', ...scheduleLabel, '本人確認', 'アルコール', '指示確認', '運行報告', '完了']
   })

@@ -75,6 +75,15 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     if (c) void sync({ ifOlderThanMs: VEIN_TEMPLATE_SYNC_INTERVAL_MS })
   })
 
+  /**
+   * 不一致の自動のやり直しの前に、画面と機器の両方で「もう一度置いてください」を出す。
+   * 機器は指の置き直しを黙って待つので、鳴らさないと画面が止まったように見える (2026-11-02 実機、23 秒待って NO_FINGER)
+   */
+  async function sayAgain(): Promise<void> {
+    again.value = true
+    await vein.say('AGAIN').catch(() => {})
+  }
+
   /** 用意しかけの記録 (同じ人なら、免許証を読んだときに始めた書き込みを照合が待つ) */
   let prepared: { employeeId: string; promise: Promise<number | null> } | null = null
 
@@ -116,7 +125,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       if (prompt) await vein.say('PLACE')
       // 不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
       const onAgain = () => { again.value = true }
-      if (!await retryOnVeinMiss(() => vein.verify(id, onAgain), ok => !ok, onAgain)) return opts.missMessage
+      if (!await retryOnVeinMiss(() => vein.verify(id, onAgain), ok => !ok, sayAgain)) return opts.missMessage
     }
     catch (e) {
       return `指静脈を読み取れませんでした (${(e as Error).message})`
@@ -147,7 +156,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       // モジュールの不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
       const onAgain = () => { again.value = true }
       read = viaModule
-        ? await retryOnVeinMiss(() => vein.identify(onAgain), id => id === null, onAgain)
+        ? await retryOnVeinMiss(() => vein.identify(onAgain), id => id === null, sayAgain)
         : await vein.capture()
     }
     catch (e) {
