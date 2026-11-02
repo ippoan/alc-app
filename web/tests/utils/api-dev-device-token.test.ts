@@ -334,14 +334,15 @@ describe("request() — scope 'tenko-monitor' (遠隔点呼モニター)", () =>
     expect(sent(0)).toEqual({ url: '/api/proxy/employees', bearer: `Bearer ${ADMIN_JWT}`, tenant: null })
   })
 
-  it('運行管理者席の印なし + admin JWT なし → キオスクの鍵で送る (\'default\' と同じ)', async () => {
+  it('運行管理者席の印なし + admin JWT なし + 席の鍵が取れない → キオスクの鍵で送る (\'default\' と同じ)', async () => {
     kioskGetter.mockResolvedValue(PLAIN_KIOSK_JWT)
+    managerGetter.mockResolvedValue(null)
     initApi(API_BASE, undefined, () => 'test-tenant', undefined, kioskGetter, managerGetter)
 
     await getEmployees('tenko-monitor')
     await getEmployees()
 
-    expect(managerGetter).not.toHaveBeenCalled()
+    expect(managerGetter).toHaveBeenCalledTimes(1)
     expect(kioskGetter).toHaveBeenCalledTimes(2)
     expect(sent(0)).toEqual(sent(1))
     expect(sent(0).bearer).toBe(`Bearer ${PLAIN_KIOSK_JWT}`)
