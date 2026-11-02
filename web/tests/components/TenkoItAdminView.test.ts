@@ -676,6 +676,20 @@ describe('TenkoItAdminView — 通話', () => {
     w.unmount()
   })
 
+  it('★ 点呼受付 (remoteRooms あり) は遠隔の部屋も着信に並べて印で分け、遠隔の行は remoteCall を出す', async () => {
+    const w = await mountView()
+    await w.setProps({ remoteRooms: ['session-9'] })
+    const rows = w.findAll('[data-testid="it-incoming-row"]')
+    expect(rows.map(r => r.attributes('data-kind'))).toEqual(['remote', 'it'])
+    expect(rows[0]!.text()).toContain('遠隔')
+    expect(rows[1]!.text()).toContain('IT')
+    expect(w.find('[data-testid="it-incoming"] h3').text()).toContain('2件')
+    await click(rows[0]!.find('button'), w)
+    expect(w.emitted('remoteCall')).toEqual([['session-9']])
+    expect(cameraStartMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
   it('未完了の行でも、部屋が在れば着信と同じ動き (通話する)', async () => {
     listTenkoSessionsMock.mockResolvedValue({ sessions: [makeSession('session-1')], total: 1, page: 1, per_page: 50 })
     const w = await mountView()
