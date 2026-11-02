@@ -18,6 +18,8 @@ const apiBase = config.public.apiBase as string
 const stagingTenantId = config.public.stagingTenantId as string
 const stagingApiKey = config.public.stagingApiKey as string
 const appVersion = config.public.appVersion as string
+// 開発端末のファームの合図の購読 (DevFirmwareAutoUpdate が書く)。版の表示の中に足す
+const fwWatch = useDevFirmwareWatchBadge()
 
 onMounted(async () => {
   // --- リロード検知ログ (Refs #197) ---
@@ -153,7 +155,12 @@ useHead({
     </div>
     <NuxtPage v-else />
     <StagingFooter :api-base="apiBase" :tenant-id="stagingTenantId" :staging-api-key="stagingApiKey" />
-    <VersionBadge :api-base="apiBase" :frontend-version="appVersion" />
+    <VersionBadge :api-base="apiBase" :frontend-version="appVersion">
+      <span v-if="fwWatch" data-testid="dev-firmware-watch-badge">
+        / <span :class="fwWatch.on ? 'text-green-400' : 'text-gray-400'">{{ fwWatch.on ? '●' : '○' }}</span>
+        合図 {{ fwWatch.text }}<template v-if="fwWatch.lastSignalAt"> ({{ fwWatch.lastSignalAt }})</template>
+      </span>
+    </VersionBadge>
   </div>
 </template>
 

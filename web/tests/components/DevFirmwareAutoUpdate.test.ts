@@ -168,25 +168,26 @@ describe('DevFirmwareAutoUpdate', () => {
     expect(watchHandle.connect).not.toHaveBeenCalled()
   })
 
-  it('★ 開発端末は右下に合図の購読の状態と最後の合図の時刻を出す。本番の端末は出さない', async () => {
+  it('★ 開発端末は合図の購読の状態と最後の合図の時刻を版の表示へ渡す。本番の端末は渡さない', async () => {
     vein.isConnected.value = false
     const w = await mount()
-    const badge = () => w.find('[data-testid="dev-firmware-watch-badge"]')
-    expect(badge().text()).toContain('未購読')
+    expect(w.text()).toBe('')
+    const badge = useDevFirmwareWatchBadge()
+    expect(badge.value).toEqual({ on: false, text: '未購読', lastSignalAt: null })
     vein.isConnected.value = true
     await flushPromises()
-    expect(badge().text()).toContain('購読中')
-    expect(badge().text()).not.toContain('最後の合図')
+    expect(badge.value).toEqual({ on: true, text: '購読中', lastSignalAt: null })
     fwWatch().onFirmwarePublished('timecard-station')
     await flushPromises()
-    expect(badge().text()).toMatch(/最後の合図 \d{1,2}:\d{2}:\d{2}/)
+    expect(badge.value!.lastSignalAt).toMatch(/^\d{1,2}:\d{2}:\d{2}$/)
     watchHandle.isConnected.value = false
     await flushPromises()
-    expect(badge().text()).toContain('再接続中')
+    expect(badge.value).toMatchObject({ on: false, text: '再接続中' })
     mounted.splice(0).forEach(m => m.unmount())
+    expect(badge.value).toBeNull()
     marks.dev = { 'kiosk': false, 'manager-device': false }
-    const prod = await mount()
-    expect(prod.find('[data-testid="dev-firmware-watch-badge"]').exists()).toBe(false)
+    await mount()
+    expect(badge.value).toBeNull()
   })
 
   it('★ 合図の購読がつながった時点で取り直す (張る前の配信を拾う)', async () => {
