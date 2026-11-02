@@ -1,7 +1,8 @@
 // 運行管理者席 (PC には席の鍵だけ。dev端末) の**読み取り**が、席の鍵で送られること。
 //
 // 席の鍵が dev だと分かっているとき、`'tenko-monitor'` は `'manager-device'` に解け、admin JWT が
-// あっても席の鍵で送る。dev でなければ今までどおり (admin → キオスク)。書き込みは scope を付けない。
+// あっても席の鍵で送る。dev でなければ今までどおり (admin → キオスク)。ただし管理者ログインの無い PC は、
+// dev でない席の鍵が取れればそれで送り、取れなければ今までどおり (キオスク → 無認証)。
 // raw fetch (顔写真・動画・CSV) も `request()` と同じ規則で、席の鍵が取れなければ
 // MANAGER_DEVICE_AUTH_FAILED_MESSAGE で止める (キオスクの鍵にも無認証にも落とさない)。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -124,6 +125,65 @@ describe("読み取り (request) — scope 'tenko-monitor'", () => {
     await expect(getTenkoDashboard('tenko-monitor')).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
 
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("本番の席 (席の鍵が dev でない・管理者ログインなし) — scope 'tenko-monitor'", () => {
+  beforeEach(() => {
+    managerGetter.mockResolvedValue(PLAIN_MANAGER_JWT)
+  })
+
+  it.each(READS)('★ 席の鍵が取れる → %s は席の鍵で送る (キオスクの鍵・無認証に進まない)', async (_n, call, url) => {
+    initSeatOnly()
+
+    await call('tenko-monitor' as never)
+
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent()).toEqual({ url, bearer: `Bearer ${PLAIN_MANAGER_JWT}` })
+  })
+
+  it('席の鍵が取れない (席の機体の無い PC) → 今までどおりキオスクの鍵', async () => {
+    managerGetter.mockResolvedValue(null)
+    initSeatOnly()
+
+    await getTenkoDashboard('tenko-monitor')
+
+    expect(sent()).toEqual({ url: '/api/proxy/tenko/dashboard', bearer: `Bearer ${PLAIN_KIOSK_JWT}` })
+  })
+
+  it('席の getter が無い環境 → 今までどおりキオスクの鍵', async () => {
+    initApi(API_BASE, undefined, () => 'test-tenant', undefined, kioskGetter)
+
+    await getTenkoDashboard('tenko-monitor')
+
+    expect(sent().bearer).toBe(`Bearer ${PLAIN_KIOSK_JWT}`)
+  })
+
+  it('scope を渡さない読み取りは席の鍵を使わない (今までどおりキオスクの鍵)', async () => {
+    initSeatOnly()
+
+    await getTenkoDashboard()
+
+    expect(managerGetter).not.toHaveBeenCalled()
+    expect(sent().bearer).toBe(`Bearer ${PLAIN_KIOSK_JWT}`)
+  })
+
+  it('★ 顔写真 (raw fetch) も席の鍵で送る', async () => {
+    initSeatOnly()
+
+    await fetchFacePhoto('m1', 'tenko-monitor')
+
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent()).toEqual({ url: '/api/proxy/measurements/m1/face-photo', bearer: `Bearer ${PLAIN_MANAGER_JWT}` })
+  })
+
+  it('顔写真: 席の鍵が取れない → 今までどおりキオスクの鍵', async () => {
+    managerGetter.mockResolvedValue(null)
+    initSeatOnly()
+
+    await fetchFacePhoto('m1', 'tenko-monitor')
+
+    expect(sent().bearer).toBe(`Bearer ${PLAIN_KIOSK_JWT}`)
   })
 })
 

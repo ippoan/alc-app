@@ -190,7 +190,8 @@ function buildAuthHeaders(): Record<string, string> {
  * - `'tenko-monitor'` … **遠隔点呼モニターの口** (Refs ippoan/alc-app#387)。それ自体の送り方は
  *   持たず、`request()` の冒頭で上のどちらかに解決する ({@link resolveTenkoMonitorScope}):
  *   運行管理者席の鍵が dev でなければ `'default'` (今までと同じ)、dev なら `'manager-device'`
- *   (運行管理者席の鍵で送る)。付けてよいのは auth-worker の運行管理者の鍵の許可表に在る口だけ
+ *   (運行管理者席の鍵で送る)。ただし管理者ログインの無い PC では、dev でない席の鍵が取れれば
+ *   先にそれで送る ({@link prodSeatJwt})。付けてよいのは auth-worker の運行管理者の鍵の許可表に在る口だけ
  * - `'admin'` … **管理画面の口** (一覧・承認・削除など、記録を作らない操作。Refs ippoan/alc-app#436)。
  *   admin JWT があれば**端末の鍵の dev の印に関係なく** admin JWT で送る — #387 が守るのは
  *   「dev 端末の**記録**を本番の行にしない」ことで、管理画面の操作は記録を作らないため。
@@ -285,12 +286,29 @@ function resolveTenkoMonitorScope(): 'default' | 'manager-device' {
   return 'manager-device'
 }
 
+/**
+ * 本番の運行管理者席 (席の鍵が dev でない) の PC で `'tenko-monitor'` を送るときの席の鍵の JWT。
+ * **管理者ログインが無く、席の鍵が取れたときだけ**返す。試さない場面は (Promise ではなく) null を
+ * 同期で返し、ほかの送信に待ちを足さない。取れなければ null で、呼び出し側は今までどおり
+ * `'default'` (キオスクの鍵 → 無認証) に進む — 席の鍵の無い PC と管理者ログインのある PC の送り方は
+ * 変えない。管理者ログインもキオスクの鍵も無い本番の席が、無認証の直叩きに落ちて
+ * 「Failed to fetch」になっていたのを塞ぐ。dev の席は {@link resolveTenkoMonitorScope} が先に
+ * `'manager-device'` へ解くのでここは通らない。本番の席の鍵で触れる範囲は auth-worker の許可表と
+ * backend が絞る (取り消し・中断・再開・判定は IT点呼 だけ)。
+ */
+function prodSeatJwt(scope: RequestTokenScope): Promise<string | null> | null {
+  if (scope !== 'tenko-monitor' || isDevDevice('manager-device')) return null
+  if (getAccessToken?.() || !getManagerDeviceJwt) return null
+  return getManagerDeviceJwt()
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
   scope: RequestTokenScope = 'default',
 ): Promise<T> {
   if (!authFetch) throw new Error('API 未初期化: initApi() を呼んでください')
+  const seatJwtPending = prodSeatJwt(scope)
   if (scope === 'tenko-monitor') scope = resolveTenkoMonitorScope()
   // 測定の 4 口は土台の scope に解く (端末の鍵を先に試す印だけ持ち越す)
   const preferDeviceKey = scope === 'measurement' || scope === 'measurement-bp'
@@ -303,6 +321,11 @@ async function request<T>(
   // 渡す) ので、admin / device JWT / X-Tenant-ID fallback の全部に同じ上限が効く。
   const opts = withTimeout(options)
   try {
+    // 本番の運行管理者席 (管理者ログインなし) は席の鍵で送る ({@link prodSeatJwt})
+    if (seatJwtPending) {
+      const seatJwt = await seatJwtPending
+      if (seatJwt) return await proxyRequest<T>(path, seatJwt, opts)
+    }
     // admin browser JWT があれば same-origin proxy (/api/proxy, #434 step 3d) 経由にする。
     // proxy (auth-worker /alc-proxy) が JWT を検証して X-Tenant-ID + X-User-* を注入し
     // OIDC mint する (Cloud Run IAM lockdown 後も到達可)。401→refresh→retry を効かせるため
@@ -421,13 +444,19 @@ async function publicIngestRequest<T>(path: string, options: RequestInit = {}): 
 /**
  * raw fetch (`proxyRawFetch` と CSV) に付ける token を `scope` で選ぶ (`request()` と同じ規則)。
  *
- * - `'tenko-monitor'` は {@link resolveTenkoMonitorScope} で `'default'` / `'manager-device'` に解く
+ * - `'tenko-monitor'` は、本番の席の鍵が取れればそれ ({@link prodSeatJwt})。それ以外は
+ *   {@link resolveTenkoMonitorScope} で `'default'` / `'manager-device'` に解く
  * - `'manager-device'` (getter あり): 管理者の token を使う場面 (`usesAdminToken`) は管理者の token、
  *   それ以外は**運行管理者席の鍵**。取れなければ {@link MANAGER_DEVICE_AUTH_FAILED_MESSAGE} を投げる —
  *   キオスクの鍵にも無認証にも落とさない (fail-closed)
  * - それ以外: 今までどおり (管理者 → キオスクの鍵。無ければ null)
  */
 async function rawSendToken(scope: RequestTokenScope): Promise<string | null> {
+  const seatJwtPending = prodSeatJwt(scope)
+  if (seatJwtPending) {
+    const seatJwt = await seatJwtPending
+    if (seatJwt) return seatJwt
+  }
   if (scope === 'tenko-monitor') scope = resolveTenkoMonitorScope()
   if (scope === 'manager-device' && getManagerDeviceJwt) {
     const jwt = await selectSendToken(getAccessToken?.(), 'manager-device', getManagerDeviceJwt)
