@@ -13,9 +13,13 @@
  * **Vein Station を掴みに行くのもここ** — 掴むのが血圧・点呼の画面だけだと、管理者の画面に
  * 切り替えたブラウザでは Station が繋がらず、その鍵で端末の token も取れない
  * (CoreS3 の無い PC では Vein Station が端末の鍵。`useDeviceToken` の vein の署名)。
+ *
+ * **開発用の遠隔操作もここで受ける** (Refs ippoan/alc-app-s3#352)。端末設定でオンにしたキオスクだけが、
+ * 自分宛て (か全キオスク宛て) の `kiosk_command` を実行して返事を送る (`utils/kiosk-remote`)。
  */
-import { reportVeinFleet } from '~/utils/api'
+import { reportKioskCommandResult, reportVeinFleet } from '~/utils/api'
 import { loadVeinModuleEntries } from '~/utils/vein-db'
+import { kioskDeviceIdFromJwt, parseKioskCommand, readKioskRemoteEnabled, runKioskCommand } from '~/utils/kiosk-remote'
 
 const props = defineProps<{
   /** いまのタブがデモか。デモの間は合図を受けても報告しない */
@@ -45,11 +49,26 @@ async function report(): Promise<void> {
   }
 }
 
+async function onKioskCommand(data: unknown): Promise<void> {
+  const cmd = parseKioskCommand(data)
+  if (!cmd || props.demo || !readKioskRemoteEnabled()) return
+  const deviceId = kioskDeviceIdFromJwt(await useDeviceToken().getDeviceJwt().catch(() => null))
+  if (!deviceId || (cmd.device_id !== '*' && cmd.device_id !== deviceId)) return
+  const send = (payload: Record<string, unknown>) => reportKioskCommandResult(cmd.id, payload)
+  try {
+    await send(await runKioskCommand(cmd, { port: veinSerial, deviceId, progress: send }))
+  }
+  catch (e) {
+    console.warn('[kiosk-remote] 返事を送れませんでした:', e)
+  }
+}
+
 const fleetWatch = useTimecardWatch({
   getToken: () => useDeviceToken().getDeviceJwt(),
   onVeinListRequest: () => {
     if (!props.demo) void report()
   },
+  onKioskCommand: (data) => { void onKioskCommand(data) },
 })
 
 onMounted(() => { void veinSerial.connect() })

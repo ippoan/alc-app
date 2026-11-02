@@ -396,6 +396,10 @@ path = "app/composables/useVeinAddedFingerSetting.ts"
 branches = true
 
 [[files]]
+path = "app/utils/kiosk-remote.ts"
+branches = true
+
+[[files]]
 path = "app/utils/vein-added-finger-mode.ts"
 branches = true
 

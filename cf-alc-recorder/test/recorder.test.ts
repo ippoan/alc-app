@@ -2562,3 +2562,112 @@ describe("POST /device-log の CORS (キオスクの画面から送る)", () => 
     expect(lookalike.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)
+//
+//   1. `POST /tenants/:t/kiosk-command` でキオスクの購読へ命令 (宛先は合図に載せる)
+//   2. `POST /tenants/:t/kiosk-command-result` でキオスクの返事を保存 (宛先の端末だけ)
+//   3. `GET  /tenants/:t/commands/:id/result` で返事を取る
+// ---------------------------------------------------------------------------
+
+function kioskCommandViaHttp(tenantId: string, body: unknown, authHeader: string | null = SHARED_SECRET) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authHeader !== null) headers.Authorization = authHeader;
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/kiosk-command`, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+function kioskResultViaHttp(tenantId: string, deviceId: string | null, body: unknown) {
+  const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: SHARED_SECRET };
+  if (deviceId !== null) headers["X-Recorder-Device-Id"] = deviceId;
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/kiosk-command-result`, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+async function commandResult(tenantId: string, id: string) {
+  return SELF.fetch(`${BASE}/tenants/${tenantId}/commands/${id}/result`, {
+    headers: { Authorization: SHARED_SECRET },
+  });
+}
+
+describe("kiosk-command の命令・返事", () => {
+  it("★ 命令はキオスクの購読にだけ届き、宛先の端末の返事だけを保存する", async () => {
+    const { ws: kioskWs } = await connectWatcher("kiosk-token-vein");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const kiosk = messageQueue(kioskWs!);
+    const { ws: adminWs } = await connectWatcher("admin-token-vein");
+    expect(adminWs).not.toBeNull();
+    openSockets.push(adminWs!);
+    const admin = messageQueue(adminWs!);
+
+    const res = await kioskCommandViaHttp("tenant-vein", {
+      device_id: "alarm-k1",
+      id: "cmd-1",
+      op: "vein_info",
+      args: { x: 1 },
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ id: "cmd-1", sent: 1 });
+    expect(await kiosk.next()).toEqual({
+      type: "kiosk_command",
+      id: "cmd-1",
+      device_id: "alarm-k1",
+      op: "vein_info",
+      args: { x: 1 },
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(admin.pending()).toBe(0);
+
+    expect((await commandResult("tenant-vein", "cmd-1")).status).toBe(404);
+    const other = await kioskResultViaHttp("tenant-vein", "alarm-k2", { id: "cmd-1", payload: { done: true } });
+    expect(other.status).toBe(403);
+    const ok = await kioskResultViaHttp("tenant-vein", "alarm-k1", { id: "cmd-1", payload: { done: true, users: 1 } });
+    expect(ok.status).toBe(200);
+    const got = await commandResult("tenant-vein", "cmd-1");
+    expect(got.status).toBe(200);
+    expect(await got.json()).toMatchObject({ device_id: "alarm-k1", payload: { done: true, users: 1 } });
+  });
+
+  it("宛先が全キオスク (*) なら、返事を端末ごとにまとめる", async () => {
+    const { ws } = await connectWatcher("kiosk-token-vein");
+    openSockets.push(ws!);
+    const res = await kioskCommandViaHttp("tenant-vein", { device_id: "*", op: "hello" });
+    expect(res.status).toBe(202);
+    const { id } = (await res.json()) as { id: string };
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    await kioskResultViaHttp("tenant-vein", "alarm-a", { id, payload: { done: true, n: 1 } });
+    await kioskResultViaHttp("tenant-vein", "alarm-b", { id, payload: { done: true, n: 2 } });
+    const got = (await (await commandResult("tenant-vein", id)).json()) as { payload: unknown };
+    expect(got.payload).toEqual({ devices: { "alarm-a": { done: true, n: 1 }, "alarm-b": { done: true, n: 2 } } });
+  });
+
+  it("購読が無ければ 404、形が外れた命令は 400", async () => {
+    expect((await kioskCommandViaHttp("tenant-kiosk-none", { device_id: "k", op: "hello" })).status).toBe(404);
+    const { ws } = await connectWatcher("kiosk-token-vein");
+    openSockets.push(ws!);
+    expect((await kioskCommandViaHttp("tenant-vein", "{")).status).toBe(400);
+    expect(await (await kioskCommandViaHttp("tenant-vein", { op: "hello" })).json()).toEqual({ error: "invalid_device_id" });
+    expect(await (await kioskCommandViaHttp("tenant-vein", { device_id: "k", op: "Bad Op" })).json()).toEqual({
+      error: "invalid_op",
+    });
+  });
+
+  it("返事: 端末なし・知らない id・壊れた JSON・大きすぎは弾く", async () => {
+    expect((await kioskResultViaHttp("tenant-vein", null, { id: "x" })).status).toBe(400);
+    expect((await kioskResultViaHttp("tenant-vein", "k", { id: "no-such" })).status).toBe(404);
+    expect((await kioskResultViaHttp("tenant-vein", "k", "{")).status).toBe(400);
+    expect((await kioskResultViaHttp("tenant-vein", "k", "x".repeat(64 * 1024 + 1))).status).toBe(413);
+  });
+
+  it("内部の秘密が無ければ 401", async () => {
+    expect((await kioskCommandViaHttp("tenant-vein", { device_id: "k", op: "hello" }, null)).status).toBe(401);
+  });
+});

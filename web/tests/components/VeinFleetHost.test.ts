@@ -6,13 +6,15 @@ import { flushPromises } from '@vue/test-utils'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import VeinFleetHost from '~/components/VeinFleetHost.vue'
 
-const { reportVeinFleet, loadVeinModuleEntries } = vi.hoisted(() => ({
+const { reportVeinFleet, reportKioskCommandResult, loadVeinModuleEntries } = vi.hoisted(() => ({
   reportVeinFleet: vi.fn(),
+  reportKioskCommandResult: vi.fn(),
   loadVeinModuleEntries: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   reportVeinFleet,
+  reportKioskCommandResult,
 }))
 vi.mock('~/utils/vein-db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/vein-db')>()),
@@ -29,11 +31,11 @@ const vein = vi.hoisted(() => ({
 }))
 mockNuxtImport('useVeinSerial', () => () => vein)
 
-const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn(async () => 'kiosk-jwt') }))
+const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn(async (): Promise<string> => 'kiosk-jwt') }))
 mockNuxtImport('useDeviceToken', () => () => deviceToken)
 
 const watchHandle = vi.hoisted(() => ({ connect: vi.fn(async () => {}), stop: vi.fn() }))
-interface WatchOptions { getToken: () => unknown, onVeinListRequest: () => void }
+interface WatchOptions { getToken: () => unknown, onVeinListRequest: () => void, onKioskCommand: (data: unknown) => void }
 const watchOptions = (): WatchOptions => timecardWatch.mock.calls[0]![0] as WatchOptions
 
 const ENTRY = { employeeId: 'e1', moduleId: 10, updatedAt: '2026-10-22T00:00:00Z', approved: true }
@@ -117,5 +119,61 @@ describe('VeinFleetHost', () => {
     await flushPromises()
     expect(loadVeinModuleEntries).not.toHaveBeenCalled()
     expect(reportVeinFleet).not.toHaveBeenCalled()
+  })
+
+  describe('開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)', () => {
+    /** sub が alarm:<指紋> の端末の token (署名はダミー) */
+    const KIOSK_JWT = `h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef' }))}.s`
+    const hello = (deviceId: string) => ({ type: 'kiosk_command', id: 'c1', device_id: deviceId, op: 'hello', args: {} })
+
+    beforeEach(() => {
+      localStorage.setItem('alc-kiosk-remote', '1')
+      deviceToken.getDeviceJwt.mockResolvedValue(KIOSK_JWT)
+      reportKioskCommandResult.mockResolvedValue(undefined)
+    })
+
+    it('★ オンにした端末は、自分宛て・全キオスク宛ての命令を実行して返事を送る', async () => {
+      vein.isConnected.value = true
+      await mountSuspended(VeinFleetHost)
+      watchOptions().onKioskCommand(hello('alarm-0123456789abcdef'))
+      await flushPromises()
+      watchOptions().onKioskCommand(hello('*'))
+      await flushPromises()
+      expect(reportKioskCommandResult.mock.calls).toEqual([
+        ['c1', { done: true, ok: true, op: 'hello', result: { device_id: 'alarm-0123456789abcdef', vein_connected: true } }],
+        ['c1', { done: true, ok: true, op: 'hello', result: { device_id: 'alarm-0123456789abcdef', vein_connected: true } }],
+      ])
+    })
+
+    it('★ 他の端末宛て・設定がオフ・デモ・形が外れた命令は実行しない', async () => {
+      await mountSuspended(VeinFleetHost)
+      watchOptions().onKioskCommand(hello('alarm-ffffffffffffffff'))
+      watchOptions().onKioskCommand({ type: 'kiosk_command' })
+      localStorage.removeItem('alc-kiosk-remote')
+      watchOptions().onKioskCommand(hello('*'))
+      await flushPromises()
+      expect(reportKioskCommandResult).not.toHaveBeenCalled()
+
+      localStorage.setItem('alc-kiosk-remote', '1')
+      await mountSuspended(VeinFleetHost, { props: { demo: true } })
+      ;(timecardWatch.mock.calls[1]![0] as WatchOptions).onKioskCommand(hello('*'))
+      await flushPromises()
+      expect(reportKioskCommandResult).not.toHaveBeenCalled()
+    })
+
+    it('端末の token が取れなければ実行しない。返事の失敗は握る', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      deviceToken.getDeviceJwt.mockRejectedValueOnce(new Error('no key'))
+      await mountSuspended(VeinFleetHost)
+      watchOptions().onKioskCommand(hello('*'))
+      await flushPromises()
+      expect(reportKioskCommandResult).not.toHaveBeenCalled()
+
+      reportKioskCommandResult.mockRejectedValue(new Error('端末の登録が必要です'))
+      watchOptions().onKioskCommand(hello('*'))
+      await flushPromises()
+      expect(warn).toHaveBeenCalled()
+      warn.mockRestore()
+    })
   })
 })

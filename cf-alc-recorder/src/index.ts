@@ -41,7 +41,11 @@
  *   - POST /tenants/:tenantId/vein-list-report          … キオスクの対応表を保存し、管理画面の
  *       購読へ「更新した」の合図 (Refs ippoan/alc-app#436)
  *   - GET  /tenants/:tenantId/vein-list-status          … 保存した対応表の一覧
- *     (`/tenants/...` の 11 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
+ *   - POST /tenants/:tenantId/kiosk-command             … キオスクへ開発用の遠隔操作の命令
+ *       (auth-worker の MCP から。実行は端末設定でオンにしたキオスクだけ。Refs ippoan/alc-app-s3#352)
+ *   - POST /tenants/:tenantId/kiosk-command-result      … キオスクの返事 (alc-app の server route から。
+ *       返す端末は `X-Recorder-Device-Id`。返事は `commands/:id/result` で取る)
+ *     (`/tenants/...` の 13 endpoint は `Authorization: <INTERNAL_SHARED_SECRET>` の
  *      内部 API。auth-worker /auth/introspect と同じ server-to-server shared secret
  *      認証で、呼び手は alc-app の server route など Worker 間に限られる)
  *
@@ -544,6 +548,22 @@ export default {
         body: veinListMatch[2] === "report" ? request.body : null,
       });
       return hubStub(env, decodeURIComponent(veinListMatch[1])).fetch(fwd);
+    }
+
+    // 開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)。body の検査と宛先の確認は DO 側
+    const kioskCmdMatch = url.pathname.match(/^\/tenants\/([^/]+)\/kiosk-command(-result)?$/);
+    if (kioskCmdMatch && request.method === "POST") {
+      const denied = await requireInternalAuth(request, env);
+      if (denied) return denied;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const deviceId = request.headers.get("X-Recorder-Device-Id");
+      if (kioskCmdMatch[2] && deviceId) headers["X-Recorder-Device-Id"] = deviceId;
+      const fwd = new Request(`https://recorder-hub.internal/kiosk-command${kioskCmdMatch[2] ?? ""}`, {
+        method: "POST",
+        headers,
+        body: request.body,
+      });
+      return hubStub(env, decodeURIComponent(kioskCmdMatch[1])).fetch(fwd);
     }
 
     const devicesMatch = url.pathname.match(/^\/tenants\/([^/]+)\/devices$/);

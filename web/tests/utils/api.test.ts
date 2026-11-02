@@ -72,6 +72,7 @@ import {
   approveVeinByEmployee,
   requestVeinFleet,
   reportVeinFleet,
+  reportKioskCommandResult,
   reportFirmware,
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
@@ -3377,6 +3378,22 @@ describe.skipIf(isLive)('端末の指静脈の一覧 (#436)', () => {
     await expect(reportVeinFleet({ entries: [] })).rejects.toThrow('端末の登録が必要です')
     initApi(API_BASE, () => 'admin-jwt')
     await expect(reportVeinFleet({ entries: [] })).rejects.toThrow('端末の登録が必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('★ reportKioskCommandResult: 遠隔操作の返事をキオスクの端末の token で送る', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ ok: true }))
+    expect(await reportKioskCommandResult('c1', { done: true })).toBeUndefined()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/kiosk-remote/result')
+    expect(init.body).toBe(JSON.stringify({ id: 'c1', payload: { done: true } }))
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+  })
+
+  it('reportKioskCommandResult: 端末の token が無ければ fetch せずに throw', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => null)
+    await expect(reportKioskCommandResult('c1', {})).rejects.toThrow('端末の登録が必要です')
     expect(mockFetch).not.toHaveBeenCalled()
   })
 })

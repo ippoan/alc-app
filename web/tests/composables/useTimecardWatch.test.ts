@@ -413,6 +413,19 @@ describe('useTimecardWatch', () => {
       lastWs().open()
       expect(() => lastWs().message(JSON.stringify({ type: 'vein_list_request' }))).not.toThrow()
       expect(() => lastWs().message(JSON.stringify({ type: 'vein_list_updated' }))).not.toThrow()
+      expect(() => lastWs().message(JSON.stringify({ type: 'kiosk_command', id: 'c1' }))).not.toThrow()
+    })
+
+    it('kiosk_command (開発用の遠隔操作) はフレームごと受け手に渡す', async () => {
+      const onKioskCommand = vi.fn()
+      const { watch, onChange } = make({ onKioskCommand })
+      await watch.connect()
+      lastWs().open()
+      onChange.mockClear()
+      const frame = { type: 'kiosk_command', id: 'c1', device_id: 'k', op: 'hello', args: {} }
+      lastWs().message(JSON.stringify(frame))
+      expect(onKioskCommand).toHaveBeenCalledWith(frame)
+      expect(onChange).not.toHaveBeenCalled()
     })
   })
 
