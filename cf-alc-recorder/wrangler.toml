@@ -53,6 +53,12 @@ binding = "INTERNAL_SHARED_SECRET"
 store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
 secret_name = "INTERNAL_SHARED_SECRET"
 
+# CI (alc-app-s3) がファームの配信を知らせる専用の鍵 (POST /firmware-published、Refs ippoan/alc-app-s3#352)
+[[secrets_store_secrets]]
+binding = "FIRMWARE_NOTIFY_TOKEN"
+store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
+secret_name = "FIRMWARE_NOTIFY_TOKEN"
+
 # crash_log (CoreS3 の異常リセット復帰レポート、ippoan/alc-app-s3#43) の保存先。
 # backend (rust-alc-api hub_measurements) へは転送せず R2 で完結させる。
 # key: {tenant_id}/{device_id}/{seq 12桁0詰}.json (再送冪等)。
@@ -108,6 +114,11 @@ service = "auth-worker-staging"
 binding = "INTERNAL_SHARED_SECRET"
 store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
 secret_name = "INTERNAL_SHARED_SECRET"
+
+[[env.staging.secrets_store_secrets]]
+binding = "FIRMWARE_NOTIFY_TOKEN"
+store_id = "bd7bc91a3e5f4111add4acf6cb4b8733"
+secret_name = "FIRMWARE_NOTIFY_TOKEN"
 
 [[env.staging.r2_buckets]]
 binding = "CRASH_LOGS"

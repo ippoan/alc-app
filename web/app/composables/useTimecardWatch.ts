@@ -83,22 +83,29 @@ export interface TimecardWatchOptions {
    * キオスクの購読だけに届く。形の検査と実行するかは受け手 (`utils/kiosk-remote`) が決める
    */
   onKioskCommand?: (data: unknown) => void
+  /**
+   * `{"type":"firmware_published", target}` (CI がファームを配信した) を受けたときに呼ぶ。
+   * `path: '/watch-firmware'` の購読 (テナントに依らない部屋) だけに届く (Refs ippoan/alc-app-s3#352)
+   */
+  onFirmwarePublished?: (target: string) => void
+  /** recorder の購読の口 (既定 `/watch-timecard`)。ファームの合図は `/watch-firmware` */
+  path?: string
 }
 
 /**
  * `https://…` / `http://…` を購読 WS の URL に直す (末尾スラッシュは落とす)。
  * **空文字なら空文字を返す** — 未設定のまま `new WebSocket()` に渡さない。
  */
-export function toTimecardWatchUrl(base: string): string {
+export function toTimecardWatchUrl(base: string, path: string = '/watch-timecard'): string {
   const trimmed = base.replace(/\/$/, '')
   if (!trimmed) return ''
-  return `${trimmed.replace(/^http/, 'ws')}/watch-timecard`
+  return `${trimmed.replace(/^http/, 'ws')}${path}`
 }
 
 export function useTimecardWatch(options: TimecardWatchOptions) {
   const config = useRuntimeConfig()
   // nuxt.config.ts が既定値を持つので常に文字列 (空なら購読しない = ポーリングのみ)
-  const url = toTimecardWatchUrl(config.public.recorderUrl as string)
+  const url = toTimecardWatchUrl(config.public.recorderUrl as string, options.path)
 
   const isConnected = ref(false)
 
@@ -193,6 +200,9 @@ export function useTimecardWatch(options: TimecardWatchOptions) {
         else if (data.type === 'vein_list_request') options.onVeinListRequest?.()
         else if (data.type === 'vein_list_updated') options.onVeinListUpdated?.()
         else if (data.type === 'kiosk_command') options.onKioskCommand?.(data)
+        else if (data.type === 'firmware_published' && typeof data.target === 'string') {
+          options.onFirmwarePublished?.(data.target)
+        }
       }
       catch {
         // 非 JSON は無視

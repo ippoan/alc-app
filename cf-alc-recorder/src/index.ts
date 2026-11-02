@@ -41,6 +41,10 @@
  *   - POST /tenants/:tenantId/vein-list-report          … キオスクの対応表を保存し、管理画面の
  *       購読へ「更新した」の合図 (Refs ippoan/alc-app#436)
  *   - GET  /tenants/:tenantId/vein-list-status          … 保存した対応表の一覧
+ *   - GET  /watch-firmware                              … ファームの配信の合図の購読 (端末の token、
+ *       テナントに依らない部屋 1 つ。Refs ippoan/alc-app-s3#352)
+ *   - POST /firmware-published                          … CI がファームの配信を知らせる (専用の鍵
+ *       FIRMWARE_NOTIFY_TOKEN、body `{ target }`)
  *   - POST /tenants/:tenantId/kiosk-command             … キオスクへ開発用の遠隔操作の命令
  *       (auth-worker の MCP から。実行は端末設定でオンにしたキオスクだけ。Refs ippoan/alc-app-s3#352)
  *   - POST /tenants/:tenantId/kiosk-command-result      … キオスクの返事 (alc-app の server route から。
@@ -93,6 +97,11 @@ export interface Env {
   AUTH_WORKER: Fetcher;
   /** CF Secrets Store binding (`.get()`)。テストでは文字列で注入する。 */
   INTERNAL_SHARED_SECRET: unknown;
+  /**
+   * CI がファームの配信を知らせる専用の鍵 (`POST /firmware-published`、CF Secrets Store binding)。
+   * 合図を 1 種類出すことしかできない (Refs ippoan/alc-app-s3#352)。テストでは文字列で注入する
+   */
+  FIRMWARE_NOTIFY_TOKEN?: unknown;
   /** crash_log (kind=crash_log) の保存先。backend へは転送しない (alc-app-s3#43) */
   CRASH_LOGS: R2Bucket;
   /** crash_log のメール通知 (Email Routing send_email binding)。テスト環境は未設定 = skip */
@@ -247,7 +256,12 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
  * (応答ヘッダーに秘密が乗る)。`?token=` にしないのは、常時表示のキオスクが
  * 1 時間ごとに mint する device 資格情報が Worker のログと分析に残り続けるため。
  */
-async function handleWatchTimecard(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleWatchTimecard(
+  request: Request,
+  env: Env,
+  url: URL,
+  firmware = false,
+): Promise<Response> {
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("Expected WebSocket. Use GET /watch-timecard with Upgrade header", {
       status: 426,
@@ -275,6 +289,16 @@ async function handleWatchTimecard(request: Request, env: Env, url: URL): Promis
       decision.status,
     );
   }
+  // ファームの合図の購読 (`/watch-firmware`) はテナントに依らない部屋 1 つに集める
+  // (CI はテナントを知らない。Refs ippoan/alc-app-s3#352)。受けるのは配信の合図だけ
+  if (firmware) {
+    const fwd = new Request("https://recorder-hub.internal/watch", request);
+    fwd.headers.set("X-Recorder-Tenant-Id", FIRMWARE_HUB);
+    fwd.headers.delete("X-Recorder-Device-Id");
+    fwd.headers.set("X-Recorder-Watcher-Kind", "firmware");
+    setRecorderDev(fwd, false);
+    return hubStub(env, FIRMWARE_HUB).fetch(fwd);
+  }
   // tenant は introspect 結果からのみ。**クライアントに名乗らせない** (既存の不変条件)
   const fwd = new Request("https://recorder-hub.internal/watch", request);
   fwd.headers.set("X-Recorder-Tenant-Id", decision.tenantId);
@@ -287,6 +311,39 @@ async function handleWatchTimecard(request: Request, env: Env, url: URL): Promis
   // 購読者の dev も同じ — dev端末は dev の打刻の合図だけを受ける (Refs ippoan/alc-app#387)
   setRecorderDev(fwd, isDevIntrospect(result));
   return hubStub(env, decision.tenantId).fetch(fwd);
+}
+
+/** ファームの合図の部屋 (テナントに依らない DO の名前。テナントの id とは衝突しない形) */
+const FIRMWARE_HUB = "__firmware__";
+
+/** `POST /firmware-published` で受ける target (alc-app の `FIRMWARE_TARGETS` の語) */
+const FIRMWARE_PUBLISHED_TARGETS: ReadonlySet<string> = new Set(["timecard-station", "cores3", "alarm"]);
+
+/**
+ * POST /firmware-published — CI がファームを配信したことを知らせる (Refs ippoan/alc-app-s3#352)。
+ * `Authorization: Bearer <FIRMWARE_NOTIFY_TOKEN>` (この合図専用の鍵)。body `{ target }` は allowlist。
+ * ファームの合図の部屋 (`/watch-firmware` の購読) へ `{ type: "firmware_published", target }` を流すだけで、
+ * URL・版・自由文字列は運ばない (受けた端末は配布の manifest を自分で取りに行く)
+ */
+async function handleFirmwarePublished(request: Request, env: Env): Promise<Response> {
+  const expected = await resolveSecret(env.FIRMWARE_NOTIFY_TOKEN);
+  if (!expected) return json({ error: "server_error" }, 503);
+  const token = bearerToken(request.headers.get("Authorization"));
+  if (!token || !constantTimeEquals(token, expected)) return json({ error: "unauthorized" }, 401);
+  let body: { target?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+  if (typeof body.target !== "string" || !FIRMWARE_PUBLISHED_TARGETS.has(body.target)) {
+    return json({ error: "invalid_target" }, 400);
+  }
+  return hubStub(env, FIRMWARE_HUB).fetch("https://recorder-hub.internal/firmware-published", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: body.target }),
+  });
 }
 
 /**
@@ -430,6 +487,12 @@ export default {
     }
     if (url.pathname === "/watch-timecard") {
       return handleWatchTimecard(request, env, url);
+    }
+    if (url.pathname === "/watch-firmware") {
+      return handleWatchTimecard(request, env, url, true);
+    }
+    if (url.pathname === "/firmware-published" && request.method === "POST") {
+      return handleFirmwarePublished(request, env);
     }
 
     if (url.pathname === "/measurements" && request.method === "POST") {

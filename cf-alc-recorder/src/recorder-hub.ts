@@ -177,6 +177,9 @@ const KIOSK_TAG = "watch:kiosk";
  */
 const MANAGER_SEAT_TAG = "watch:manager-seat";
 
+/** ファームの配信の合図の購読 (`/watch-firmware`) だけの tag。テナントに依らない部屋の DO で使う */
+const FIRMWARE_TAG = "watch:firmware";
+
 /**
  * 購読 WS のサブプロトコル名。ブラウザは `["alc.timecard.v1", "<jwt>"]` を送り、
  * サーバはこちらだけを echo し返す (トークンを応答ヘッダーに乗せない)。
@@ -512,6 +515,9 @@ export class RecorderHub extends DurableObject<Env> {
     if (url.pathname === "/vein-list-status" && request.method === "GET") {
       return this.handleVeinListStatus();
     }
+    if (url.pathname === "/firmware-published" && request.method === "POST") {
+      return this.handleFirmwarePublished(request);
+    }
     if (url.pathname === "/kiosk-command" && request.method === "POST") {
       return this.handleKioskCommand(request);
     }
@@ -571,7 +577,13 @@ export class RecorderHub extends DurableObject<Env> {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(
       pair[1],
-      kind === "manager-seat" ? [MANAGER_SEAT_TAG] : isKiosk ? [watchTag, KIOSK_TAG] : [watchTag],
+      kind === "firmware"
+        ? [FIRMWARE_TAG]
+        : kind === "manager-seat"
+          ? [MANAGER_SEAT_TAG]
+          : isKiosk
+            ? [watchTag, KIOSK_TAG]
+            : [watchTag],
     );
     pair[1].serializeAttachment(buildAttachment(tenantId, undefined, dev));
     // サブプロトコルを 1 つも返さないとブラウザが即座に閉じる。
@@ -1081,6 +1093,17 @@ export class RecorderHub extends DurableObject<Env> {
       }
     }
     return json({ ok: true });
+  }
+
+  /**
+   * ファームの配信の合図を、ファームの合図の購読へ流す (target は worker が allowlist で検査済み)。
+   * 送った本数を返す
+   */
+  private async handleFirmwarePublished(request: Request): Promise<Response> {
+    const { target } = (await request.json()) as { target: string };
+    const sockets = this.ctx.getWebSockets(FIRMWARE_TAG);
+    for (const ws of sockets) this.send(ws, { type: "firmware_published", target });
+    return json({ sent: sockets.length });
   }
 
   // ── 開発用の遠隔操作 (内部 HTTP API、Refs ippoan/alc-app-s3#352) ─────────────
