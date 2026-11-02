@@ -792,6 +792,8 @@ function onRoleTabClick(role: RoleTab) {
     <AlarmDeviceFirmwareNotice v-if="activeRole === 'manager' || activeRole === 'it_tenko'" />
     <!-- 開発用の遠隔操作の受け答え (運行管理者席の鍵。描くものは無い。Refs ippoan/alc-app-s3#352) -->
     <ManagerSeatRemoteHost v-if="activeRole === 'manager'" />
+    <!-- 運行管理者の画面の間は席の Vein Base に体温計へつながせない (キオスクに体温を譲る。描くものは無い) -->
+    <ManagerSeatThermoPause v-if="activeRole === 'manager'" />
     <!-- ハンバーガーメニュー (デバイス設定。運行者の画面と同じ置き方) -->
     <div v-if="activeRole === 'manager' && !incomingCallMode" class="w-full max-w-lg mx-auto px-4 mt-2 flex justify-end">
       <div ref="managerMenuRef" class="relative">
