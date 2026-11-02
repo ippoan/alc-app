@@ -8,13 +8,16 @@
  * 違えば押さずに始める。役割に依らない位置に 1 つ置く (運行管理者席の Vein Base も対象)。
  *
  * - 配布中の版はつながったときと、その後 {@link LATEST_REFRESH_MS} おきに取り直す
+ * - **合図の購読がつながったら、その時点で 1 回取り直す** (購読を張る前・切れていた間の配信は合図が届かないため)
  * - **CI がファームを配信したら、すぐ取り直す** (recorder の `/watch-firmware` の合図 `firmware_published`)。
  *   配布先 (GitHub Pages) は CDN が最大 10 分古い manifest を返すので、合図の後
  *   {@link NOTIFY_REFRESH_DELAYS_MS} の時点で取り直す
  * - 機体を使っている画面 (点呼の途中・指静脈の読み取り中) や、別の更新が走っている間は始めない
  * - 同じ「今の版 → 配布中の版」はこの画面を開いている間に 1 回だけ試す (失敗しても繰り返さない)
  * - 書き込みは画面の更新と同じ `useSerialOta` — 「更新中」の幕 (`FirmwareOtaOverlay.vue`) も同じものが出る。
- *   書き終えると画面を読み込み直す。描くものは無い
+ *   書き終えると画面を読み込み直す
+ * - 開発端末では右下に合図の購読の状態 (購読中 / 再接続中 / 未購読) と最後に合図を受けた時刻を小さく出す。
+ *   合図が届かなかったときに、購読が無かったのかを画面で見分けるため
  */
 import { fetchLatestFirmwareVersions, isFirmwareDifferent } from '~/utils/firmware-updates'
 import { VEIN_FIRMWARE_TARGET } from '~/utils/kiosk-remote'
@@ -42,6 +45,8 @@ const latest = ref<Record<string, string>>({})
 const attempted = new Set<string>()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let notifyTimers: ReturnType<typeof setTimeout>[] = []
+/** 最後に合図を受けた時刻 (HH:MM:SS)。右下の表示に使う */
+const lastSignalAt = ref<string | null>(null)
 
 function clearNotifyTimers(): void {
   notifyTimers.forEach(t => clearTimeout(t))
@@ -51,6 +56,7 @@ function clearNotifyTimers(): void {
 /** CI の配信の合図。指静脈の端末の target のときだけ取り直す */
 function onFirmwarePublished(target: string): void {
   if (target !== VEIN_FIRMWARE_TARGET) return
+  lastSignalAt.value = new Date().toLocaleTimeString('ja-JP', { hour12: false })
   appendDiag(`[ota] 配信の合図を受けました ${target}`)
   clearNotifyTimers()
   notifyTimers = NOTIFY_REFRESH_DELAYS_MS.map(ms => setTimeout(() => { void refreshLatest() }, ms))
@@ -62,7 +68,16 @@ const firmwareWatch = useTimecardWatch({
   getToken: () => isDevDevice('kiosk') ? useDeviceToken().getDeviceJwt() : useManagerDeviceToken().getManagerJwt(),
   onFirmwarePublished,
 })
-let subscribed = false
+const subscribed = ref(false)
+
+/** 右下の表示。開発端末でなければ出さない */
+const watchBadge = computed(() => {
+  if (!dev.value || isDemoMode.value) return null
+  if (!subscribed.value) return { on: false, text: 'ファームの合図: 未購読 (指静脈の端末を待っています)' }
+  return firmwareWatch.isConnected.value
+    ? { on: true, text: 'ファームの合図: 購読中' }
+    : { on: false, text: 'ファームの合図: 再接続中' }
+})
 
 async function refreshLatest(): Promise<void> {
   latest.value = await fetchLatestFirmwareVersions(VEIN_FIRMWARE_TARGET)
@@ -100,9 +115,14 @@ watch(pending, async (key) => {
   appendDiag(`[ota] 開発端末の自動更新 ${key} → ${result}`)
 })
 
+// 購読がつながった (張った・張り直した) 時点で取り直す。合図を受けそびれた配信を拾う
+watch(firmwareWatch.isConnected, (open) => {
+  if (open && vein.isConnected.value) void refreshLatest()
+})
+
 watch([dev, vein.isConnected], ([isDev, connected]) => {
-  if (!isDev || !connected || subscribed || isDemoMode.value) return
-  subscribed = true
+  if (!isDev || !connected || subscribed.value || isDemoMode.value) return
+  subscribed.value = true
   void firmwareWatch.connect()
 }, { immediate: true })
 
@@ -119,5 +139,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 描くものは無い -->
+  <div
+    v-if="watchBadge"
+    data-testid="dev-firmware-watch-badge"
+    class="fixed bottom-1 right-1 z-50 pointer-events-none rounded bg-white/90 border border-gray-300 px-2 py-0.5 text-xs text-gray-700 shadow"
+  >
+    <span :class="watchBadge.on ? 'text-green-600' : 'text-gray-400'">{{ watchBadge.on ? '●' : '○' }}</span>
+    {{ watchBadge.text }}<template v-if="lastSignalAt">（最後の合図 {{ lastSignalAt }}）</template>
+  </div>
 </template>
