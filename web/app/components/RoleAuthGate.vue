@@ -156,7 +156,9 @@ const vein = useVeinEmployeeIdentify({
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から承認してください`,
   onEmployee: grantByVein,
   // 指を足している間は受けない (登録で置くたびに合図が来て、ポートが登録の応答待ちのまま照合が失敗する)
-  isIdle: () => step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value && !fingerAdd.adding.value && !refresh.adding.value,
+  // 通った後 (中の画面を出している間) は指の合図を受けない。受けると中の画面の照合 (遠隔点呼の通話前の確認など) と
+  // 同じ指を取り合い、中の側が次の指を待ったまま止まる (2026-11-02 実機)
+  isIdle: () => !isGranted.value && step.value === 'nfc' && !isSubmitting.value && !isFaceSyncing.value && !vein.busy.value && !fingerAdd.adding.value && !refresh.adding.value,
   // 運行管理者の入口は運行管理者席の鍵で照合データを取り、当たった人を引く (キオスクの鍵が無い席がある)
   scope: props.requiredRole === 'manager' ? 'manager-device' : 'default',
   onStart: () => {
