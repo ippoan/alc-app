@@ -28,7 +28,13 @@ const mod = vi.hoisted(() => ({
   usesVeinModule: vi.fn(() => true),
   identifyVeinModuleEmployee: vi.fn(),
   prepareVeinModuleRecord: vi.fn(async () => 12 as number | null),
+  // 本人が決まった人の照合 (1:N で当たった ID がその人の枠か)。中身は utils/vein-module.test.ts
+  matchVeinModuleEmployee: vi.fn(async (..._args: unknown[]) => 12 as number | null),
+  needsThisDeviceRecord: vi.fn(async (_employeeId: string) => false),
 }))
+// この端末で登録し直す (中身は useVeinAddDevice.test.ts)
+const adopt = vi.hoisted(() => ({ addThisDeviceFinger: vi.fn(async (..._args: unknown[]) => {}) }))
+vi.mock('~/composables/useVeinAddDevice', () => adopt)
 // 不一致のやり直し (retryOnVeinMiss) は本物を使う
 vi.mock('~/utils/vein-module', async importOriginal => ({
   retryOnVeinMiss: (await importOriginal<typeof import('~/utils/vein-module')>()).retryOnVeinMiss,
@@ -254,8 +260,10 @@ describe('useVeinEmployeeIdentify', () => {
       fingerCb?.()
       await vi.waitFor(() => expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null))
       expect(mod.prepareVeinModuleRecord).toHaveBeenCalledWith(vein, 'emp-test-1', 'manager-device')
-      expect(vein.verify).toHaveBeenCalledWith(12, expect.any(Function))
-      expect(vein.identify).not.toHaveBeenCalled()
+      // VEIN VERIFY <id> は使わない (指定と違う ID に当たっても成功を返すため)。1:N で本人の枠か確かめる
+      expect(mod.matchVeinModuleEmployee).toHaveBeenCalledWith(vein, 'emp-test-1', expect.any(Function), expect.any(Function))
+      expect(vein.verify).not.toHaveBeenCalled()
+      expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, 'manager-device')
       expect(vein.say).not.toHaveBeenCalledWith('PLACE')
       expect(api.error.value).toBeNull()
       app.unmount()
@@ -265,8 +273,71 @@ describe('useVeinEmployeeIdentify', () => {
       mod.prepareVeinModuleRecord.mockResolvedValueOnce(null)
       const { api, app } = setup({ expectedEmployeeId: () => 'emp-test-1' })
       await api.identify()
-      expect(vein.verify).not.toHaveBeenCalled()
+      expect(mod.matchVeinModuleEmployee).not.toHaveBeenCalled()
       expect(api.error.value).toBe('一致しません')
+      app.unmount()
+    })
+
+    it('★ 本人の枠に当たらなければ (他人・不一致) 不一致。登録し直さない', async () => {
+      mod.matchVeinModuleEmployee.mockResolvedValueOnce(null)
+      mod.needsThisDeviceRecord.mockResolvedValue(true)
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1' })
+      await api.identify()
+      expect(api.error.value).toBe('一致しません')
+      expect(opts.onEmployee).not.toHaveBeenCalled()
+      expect(adopt.addThisDeviceFinger).not.toHaveBeenCalled()
+      expect(vein.say).toHaveBeenCalledWith('FAILED')
+      mod.needsThisDeviceRecord.mockResolvedValue(false)
+      app.unmount()
+    })
+
+    it('★ ほかの端末の記録で通った人は、この端末で登録し直してから渡す。この端末の記録がある人は登録しない', async () => {
+      const order: string[] = []
+      mod.needsThisDeviceRecord.mockResolvedValueOnce(true)
+      adopt.addThisDeviceFinger.mockImplementationOnce(async () => { order.push('adopt') })
+      lastMatch.value = { via: 'FP' }
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1', scope: 'manager-device' })
+      opts.onEmployee.mockImplementationOnce(() => { order.push('onEmployee'); return null })
+      await api.identify()
+      expect(mod.needsThisDeviceRecord).toHaveBeenCalledWith('emp-test-1')
+      expect(adopt.addThisDeviceFinger).toHaveBeenCalledWith(vein, 'emp-test-1', 'manager-device', expect.any(Function))
+      expect(vein.say).toHaveBeenCalledWith('ENROLLED')
+      // 照合の層は登録し直す前の値を渡す
+      expect(opts.onEmployee).toHaveBeenCalledWith(EMP, 'FP')
+      expect(order).toEqual(['adopt', 'onEmployee'])
+      await api.identify()
+      expect(adopt.addThisDeviceFinger).toHaveBeenCalledTimes(1)
+      app.unmount()
+    })
+
+    it('用意・照合の失敗は理由を出す。本人の枠に当たっても乗務員を引けなければ、その理由を出して登録し直さない', async () => {
+      mod.needsThisDeviceRecord.mockResolvedValue(true)
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1' })
+      mod.prepareVeinModuleRecord.mockRejectedValueOnce(new Error('WRITE_SEQ'))
+      await api.identify()
+      expect(api.error.value).toBe('指静脈の記録をこの端末に用意できませんでした (WRITE_SEQ)')
+      mod.matchVeinModuleEmployee.mockRejectedValueOnce(new Error('TIMEOUT'))
+      await api.identify()
+      expect(api.error.value).toBe('指静脈を読み取れませんでした (TIMEOUT)')
+      mod.identifyVeinModuleEmployee.mockResolvedValueOnce({ kind: 'error', message: '乗務員の情報が手元にありません' })
+      await api.identify()
+      expect(api.error.value).toBe('乗務員の情報が手元にありません')
+      expect(opts.onEmployee).not.toHaveBeenCalled()
+      expect(adopt.addThisDeviceFinger).not.toHaveBeenCalled()
+      mod.needsThisDeviceRecord.mockResolvedValue(false)
+      app.unmount()
+    })
+
+    it('登録し直しに失敗しても、本人確認は済んでいるので先へ進める (理由は診断ログ)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      mod.needsThisDeviceRecord.mockResolvedValueOnce(true)
+      adopt.addThisDeviceFinger.mockRejectedValueOnce(new Error('TIMEOUT'))
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1' })
+      await api.identify()
+      expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null)
+      expect(api.error.value).toBeNull()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('TIMEOUT'))
+      warn.mockRestore()
       app.unmount()
     })
 

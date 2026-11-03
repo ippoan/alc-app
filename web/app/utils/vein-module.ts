@@ -15,8 +15,10 @@
  * - 同期: サーバーの承認済みの記録 (`GET /api/vein/module-templates`) と対応表を比べ、新しい・変わった
  *   記録を空いている ID に書き、一覧から消えた乗務員はモジュールから消す。枠が埋まったら書かずに飛ばす
  * - 免許証・社員番号で本人が決まったら (`prepareVeinModuleRecord`): その 1 人の記録をサーバーから取り、
- *   モジュールに無い・古ければ書いて 1:1 (`VEIN VERIFY`) で照合する。枠が埋まっていたら一番長く使っていない人の
- *   枠を譲らせる — **91 人を超えても照合できる** (Refs ippoan/alc-app-s3#352)。記録は PC に持たない
+ *   モジュールに無い・古ければ書いて照合する。枠が埋まっていたら一番長く使っていない人の
+ *   枠を譲らせる — **91 人を超えても照合できる** (Refs ippoan/alc-app-s3#352)。記録は PC に持たない。
+ *   照合は 1:N (`VEIN IDENTIFY`) で、当たった ID がその人の枠のときだけ通す (`matchVeinModuleEmployee`)。
+ *   この端末で撮った記録がまだ無い人が通ったら、その場でこの端末で登録し直す (`needsThisDeviceRecord`)
  *
  * モジュールの ID は 1 = 作業用 / 2〜9 = 確認タブの試験 / **10〜100 = ここが割り振る** (ファームの
  * docs/console-protocol.md の「ID の分け方」)。サーバーは端末の ID を知らない。
@@ -144,6 +146,45 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/** 本人が決まった人の照合が使うモジュールの口 (`useVeinSerial` の一部) */
+export interface VeinMatchPort {
+  identify: (onAgain?: () => void) => Promise<number | null>
+}
+
+/**
+ * 免許証・社員番号で決まった `employeeId` を、モジュールの 1:N (`VEIN IDENTIFY`) で照合し、当たった ID が
+ * その人の承認済みの枠のときだけ、その ID を返す (それ以外は null)。`VEIN VERIFY <id>` は、モジュールが指定と違う
+ * ID に当たっても成功を返し、ファームも当たった ID を見ていない (2026-11-03 実測) — 他人の指で通さないため、
+ * 1:N で当たった ID を対応表で引いて確かめる。他人・誰にも当たらないときは {@link VEIN_NOMATCH_RETRIES} 回まで
+ * やり直す (やり直す前に `onRetry`)。読み取りの失敗は投げる
+ */
+export async function matchVeinModuleEmployee(
+  port: VeinMatchPort,
+  employeeId: string,
+  onAgain?: () => void,
+  onRetry: () => void | Promise<void> = () => {},
+): Promise<number | null> {
+  const read = async (): Promise<number | null> => {
+    const hit = await port.identify(onAgain)
+    if (hit === null) return null
+    const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === hit)
+    if (entry?.employeeId === employeeId && entry.approved) return hit
+    // 他人の枠に当たった: 本人ではない (乗務員の ID は残さない)
+    recordVeinLine(`PC VEIN OTHER ${hit}`)
+    return null
+  }
+  return await retryOnVeinMiss(read, hit => hit === null, onRetry)
+}
+
+/**
+ * `employeeId` のこの端末のモジュールの記録が、ほかの端末で撮った記録のままか (この端末で撮った記録がサーバーに無い)。
+ * 免許証の 1:1 で通ったときに、この端末で登録し直すかの判断に使う。その場で撮った記録 (`native`) は false
+ */
+export async function needsThisDeviceRecord(employeeId: string): Promise<boolean> {
+  const entry = (await loadVeinModuleEntries()).find(e => e.employeeId === employeeId)
+  return entry?.approved === true && !entry.native && entry.source === 'other'
+}
+
 /**
  * モジュールが返した ID (`VEIN IDENTIFY`、不一致は null) から乗務員を引く。
  * 対応表に無い ID は不一致、承認待ちの ID は `pending` (本人確認にはしない)。社員の情報はオンラインは
@@ -207,7 +248,8 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
   if (!template) return null
   // その場の記録 (native) は、同じ版でも混ぜた記録とは中身が違う: 設定が native なら残し、mixed なら書き直す
   if (own?.approved && (keepsOnSpotRecord(own) || (own.updatedAt === template.updated_at && !own.native))) {
-    await touchVeinModuleEntry(own)
+    // 出どころを持たない古い対応表にも残す (この端末で登録し直すかの判断 — needsThisDeviceRecord)
+    await touchVeinModuleEntry(own.native ? own : { ...own, source: serverRecordKind(template) })
     return own.moduleId
   }
   const slot = allocateOrEvictVeinModuleId(entries, employeeId)
@@ -223,6 +265,7 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
     updatedAt: template.updated_at,
     approved: true,
     registeredDeviceId: template.registered_device_id ?? null,
+    source: serverRecordKind(template),
     lastUsedAt: Date.now(),
   })
   return slot.id
@@ -301,6 +344,7 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
           updatedAt: t.updated_at,
           approved: true,
           registeredDeviceId: t.registered_device_id ?? null,
+          source: serverRecordKind(t),
           lastUsedAt: current?.lastUsedAt,
         }
         await putVeinModuleEntry(entry)

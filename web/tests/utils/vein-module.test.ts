@@ -180,7 +180,7 @@ describe('prepareVeinModuleRecord', () => {
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(15)
     expect(p.syncWrite).not.toHaveBeenCalled()
     // 使った印 (枠を譲らせる順) を残す
-    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ ...entry('emp-1', 15), lastUsedAt: expect.any(Number) })
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ ...entry('emp-1', 15), source: 'server', lastUsedAt: expect.any(Number) })
   })
 
   it('★ その 1 人だけを、混ぜずに選んだ記録で頼む (native の設定。鍵も渡す)', async () => {
@@ -213,7 +213,7 @@ describe('prepareVeinModuleRecord', () => {
     const p = port()
     expect(await mod.prepareVeinModuleRecord(p, 'emp-1')).toBe(11)
     expect(p.syncWrite).toHaveBeenCalledWith(11, expect.any(Uint8Array))
-    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true, registeredDeviceId: null, lastUsedAt: expect.any(Number) })
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith({ employeeId: 'emp-1', moduleId: 11, updatedAt: 'v3', approved: true, registeredDeviceId: null, source: 'server', lastUsedAt: expect.any(Number) })
   })
 
   it('登録した端末をサーバーの値で対応表に入れる', async () => {
@@ -334,8 +334,8 @@ describe('syncVeinModule', () => {
     ])
     expect(db.putVeinModuleEntry.mock.calls).toEqual([
       [entry('pending-approved', 10, { registeredDeviceId: null })],
-      [entry('changed', 12, { updatedAt: 'v2', registeredDeviceId: null })],
-      [entry('new', 13, { registeredDeviceId: null })],
+      [entry('changed', 12, { updatedAt: 'v2', registeredDeviceId: null, source: 'server' })],
+      [entry('new', 13, { registeredDeviceId: null, source: 'server' })],
     ])
     // 書き直す前に古い版を外す (途中で落ちても古い版を承認済みとして引かない)
     expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('changed')
@@ -359,7 +359,7 @@ describe('syncVeinModule', () => {
     expect(p.syncWrite.mock.calls.map(c => c[0])).toEqual([12])
     expect(db.putVeinModuleEntry.mock.calls).toEqual([
       [entry('known', 11, { registeredDeviceId: 'kiosk-1' })],
-      [entry('new', 12, { registeredDeviceId: 'kiosk-2' })],
+      [entry('new', 12, { registeredDeviceId: 'kiosk-2', source: 'server' })],
     ])
   })
 
@@ -379,7 +379,7 @@ describe('syncVeinModule', () => {
     expect(db.deleteVeinModuleEntry).not.toHaveBeenCalledWith('gone')
     expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('changed')
     expect(p.syncWrite.mock.calls.map(c => c[0])).toEqual([10, 10])
-    expect(db.putVeinModuleEntry.mock.calls).toEqual([[entry('new', 10, { registeredDeviceId: null })]])
+    expect(db.putVeinModuleEntry.mock.calls).toEqual([[entry('new', 10, { registeredDeviceId: null, source: 'server' })]])
     expect(console.warn).toHaveBeenCalledTimes(2)
   })
 
@@ -464,7 +464,7 @@ describe('その場で撮った記録 (native) の扱い', () => {
     const p = port()
     await mod.syncVeinModule(p)
     expect(p.syncWrite).toHaveBeenCalledWith(10, new Uint8Array([0xDE, 0xED]))
-    expect(db.putVeinModuleEntry).toHaveBeenCalledWith(entry('added', 10, { registeredDeviceId: null }))
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith(entry('added', 10, { registeredDeviceId: null, source: 'composed' }))
     expect(db.putVeinModuleEntry.mock.calls[0]![0]).not.toHaveProperty('native')
   })
 
@@ -493,5 +493,75 @@ describe('その場で撮った記録 (native) の扱い', () => {
     const p = port()
     await mod.prepareVeinModuleRecord(p, 'emp-1')
     expect(p.syncWrite).toHaveBeenCalledWith(15, expect.any(Uint8Array))
+  })
+})
+
+// 免許証・社員番号で決まった人の照合: 1:N で当たった ID がその人の枠のときだけ通す (VEIN VERIFY <id> は
+// 指定と違う ID に当たっても成功を返すため。2026-11-03 実測)
+describe('matchVeinModuleEmployee', () => {
+  function matchPort(...hits: Array<number | null>) {
+    const identify = vi.fn(async (_onAgain?: () => void) => null as number | null)
+    for (const h of hits) identify.mockResolvedValueOnce(h)
+    return { identify }
+  }
+
+  it('★ 当たった ID がその人の承認済みの枠なら、その ID', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12), entry('emp-2', 13)])
+    const p = matchPort(12)
+    const onAgain = vi.fn()
+    expect(await mod.matchVeinModuleEmployee(p, 'emp-1', onAgain)).toBe(12)
+    expect(p.identify).toHaveBeenCalledTimes(1)
+    expect(p.identify).toHaveBeenCalledWith(onAgain)
+  })
+
+  it('★ 他人の枠に当たったら通さない (1 回やり直し、2 回とも他人・不一致なら null)。乗務員の ID は残さない', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12), entry('emp-2', 13)])
+    const onRetry = vi.fn()
+    expect(await mod.matchVeinModuleEmployee(matchPort(13, null), 'emp-1', undefined, onRetry)).toBeNull()
+    expect(onRetry).toHaveBeenCalledTimes(1)
+    expect(snapshotVeinLines()).toContain('PC VEIN OTHER 13')
+    expect(snapshotVeinLines()).not.toContain('emp-')
+    // やり直しで本人に当たれば通す
+    expect(await mod.matchVeinModuleEmployee(matchPort(13, 12), 'emp-1')).toBe(12)
+  })
+
+  it('承認待ちの枠・対応表に無い ID は本人にしない', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12, { approved: false })])
+    expect(await mod.matchVeinModuleEmployee(matchPort(12, 12), 'emp-1')).toBeNull()
+    expect(await mod.matchVeinModuleEmployee(matchPort(40, 40), 'emp-1')).toBeNull()
+  })
+
+  it('読み取りの失敗は投げる', async () => {
+    const p = { identify: vi.fn(async () => { throw new Error('TIMEOUT') }) }
+    await expect(mod.matchVeinModuleEmployee(p, 'emp-1')).rejects.toThrow('TIMEOUT')
+  })
+})
+
+describe('needsThisDeviceRecord (この端末で登録し直すか)', () => {
+  it('★ ほかの端末の記録 (other) を置いている承認済みの人だけ true', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([
+      entry('other', 10, { source: 'other' }),
+      entry('own', 11, { source: 'own' }),
+      entry('native', 12, { source: 'other', native: true }),
+      entry('pending', 13, { source: 'other', approved: false }),
+      entry('unknown', 14),
+    ])
+    expect(await mod.needsThisDeviceRecord('other')).toBe(true)
+    for (const id of ['own', 'native', 'pending', 'unknown', 'absent']) {
+      expect(await mod.needsThisDeviceRecord(id)).toBe(false)
+    }
+  })
+
+  it('用意のとき、版が同じで書き直さなくても出どころを対応表に残す (その場で撮った記録はそのまま)', async () => {
+    localStorage.setItem('alc-vein-added-finger', 'native')
+    const B64 = btoa(String.fromCharCode(0xDE, 0xED))
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15)])
+    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: B64, updated_at: 'v1', source: 'other' })
+    expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBe(15)
+    expect(db.putVeinModuleEntry).toHaveBeenLastCalledWith(expect.objectContaining({ employeeId: 'emp-1', source: 'other' }))
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 15, { native: true })])
+    expect(await mod.prepareVeinModuleRecord(port(), 'emp-1')).toBe(15)
+    expect(db.putVeinModuleEntry.mock.calls.at(-1)![0]).not.toHaveProperty('source')
   })
 })

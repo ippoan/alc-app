@@ -52,6 +52,12 @@ export interface VeinModuleEntry {
    */
   native?: boolean
   /**
+   * サーバーから取って置いた記録の出どころ (`own` = この端末で撮った記録 / `other` = ほかの端末の記録 /
+   * `composed` = 混ぜた記録 / `server` = 出どころを名乗らない古いサーバー)。この端末で撮った記録がまだ無い人
+   * (`other`) が免許証の 1:1 で通ったら、この端末で登録し直す (`needsThisDeviceRecord`)。無ければ分からない
+   */
+  source?: 'own' | 'other' | 'composed' | 'server'
+  /**
    * 最後に照合に使った時刻 (ms)。枠 (10〜100) が埋まったら、これが一番古い人の枠を譲らせる
    * (`allocateOrEvictVeinModuleId`)。無ければ 0 と見る
    */
