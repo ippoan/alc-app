@@ -127,64 +127,11 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
   <div class="space-y-4" data-testid="tenko-filing">
     <div class="bg-white rounded-xl p-4 shadow-sm space-y-2">
       <p class="text-sm text-gray-600">
-        遠隔点呼・自動点呼の届出と、自動点呼機器の認定申請の様式を、下の値を書き込んだ状態でダウンロードします。
+        遠隔点呼・自動点呼の届出と、自動点呼機器の認定申請の様式を、「書き込む値」を書き込んだ状態でダウンロードします (一番下)。
         届出は e-Gov アプリから、認定申請は国交省 安全政策課へメールで、人が提出します。
         様式の原本は毎週取り直している最新版 (ippoan/tenko-forms) を使います。
       </p>
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-filing-load-error">{{ loadError }}</p>
-    </div>
-
-    <!-- ダウンロード -->
-    <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-download">
-      <h3 class="font-semibold text-gray-800">記入済みの様式をダウンロード</h3>
-      <div class="flex flex-wrap items-end gap-4 text-sm">
-        <label class="flex items-center gap-1">
-          <input v-model="kind" type="radio" value="remote" data-testid="tenko-filing-kind-remote"> 遠隔点呼の実施の届出
-        </label>
-        <label class="flex items-center gap-1">
-          <input v-model="kind" type="radio" value="auto" data-testid="tenko-filing-kind-auto"> 自動点呼の実施の届出 (認定後)
-        </label>
-        <label class="flex items-center gap-1">
-          <input v-model="kind" type="radio" value="nintei" data-testid="tenko-filing-kind-nintei"> 自動点呼機器の認定申請
-        </label>
-        <label class="flex flex-col">
-          <span class="text-gray-500">申請日</span>
-          <input v-model="applyDate" type="date" class="border rounded-lg px-2 py-1">
-        </label>
-        <label v-if="isNotification(kind)" class="flex flex-col">
-          <span class="text-gray-500">実施予定日 (申請の {{ FILING_LEAD_DAYS }} 日後以降)</span>
-          <input v-model="startDate" type="date" :min="minStartDate || undefined" class="border rounded-lg px-2 py-1" data-testid="tenko-filing-start-date">
-        </label>
-      </div>
-      <ul class="divide-y">
-        <li v-for="form in forms" :key="form.id" class="flex items-center justify-between py-2">
-          <span class="text-sm">{{ form.label }}</span>
-          <button
-            class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
-            :data-testid="`tenko-filing-dl-${form.id}`"
-            :disabled="!!busyForm"
-            @click="download(form)"
-          >
-            {{ busyForm === form.id ? '作成中…' : '記入済みをダウンロード' }}
-          </button>
-        </li>
-      </ul>
-      <p class="text-sm text-gray-600" data-testid="tenko-filing-kind-note">
-        <template v-if="kind === 'nintei'">
-          認定申請は一歩庵点呼の製作元が国交省 物流・自動車局 安全政策課へメールで出します (e-Gov ではありません)。
-          審査で追加資料・現品の提示・デモンストレーションを求められることがあります。様式3-1・3-2 (自己チェック表) と根拠資料は別に用意します。
-        </template>
-        <template v-else>
-          実施の届出は e-Gov アプリから、営業所を管轄する運輸支局へ、実施予定日の原則 {{ FILING_LEAD_DAYS }} 日前までに出します。
-        </template>
-      </p>
-      <p v-if="kind === 'auto' && !settings.auto_cert_pre && !settings.auto_cert_post" class="text-sm text-amber-700">
-        自動点呼の届出には国交省の認定番号が要ります。認定が出たら下の「認定番号」に入力してください。
-      </p>
-      <p v-if="settings.offices.length > EGOV_OFFICE_SLOTS" class="text-sm text-amber-700">
-        e-Gov の参考様式に書けるのは営業所・車庫 {{ EGOV_OFFICE_SLOTS }} 件までです。6 件目からは別紙にしてください。
-      </p>
-      <p v-if="downloadError" class="text-sm text-red-600" data-testid="tenko-filing-download-error">{{ downloadError }}</p>
     </div>
 
     <!-- 設定 -->
@@ -272,5 +219,58 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         <span v-if="saveError" class="text-sm text-red-600" data-testid="tenko-filing-save-error">{{ saveError }}</span>
       </div>
     </div>
+    <!-- ダウンロード -->
+    <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-download">
+      <h3 class="font-semibold text-gray-800">記入済みの様式をダウンロード</h3>
+      <div class="flex flex-wrap items-end gap-4 text-sm">
+        <label class="flex items-center gap-1">
+          <input v-model="kind" type="radio" value="remote" data-testid="tenko-filing-kind-remote"> 遠隔点呼の実施の届出
+        </label>
+        <label class="flex items-center gap-1">
+          <input v-model="kind" type="radio" value="auto" data-testid="tenko-filing-kind-auto"> 自動点呼の実施の届出 (認定後)
+        </label>
+        <label class="flex items-center gap-1">
+          <input v-model="kind" type="radio" value="nintei" data-testid="tenko-filing-kind-nintei"> 自動点呼機器の認定申請
+        </label>
+        <label class="flex flex-col">
+          <span class="text-gray-500">申請日</span>
+          <input v-model="applyDate" type="date" class="border rounded-lg px-2 py-1">
+        </label>
+        <label v-if="isNotification(kind)" class="flex flex-col">
+          <span class="text-gray-500">実施予定日 (申請の {{ FILING_LEAD_DAYS }} 日後以降)</span>
+          <input v-model="startDate" type="date" :min="minStartDate || undefined" class="border rounded-lg px-2 py-1" data-testid="tenko-filing-start-date">
+        </label>
+      </div>
+      <ul class="divide-y">
+        <li v-for="form in forms" :key="form.id" class="flex items-center justify-between py-2">
+          <span class="text-sm">{{ form.label }}</span>
+          <button
+            class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
+            :data-testid="`tenko-filing-dl-${form.id}`"
+            :disabled="!!busyForm"
+            @click="download(form)"
+          >
+            {{ busyForm === form.id ? '作成中…' : '記入済みをダウンロード' }}
+          </button>
+        </li>
+      </ul>
+      <p class="text-sm text-gray-600" data-testid="tenko-filing-kind-note">
+        <template v-if="kind === 'nintei'">
+          認定申請は一歩庵点呼の製作元が国交省 物流・自動車局 安全政策課へメールで出します (e-Gov ではありません)。
+          審査で追加資料・現品の提示・デモンストレーションを求められることがあります。様式3-1・3-2 (自己チェック表) と根拠資料は別に用意します。
+        </template>
+        <template v-else>
+          実施の届出は e-Gov アプリから、営業所を管轄する運輸支局へ、実施予定日の原則 {{ FILING_LEAD_DAYS }} 日前までに出します。
+        </template>
+      </p>
+      <p v-if="kind === 'auto' && !settings.auto_cert_pre && !settings.auto_cert_post" class="text-sm text-amber-700">
+        自動点呼の届出には国交省の認定番号が要ります。認定が出たら下の「認定番号」に入力してください。
+      </p>
+      <p v-if="settings.offices.length > EGOV_OFFICE_SLOTS" class="text-sm text-amber-700">
+        e-Gov の参考様式に書けるのは営業所・車庫 {{ EGOV_OFFICE_SLOTS }} 件までです。6 件目からは別紙にしてください。
+      </p>
+      <p v-if="downloadError" class="text-sm text-red-600" data-testid="tenko-filing-download-error">{{ downloadError }}</p>
+    </div>
+
   </div>
 </template>

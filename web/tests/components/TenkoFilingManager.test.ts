@@ -82,6 +82,12 @@ describe('TenkoFilingManager', () => {
     expect(forms.buildFilledForm.mock.calls[0]![2]).toMatchObject({ kind: 'nintei', startDate: '' })
   })
 
+  it('「書き込む値」の下にダウンロードを置く (入れる → 保存 → 出す の順)', async () => {
+    const w = await mountIt()
+    const ids = w.findAll('[data-testid="tenko-filing-settings"], [data-testid="tenko-filing-download"]').map(e => e.attributes('data-testid'))
+    expect(ids).toEqual(['tenko-filing-settings', 'tenko-filing-download'])
+  })
+
   it('読めないときは文言を出す (理由の記号は文にする)', async () => {
     const w = await mountIt(new Error('403 {"error":"forbidden"}'))
     expect(w.find('[data-testid="tenko-filing-load-error"]').text()).toBe('システム管理者だけが変更できます')
