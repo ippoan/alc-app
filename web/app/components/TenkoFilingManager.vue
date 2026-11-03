@@ -2,7 +2,7 @@
 import { getTenkoFilingSettings, putTenkoFilingSettings } from '~/utils/api'
 import { jstTodayDate } from '~/utils/jst'
 import {
-  BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm, earliestStartDate,
+  BUSINESS_TYPES, DEVICE_NAMES, EGOV_OFFICE_SLOTS, deviceNameOptions, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm, earliestStartDate,
   emptySettings, isNotification, saveBytes,
   type FilingKind, type FilingSettings, type TenkoForm,
 } from '~/utils/tenko-forms'
@@ -47,12 +47,17 @@ function messageOf(e: unknown, fallback: string): string {
 
 onMounted(async () => {
   try {
-    settings.value = { ...emptySettings(), ...(await getTenkoFilingSettings()) }
+    settings.value = adopt(await getTenkoFilingSettings())
   }
   catch (e) {
     loadError.value = messageOf(e, '設定を取得できませんでした')
   }
 })
+
+/** 読んだ値を画面の値にする。機器の名称が空なら既定 (選択肢の先頭) を選ぶ */
+function adopt(s: FilingSettings): FilingSettings {
+  return { ...emptySettings(), ...s, device_name: s.device_name || DEVICE_NAMES[0] }
+}
 
 function addOffice() {
   settings.value.offices.push({ name: '', address: '', role: settings.value.offices.length ? 2 : 1 })
@@ -67,7 +72,7 @@ async function save() {
   saveError.value = ''
   notice.value = ''
   try {
-    settings.value = { ...emptySettings(), ...(await putTenkoFilingSettings(settings.value)) }
+    settings.value = adopt(await putTenkoFilingSettings(settings.value))
     notice.value = '保存しました'
   }
   catch (e) {
@@ -140,8 +145,11 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
 
       <div class="grid gap-3 sm:grid-cols-3">
         <label class="text-sm">
-          <span class="text-gray-500">事業者番号 (許可書の 12 桁)</span>
-          <input v-model="settings.business_number" :class="inputClass" inputmode="numeric" maxlength="12" data-testid="tenko-filing-business-number">
+          <span class="text-gray-500">事業者番号 (任意・半角 12 桁)</span>
+          <input v-model="settings.business_number" :class="inputClass" inputmode="numeric" maxlength="12" placeholder="例: 012345678901" data-testid="tenko-filing-business-number">
+          <span class="block text-xs text-gray-500 mt-1" data-testid="tenko-filing-business-number-hint">
+            一般貨物自動車運送事業の許可のときに交付された許可書に書かれた 12 桁の番号です。0 で始まるときは 0 も入れます。e-Gov では任意の欄なので、分からなければ空欄のまま出せます。
+          </span>
         </label>
         <label class="text-sm">
           <span class="text-gray-500">屋号等</span>
@@ -164,7 +172,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         <div v-for="(o, i) in settings.offices" :key="i" class="grid gap-2 sm:grid-cols-[2fr_3fr_1fr_auto] items-center">
           <input v-model="o.name" :class="inputClass" placeholder="名称">
           <input v-model="o.address" :class="inputClass" placeholder="所在地">
-          <select v-model="o.role" :class="inputClass">
+          <select v-model="o.role" :class="inputClass" data-testid="tenko-filing-office-role">
             <option v-for="(r, j) in OFFICE_ROLES" :key="r" :value="j + 1">{{ r }}</option>
           </select>
           <button class="text-sm text-red-600 hover:underline" @click="removeOffice(i)">削除</button>
@@ -174,7 +182,9 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       <div class="grid gap-3 sm:grid-cols-3">
         <label class="text-sm">
           <span class="text-gray-500">使用する機器の名称</span>
-          <input v-model="settings.device_name" :class="inputClass">
+          <select v-model="settings.device_name" :class="inputClass" data-testid="tenko-filing-device-name">
+            <option v-for="name in deviceNameOptions(settings.device_name)" :key="name" :value="name">{{ name }}</option>
+          </select>
         </label>
         <label class="text-sm">
           <span class="text-gray-500">認定番号 (業務前自動点呼機器)</span>

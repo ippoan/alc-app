@@ -44,6 +44,7 @@ describe('TenkoFilingManager', () => {
   it('保存した値を出し、種別ごとに様式を並べる', async () => {
     const w = await mountIt()
     expect((w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value).toBe('000000000001')
+    expect(w.find('[data-testid="tenko-filing-business-number-hint"]').text()).toContain('分からなければ空欄のまま出せます')
     expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou', 'tenko-filing-dl-remote-kamotsu-bessi7-jisshi'])
     await w.find('[data-testid="tenko-filing-kind-auto"]').setValue(true)
     expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou'])
@@ -88,6 +89,15 @@ describe('TenkoFilingManager', () => {
     expect(ids).toEqual(['tenko-filing-settings', 'tenko-filing-download'])
   })
 
+  it('機器の名称は選択肢。既定が選ばれ、空なら既定に、保存済みの別の名称は残す', async () => {
+    const sel = (w: W) => w.find('[data-testid="tenko-filing-device-name"]')
+    const opts = (w: W) => sel(w).findAll('option').map(o => o.text())
+    const def = await mountIt(saved({ device_name: null }))
+    expect([(sel(def).element as HTMLSelectElement).value, opts(def)]).toEqual(['一歩庵点呼 v1', ['一歩庵点呼 v1']])
+    const other = await mountIt(saved({ device_name: '架空の機器' }))
+    expect([(sel(other).element as HTMLSelectElement).value, opts(other)]).toEqual(['架空の機器', ['一歩庵点呼 v1', '架空の機器']])
+  })
+
   it('読めないときは文言を出す (理由の記号は文にする)', async () => {
     const w = await mountIt(new Error('403 {"error":"forbidden"}'))
     expect(w.find('[data-testid="tenko-filing-load-error"]').text()).toBe('システム管理者だけが変更できます')
@@ -99,7 +109,7 @@ describe('TenkoFilingManager', () => {
     const w = await mountIt(saved({ offices: [] }))
     await w.find('[data-testid="tenko-filing-add-office"]').trigger('click')
     await w.find('[data-testid="tenko-filing-add-office"]').trigger('click')
-    const rows = () => w.findAll('[data-testid="tenko-filing-settings"] select').slice(1)
+    const rows = () => w.findAll('[data-testid="tenko-filing-office-role"]')
     expect(rows().map(s => (s.element as HTMLSelectElement).value)).toEqual(['1', '2'])
     await w.findAll('button').find(b => b.text() === '削除')!.trigger('click')
     api.putTenkoFilingSettings.mockResolvedValue(saved({ offices: [{ name: '', address: '', role: 2 }] }))

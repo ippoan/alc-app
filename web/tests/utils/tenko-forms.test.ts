@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import {
-  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, earliestStartDate, egovCells, egovChecks,
+  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, deviceNameOptions, earliestStartDate, egovCells, egovChecks,
   egovOfficeRow, emptySettings, isNotification, fillBessi7, fillDocx, fillEgovXlsx, fillYoshiki1, fillYoshiki2, latestFormPath,
   reiwaDate, saveBytes, setXlsxCell, slashDate, xlsxCellText,
   type FilingRequest, type FilingSettings,
@@ -65,6 +65,14 @@ describe('実施予定日の下限と手続の別', () => {
     expect([isNotification('remote'), isNotification('auto'), isNotification('nintei')]).toEqual([true, true, false])
     expect(TENKO_FORMS.filter(f => f.kinds.includes('nintei')).map(f => f.id)).toEqual(['nintei-yoshiki1-shinsei', 'nintei-yoshiki2-gaiyo'])
     expect(TENKO_FORMS.filter(f => f.kinds.includes('auto')).map(f => f.id)).toEqual(['egov-tenko-todokede-sankou'])
+  })
+})
+
+describe('deviceNameOptions', () => {
+  it('既定の名称が先頭。保存済みの別の名称は消さずに末尾に残す', () => {
+    expect(deviceNameOptions(null)).toEqual(['一歩庵点呼 v1'])
+    expect(deviceNameOptions('一歩庵点呼 v1')).toEqual(['一歩庵点呼 v1'])
+    expect(deviceNameOptions('架空の機器')).toEqual(['一歩庵点呼 v1', '架空の機器'])
   })
 })
 
