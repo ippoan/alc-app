@@ -4,7 +4,7 @@ import { getEmployeeByCode, getEmployeeByNfcId, startMeasurement, updateMeasurem
 import { devTiming } from '~/utils/dev-timing'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
-import { prepareVeinModuleRecord, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
+import { matchVeinModuleEmployee, needsThisDeviceRecord, prepareVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 import { restartVeinAndReload } from '~/utils/vein-restart'
 
@@ -137,14 +137,18 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
     const moduleId = await prepareVeinModuleRecord(veinSerial, emp.id)
     if (moduleId === null) return 'no_record'
     await veinSerial.say('PLACE')
-    // 不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
+    // 1:N で照合し、当たった ID がこの人の枠のときだけ通す (他人の指で通さない)。不一致は 1 回だけ自動でやり直す
     const onAgain = () => { vein.again.value = true }
     // やり直しの前に機器でも「もう一度置いてください」を鳴らす (黙って待つと止まったように見える)
     const sayAgain = async () => {
       onAgain()
       await veinSerial.say('AGAIN').catch(() => {})
     }
-    if (await retryOnVeinMiss(() => veinSerial.verify(moduleId, onAgain), ok => !ok, sayAgain)) return 'verified'
+    if (await matchVeinModuleEmployee(veinSerial, emp.id, onAgain, sayAgain) !== null) {
+      // ほかの端末の記録で通った: この端末で登録し直す (失敗しても測定は止めない。理由は fingerAdd が出す)
+      if (await needsThisDeviceRecord(emp.id)) await fingerAdd.add(emp.id)
+      return 'verified'
+    }
     await veinSerial.say('FAILED').catch(() => {})
     // 別の端末で撮った記録だと通りにくい。この端末の指を足せるようにする (測定は止めない)
     addFingerEmployee.value = { id: emp.id, name: emp.name }

@@ -6,8 +6,10 @@
  * ここが持つのは:
  * - Vein Station / Vein Base の接続と、照合に使う写しの同期 (起動時・つながったとき)
  * - 読み取り (`VEIN IDENTIFY` か、古い構成の `VEIN CAPTURE`) と、乗務員の特定
- * - 本人が先に決まっている画面 (`expectedEmployeeId`) では、その 1 人をモジュールに用意して 1:1 (`VEIN VERIFY`) で
- *   照合する (Refs ippoan/alc-app-s3#352: モジュールの 91 人の上限を超えても照合できる)
+ * - 本人が先に決まっている画面 (`expectedEmployeeId`) では、その 1 人をモジュールに用意して照合する
+ *   (Refs ippoan/alc-app-s3#352: モジュールの 91 人の上限を超えても照合できる)。照合は 1:N で、当たった ID が
+ *   その人の枠のときだけ通す (`matchVeinModuleEmployee`)。この端末で撮った記録がまだ無い人 (ほかの端末の記録で
+ *   通った人) は、その場でこの端末で登録し直す (`adoptOnThisDevice`)
  * - 指が置かれた合図 (`EVT VEIN FINGER`) で、待機中なら照合を始めること
  * - 読み取り中・撮り直し・失敗の理由の状態と、失敗の案内の音声 (`VEIN SAY FAILED`)
  *
@@ -16,7 +18,9 @@
 import type { ApiEmployee } from '~/types'
 import type { RequestTokenScope } from '~/utils/api'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
-import { identifyVeinModuleEmployee, prepareVeinModuleRecord, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
+import { identifyVeinModuleEmployee, matchVeinModuleEmployee, needsThisDeviceRecord, prepareVeinModuleRecord, retryOnVeinMiss, usesVeinModule } from '~/utils/vein-module'
+import { addThisDeviceFinger } from '~/composables/useVeinAddDevice'
+import { appendDiag } from '~/utils/serialDiagLog'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 export interface VeinEmployeeIdentifyOptions {
@@ -120,23 +124,45 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       prepared = null
     }
     if (moduleId === null) return opts.noRecordMessage ?? opts.missMessage
-    const id = moduleId
+    let hit: number | null
     try {
       if (prompt) await vein.say('PLACE')
-      // 不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
+      // 他人・不一致は 1 回だけ自動でやり直す (matchVeinModuleEmployee)
       const onAgain = () => { again.value = true }
-      if (!await retryOnVeinMiss(() => vein.verify(id, onAgain), ok => !ok, sayAgain)) return opts.missMessage
+      hit = await matchVeinModuleEmployee(vein, employeeId, onAgain, sayAgain)
     }
     catch (e) {
       return `指静脈を読み取れませんでした (${(e as Error).message})`
     }
-    return await deliver(await identifyVeinModuleEmployee(id, opts.scope), true)
+    if (hit === null) return opts.missMessage
+    const via = vein.lastMatch.value?.via ?? null
+    // 渡す人を先に引く (登録し直しが失敗すると対応表から外れるため)
+    const outcome = await identifyVeinModuleEmployee(hit, opts.scope)
+    if (outcome.kind === 'hit') await adoptOnThisDevice(employeeId)
+    return await deliver(outcome, true, via)
+  }
+
+  /**
+   * ほかの端末で撮った記録で通った人を、この端末で登録し直す (登録画面と同じ本数を撮り、この端末の分としてサーバーへ
+   * 預ける。`addThisDeviceFinger`)。本人確認は済んでいるので、失敗しても先へは進める (診断ログに残す)
+   */
+  async function adoptOnThisDevice(employeeId: string): Promise<void> {
+    if (!await needsThisDeviceRecord(employeeId)) return
+    try {
+      await addThisDeviceFinger(vein, employeeId, opts.scope ?? 'default', () => { again.value = true })
+      await vein.say('ENROLLED').catch(() => {})
+    }
+    catch (e) {
+      const msg = `[vein] 通った人をこの端末で登録し直せませんでした: ${(e as Error).message}`
+      console.warn(msg)
+      appendDiag(msg)
+    }
   }
 
   /** 特定の結果を `onEmployee` へ渡すか、理由にする */
-  async function deliver(outcome: VeinIdentifyOutcome, viaModule: boolean): Promise<string | null> {
+  async function deliver(outcome: VeinIdentifyOutcome, viaModule: boolean, via = vein.lastMatch.value?.via ?? null): Promise<string | null> {
     switch (outcome.kind) {
-      case 'hit': return await opts.onEmployee(outcome.employee, viaModule ? vein.lastMatch.value?.via ?? null : null)
+      case 'hit': return await opts.onEmployee(outcome.employee, viaModule ? via : null)
       case 'miss': return opts.missMessage
       case 'pending': return opts.pendingMessage(outcome.name)
       case 'error': return outcome.message

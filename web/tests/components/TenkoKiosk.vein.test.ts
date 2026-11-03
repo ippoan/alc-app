@@ -397,20 +397,20 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       db.loadVeinModuleEntries.mockResolvedValue([
         { employeeId: 'emp-1', moduleId: 12, updatedAt: 'v1', approved: true },
         { employeeId: 'emp-2', moduleId: 13, updatedAt: 'v1', approved: false },
+        { employeeId: 'emp-3', moduleId: 14, updatedAt: 'v1', approved: true },
       ])
       api.getEmployeeById.mockResolvedValue(EMP)
     })
 
-    it('★ 1:1: 最初の段の人の記録をモジュールに用意し、VEIN VERIFY で当たれば本人確認にする (IDENTIFY は使わない)', async () => {
+    it('★ 1:1: 最初の段の人の記録をモジュールに用意し、1:N で当たった ID がその人の枠なら本人確認にする (VEIN VERIFY は使わない)', async () => {
       prep.fn.mockResolvedValue(12)
-      vein.verify.mockResolvedValue(true)
       const wrapper = await mountKiosk()
       // 本人確認の段に入った時点で書き始める (指を置くまでの間と重ねる)
       expect(prep.fn).toHaveBeenCalledWith(vein, 'emp-1', undefined)
       await pressVein(wrapper)
       expect(prep.fn).toHaveBeenCalledTimes(1)
-      expect(vein.verify).toHaveBeenCalledWith(12, expect.any(Function))
-      expect(vein.identify).not.toHaveBeenCalled()
+      expect(vein.identify).toHaveBeenCalledWith(expect.any(Function))
+      expect(vein.verify).not.toHaveBeenCalled()
       expect(api.getEmployeeById).toHaveBeenCalledWith('emp-1', 'default')
       expect(onFaceAuthCompleteMock).toHaveBeenCalledWith(VEIN_OK)
       // 用意は 1 回の照合で使い切る (次の照合はもう一度確かめる)
@@ -423,7 +423,7 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       prep.fn.mockResolvedValue(null)
       const wrapper = await mountKiosk()
       await pressVein(wrapper)
-      expect(vein.verify).not.toHaveBeenCalled()
+      expect(vein.identify).not.toHaveBeenCalled()
       expect(onFaceAuthCompleteMock).not.toHaveBeenCalled()
       expect(wrapper.text()).toContain('この人の承認済みの指静脈の記録がありません')
       wrapper.unmount()
@@ -431,8 +431,8 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
 
     it('★ モジュールが撮り直しを求めたら (onAgain)、ボタンを「もう一度置いてください…」にする。次の照合では戻す', async () => {
       prep.fn.mockResolvedValue(12)
-      let finish: (ok: boolean) => void = () => {}
-      vein.verify.mockImplementationOnce((_id: number, onAgain?: () => void) => new Promise((resolve) => {
+      let finish: (id: number | null) => void = () => {}
+      vein.identify.mockImplementationOnce((onAgain?: () => void) => new Promise((resolve) => {
         finish = resolve
         onAgain?.()
       }))
@@ -441,10 +441,10 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
       await button().trigger('click')
       await flushPromises()
       expect(button().text()).toBe('もう一度置いてください…')
-      finish(true)
+      finish(12)
       await flushPromises()
 
-      vein.verify.mockImplementationOnce(() => new Promise(() => {}))
+      vein.identify.mockImplementationOnce(() => new Promise(() => {}))
       await button().trigger('click')
       await flushPromises()
       expect(button().text()).toBe('指を置いてください…')
@@ -453,10 +453,12 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
 
     it('不一致は (1 回自動でやり直しても) 不一致、読み取り・用意の失敗は理由を出す', async () => {
       prep.fn.mockResolvedValue(12)
-      vein.verify.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('TIMEOUT'))
+      // 1 回目は誰にも当たらず、やり直しは他人 (emp-3) の枠に当たる → 本人ではない
+      vein.identify.mockResolvedValueOnce(null).mockResolvedValueOnce(14).mockRejectedValueOnce(new Error('TIMEOUT'))
       const wrapper = await mountKiosk()
       await pressVein(wrapper)
-      expect(vein.verify).toHaveBeenCalledTimes(2)
+      expect(vein.identify).toHaveBeenCalledTimes(2)
+      expect(onFaceAuthCompleteMock).not.toHaveBeenCalled()
       expect(wrapper.text()).toContain(VEIN_NO_MATCH_MESSAGE)
       await pressVein(wrapper)
       expect(wrapper.text()).toContain('指静脈を読み取れませんでした (TIMEOUT)')
