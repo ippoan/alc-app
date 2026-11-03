@@ -53,8 +53,8 @@ export interface VeinModuleEntry {
   native?: boolean
   /**
    * サーバーから取って置いた記録の出どころ (`own` = この端末で撮った記録 / `other` = ほかの端末の記録 /
-   * `composed` = 混ぜた記録 / `server` = 出どころを名乗らない古いサーバー)。この端末で撮った記録がまだ無い人
-   * (`other`) が免許証の 1:1 で通ったら、この端末で登録し直す (`needsThisDeviceRecord`)。無ければ分からない
+   * `composed` = 混ぜた記録 / `server` = 出どころを名乗らない古いサーバー)。照合に置いた指で入れ替えた後は `own`。
+   * どの端末の記録を置いているかの診断用 (MCP の `vein_entries`)。無ければ分からない
    */
   source?: 'own' | 'other' | 'composed' | 'server'
   /**

@@ -4,7 +4,7 @@ import { getEmployeeByCode, getEmployeeByNfcId, startMeasurement, updateMeasurem
 import { devTiming } from '~/utils/dev-timing'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
-import { matchVeinModuleEmployee, needsThisDeviceRecord, prepareVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
+import { matchVeinModuleEmployee, prepareVeinModuleRecord, rotateVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 import { restartVeinAndReload } from '~/utils/vein-restart'
 
@@ -144,9 +144,10 @@ async function verifyIdentifiedByVein(emp: { id: string; name: string }): Promis
       onAgain()
       await veinSerial.say('AGAIN').catch(() => {})
     }
-    if (await matchVeinModuleEmployee(veinSerial, emp.id, onAgain, sayAgain) !== null) {
-      // ほかの端末の記録で通った: この端末で登録し直す (失敗しても測定は止めない。理由は fingerAdd が出す)
-      if (await needsThisDeviceRecord(emp.id)) await fingerAdd.add(emp.id)
+    const match = await matchVeinModuleEmployee(veinSerial, emp.id, onAgain, sayAgain)
+    if (match !== null) {
+      // 通った: 同じ置き方で撮った 1 本で一番古い 1 本を入れ替える (測定へ進めた後に裏で)
+      void rotateVeinModuleRecord(veinSerial, match, emp.id)
       return 'verified'
     }
     await veinSerial.say('FAILED').catch(() => {})

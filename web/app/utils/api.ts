@@ -837,6 +837,32 @@ export async function putVeinModuleDeviceRecord(
   )
 }
 
+/**
+ * 照合が通った 1 回の置き方で撮った 1 本で、この端末へ配っている記録の一番古い 1 本を入れ替え、この端末の記録として
+ * 預ける (`POST /api/vein/templates/{employee_id}/module/devices/rotate`)。返すのは入れ替えた記録 (base64) と版。
+ * `pick` は端末の設定どおり (`own` = 混ぜずに選んだ記録が元、無し = 混ぜた記録が元)。鍵の選び方は
+ * {@link putVeinModuleDeviceRecord} と同じ
+ */
+export async function rotateVeinModuleDeviceRecord(
+  employeeId: string,
+  record: Uint8Array,
+  pick: 'own' | undefined,
+  scope: RequestTokenScope = 'default',
+): Promise<{ employee_id: string; record: string; updated_at: string }> {
+  const [getter, failed] = scope === 'manager-device'
+    ? [getManagerDeviceJwt, MANAGER_DEVICE_AUTH_FAILED_MESSAGE] as const
+    : scope === 'bp-station'
+      ? [getBpStationDeviceJwt, BP_STATION_DEVICE_AUTH_FAILED_MESSAGE] as const
+      : [getKioskDeviceJwt, KIOSK_DEVICE_AUTH_FAILED_MESSAGE] as const
+  const jwt = await getter?.()
+  if (!jwt) throw new Error(failed)
+  return proxyRequest<{ employee_id: string; record: string; updated_at: string }>(
+    `/api/vein/templates/${encodeURIComponent(employeeId)}/module/devices/rotate`,
+    jwt,
+    { method: 'POST', body: JSON.stringify({ record: bytesToBase64(record), ...(pick ? { pick } : {}) }) },
+  )
+}
+
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
 export interface ApiVeinModuleRecord {
   employee_id: string

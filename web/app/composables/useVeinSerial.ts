@@ -45,6 +45,7 @@
 
 import { bleDiagJson, isBleDiagEvent } from '~/utils/ble-diag'
 import { recordVeinLine } from '~/utils/vein-line-log'
+import { VEIN_IDENTIFY_KEEP_UNSUPPORTED } from '~/utils/vein-module'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND, writeLine } from '~/composables/useSerialArbiter'
@@ -614,6 +615,11 @@ export function useVeinSerial() {
     finally {
       offAgain()
     }
+    return identifiedId(line)
+  }
+
+  /** `VEIN IDENTIFIED <id> …` / `VEIN NOMATCH …` の行から当たった ID (不一致は null) を読み、照合の結果として残す */
+  function identifiedId(line: string): number | null {
     if (line.startsWith('VEIN NOMATCH')) {
       recordMatch({ kind: 'NOMATCH', id: null, ...parseVeinMatchFields([]) })
       return null
@@ -623,6 +629,62 @@ export function useVeinSerial() {
     const id = Number(idToken)
     recordMatch({ kind: 'IDENTIFIED', id, ...parseVeinMatchFields(rest) })
     return id
+  }
+
+  /**
+   * 置いた 1 回の指を撮ってから、離さずに 1:N 照合する (`VEIN IDENTIFY KEEP`、ファームは ippoan/alc-app-s3 の同名の口)。
+   * 照合でモジュールが撮った指は外へ出せないため、ファームが先に作業用 ID 1 へ 1 本撮って読み出す。当たれば撮った記録
+   * (`VEIN RECORD 1 …`) も返す (不一致は `record: null`)。途中の「離して」はファームが鳴らさず、当たったときだけ最後に鳴らす。
+   * 古いファーム (`KEEP` を知らない) は {@link VEIN_IDENTIFY_KEEP_UNSUPPORTED} の Error。ほかの失敗は reason の Error
+   */
+  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null }> {
+    const prefix = 'VEIN RECORD 1 '
+    const endPrefix = `${prefix}END `
+    const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
+    /** END の行の総バイト数 (届かなければ -1) */
+    let total = -1
+    let broken = false
+    rawLineTap = (line) => {
+      // 行は途中に連結されて届くことがあるので、行の中から探す (enroll と同じ)
+      const at = line.indexOf(prefix)
+      if (at < 0) return
+      if (line.includes(endPrefix)) {
+        total = Number(line.slice(line.indexOf(endPrefix) + endPrefix.length).trim())
+        return
+      }
+      const [offset, hex] = line.slice(at + prefix.length).split(' ')
+      const bytes = hexToBytes(hex ?? '')
+      if (!/^\d+$/.test(offset!) || !bytes) broken = true
+      else chunks.push({ offset: Number(offset), bytes })
+    }
+    const offAgain = watchAgain(onAgain)
+    let line: string
+    try {
+      line = await veinRequest('VEIN IDENTIFY KEEP', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+    }
+    catch (e) {
+      if ((e as Error).message.includes('IDENTIFY に引数は要りません')) throw new Error(VEIN_IDENTIFY_KEEP_UNSUPPORTED)
+      return failMatch(e)
+    }
+    finally {
+      rawLineTap = null
+      offAgain()
+    }
+    const id = identifiedId(line)
+    if (id === null) return { id, record: null }
+    // 記録が壊れていても照合の結果は使う (入れ替えだけ見送る)
+    const record = broken || !Number.isInteger(total) || total < 0 ? null : assembleRecordOrNull(chunks, total)
+    return { id, record }
+  }
+
+  /** {@link assembleRecord} の、壊れていれば null を返す版 */
+  function assembleRecordOrNull(chunks: Array<{ offset: number; bytes: Uint8Array }>, total: number): Uint8Array | null {
+    try {
+      return assembleRecord(chunks, total)
+    }
+    catch {
+      return null
+    }
   }
 
   /**
@@ -782,6 +844,7 @@ export function useVeinSerial() {
     say,
     enroll,
     identify,
+    identifyKeep,
     verify,
     lastMatch: readonly(lastMatch),
     syncWrite,
