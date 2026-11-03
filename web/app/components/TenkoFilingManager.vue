@@ -2,7 +2,8 @@
 import { getTenkoFilingSettings, putTenkoFilingSettings } from '~/utils/api'
 import { jstTodayDate } from '~/utils/jst'
 import {
-  BUSINESS_TYPES, EGOV_OFFICE_SLOTS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm, emptySettings, saveBytes,
+  BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm, earliestStartDate,
+  emptySettings, isNotification, saveBytes,
   type FilingKind, type FilingSettings, type TenkoForm,
 } from '~/utils/tenko-forms'
 
@@ -30,6 +31,11 @@ const notice = ref('')
 const kind = ref<FilingKind>('remote')
 const applyDate = ref(jstTodayDate())
 const startDate = ref('')
+/** 実施予定日の下限 (申請日の 10 日後)。申請日を後ろへずらして下限を割ったら、予定日を空に戻す */
+const minStartDate = computed(() => earliestStartDate(applyDate.value))
+watch(minStartDate, (min) => {
+  if (min && startDate.value && startDate.value < min) startDate.value = ''
+})
 const busyForm = ref('')
 const downloadError = ref('')
 
@@ -81,7 +87,7 @@ async function download(form: TenkoForm) {
     const { bytes, filename } = await buildFilledForm(form, settings.value, {
       kind: kind.value,
       applyDate: applyDate.value,
-      startDate: startDate.value,
+      startDate: isNotification(kind.value) ? startDate.value : '',
     })
     saveBytes(bytes, filename, form.ext)
   }
@@ -133,18 +139,21 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       <h3 class="font-semibold text-gray-800">記入済みの様式をダウンロード</h3>
       <div class="flex flex-wrap items-end gap-4 text-sm">
         <label class="flex items-center gap-1">
-          <input v-model="kind" type="radio" value="remote" data-testid="tenko-filing-kind-remote"> 遠隔点呼
+          <input v-model="kind" type="radio" value="remote" data-testid="tenko-filing-kind-remote"> 遠隔点呼の実施の届出
         </label>
         <label class="flex items-center gap-1">
-          <input v-model="kind" type="radio" value="auto" data-testid="tenko-filing-kind-auto"> 自動点呼 (業務前・業務後)
+          <input v-model="kind" type="radio" value="auto" data-testid="tenko-filing-kind-auto"> 自動点呼の実施の届出 (認定後)
+        </label>
+        <label class="flex items-center gap-1">
+          <input v-model="kind" type="radio" value="nintei" data-testid="tenko-filing-kind-nintei"> 自動点呼機器の認定申請
         </label>
         <label class="flex flex-col">
           <span class="text-gray-500">申請日</span>
           <input v-model="applyDate" type="date" class="border rounded-lg px-2 py-1">
         </label>
-        <label class="flex flex-col">
-          <span class="text-gray-500">実施予定日 (申請の 10 日後以降)</span>
-          <input v-model="startDate" type="date" class="border rounded-lg px-2 py-1" data-testid="tenko-filing-start-date">
+        <label v-if="isNotification(kind)" class="flex flex-col">
+          <span class="text-gray-500">実施予定日 (申請の {{ FILING_LEAD_DAYS }} 日後以降)</span>
+          <input v-model="startDate" type="date" :min="minStartDate || undefined" class="border rounded-lg px-2 py-1" data-testid="tenko-filing-start-date">
         </label>
       </div>
       <ul class="divide-y">
@@ -160,6 +169,15 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           </button>
         </li>
       </ul>
+      <p class="text-sm text-gray-600" data-testid="tenko-filing-kind-note">
+        <template v-if="kind === 'nintei'">
+          認定申請は一歩庵点呼の製作元が国交省 物流・自動車局 安全政策課へメールで出します (e-Gov ではありません)。
+          審査で追加資料・現品の提示・デモンストレーションを求められることがあります。様式3-1・3-2 (自己チェック表) と根拠資料は別に用意します。
+        </template>
+        <template v-else>
+          実施の届出は e-Gov アプリから、営業所を管轄する運輸支局へ、実施予定日の原則 {{ FILING_LEAD_DAYS }} 日前までに出します。
+        </template>
+      </p>
       <p v-if="kind === 'auto' && !settings.auto_cert_pre && !settings.auto_cert_post" class="text-sm text-amber-700">
         自動点呼の届出には国交省の認定番号が要ります。認定が出たら下の「認定番号」に入力してください。
       </p>
