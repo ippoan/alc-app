@@ -5,15 +5,17 @@
  * 経路: MCP → recorder `POST /kiosk-command` → 購読 WS に `kiosk_command` → **ここ** →
  *   `POST /api/kiosk-remote/result` (端末の token) → recorder の `cmdres:<id>` → MCP が取る
  *
- * ★ **端末設定でオンにしたキオスクだけ**が実行する (既定はオフ。開発に使う PC だけオンにする)
+ * ★ **開発用の端末 (鍵に `dev_device` の印) で、端末設定をオンにしたキオスクだけ**が実行する (既定はオフ)。
+ *   本番の端末は設定をオンにしても実行しない (印は端末の localStorage ではなく、サーバーが発行した鍵の中身で見る)
  * ★ 宛先 (`device_id`) が自分でない命令は実行しない (`*` は全キオスク)。購読の合図は全キオスクに届くため
  * ★ 指静脈の記録の中身 (16 進) は返さない。シリアルの行は `redactVeinLine` で伏せてから返す
  */
 import type { DeepReadonly, Ref } from 'vue'
 import type { RequestTokenScope } from '~/utils/api'
+import { isDevDeviceToken } from '~/utils/token-selection'
 import { identifyVeinModuleEmployee, prepareVeinModuleRecord } from '~/utils/vein-module'
 import type { VeinModulePort } from '~/utils/vein-module'
-import { loadVeinModuleEntries } from '~/utils/vein-db'
+import { deleteVeinModuleEntry, loadVeinModuleEntries } from '~/utils/vein-db'
 import { redactVeinLine, snapshotVeinLines } from '~/utils/vein-line-log'
 import type { VeinMatchResult } from '~/composables/useVeinSerial'
 
@@ -158,7 +160,7 @@ function matchOf(port: KioskRemotePort): Record<string, unknown> | null {
  * | `hello` | | 端末の id・Vein Station がつながっているか |
  * | `vein_info` | | モジュールの登録人数と上限 |
  * | `vein_entries` | | 対応表 (誰をどの ID に置いたか。記録の中身は無い) |
- * | `vein_clear` | `id` | モジュールの ID の登録を消す (対応表は触らない) |
+ * | `vein_clear` | `id` | モジュールの ID の登録と、対応表のその ID の行を消す (モジュールが既に空でも対応表は消す。次の用意が書き直す) |
  * | `vein_prepare` | `employee_id` | キオスクと同じ手順でその人の記録をモジュールに用意する |
  * | `vein_verify` | `id?`, `wait_finger_ms?` | 指を待って照合 (id で 1:1、無ければ 1:N) |
  * | `kiosk_flow` | `employee_id`, `wait_finger_ms?` | 免許証で決まった後のキオスクの照合 (用意 → 指 → 1:1 → 乗務員の照会) |
@@ -187,12 +189,22 @@ export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps):
           native: e.native ?? false,
           registered_device_id: e.registeredDeviceId ?? null,
           last_used_at: e.lastUsedAt ?? null,
+          source: e.source ?? null,
         }))
         break
       case 'vein_clear': {
         const id = moduleId(a.id)
-        await port.syncClear(id)
-        result = { cleared: id }
+        // モジュールが既に空 (未登録の失敗) でも、対応表の行は消す。行だけ残ると、版が同じなので用意が書き直さず空の ID と照合する
+        let module = 'cleared'
+        try {
+          await port.syncClear(id)
+        }
+        catch (e) {
+          module = (e as Error).message
+        }
+        const owners = (await loadVeinModuleEntries()).filter(e => e.moduleId === id)
+        for (const e of owners) await deleteVeinModuleEntry(e.employeeId)
+        result = { cleared: id, module, entries_removed: owners.length }
         break
       }
       case 'vein_prepare':
@@ -253,7 +265,7 @@ export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps):
 
 /**
  * 購読 WS で受けた `kiosk_command` に答える (キオスクの VeinFleetHost と運行管理者席の ManagerSeatRemoteHost で共通)。
- * 端末設定がオフ・形が外れた命令・自分宛てでない命令・端末の token が無いときは何もしない。返事の失敗は握る
+ * 端末設定がオフ・形が外れた命令・自分宛てでない命令・端末の token が無い・開発用の鍵でないときは何もしない。返事の失敗は握る
  */
 export async function respondToKioskCommand(data: unknown, deps: {
   /** この端末の token (宛先の見分けに使う) */
@@ -268,7 +280,10 @@ export async function respondToKioskCommand(data: unknown, deps: {
 }): Promise<void> {
   const cmd = parseKioskCommand(data)
   if (!cmd || !readKioskRemoteEnabled()) return
-  const deviceId = kioskDeviceIdFromJwt(await deps.jwt().catch(() => null))
+  const token = await deps.jwt().catch(() => null)
+  // 開発用の端末の鍵だけ (本番の端末は設定がオンでも受けない)
+  if (!isDevDeviceToken(token)) return
+  const deviceId = kioskDeviceIdFromJwt(token)
   if (!deviceId || (cmd.device_id !== '*' && cmd.device_id !== deviceId)) return
   const send = (payload: Record<string, unknown>) => deps.report(cmd.id, payload)
   try {

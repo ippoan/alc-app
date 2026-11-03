@@ -753,7 +753,7 @@ async function syncFc1200Date() {
             @change="setKioskRemote(($event.target as HTMLInputElement).checked)"
           />
           <span>
-            開発用の遠隔操作を受ける (MCP から指静脈の端末を操る。開発に使う PC だけ)
+            開発用の遠隔操作を受ける (MCP から指静脈の端末を操る。開発用の鍵の端末だけが受け、本番の端末はオンにしても受けない)
             <span v-if="kioskRemoteEnabled" class="block text-gray-500" data-testid="kiosk-remote-device-id">
               この端末の id: {{ kioskRemoteDeviceId ?? '(端末の登録が必要です)' }}
             </span>

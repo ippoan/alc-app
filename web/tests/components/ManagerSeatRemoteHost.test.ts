@@ -21,7 +21,7 @@ mockNuxtImport('useVeinSerial', () => () => vein)
 const serialOta = vi.hoisted(() => ({ run: vi.fn(async () => 'updated') }))
 mockNuxtImport('useSerialOta', () => () => serialOta)
 
-const SEAT_JWT = `h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef' }))}.s`
+const SEAT_JWT = `h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef', dev_device: true }))}.s`
 const managerToken = vi.hoisted(() => ({ getManagerJwt: vi.fn() }))
 mockNuxtImport('useManagerDeviceToken', () => () => managerToken)
 
