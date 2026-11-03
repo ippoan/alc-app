@@ -71,6 +71,15 @@ export const BUSINESS_TYPES = [
   '一般貨物', '特定貨物', '貨物軽', '特定第二種貨物', '一般乗合', '一般貸切', '一般乗用', '特定旅客',
 ] as const
 
+/** 使用する機器の名称の選択肢 (先頭が既定)。版を上げたら足す (認定は機器の名称 (製品番号) ごと) */
+export const DEVICE_NAMES = ['一歩庵点呼 v1'] as const
+
+/** 機器の名称の選択肢。保存済みの値が選択肢に無ければ、消さずに末尾に足す */
+export function deviceNameOptions(saved: string | null): string[] {
+  const names: string[] = [...DEVICE_NAMES]
+  return saved && !names.includes(saved) ? [...names, saved] : names
+}
+
 export const OFFICE_ROLES = ['実施', '被実施', '実施・被実施両方'] as const
 
 /** 参考様式の申請欄の件数 (#17〜#51 の 5 件) */
@@ -82,7 +91,7 @@ export function emptySettings(): FilingSettings {
     trade_name: null,
     business_type: null,
     offices: [],
-    device_name: '一歩庵点呼 v1',
+    device_name: DEVICE_NAMES[0],
     auto_cert_pre: null,
     auto_cert_post: null,
     operator_name: null,
