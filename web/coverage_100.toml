@@ -422,3 +422,7 @@ branches = true
 [[files]]
 path = "app/utils/device-key-status.ts"
 branches = true
+
+# 点呼の届出・認定申請の様式への差し込み (行。分岐は ?? の既定の数か所が残る)
+[[files]]
+path = "app/utils/tenko-forms.ts"

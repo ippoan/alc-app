@@ -88,6 +88,8 @@ import {
   deleteVeinTemplate,
   getBpNotifySettings,
   updateBpNotifySetting,
+  getTenkoFilingSettings,
+  putTenkoFilingSettings,
   getLineworksUsers,
   linkBpNotifyByName,
   listCamClipsCameras,
@@ -3192,6 +3194,30 @@ describe.skipIf(isLive)('指静脈の承認 (Refs ippoan/alc-app#436)', () => {
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toMatch(/\/vein\/templates\/emp%2F1$/)
     expect(init.method).toBe('DELETE')
+  })
+})
+
+// 点呼の届出・認定申請に差し込む値。mock 専用
+describe.skipIf(isLive)('点呼の届出の設定', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('GET で取り、PUT で全部の欄を送る', async () => {
+    const s = { business_number: '000000000001', offices: [] }
+    mockFetch.mockResolvedValueOnce(okJson(s))
+    await expect(getTenkoFilingSettings()).resolves.toEqual(s)
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/filing-settings$/)
+    mockFetch.mockResolvedValueOnce(okJson(s))
+    await expect(putTenkoFilingSettings(s as never)).resolves.toEqual(s)
+    const [url, init] = mockFetch.mock.calls[1]
+    expect(url).toMatch(/\/tenko\/filing-settings$/)
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual(s)
   })
 })
 

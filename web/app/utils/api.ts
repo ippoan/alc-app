@@ -32,6 +32,7 @@ import type {
 } from '~/utils/cam-clips'
 import type { KnownDeviceName } from '~/utils/device-name'
 import type { DeviceKeyStatus } from '~/utils/device-key-status'
+import type { FilingSettings } from '~/utils/tenko-forms'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
@@ -1021,6 +1022,19 @@ export async function linkBpNotifyByName(dryRun: boolean): Promise<ApiBpNotifyLi
   return request<ApiBpNotifyLinkResult>('/api/bp-notify/link-by-name', {
     method: 'POST',
     body: JSON.stringify({ dry_run: dryRun }),
+  }, 'admin')
+}
+
+/** 点呼の届出・認定申請に差し込む値 (管理者だけ)。保存が無ければ既定値 */
+export async function getTenkoFilingSettings(): Promise<FilingSettings> {
+  return request<FilingSettings>('/api/tenko/filing-settings', {}, 'admin')
+}
+
+/** 点呼の届出・認定申請に差し込む値を保存する (管理者だけ。全部の欄を置き換える)。欄が外れていれば 400 */
+export async function putTenkoFilingSettings(body: FilingSettings): Promise<FilingSettings> {
+  return request<FilingSettings>('/api/tenko/filing-settings', {
+    method: 'PUT',
+    body: JSON.stringify(body),
   }, 'admin')
 }
 
