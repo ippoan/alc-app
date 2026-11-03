@@ -7,8 +7,8 @@ vi.mock('~/utils/vein-module', () => ({
   prepareVeinModuleRecord: prep.prepare,
   identifyVeinModuleEmployee: prep.identify,
 }))
-const db = vi.hoisted(() => ({ load: vi.fn() }))
-vi.mock('~/utils/vein-db', () => ({ loadVeinModuleEntries: db.load }))
+const db = vi.hoisted(() => ({ load: vi.fn(), remove: vi.fn(async (_employeeId: string) => {}) }))
+vi.mock('~/utils/vein-db', () => ({ loadVeinModuleEntries: db.load, deleteVeinModuleEntry: db.remove }))
 const lines = vi.hoisted(() => ({ snapshot: vi.fn(() => '') }))
 vi.mock('~/utils/vein-line-log', () => ({
   redactVeinLine: (l: string) => l.replace(/[0-9A-F]{32,}/g, '<hex>'),
@@ -140,20 +140,31 @@ describe('runKioskCommand', () => {
       done: true, ok: true, op: 'hello', result: { device_id: 'alarm-k1', vein_connected: true },
     })
     expect((await runKioskCommand(cmd('vein_info'), deps)).result).toEqual({ users: 1, max: 100 })
-    expect((await runKioskCommand(cmd('vein_clear', { id: 10 }), deps)).result).toEqual({ cleared: 10 })
+    db.load.mockResolvedValue([
+      { employeeId: EMP, moduleId: 10, updatedAt: 'v1', approved: true },
+      { employeeId: 'e2', moduleId: 11, updatedAt: 'v1', approved: true },
+    ])
+    expect((await runKioskCommand(cmd('vein_clear', { id: 10 }), deps)).result).toEqual({ cleared: 10, module: 'cleared', entries_removed: 1 })
     expect(p.port.syncClear).toHaveBeenCalledWith(10)
+    // 対応表のその ID の行も消す (ほかの ID の行は残す)
+    expect(db.remove).toHaveBeenCalledTimes(1)
+    expect(db.remove).toHaveBeenCalledWith(EMP)
+    // モジュールが既に空 (未登録) でも、対応表の行は消す
+    p.port.syncClear.mockRejectedValueOnce(new Error('RC=07'))
+    expect((await runKioskCommand(cmd('vein_clear', { id: 10 }), deps)).result).toEqual({ cleared: 10, module: 'RC=07', entries_removed: 1 })
+    expect(db.remove).toHaveBeenCalledTimes(2)
     expect(await runKioskCommand(cmd('vein_clear', { id: 9 }), deps)).toMatchObject({ ok: false, error: 'id は 10〜100 で指定してください' })
   })
 
   it('vein_entries は対応表だけ (記録の中身は無い)', async () => {
     db.load.mockResolvedValue([
-      { employeeId: EMP, moduleId: 10, updatedAt: 'v1', approved: true, native: true, registeredDeviceId: 'alarm:x', lastUsedAt: 5 },
+      { employeeId: EMP, moduleId: 10, updatedAt: 'v1', approved: true, native: true, registeredDeviceId: 'alarm:x', lastUsedAt: 5, source: 'other' },
       { employeeId: 'e2', moduleId: 11, updatedAt: 'v2', approved: false },
     ])
     const r = await runKioskCommand(cmd('vein_entries'), { port: makePort().port, deviceId: 'k', progress: vi.fn() })
     expect(r.result).toEqual([
-      { employee_id: EMP, module_id: 10, version: 'v1', approved: true, native: true, registered_device_id: 'alarm:x', last_used_at: 5 },
-      { employee_id: 'e2', module_id: 11, version: 'v2', approved: false, native: false, registered_device_id: null, last_used_at: null },
+      { employee_id: EMP, module_id: 10, version: 'v1', approved: true, native: true, registered_device_id: 'alarm:x', last_used_at: 5, source: 'other' },
+      { employee_id: 'e2', module_id: 11, version: 'v2', approved: false, native: false, registered_device_id: null, last_used_at: null, source: null },
     ])
   })
 
@@ -256,7 +267,7 @@ describe('runKioskCommand', () => {
 })
 
 describe('respondToKioskCommand', () => {
-  const SEAT_JWT = jwt({ sub: 'alarm:0123456789abcdef' })
+  const SEAT_JWT = jwt({ sub: 'alarm:0123456789abcdef', dev_device: true })
   const frame = (deviceId: string, op = 'hello') => ({ type: 'kiosk_command', id: 'c1', device_id: deviceId, op, args: {} })
   const deps = (over: Partial<Parameters<typeof respondToKioskCommand>[1]> = {}) => ({
     jwt: vi.fn(async (): Promise<string | null> => SEAT_JWT),
@@ -288,6 +299,17 @@ describe('respondToKioskCommand', () => {
     await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => null), report: d.report }))
     await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => { throw new Error('no key') }), report: d.report }))
     expect(d.report).not.toHaveBeenCalled()
+  })
+
+  it('★ 開発用の鍵でない端末 (本番) は、設定がオンでも答えない', async () => {
+    writeKioskRemoteEnabled(true)
+    const d = deps()
+    for (const payload of [{ sub: 'alarm:0123456789abcdef' }, { sub: 'alarm:0123456789abcdef', dev_device: false }]) {
+      await respondToKioskCommand(frame('*'), deps({ jwt: vi.fn(async () => jwt(payload)), report: d.report }))
+    }
+    expect(d.report).not.toHaveBeenCalled()
+    await respondToKioskCommand(frame('*'), d)
+    expect(d.report).toHaveBeenCalledTimes(1)
   })
 
   it('ファームの更新の口を runKioskCommand へ渡す', async () => {

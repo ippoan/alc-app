@@ -125,8 +125,8 @@ describe('VeinFleetHost', () => {
   })
 
   describe('開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)', () => {
-    /** sub が alarm:<指紋> の端末の token (署名はダミー) */
-    const KIOSK_JWT = `h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef' }))}.s`
+    /** sub が alarm:<指紋> の開発用の端末の token (署名はダミー。dev_device が無いと遠隔操作を受けない) */
+    const KIOSK_JWT = `h.${btoa(JSON.stringify({ sub: 'alarm:0123456789abcdef', dev_device: true }))}.s`
     const hello = (deviceId: string) => ({ type: 'kiosk_command', id: 'c1', device_id: deviceId, op: 'hello', args: {} })
 
     beforeEach(() => {
