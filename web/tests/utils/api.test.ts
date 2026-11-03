@@ -78,6 +78,7 @@ import {
   putVeinTemplate,
   putVeinModuleRecord,
   putVeinModuleDeviceRecord,
+  rotateVeinModuleDeviceRecord,
   getVeinModuleTemplates,
   getVeinModuleTemplate,
   identifyVein,
@@ -1163,6 +1164,35 @@ describe.skipIf(isLive)('api', () => {
       expect(JSON.parse(init.body)).toEqual({ record: '3u3e7Q==' })
       expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
       expect(got).toEqual({ employee_id: TEST_EMPLOYEE_ID, updated_at: 'v2' })
+    })
+
+    it.skipIf(isLive)('★ rotateVeinModuleDeviceRecord は端末の token で POST …/module/devices/rotate へ撮った 1 本と pick を送り、入れ替えた記録を返す', async () => {
+      initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')
+      const saved = { employee_id: TEST_EMPLOYEE_ID, record: 'AAEC', updated_at: 'v3' }
+      mockFetch.mockResolvedValueOnce(okJson(saved))
+      const got = await rotateVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([0xDE, 0xED, 0xDE, 0xED]), 'own')
+      const [url, init] = mockFetch.mock.calls.at(-1)!
+      expect(url).toContain(`/vein/templates/${TEST_EMPLOYEE_ID}/module/devices/rotate`)
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body)).toEqual({ record: '3u3e7Q==', pick: 'own' })
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+      expect(got).toEqual(saved)
+      // 混ぜた記録の設定 (pick 無し) は pick を送らない。scope で鍵を選ぶ
+      initApi(API_BASE, undefined, () => 'tid', undefined, async () => 'kiosk-jwt', async () => 'manager-jwt', async () => 'bp-jwt')
+      for (const [scope, jwt] of [['manager-device', 'manager-jwt'], ['bp-station', 'bp-jwt'], ['default', 'kiosk-jwt']] as const) {
+        mockFetch.mockResolvedValueOnce(okJson(saved))
+        await rotateVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]), undefined, scope)
+        const [, sent] = mockFetch.mock.calls.at(-1)!
+        expect(JSON.parse(sent.body)).toEqual({ record: 'AQ==' })
+        expect(new Headers(sent.headers).get('Authorization')).toBe(`Bearer ${jwt}`)
+      }
+    })
+
+    it.skipIf(isLive)('rotateVeinModuleDeviceRecord: 鍵が取れなければ送らずに投げる', async () => {
+      initApi(API_BASE, undefined, () => 'tid', undefined, async () => null)
+      const before = mockFetch.mock.calls.length
+      await expect(rotateVeinModuleDeviceRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]), undefined)).rejects.toThrow()
+      expect(mockFetch.mock.calls.length).toBe(before)
     })
 
     it.skipIf(isLive)('putVeinModuleDeviceRecord: scope で運行管理者席・測定台の鍵を選ぶ', async () => {

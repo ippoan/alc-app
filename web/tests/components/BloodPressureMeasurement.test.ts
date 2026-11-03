@@ -104,13 +104,15 @@ vi.mock('~/utils/vein-identify', async importOriginal => ({
 }))
 
 // 照合をモジュールに任せる (Refs ippoan/alc-app#436)。対応表の引き方は vein-module.test.ts
+/** 本人の枠に当たった照合の結果 (同じ置き方で撮った記録つき) */
+const HIT = vi.hoisted(() => ({ id: 12, record: new Uint8Array([0xDE, 0xED]) }))
 const veinModule = vi.hoisted(() => ({
   usesVeinModule: vi.fn(() => false),
   identifyVeinModuleEmployee: vi.fn(),
   prepareVeinModuleRecord: vi.fn(),
   // カード・社員番号で決まった人の照合 (1:N で当たった ID がその人の枠か)。中身は vein-module.test.ts
-  matchVeinModuleEmployee: vi.fn(async (..._args: unknown[]) => 12 as number | null),
-  needsThisDeviceRecord: vi.fn(async (_employeeId: string) => false),
+  matchVeinModuleEmployee: vi.fn(async (..._args: unknown[]) => HIT as { id: number; record: Uint8Array | null } | null),
+  rotateVeinModuleRecord: vi.fn(async (..._args: unknown[]) => {}),
 }))
 vi.mock('~/utils/vein-module', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-module')>()),
@@ -1132,7 +1134,7 @@ describe('BloodPressureMeasurement — 指静脈が FP のときの撮り直し�
     getEmployeeByNfcIdMock.mockImplementation(async () => employee.value)
     veinModule.usesVeinModule.mockReturnValue(true)
     veinModule.prepareVeinModuleRecord.mockReset().mockResolvedValue(12)
-    veinModule.matchVeinModuleEmployee.mockReset().mockResolvedValue(12)
+    veinModule.matchVeinModuleEmployee.mockReset().mockResolvedValue(HIT)
     vein.say.mockReset().mockResolvedValue(undefined)
     vein.identify.mockReset().mockResolvedValue(12)
     veinModule.identifyVeinModuleEmployee.mockReset().mockResolvedValue({
@@ -1246,8 +1248,8 @@ describe('BloodPressureMeasurement — カード・社員番号で決まった�
     veinModule.usesVeinModule.mockReturnValue(true)
     veinModule.prepareVeinModuleRecord.mockReset()
     veinModule.prepareVeinModuleRecord.mockResolvedValue(12)
-    veinModule.matchVeinModuleEmployee.mockReset().mockResolvedValue(12)
-    veinModule.needsThisDeviceRecord.mockReset().mockResolvedValue(false)
+    veinModule.matchVeinModuleEmployee.mockReset().mockResolvedValue(HIT)
+    veinModule.rotateVeinModuleRecord.mockReset().mockResolvedValue(undefined)
     vein.say.mockReset()
     vein.say.mockResolvedValue(undefined)
     startMeasurementMock.mockReset()
@@ -1270,32 +1272,21 @@ describe('BloodPressureMeasurement — カード・社員番号で決まった�
     wrapper.unmount()
   })
 
-  it('★ ほかの端末の記録で通った人は、測定へ進む前にこの端末で登録し直す。外れた人・この端末の記録がある人はしない', async () => {
-    addDevice.add.mockReset().mockResolvedValue(true)
-    veinModule.needsThisDeviceRecord.mockResolvedValue(true)
+  it('★ 通ったら測定へ進めてから、同じ置き方で撮った記録で一番古い 1 本を入れ替える。外れたら入れ替えない', async () => {
     const wrapper = await mountBp()
     await tapCard(wrapper)
     await flush(wrapper)
-    expect(veinModule.needsThisDeviceRecord).toHaveBeenCalledWith('emp-test-1')
-    expect(addDevice.add).toHaveBeenCalledWith('emp-test-1')
+    expect(veinModule.rotateVeinModuleRecord).toHaveBeenCalledWith(expect.anything(), HIT, 'emp-test-1')
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
     wrapper.unmount()
 
-    addDevice.add.mockClear()
+    veinModule.rotateVeinModuleRecord.mockClear()
     veinModule.matchVeinModuleEmployee.mockResolvedValue(null)
     const miss = await mountBp()
     await tapCard(miss)
     await flush(miss)
-    expect(addDevice.add).not.toHaveBeenCalled()
+    expect(veinModule.rotateVeinModuleRecord).not.toHaveBeenCalled()
     miss.unmount()
-
-    veinModule.matchVeinModuleEmployee.mockResolvedValue(12)
-    veinModule.needsThisDeviceRecord.mockResolvedValue(false)
-    const own = await mountBp()
-    await tapCard(own)
-    await flush(own)
-    expect(addDevice.add).not.toHaveBeenCalled()
-    own.unmount()
   })
 
   it('社員番号の後も同じく 1:1 で照合する', async () => {
