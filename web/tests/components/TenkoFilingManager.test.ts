@@ -16,6 +16,7 @@ vi.mock('~/utils/api', async importOriginal => ({
 const forms = vi.hoisted(() => ({
   buildFilledForm: vi.fn(),
   saveBytes: vi.fn(),
+  fetchProductInfo: vi.fn(),
 }))
 vi.mock('~/utils/tenko-forms', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/tenko-forms')>()),
@@ -38,6 +39,7 @@ const dlButtons = (w: W) => w.findAll('[data-testid^="tenko-filing-dl-"]').map(b
 
 beforeEach(() => {
   vi.clearAllMocks()
+  forms.fetchProductInfo.mockResolvedValue({ deviceName: '一歩庵点呼 v1', certPre: null, certPost: null })
 })
 
 describe('TenkoFilingManager', () => {
@@ -50,12 +52,6 @@ describe('TenkoFilingManager', () => {
     expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou'])
     expect(w.text()).toContain('認定番号が要ります')
     expect(w.find('[data-testid="tenko-filing-kind-note"]').text()).toContain('原則 10 日前まで')
-    // 認定申請は届出と別の手続。実施予定日の欄は出さない
-    await w.find('[data-testid="tenko-filing-kind-nintei"]').setValue(true)
-    expect(dlButtons(w)).toEqual(['tenko-filing-dl-nintei-yoshiki1-shinsei', 'tenko-filing-dl-nintei-yoshiki2-gaiyo'])
-    expect(w.find('[data-testid="tenko-filing-start-date"]').exists()).toBe(false)
-    expect(w.find('[data-testid="tenko-filing-kind-note"]').text()).toContain('安全政策課へメール')
-    expect(w.text()).not.toContain('認定番号が要ります')
   })
 
   it('実施予定日は申請日の 10 日後より前を選べず、申請日を後ろへずらして割ったら空に戻す', async () => {
@@ -73,29 +69,22 @@ describe('TenkoFilingManager', () => {
     expect(start().attributes('min')).toBeUndefined()
   })
 
-  it('認定申請のダウンロードには実施予定日を渡さない', async () => {
-    const w = await mountIt()
-    forms.buildFilledForm.mockResolvedValue({ bytes: new Uint8Array([1]), filename: 'a.docx' })
-    await w.find('[data-testid="tenko-filing-start-date"]').setValue('2099-01-01')
-    await w.find('[data-testid="tenko-filing-kind-nintei"]').setValue(true)
-    await w.find('[data-testid="tenko-filing-dl-nintei-yoshiki1-shinsei"]').trigger('click')
-    await flushPromises()
-    expect(forms.buildFilledForm.mock.calls[0]![2]).toMatchObject({ kind: 'nintei', startDate: '' })
-  })
-
   it('「書き込む値」の下にダウンロードを置く (入れる → 保存 → 出す の順)', async () => {
     const w = await mountIt()
     const ids = w.findAll('[data-testid="tenko-filing-settings"], [data-testid="tenko-filing-download"]').map(e => e.attributes('data-testid'))
     expect(ids).toEqual(['tenko-filing-settings', 'tenko-filing-download'])
   })
 
-  it('機器の名称は選択肢。既定が選ばれ、空なら既定に、保存済みの別の名称は残す', async () => {
+  it('機器の名称と認定番号の既定は製品の設定。保存済みの別の名称 (前の版) は残す', async () => {
     const sel = (w: W) => w.find('[data-testid="tenko-filing-device-name"]')
     const opts = (w: W) => sel(w).findAll('option').map(o => o.text())
+    forms.fetchProductInfo.mockResolvedValue({ deviceName: '一歩庵点呼 v2', certPre: '前-1', certPost: '後-2' })
     const def = await mountIt(saved({ device_name: null }))
-    expect([(sel(def).element as HTMLSelectElement).value, opts(def)]).toEqual(['一歩庵点呼 v1', ['一歩庵点呼 v1']])
-    const other = await mountIt(saved({ device_name: '架空の機器' }))
-    expect([(sel(other).element as HTMLSelectElement).value, opts(other)]).toEqual(['架空の機器', ['一歩庵点呼 v1', '架空の機器']])
+    expect([(sel(def).element as HTMLSelectElement).value, opts(def)]).toEqual(['一歩庵点呼 v2', ['一歩庵点呼 v2']])
+    expect(def.findAll('[data-testid="tenko-filing-settings"] input').map(i => (i.element as HTMLInputElement).value)).toContain('前-1')
+    const old = await mountIt(saved({ device_name: '一歩庵点呼 v1', auto_cert_pre: '前-0' }))
+    expect([(sel(old).element as HTMLSelectElement).value, opts(old)]).toEqual(['一歩庵点呼 v1', ['一歩庵点呼 v2', '一歩庵点呼 v1']])
+    expect(old.findAll('[data-testid="tenko-filing-settings"] input').map(i => (i.element as HTMLInputElement).value)).toContain('前-0')
   })
 
   it('読めないときは文言を出す (理由の記号は文にする)', async () => {

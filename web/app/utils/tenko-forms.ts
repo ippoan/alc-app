@@ -1,13 +1,14 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 
 /**
- * 点呼の届出・自動点呼機器の認定申請の様式に値を差し込む (管理画面の「点呼の届出」タブ)。
+ * 遠隔点呼・自動点呼の実施の届出の様式に値を差し込む (管理画面の「点呼の届出」タブ)。
+ * 自動点呼機器の認定申請 (製作元の手続) は auth.ippoan.org の開発者専用ページ `/maker/certification` の受け持ち。
  *
  * 様式の原本は ippoan/tenko-forms (public)。`manifest.json` の `forms.<id>.latest` が最新版のパスで、
  * 毎週月曜に取り直される。ブラウザで raw を取り、xlsx / docx (どちらも zip の中の XML) の決まった位置に
  * 値を書いて、そのままダウンロードさせる。サーバーには送らない。
  *
- * 書く位置は様式ごとの対応表 ({@link EGOV_CELLS}・{@link fillBessi7}・{@link fillYoshiki1}・{@link fillYoshiki2}) に持つ。
+ * 書く位置は様式ごとの対応表 ({@link EGOV_CELLS}・{@link fillBessi7}) に持つ。
  * docx には差し込み用の目印が無いので、本文の何番目の段落・表の何行何列かで指す。様式の版が変わって
  * 位置がずれたら、ここを直す (位置の文字を確かめ、合わなければ書かずに例外にする)。
  */
@@ -36,34 +37,18 @@ export interface FilingSettings {
   operator_contact_name: string | null
   operator_contact_phone: string | null
   operator_contact_email: string | null
-  applicant_name: string | null
-  applicant_kana: string | null
-  applicant_address: string | null
-  applicant_contact_name: string | null
-  applicant_contact_dept: string | null
-  applicant_contact_phone: string | null
-  applicant_contact_email: string | null
-  product_url: string | null
   updated_at?: string | null
 }
 
-/**
- * 手続の種別。`remote` / `auto` は運輸支局への実施の届出 (e-Gov。参考様式 #13 の 4 遠隔点呼 / 6 自動点呼)、
- * `nintei` は自動点呼機器の認定申請 (製作元が国交省 安全政策課へメールで出す。届出とは別の手続)
- */
-export type FilingKind = 'remote' | 'auto' | 'nintei'
-
-/** 実施の届出か (実施予定日と、その下限を持つのは届出だけ) */
-export function isNotification(kind: FilingKind): boolean {
-  return kind !== 'nintei'
-}
+/** 実施の届出の種別 (運輸支局へ e-Gov で出す。参考様式 #13 の 4 遠隔点呼 / 6 自動点呼) */
+export type FilingKind = 'remote' | 'auto'
 
 /** ダウンロードのたびに決める値 (保存しない) */
 export interface FilingRequest {
   kind: FilingKind
   /** 申請日 (YYYY-MM-DD) */
   applyDate: string
-  /** 実施予定日 (YYYY-MM-DD)。空なら書かない。認定申請では使わない */
+  /** 実施予定日 (YYYY-MM-DD)。空なら書かない */
   startDate: string
 }
 
@@ -71,13 +56,41 @@ export const BUSINESS_TYPES = [
   '一般貨物', '特定貨物', '貨物軽', '特定第二種貨物', '一般乗合', '一般貸切', '一般乗用', '特定旅客',
 ] as const
 
-/** 使用する機器の名称の選択肢 (先頭が既定)。版を上げたら足す (認定は機器の名称 (製品番号) ごと) */
-export const DEVICE_NAMES = ['一歩庵点呼 v1'] as const
+/** 製品の設定 (tenko-forms の `product/ippoan-tenko.json`。auth-worker の認定申請ページと同じものを読む) */
+export const PRODUCT_PATH = 'product/ippoan-tenko.json'
 
-/** 機器の名称の選択肢。保存済みの値が選択肢に無ければ、消さずに末尾に足す */
-export function deviceNameOptions(saved: string | null): string[] {
-  const names: string[] = [...DEVICE_NAMES]
-  return saved && !names.includes(saved) ? [...names, saved] : names
+/** 製品の設定が読めないときの機器の名称 */
+export const FALLBACK_DEVICE_NAME = '一歩庵点呼 v1'
+
+/** 届出に使う製品の値。名称は `product` + `version` (版を上げると切り替わる)、認定番号は業務前・業務後 */
+export interface ProductInfo {
+  deviceName: string
+  certPre: string | null
+  certPost: string | null
+}
+
+/** 製品の設定を読む。読めなければ既定の名称だけ (届出の画面を止めない) */
+export async function fetchProductInfo(fetcher: typeof fetch = fetch): Promise<ProductInfo> {
+  try {
+    const res = await fetcher(`${TENKO_FORMS_RAW}${PRODUCT_PATH}`, { cache: 'no-store' })
+    const cfg = res.ok
+      ? await res.json() as { product?: unknown, version?: unknown, certification?: { pre?: string | null, post?: string | null } }
+      : null
+    if (!cfg || typeof cfg.product !== 'string' || typeof cfg.version !== 'string') throw new Error('product')
+    return {
+      deviceName: `${cfg.product} ${cfg.version}`,
+      certPre: cfg.certification?.pre ?? null,
+      certPost: cfg.certification?.post ?? null,
+    }
+  }
+  catch {
+    return { deviceName: FALLBACK_DEVICE_NAME, certPre: null, certPost: null }
+  }
+}
+
+/** 機器の名称の選択肢。先頭が今の製品の名称、保存済みの別の名称 (前の版など) は消さずに末尾に足す */
+export function deviceNameOptions(saved: string | null, current: string = FALLBACK_DEVICE_NAME): string[] {
+  return saved && saved !== current ? [current, saved] : [current]
 }
 
 export const OFFICE_ROLES = ['実施', '被実施', '実施・被実施両方'] as const
@@ -91,7 +104,7 @@ export function emptySettings(): FilingSettings {
     trade_name: null,
     business_type: null,
     offices: [],
-    device_name: DEVICE_NAMES[0],
+    device_name: FALLBACK_DEVICE_NAME,
     auto_cert_pre: null,
     auto_cert_post: null,
     operator_name: null,
@@ -100,14 +113,6 @@ export function emptySettings(): FilingSettings {
     operator_contact_name: null,
     operator_contact_phone: null,
     operator_contact_email: null,
-    applicant_name: null,
-    applicant_kana: null,
-    applicant_address: null,
-    applicant_contact_name: null,
-    applicant_contact_dept: null,
-    applicant_contact_phone: null,
-    applicant_contact_email: null,
-    product_url: null,
   }
 }
 
@@ -416,41 +421,6 @@ export function fillBessi7(b: DocxBody, s: FilingSettings, req: FilingRequest): 
   b.setText(b.child(30), now => now.replace('□', '☑'), '□')
 }
 
-/** 認定申請 様式1 (自動点呼機器認定申請書)。機器の種類は業務前・業務後の両方に ○ */
-export function fillYoshiki1(b: DocxBody, s: FilingSettings, req: FilingRequest): void {
-  b.setText(b.child(0), now => now.replace(/令和[\s　]*年[\s　]*月[\s　]*日/, reiwaDate(req.applyDate)), '令和')
-  b.setText(b.child(4), afterLabel('住所', s.applicant_address), '住所')
-  b.setText(b.child(5), afterLabel('氏名又は名称', s.applicant_name), '氏名又は名称')
-  const who = b.table(0)
-  b.setText(b.cellPara(who, 0, 1), now => (s.applicant_kana ? `（フリガナ）${s.applicant_kana}` : now), 'フリガナ')
-  if (s.applicant_name) b.setText(b.cellPara(who, 1, 1), () => s.applicant_name!)
-  if (s.applicant_address) {
-    const a = s.applicant_address
-    b.setText(b.cellPara(who, 2, 1), () => (a.startsWith('〒') ? a : `〒${a}`), '〒')
-  }
-  b.setText(b.cellPara(who, 3, 1), afterLabel('担当者名', s.applicant_contact_name), '担当者名')
-  b.setText(b.cellPara(who, 4, 1), afterLabel('所属・役職', s.applicant_contact_dept), '所属・役職')
-  b.setText(b.cellPara(who, 5, 1), afterLabel('電話番号', s.applicant_contact_phone), '電話番号')
-  b.setText(b.cellPara(who, 6, 1), afterLabel('メールアドレス', s.applicant_contact_email), 'メールアドレス')
-  const dev = b.table(1)
-  b.setText(b.cellPara(dev, 0, 1), now => circle('業務後自動点呼機器')(circle('業務前自動点呼機器')(now)), '業務前自動点呼機器')
-  b.setText(b.cellPara(dev, 1, 1), () => s.device_name ?? '')
-  // 添付書類 1〜6 に ○ (7 その他は必要なときだけなので付けない)
-  for (let i = 0; i < 6; i++) {
-    b.setText(b.cellPara(dev, 2, 1, i), now => now.replace(/（[\s　]*）/, '（○）'), `${'１２３４５６'[i]}`)
-  }
-}
-
-/** 認定申請 様式2 (自動点呼機器の概要)。被点呼対象者 ① 運転者のみ・被実施場所 ① 営業所又は車庫に限る */
-export function fillYoshiki2(b: DocxBody, s: FilingSettings): void {
-  const t = b.table(0)
-  b.setText(b.cellPara(t, 0, 1), () => s.device_name ?? '')
-  b.setText(b.cellPara(t, 1, 1), circle('①運転者のみ'), '①運転者のみ')
-  b.setText(b.cellPara(t, 2, 1), circle('①営業所又は車庫に限る'), '①営業所又は車庫に限る')
-  b.setText(b.cellPara(t, 3, 1), () => s.applicant_name ?? '')
-  b.setText(b.cellPara(t, 4, 1), () => s.product_url ?? '')
-}
-
 /** docx の本文を書き換える */
 export function fillDocx(file: Uint8Array, fill: (b: DocxBody) => void): Uint8Array {
   const zip = unzipSync(file)
@@ -488,20 +458,6 @@ export const TENKO_FORMS: TenkoForm[] = [
     kinds: ['remote'],
     ext: 'docx',
     fill: (f, s, r) => fillDocx(f, b => fillBessi7(b, s, r)),
-  },
-  {
-    id: 'nintei-yoshiki1-shinsei',
-    label: '認定申請 様式1 自動点呼機器認定申請書',
-    kinds: ['nintei'],
-    ext: 'docx',
-    fill: (f, s, r) => fillDocx(f, b => fillYoshiki1(b, s, r)),
-  },
-  {
-    id: 'nintei-yoshiki2-gaiyo',
-    label: '認定申請 様式2 自動点呼機器の概要',
-    kinds: ['nintei'],
-    ext: 'docx',
-    fill: (f, s) => fillDocx(f, b => fillYoshiki2(b, s)),
   },
 ]
 
