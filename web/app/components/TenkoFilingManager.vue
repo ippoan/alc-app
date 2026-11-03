@@ -2,15 +2,16 @@
 import { getTenkoFilingSettings, putTenkoFilingSettings } from '~/utils/api'
 import { jstTodayDate } from '~/utils/jst'
 import {
-  BUSINESS_TYPES, DEVICE_NAMES, EGOV_OFFICE_SLOTS, deviceNameOptions, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm, earliestStartDate,
-  emptySettings, isNotification, saveBytes,
-  type FilingKind, type FilingSettings, type TenkoForm,
+  BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm,
+  deviceNameOptions, earliestStartDate, emptySettings, fetchProductInfo, saveBytes,
+  type FilingKind, type FilingSettings, type ProductInfo, type TenkoForm,
 } from '~/utils/tenko-forms'
 
 /**
- * 点呼の届出 (システム管理者)。遠隔点呼・自動点呼の届出と自動点呼機器の認定申請の様式に、
- * テナントに保存した値を差し込んでダウンロードさせる。提出は人が手で行う (e-Gov アプリ・国交省へのメール)。
- * ダウンロードは保存前の入力のままでも書き込む (保存は次に開いたときのため)。
+ * 点呼の届出 (システム管理者)。遠隔点呼・自動点呼の実施の届出の様式に、テナントに保存した値を差し込んで
+ * ダウンロードさせる。提出は人が手で行う (e-Gov アプリ)。ダウンロードは保存前の入力のままでも書き込む。
+ * 機器の名称と認定番号の既定は製品の設定 (tenko-forms の product/ippoan-tenko.json) から入れる (版を上げると切り替わる)。
+ * 自動点呼機器の認定申請は製作元の手続なので、ここではなく auth.ippoan.org の開発者専用ページで作る。
  */
 
 const ERRORS: Record<string, string> = {
@@ -23,6 +24,7 @@ const ERRORS: Record<string, string> = {
 }
 
 const settings = ref<FilingSettings>(emptySettings())
+const product = ref<ProductInfo>({ deviceName: FALLBACK_DEVICE_NAME, certPre: null, certPost: null })
 const loadError = ref('')
 const saving = ref(false)
 const saveError = ref('')
@@ -46,6 +48,7 @@ function messageOf(e: unknown, fallback: string): string {
 }
 
 onMounted(async () => {
+  product.value = await fetchProductInfo()
   try {
     settings.value = adopt(await getTenkoFilingSettings())
   }
@@ -54,9 +57,15 @@ onMounted(async () => {
   }
 })
 
-/** 読んだ値を画面の値にする。機器の名称が空なら既定 (選択肢の先頭) を選ぶ */
+/** 読んだ値を画面の値にする。機器の名称・認定番号が空なら製品の設定の値を入れる */
 function adopt(s: FilingSettings): FilingSettings {
-  return { ...emptySettings(), ...s, device_name: s.device_name || DEVICE_NAMES[0] }
+  return {
+    ...emptySettings(),
+    ...s,
+    device_name: s.device_name || product.value.deviceName,
+    auto_cert_pre: s.auto_cert_pre || product.value.certPre,
+    auto_cert_post: s.auto_cert_post || product.value.certPost,
+  }
 }
 
 function addOffice() {
@@ -92,7 +101,7 @@ async function download(form: TenkoForm) {
     const { bytes, filename } = await buildFilledForm(form, settings.value, {
       kind: kind.value,
       applyDate: applyDate.value,
-      startDate: isNotification(kind.value) ? startDate.value : '',
+      startDate: startDate.value,
     })
     saveBytes(bytes, filename, form.ext)
   }
@@ -114,17 +123,6 @@ const OPERATOR_FIELDS = [
   ['operator_contact_email', 'メールアドレス'],
 ] as const
 
-const APPLICANT_FIELDS = [
-  ['applicant_name', '氏名又は名称 (製作事業者名)'],
-  ['applicant_kana', 'フリガナ'],
-  ['applicant_address', '住所'],
-  ['applicant_contact_name', '担当者名'],
-  ['applicant_contact_dept', '所属・役職'],
-  ['applicant_contact_phone', '電話番号'],
-  ['applicant_contact_email', 'メールアドレス'],
-  ['product_url', '機器の概要のウェブサイトの URL (様式2)'],
-] as const
-
 const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
 </script>
 
@@ -132,7 +130,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
   <div class="space-y-4" data-testid="tenko-filing">
     <div class="bg-white rounded-xl p-4 shadow-sm space-y-2">
       <p class="text-sm text-gray-600">
-        遠隔点呼・自動点呼の届出と、自動点呼機器の認定申請の様式を、「書き込む値」を書き込んだ状態でダウンロードします (一番下)。
+        遠隔点呼・自動点呼の実施の届出の様式を、「書き込む値」を書き込んだ状態でダウンロードします (一番下)。
         届出は e-Gov アプリから、認定申請は国交省 安全政策課へメールで、人が提出します。
         様式の原本は毎週取り直している最新版 (ippoan/tenko-forms) を使います。
       </p>
@@ -183,7 +181,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         <label class="text-sm">
           <span class="text-gray-500">使用する機器の名称</span>
           <select v-model="settings.device_name" :class="inputClass" data-testid="tenko-filing-device-name">
-            <option v-for="name in deviceNameOptions(settings.device_name)" :key="name" :value="name">{{ name }}</option>
+            <option v-for="name in deviceNameOptions(settings.device_name, product.deviceName)" :key="name" :value="name">{{ name }}</option>
           </select>
         </label>
         <label class="text-sm">
@@ -200,16 +198,6 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         <legend class="text-sm font-medium text-gray-700">届け出る事業者 (別紙7)</legend>
         <div class="grid gap-3 sm:grid-cols-2">
           <label v-for="[key, label] in OPERATOR_FIELDS" :key="key" class="text-sm">
-            <span class="text-gray-500">{{ label }}</span>
-            <input v-model="settings[key]" :class="inputClass">
-          </label>
-        </div>
-      </fieldset>
-
-      <fieldset class="space-y-2">
-        <legend class="text-sm font-medium text-gray-700">自動点呼機器の認定申請者 (様式1・様式2)</legend>
-        <div class="grid gap-3 sm:grid-cols-2">
-          <label v-for="[key, label] in APPLICANT_FIELDS" :key="key" class="text-sm">
             <span class="text-gray-500">{{ label }}</span>
             <input v-model="settings[key]" :class="inputClass">
           </label>
@@ -239,14 +227,11 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         <label class="flex items-center gap-1">
           <input v-model="kind" type="radio" value="auto" data-testid="tenko-filing-kind-auto"> 自動点呼の実施の届出 (認定後)
         </label>
-        <label class="flex items-center gap-1">
-          <input v-model="kind" type="radio" value="nintei" data-testid="tenko-filing-kind-nintei"> 自動点呼機器の認定申請
-        </label>
         <label class="flex flex-col">
           <span class="text-gray-500">申請日</span>
           <input v-model="applyDate" type="date" class="border rounded-lg px-2 py-1">
         </label>
-        <label v-if="isNotification(kind)" class="flex flex-col">
+        <label class="flex flex-col">
           <span class="text-gray-500">実施予定日 (申請の {{ FILING_LEAD_DAYS }} 日後以降)</span>
           <input v-model="startDate" type="date" :min="minStartDate || undefined" class="border rounded-lg px-2 py-1" data-testid="tenko-filing-start-date">
         </label>
@@ -265,16 +250,10 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         </li>
       </ul>
       <p class="text-sm text-gray-600" data-testid="tenko-filing-kind-note">
-        <template v-if="kind === 'nintei'">
-          認定申請は一歩庵点呼の製作元が国交省 物流・自動車局 安全政策課へメールで出します (e-Gov ではありません)。
-          審査で追加資料・現品の提示・デモンストレーションを求められることがあります。様式3-1・3-2 (自己チェック表) と根拠資料は別に用意します。
-        </template>
-        <template v-else>
-          実施の届出は e-Gov アプリから、営業所を管轄する運輸支局へ、実施予定日の原則 {{ FILING_LEAD_DAYS }} 日前までに出します。
-        </template>
+        実施の届出は e-Gov アプリから、営業所を管轄する運輸支局へ、実施予定日の原則 {{ FILING_LEAD_DAYS }} 日前までに出します。
       </p>
       <p v-if="kind === 'auto' && !settings.auto_cert_pre && !settings.auto_cert_post" class="text-sm text-amber-700">
-        自動点呼の届出には国交省の認定番号が要ります。認定が出たら下の「認定番号」に入力してください。
+        自動点呼の届出には国交省の認定番号が要ります。認定が出ると、製品の設定から上の「認定番号」に自動で入ります。
       </p>
       <p v-if="settings.offices.length > EGOV_OFFICE_SLOTS" class="text-sm text-amber-700">
         e-Gov の参考様式に書けるのは営業所・車庫 {{ EGOV_OFFICE_SLOTS }} 件までです。6 件目からは別紙にしてください。

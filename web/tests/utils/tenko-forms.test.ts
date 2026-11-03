@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import {
-  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, deviceNameOptions, earliestStartDate, egovCells, egovChecks,
-  egovOfficeRow, emptySettings, isNotification, fillBessi7, fillDocx, fillEgovXlsx, fillYoshiki1, fillYoshiki2, latestFormPath,
+  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, deviceNameOptions, fetchProductInfo, earliestStartDate, egovCells, egovChecks,
+  egovOfficeRow, emptySettings, fillBessi7, fillDocx, fillEgovXlsx, latestFormPath,
   reiwaDate, saveBytes, setXlsxCell, slashDate, xlsxCellText,
   type FilingRequest, type FilingSettings,
 } from '~/utils/tenko-forms'
@@ -28,14 +28,6 @@ function settings(over: Partial<FilingSettings> = {}): FilingSettings {
     operator_contact_name: '架空 花子',
     operator_contact_phone: '000-0000-0000',
     operator_contact_email: 'contact@example.com',
-    applicant_name: '架空製作所',
-    applicant_kana: 'カクウセイサクショ',
-    applicant_address: '000-0000 架空県架空市9-9',
-    applicant_contact_name: '架空 次郎',
-    applicant_contact_dept: '開発部',
-    applicant_contact_phone: '000-1111-2222',
-    applicant_contact_email: 'dev@example.com',
-    product_url: 'https://example.com/tenko',
     ...over,
   }
 }
@@ -61,18 +53,26 @@ describe('実施予定日の下限と手続の別', () => {
     expect(earliestStartDate('')).toBe('')
   })
 
-  it('実施の届出は遠隔点呼・自動点呼。認定申請は別の手続', () => {
-    expect([isNotification('remote'), isNotification('auto'), isNotification('nintei')]).toEqual([true, true, false])
-    expect(TENKO_FORMS.filter(f => f.kinds.includes('nintei')).map(f => f.id)).toEqual(['nintei-yoshiki1-shinsei', 'nintei-yoshiki2-gaiyo'])
-    expect(TENKO_FORMS.filter(f => f.kinds.includes('auto')).map(f => f.id)).toEqual(['egov-tenko-todokede-sankou'])
-  })
 })
 
-describe('deviceNameOptions', () => {
-  it('既定の名称が先頭。保存済みの別の名称は消さずに末尾に残す', () => {
+describe('製品の設定 (機器の名称と認定番号)', () => {
+  it('先頭が今の製品の名称。保存済みの別の名称 (前の版など) は消さずに末尾に残す', () => {
     expect(deviceNameOptions(null)).toEqual(['一歩庵点呼 v1'])
-    expect(deviceNameOptions('一歩庵点呼 v1')).toEqual(['一歩庵点呼 v1'])
-    expect(deviceNameOptions('架空の機器')).toEqual(['一歩庵点呼 v1', '架空の機器'])
+    expect(deviceNameOptions('一歩庵点呼 v2', '一歩庵点呼 v2')).toEqual(['一歩庵点呼 v2'])
+    expect(deviceNameOptions('一歩庵点呼 v1', '一歩庵点呼 v2')).toEqual(['一歩庵点呼 v2', '一歩庵点呼 v1'])
+  })
+
+  it('tenko-forms の product/ippoan-tenko.json から名称と認定番号を読む。読めなければ既定の名称だけ', async () => {
+    const f = (r: Response) => vi.fn(async () => r) as unknown as typeof fetch
+    const cfg = { product: '一歩庵点呼', version: 'v2', certification: { pre: '前-1', post: null } }
+    const ok = f(new Response(JSON.stringify(cfg)))
+    expect(await fetchProductInfo(ok)).toEqual({ deviceName: '一歩庵点呼 v2', certPre: '前-1', certPost: null })
+    expect(vi.mocked(ok).mock.calls[0]![0]).toBe(`${TENKO_FORMS_RAW}product/ippoan-tenko.json`)
+    expect(await fetchProductInfo(f(new Response(JSON.stringify({ product: 'x', version: 'v1' }))))).toEqual({ deviceName: 'x v1', certPre: null, certPost: null })
+    const fallback = { deviceName: '一歩庵点呼 v1', certPre: null, certPost: null }
+    expect(await fetchProductInfo(f(new Response('', { status: 404 })))).toEqual(fallback)
+    expect(await fetchProductInfo(f(new Response('{"product":1}')))).toEqual(fallback)
+    expect(await fetchProductInfo(vi.fn(async () => { throw new Error('offline') }) as unknown as typeof fetch)).toEqual(fallback)
   })
 })
 
@@ -260,78 +260,6 @@ describe('fillBessi7', () => {
   })
 })
 
-const YOSHIKI1: Child[] = [
-  '（様式１）　　　|令和|　|　|年　　月　　日', '', '国土交通省', '安全政策課長　殿', '申請者|　|住所', '氏名又は名称',
-  '', '', '申請書', '', '本文', '', '記', '', '１．申請者について',
-  [
-    [['', '申請者の', '氏名又は名称', ''], ['（フリガナ）']],
-    [[''], ['', '']],
-    [['住　所'], ['〒', '']],
-    [['連絡先'], ['担当者名']],
-    [[''], ['所属・役職']],
-    [[''], ['電話番号']],
-    [[''], ['メールアドレス']],
-  ],
-  '', '２．申請機器について',
-  [
-    [['機器の種類'], ['業務前自動点呼機器　・　業務後自動点呼機器']],
-    [['申請機器の名称'], ['']],
-    [['添付書類'], ['（　　）１．様式１', '（　　）２．様式２', '（　　）３．様式３－１', '（　　）４．様式３－２', '（　　）５. 根拠資料', '（　　）６．パンフレット', '（　　）７. その他']],
-  ],
-]
-
-describe('fillYoshiki1', () => {
-  it('申請者・機器の種類 (両方に ○)・名称・添付 1〜6 を書く', () => {
-    const b = bodyOf(fillDocx(docx(YOSHIKI1), d => fillYoshiki1(d, settings(), REMOTE)))
-    const t = texts(b)
-    expect(t[0]).toBe('（様式１）　　　令和8年11月10日')
-    expect(t[4]).toBe('申請者　住所　000-0000 架空県架空市9-9')
-    expect(cell(b, 0, 0, 1)).toBe('（フリガナ）カクウセイサクショ')
-    expect(cell(b, 0, 1, 1)).toBe('架空製作所')
-    expect(cell(b, 0, 2, 1)).toBe('〒000-0000 架空県架空市9-9')
-    expect(cell(b, 0, 6, 1)).toBe('メールアドレス　dev@example.com')
-    expect(cell(b, 1, 0, 1)).toBe('○業務前自動点呼機器　・　○業務後自動点呼機器')
-    expect(cell(b, 1, 1, 1)).toBe('一歩庵点呼 v1')
-    expect(cell(b, 1, 2, 1, 5)).toBe('（○）６．パンフレット')
-    expect(cell(b, 1, 2, 1, 6)).toBe('（　　）７. その他')
-  })
-
-  it('値が無ければフリガナ・名称・住所は元のまま。〒付きの住所はそのまま', () => {
-    const empty = bodyOf(fillDocx(docx(YOSHIKI1), d => fillYoshiki1(d, settings({
-      applicant_kana: null, applicant_name: null, applicant_address: null, device_name: null,
-    }), REMOTE)))
-    expect(cell(empty, 0, 0, 1)).toBe('（フリガナ）')
-    expect(cell(empty, 0, 2, 1)).toBe('〒')
-    expect(cell(empty, 1, 1, 1)).toBe('')
-    const zip = bodyOf(fillDocx(docx(YOSHIKI1), d => fillYoshiki1(d, settings({ applicant_address: '〒1 架空' }), REMOTE)))
-    expect(cell(zip, 0, 2, 1)).toBe('〒1 架空')
-  })
-})
-
-const YOSHIKI2: Child[] = [
-  '（様式２）', '概要', '',
-  [
-    [['機器の名称'], ['']],
-    [['被点呼対象者'], ['①運転者のみ　②運転者及び特定運行保安員', '③特定運行保安員のみ']],
-    [['点呼の被実施場所'], ['①営業所又は車庫に限る', '②事業用自動車内']],
-    [['製作事業者名'], ['']],
-    [['URL'], ['']],
-  ],
-]
-
-describe('fillYoshiki2', () => {
-  it('名称・①に ○・製作事業者・URL を書く', () => {
-    const b = bodyOf(fillDocx(docx(YOSHIKI2), d => fillYoshiki2(d, settings())))
-    expect(cell(b, 0, 0, 1)).toBe('一歩庵点呼 v1')
-    expect(cell(b, 0, 1, 1)).toBe('○①運転者のみ　②運転者及び特定運行保安員')
-    expect(cell(b, 0, 2, 1)).toBe('○①営業所又は車庫に限る')
-    expect(cell(b, 0, 3, 1)).toBe('架空製作所')
-    expect(cell(b, 0, 4, 1)).toBe('https://example.com/tenko')
-    const empty = bodyOf(fillDocx(docx(YOSHIKI2), d => fillYoshiki2(d, settings({ device_name: null, applicant_name: null, product_url: null }))))
-    expect(cell(empty, 0, 3, 1)).toBe('')
-  })
-})
-
 describe('DocxBody の見つからない位置', () => {
   it('本文・要素・表・升目が無ければ例外', () => {
     expect(() => new DocxBody(`<w:document ${W}/>`)).toThrow('本文が見つかりません')
@@ -391,8 +319,7 @@ describe('buildFilledForm', () => {
   it('様式の一覧の差し込みはどれも動く (docx は合成の本文で)', () => {
     const byId = Object.fromEntries(TENKO_FORMS.map(f => [f.id, f]))
     expect(byId['remote-kamotsu-bessi7-jisshi']!.fill(docx(BESSI7), settings(), REMOTE)).toBeInstanceOf(Uint8Array)
-    expect(byId['nintei-yoshiki1-shinsei']!.fill(docx(YOSHIKI1), settings(), AUTO)).toBeInstanceOf(Uint8Array)
-    expect(byId['nintei-yoshiki2-gaiyo']!.fill(docx(YOSHIKI2), settings(), AUTO)).toBeInstanceOf(Uint8Array)
+    expect(TENKO_FORMS.map(f => f.id)).toEqual(['egov-tenko-todokede-sankou', 'remote-kamotsu-bessi7-jisshi'])
   })
 })
 
