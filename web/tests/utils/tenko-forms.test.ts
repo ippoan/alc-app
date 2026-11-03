@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import {
-  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, egovCells, egovChecks,
-  egovOfficeRow, emptySettings, fillBessi7, fillDocx, fillEgovXlsx, fillYoshiki1, fillYoshiki2, latestFormPath,
+  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, earliestStartDate, egovCells, egovChecks,
+  egovOfficeRow, emptySettings, isNotification, fillBessi7, fillDocx, fillEgovXlsx, fillYoshiki1, fillYoshiki2, latestFormPath,
   reiwaDate, saveBytes, setXlsxCell, slashDate, xlsxCellText,
   type FilingRequest, type FilingSettings,
 } from '~/utils/tenko-forms'
@@ -50,6 +50,21 @@ describe('日付', () => {
     expect(reiwaDate('2019-05-01')).toBe('令和1年5月1日')
     expect(reiwaDate('2018-12-31')).toBe('令和　　年　　月　　日')
     expect(reiwaDate('x')).toBe('令和　　年　　月　　日')
+  })
+})
+
+describe('実施予定日の下限と手続の別', () => {
+  it('申請日の 10 日後 (月・年をまたぐ)。申請日が読めなければ下限なし', () => {
+    expect(earliestStartDate('2026-11-04')).toBe('2026-11-14')
+    expect(earliestStartDate('2026-12-25')).toBe('2027-01-04')
+    expect(earliestStartDate('2028-02-20')).toBe('2028-03-01')
+    expect(earliestStartDate('')).toBe('')
+  })
+
+  it('実施の届出は遠隔点呼・自動点呼。認定申請は別の手続', () => {
+    expect([isNotification('remote'), isNotification('auto'), isNotification('nintei')]).toEqual([true, true, false])
+    expect(TENKO_FORMS.filter(f => f.kinds.includes('nintei')).map(f => f.id)).toEqual(['nintei-yoshiki1-shinsei', 'nintei-yoshiki2-gaiyo'])
+    expect(TENKO_FORMS.filter(f => f.kinds.includes('auto')).map(f => f.id)).toEqual(['egov-tenko-todokede-sankou'])
   })
 })
 

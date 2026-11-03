@@ -46,12 +46,40 @@ describe('TenkoFilingManager', () => {
     expect((w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value).toBe('000000000001')
     expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou', 'tenko-filing-dl-remote-kamotsu-bessi7-jisshi'])
     await w.find('[data-testid="tenko-filing-kind-auto"]').setValue(true)
-    expect(dlButtons(w)).toEqual([
-      'tenko-filing-dl-egov-tenko-todokede-sankou',
-      'tenko-filing-dl-nintei-yoshiki1-shinsei',
-      'tenko-filing-dl-nintei-yoshiki2-gaiyo',
-    ])
+    expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou'])
     expect(w.text()).toContain('認定番号が要ります')
+    expect(w.find('[data-testid="tenko-filing-kind-note"]').text()).toContain('原則 10 日前まで')
+    // 認定申請は届出と別の手続。実施予定日の欄は出さない
+    await w.find('[data-testid="tenko-filing-kind-nintei"]').setValue(true)
+    expect(dlButtons(w)).toEqual(['tenko-filing-dl-nintei-yoshiki1-shinsei', 'tenko-filing-dl-nintei-yoshiki2-gaiyo'])
+    expect(w.find('[data-testid="tenko-filing-start-date"]').exists()).toBe(false)
+    expect(w.find('[data-testid="tenko-filing-kind-note"]').text()).toContain('安全政策課へメール')
+    expect(w.text()).not.toContain('認定番号が要ります')
+  })
+
+  it('実施予定日は申請日の 10 日後より前を選べず、申請日を後ろへずらして割ったら空に戻す', async () => {
+    const w = await mountIt()
+    const apply = w.find('[data-testid="tenko-filing-download"] input[type="date"]')
+    const start = () => w.find('[data-testid="tenko-filing-start-date"]')
+    await apply.setValue('2026-11-04')
+    expect(start().attributes('min')).toBe('2026-11-14')
+    await start().setValue('2026-11-20')
+    await apply.setValue('2026-11-08')
+    expect([start().attributes('min'), (start().element as HTMLInputElement).value]).toEqual(['2026-11-18', '2026-11-20'])
+    await apply.setValue('2026-11-15')
+    expect((start().element as HTMLInputElement).value).toBe('')
+    await apply.setValue('')
+    expect(start().attributes('min')).toBeUndefined()
+  })
+
+  it('認定申請のダウンロードには実施予定日を渡さない', async () => {
+    const w = await mountIt()
+    forms.buildFilledForm.mockResolvedValue({ bytes: new Uint8Array([1]), filename: 'a.docx' })
+    await w.find('[data-testid="tenko-filing-start-date"]').setValue('2099-01-01')
+    await w.find('[data-testid="tenko-filing-kind-nintei"]').setValue(true)
+    await w.find('[data-testid="tenko-filing-dl-nintei-yoshiki1-shinsei"]').trigger('click')
+    await flushPromises()
+    expect(forms.buildFilledForm.mock.calls[0]![2]).toMatchObject({ kind: 'nintei', startDate: '' })
   })
 
   it('読めないときは文言を出す (理由の記号は文にする)', async () => {

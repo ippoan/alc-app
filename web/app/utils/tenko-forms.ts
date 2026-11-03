@@ -47,15 +47,23 @@ export interface FilingSettings {
   updated_at?: string | null
 }
 
-/** 点呼の種別 (参考様式 #13 のうち、一歩庵点呼で届け出るもの) */
-export type FilingKind = 'remote' | 'auto'
+/**
+ * 手続の種別。`remote` / `auto` は運輸支局への実施の届出 (e-Gov。参考様式 #13 の 4 遠隔点呼 / 6 自動点呼)、
+ * `nintei` は自動点呼機器の認定申請 (製作元が国交省 安全政策課へメールで出す。届出とは別の手続)
+ */
+export type FilingKind = 'remote' | 'auto' | 'nintei'
+
+/** 実施の届出か (実施予定日と、その下限を持つのは届出だけ) */
+export function isNotification(kind: FilingKind): boolean {
+  return kind !== 'nintei'
+}
 
 /** ダウンロードのたびに決める値 (保存しない) */
 export interface FilingRequest {
   kind: FilingKind
   /** 申請日 (YYYY-MM-DD) */
   applyDate: string
-  /** 実施予定日 (YYYY-MM-DD)。空なら書かない */
+  /** 実施予定日 (YYYY-MM-DD)。空なら書かない。認定申請では使わない */
   startDate: string
 }
 
@@ -99,6 +107,16 @@ export function emptySettings(): FilingSettings {
 function ymd(date: string): [number, number, number] | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+}
+
+/** 実施の届出は実施予定日の原則 10 日前まで (遠隔点呼・自動点呼とも。輸送安全規則の解釈及び運用の第 7 条) */
+export const FILING_LEAD_DAYS = 10
+
+/** 申請日から選べる実施予定日の最も早い日 (YYYY-MM-DD)。申請日が読めなければ空 (下限なし) */
+export function earliestStartDate(applyDate: string): string {
+  const d = ymd(applyDate)
+  if (!d) return ''
+  return new Date(Date.UTC(d[0], d[1] - 1, d[2] + FILING_LEAD_DAYS)).toISOString().slice(0, 10)
 }
 
 /** e-Gov の書き方 (西暦・半角・スラッシュ、例 2021/1/1)。読めなければ空 */
@@ -441,7 +459,7 @@ export interface TenkoForm {
   /** tenko-forms の manifest の id */
   id: string
   label: string
-  /** 対象の点呼の種別 (どちらでも使える様式は両方) */
+  /** 使う手続 (遠隔点呼・自動点呼の届出の両方で使う様式は両方) */
   kinds: FilingKind[]
   ext: 'xlsx' | 'docx'
   fill: (file: Uint8Array, s: FilingSettings, req: FilingRequest) => Uint8Array
@@ -465,14 +483,14 @@ export const TENKO_FORMS: TenkoForm[] = [
   {
     id: 'nintei-yoshiki1-shinsei',
     label: '認定申請 様式1 自動点呼機器認定申請書',
-    kinds: ['auto'],
+    kinds: ['nintei'],
     ext: 'docx',
     fill: (f, s, r) => fillDocx(f, b => fillYoshiki1(b, s, r)),
   },
   {
     id: 'nintei-yoshiki2-gaiyo',
     label: '認定申請 様式2 自動点呼機器の概要',
-    kinds: ['auto'],
+    kinds: ['nintei'],
     ext: 'docx',
     fill: (f, s) => fillDocx(f, b => fillYoshiki2(b, s)),
   },
