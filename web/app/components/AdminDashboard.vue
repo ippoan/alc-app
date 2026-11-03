@@ -48,6 +48,7 @@ const TABS = [
   { key: 'hub_measurements', label: 'ハブ測定値' },
   { key: 'vein_fleet', label: '端末の指静脈' },
   { key: 'bp_notify', label: '血圧の通知' },
+  { key: 'tenko_filing', label: '点呼の届出' },
   { key: 'firmware', label: '端末のファーム' },
   { key: 'device_key_status', label: '端末の鍵の状態' },
 ] as const
@@ -189,6 +190,10 @@ const visibleTabs = computed(() => TABS.filter(t =>
 
       <div v-if="activeTab === 'bp_notify'">
         <BpNotifyManager />
+      </div>
+
+      <div v-if="activeTab === 'tenko_filing'">
+        <TenkoFilingManager />
       </div>
 
       <div v-if="activeTab === 'vein_fleet'">
