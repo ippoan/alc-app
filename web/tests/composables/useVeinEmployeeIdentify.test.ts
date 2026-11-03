@@ -310,6 +310,24 @@ describe('useVeinEmployeeIdentify', () => {
       app.unmount()
     })
 
+    it('用意・照合の失敗は理由を出す。本人の枠に当たっても乗務員を引けなければ、その理由を出して登録し直さない', async () => {
+      mod.needsThisDeviceRecord.mockResolvedValue(true)
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1' })
+      mod.prepareVeinModuleRecord.mockRejectedValueOnce(new Error('WRITE_SEQ'))
+      await api.identify()
+      expect(api.error.value).toBe('指静脈の記録をこの端末に用意できませんでした (WRITE_SEQ)')
+      mod.matchVeinModuleEmployee.mockRejectedValueOnce(new Error('TIMEOUT'))
+      await api.identify()
+      expect(api.error.value).toBe('指静脈を読み取れませんでした (TIMEOUT)')
+      mod.identifyVeinModuleEmployee.mockResolvedValueOnce({ kind: 'error', message: '乗務員の情報が手元にありません' })
+      await api.identify()
+      expect(api.error.value).toBe('乗務員の情報が手元にありません')
+      expect(opts.onEmployee).not.toHaveBeenCalled()
+      expect(adopt.addThisDeviceFinger).not.toHaveBeenCalled()
+      mod.needsThisDeviceRecord.mockResolvedValue(false)
+      app.unmount()
+    })
+
     it('登録し直しに失敗しても、本人確認は済んでいるので先へ進める (理由は診断ログ)', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       mod.needsThisDeviceRecord.mockResolvedValueOnce(true)
