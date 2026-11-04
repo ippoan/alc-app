@@ -128,7 +128,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       if (prompt) await vein.say('PLACE')
       // 他人・不一致は 1 回だけ自動でやり直す (matchVeinModuleEmployee)
       const onAgain = () => { again.value = true }
-      match = await matchVeinModuleEmployee(vein, employeeId, onAgain, sayAgain)
+      match = await matchVeinModuleEmployee(vein, employeeId, onAgain, sayAgain, opts.scope)
     }
     catch (e) {
       return `指静脈を読み取れませんでした (${(e as Error).message})`

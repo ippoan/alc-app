@@ -25,14 +25,13 @@
  */
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
-import { getEmployeeById, getEmployees, getVeinModuleTemplate, getVeinModuleTemplates, rotateVeinModuleDeviceRecord } from '~/utils/api'
+import { getEmployeeById, getEmployees, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
 import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { recordVeinLine } from '~/utils/vein-line-log'
-import { verifyShot } from '~/utils/vein-match'
 
 export const VEIN_MODULE_ID_MIN = 10
 export const VEIN_MODULE_ID_MAX = 100
@@ -148,73 +147,67 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-// ---- 影の照合 (Refs ippoan/alc-app-s3#352) ----
+// ---- 認証ログ (Refs ippoan/alc-app-s3#352) ----
 //
-// 本番の判定はモジュールのまま。認証のたびに、同じ撮影 (`VEIN IDENTIFY KEEP ALL` が出す 1 本撮りの記録) を
-// ブラウザの wasm (`chara_verify`) でも、(a) 本人のサーバーの記録 (b) 他の乗務員の記録に 1:1 でかけ、
-// **点数と合否だけ**を診断ログに残す (生体データは残さない)。乗り換えの判断と閾値調整のためのデータ取り。
-// 記録はメモリに置くだけ (保存しない): 本人の記録は用意 (`prepareVeinModuleRecord`) が取ったもの、
-// 他の人の記録は同期 (`syncVeinModule`) がすでに取った一覧から少人数を抜く — 通信は増やさない。
+// 本番の判定はモジュールのまま。認証のたびに、その場の撮影 (`VEIN IDENTIFY KEEP ALL` が出す 1 本撮りの記録) と
+// モジュールの結果をサーバー (`POST /api/vein/auth-shots`) へ送って保存し、判定はサーバー側で何度でもやり直せるようにする。
+// 送るのは照合の後に裏で (画面・待ち時間に触らない)。対象は検証用のテナントだけ: `GET /api/vein/auth-log/enabled` を
+// ページの間に 1 度だけ引き、false・失敗なら以後送らない。送信の失敗は投げず、診断ログに 1 行だけ残す (生体データは載せない)。
 
-/** 他の人として使う最大人数 (同期のたびに入れ替える。1 人 1 ms 前後なので 1 回 20〜30 ms) */
-export const VEIN_SHADOW_OTHERS_MAX = 20
+/** 認証ログを送るか (最初の 1 回だけ問い合わせる。失敗は false)。テストのために戻せる */
+let authLogEnabled: Promise<boolean> | null = null
 
-interface ShadowRecord { employeeId: string; record: string }
+/** @internal テスト用: 認証ログの「送るか」の記憶を捨てる */
+export function resetVeinAuthLogEnabled(): void {
+  authLogEnabled = null
+}
 
-let shadowOwn: ShadowRecord | null = null
-let shadowOthers: ShadowRecord[] = []
-
-/** 同期で取った一覧から、他の人として使う記録を無作為に {@link VEIN_SHADOW_OTHERS_MAX} 人まで抜いて持つ (前の分は捨てる) */
-function pickShadowOthers(templates: readonly ApiVeinModuleRecord[]): void {
-  const pool = templates.map(t => ({ employeeId: t.employee_id, record: t.record }))
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
-  }
-  shadowOthers = pool.slice(0, VEIN_SHADOW_OTHERS_MAX)
+function isAuthLogEnabled(scope: RequestTokenScope): Promise<boolean> {
+  authLogEnabled ??= (async () => {
+    try {
+      return (await getVeinAuthLogEnabled(scope)).enabled === true
+    }
+    catch {
+      return false
+    }
+  })()
+  return authLogEnabled
 }
 
 /**
- * 照合の後に裏で影の照合を走らせる (画面・待ち時間に触らないよう次のタスクへ回す)。撮った記録が無ければ何もしない。
+ * 照合の後に裏で認証ログを送る (次のタスクへ回す)。撮った記録が無ければ何もしない。
  * `hit` はモジュールが当たった枠: `self` = 本人 / `other` = 他人 / `none` = 不一致
  */
-function scheduleVeinShadow(employeeId: string, got: KeepResult, hit: 'self' | 'other' | 'none'): void {
+function scheduleVeinAuthShot(employeeId: string, got: KeepResult, hit: 'self' | 'other' | 'none', scope: RequestTokenScope): void {
   if (!got.record) return
   const shot = got.record
-  // 照合の最中に次の人の用意が上書きしないよう、この時点の記録を握る
-  const own = shadowOwn?.employeeId === employeeId ? shadowOwn.record : null
-  const others = shadowOthers.filter(o => o.employeeId !== employeeId)
+  const capturedAt = new Date().toISOString()
   setTimeout(() => {
-    void runVeinShadow(shot, own, others, got, hit)
+    void sendVeinAuthShot(employeeId, shot, got, hit, capturedAt, scope)
   }, 0)
 }
 
-async function runVeinShadow(shot: Uint8Array, own: string | null, others: readonly ShadowRecord[], got: KeepResult, hit: 'self' | 'other' | 'none'): Promise<void> {
-  const started = performance.now()
+async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepResult, hit: 'self' | 'other' | 'none', capturedAt: string, scope: RequestTokenScope): Promise<void> {
   try {
-    let self = 'NA'
-    let scores = '-'
-    if (own) {
-      const r = await verifyShot(base64ToBytes(own), shot)
-      self = r ? (r.matched ? 'OK' : 'NG') : 'ERR'
-      if (r) scores = r.scores.join(',')
-    }
-    let matched = 0
-    let best: [number, number, number] = [0, 0, 0]
-    for (const o of others) {
-      const r = await verifyShot(base64ToBytes(o.record), shot)
-      if (!r) continue
-      if (r.matched) matched += 1
-      best = [Math.max(best[0], r.scores[0]), Math.max(best[1], r.scores[1]), Math.max(best[2], r.scores[2])]
-    }
-    const module = got.id === null ? 'NOMATCH' : `IDENTIFIED:${got.id}`
-    recordVeinLine(
-      `PC VEIN SHADOW MODULE=${module} HIT=${hit} MSCORE=${got.score ?? '-'} SELF=${self} S=${scores} `
-      + `OTHERS=${matched}/${others.length} OMAX=${best.join(',')} MS=${Math.round(performance.now() - started)}`,
-    )
+    if (!await isAuthLogEnabled(scope)) return
+    const started = performance.now()
+    await postVeinAuthShot({
+      employee_id: employeeId,
+      shot,
+      module: {
+        result: got.id === null ? 'NOMATCH' : 'IDENTIFIED',
+        slot: got.id,
+        hit,
+        score: got.score ?? null,
+        thresholds: got.thresholds ?? null,
+      },
+      firmware: got.firmware ?? null,
+      captured_at: capturedAt,
+    }, scope)
+    recordVeinLine(`PC VEIN AUTHLOG OK ${Math.round(performance.now() - started)}`)
   }
   catch (e) {
-    recordVeinLine(`PC VEIN SHADOW FAILED ${messageOf(e)}`)
+    recordVeinLine(`PC VEIN AUTHLOG FAILED ${messageOf(e)}`)
   }
 }
 
@@ -230,6 +223,10 @@ export interface KeepResult {
   id: number | null
   record: Uint8Array | null
   score?: number | null
+  /** モジュールの閾値 (`THS=`、無ければ null) */
+  thresholds?: number[] | null
+  /** ファームの版 (`DEVICE … VER=`、分からなければ null) */
+  firmware?: string | null
 }
 
 /** 本人が決まった人の照合の結果: 当たった ID と、同じ置き方で撮った記録 (撮れなかった・古いファームは null) */
@@ -250,23 +247,25 @@ let identifyKeepUnsupported = false
  * 当たった ID を見ていない (2026-11-03 実測) — 他人の指で通さないため、1:N で当たった ID を対応表で引いて確かめる。
  * 照合は `VEIN IDENTIFY KEEP` (置いた 1 回の指を撮ってから照合) で行い、通れば撮った記録も返す
  * ({@link rotateVeinModuleRecord} で一番古い 1 本と入れ替える)。他人・誰にも当たらないときは
- * {@link VEIN_NOMATCH_RETRIES} 回までやり直す (やり直す前に `onRetry`)。読み取りの失敗は投げる
+ * {@link VEIN_NOMATCH_RETRIES} 回までやり直す (やり直す前に `onRetry`)。読み取りの失敗は投げる。
+ * 結果が出るたび (本人・他人・不一致) に、撮った記録を裏で認証ログとして送る (`scope` はその鍵。{@link scheduleVeinAuthShot})
  */
 export async function matchVeinModuleEmployee(
   port: VeinMatchPort,
   employeeId: string,
   onAgain?: () => void,
   onRetry: () => void | Promise<void> = () => {},
+  scope: RequestTokenScope = 'default',
 ): Promise<VeinMatch | null> {
   const read = async (): Promise<VeinMatch | null> => {
     const got = await readKeeping(port, onAgain)
     if (got.id === null) {
-      scheduleVeinShadow(employeeId, got, 'none')
+      scheduleVeinAuthShot(employeeId, got, 'none', scope)
       return null
     }
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
     const self = entry?.employeeId === employeeId && entry.approved
-    scheduleVeinShadow(employeeId, got, self ? 'self' : 'other')
+    scheduleVeinAuthShot(employeeId, got, self ? 'self' : 'other', scope)
     if (self) return { id: got.id, record: got.record }
     // 他人の枠に当たった: 本人ではない (乗務員の ID は残さない。撮った記録も捨てる)
     recordVeinLine(`PC VEIN OTHER ${got.id}`)
@@ -396,7 +395,6 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
     return own.moduleId
   }
   if (!template) return null
-  shadowOwn = { employeeId, record: template.record }
   // その場の記録 (native) は、同じ版でも混ぜた記録とは中身が違う: 設定が native なら残し、mixed なら書き直す
   if (own?.approved && (keepsOnSpotRecord(own) || (own.updatedAt === template.updated_at && !own.native))) {
     // 出どころを持たない古い対応表にも残す (どの端末の記録を置いているかの診断用)
@@ -443,7 +441,6 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     const { templates } = await getVeinModuleTemplates(opts.scope, recordPick())
     const entries = new Map((await loadVeinModuleEntries()).map(e => [e.employeeId, e]))
     const listed = new Set(templates.map(t => t.employee_id))
-    pickShadowOthers(templates)
 
     // 一覧から消えた (承認の取り消し・削除・退職) 乗務員をモジュールから消す。承認待ちは一覧に
     // 載らないので残す (この端末で登録して承認を待っている人)

@@ -260,7 +260,7 @@ describe('useVeinEmployeeIdentify', () => {
       await vi.waitFor(() => expect(opts.onEmployee).toHaveBeenCalledWith(EMP, null))
       expect(mod.prepareVeinModuleRecord).toHaveBeenCalledWith(vein, 'emp-test-1', 'manager-device')
       // VEIN VERIFY <id> は使わない (指定と違う ID に当たっても成功を返すため)。1:N で本人の枠か確かめる
-      expect(mod.matchVeinModuleEmployee).toHaveBeenCalledWith(vein, 'emp-test-1', expect.any(Function), expect.any(Function))
+      expect(mod.matchVeinModuleEmployee).toHaveBeenCalledWith(vein, 'emp-test-1', expect.any(Function), expect.any(Function), 'manager-device')
       expect(vein.verify).not.toHaveBeenCalled()
       expect(mod.identifyVeinModuleEmployee).toHaveBeenCalledWith(12, 'manager-device')
       expect(vein.say).not.toHaveBeenCalledWith('PLACE')

@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   getVeinModuleTemplate: vi.fn(),
   getVeinModuleTemplates: vi.fn(),
   rotateVeinModuleDeviceRecord: vi.fn(),
+  getVeinAuthLogEnabled: vi.fn(),
+  postVeinAuthShot: vi.fn(),
 }))
 vi.mock('~/utils/api', () => api)
 
@@ -22,11 +24,6 @@ const db = vi.hoisted(() => ({
   deleteVeinModuleEntry: vi.fn(),
 }))
 vi.mock('~/utils/vein-db', () => db)
-
-// 影の照合の wasm (本物の計算は vein-match の側で DLL と全件一致を確かめてある)
-const match = vi.hoisted(() => ({ verifyShot: vi.fn() }))
-vi.mock('~/utils/vein-match', () => match)
-
 
 let mod: typeof import('~/utils/vein-module')
 
@@ -628,114 +625,88 @@ describe('用意のときの出どころ', () => {
   })
 })
 
-// 影の照合 (Refs ippoan/alc-app-s3#352): 本番の判定はモジュールのまま。認証のたびに同じ撮影を、本人の記録と他の人の記録に
-// ブラウザの wasm でかけ、点数と合否だけを診断ログに残す
-describe('影の照合 (PC VEIN SHADOW)', () => {
+// 認証ログ (Refs ippoan/alc-app-s3#352): 本番の判定はモジュールのまま。照合の後に裏で、撮影と状態をサーバーへ送る
+describe('認証ログ (POST /api/vein/auth-shots)', () => {
   const SHOT = new Uint8Array([0xDE, 0xED, 9])
-  const b64 = (n: number) => btoa(String.fromCharCode(0xDE, 0xED, n))
 
-  function keep(id: number | null, record: Uint8Array | null = SHOT, score: number | null = null) {
-    return { identify: vi.fn(async () => null as number | null), identifyKeep: vi.fn(async () => ({ id, record, score })) }
+  function keep(id: number | null, record: Uint8Array | null = SHOT, extra: Record<string, unknown> = {}) {
+    return {
+      identify: vi.fn(async () => null as number | null),
+      identifyKeep: vi.fn(async () => ({ id, record, score: 71, thresholds: [65, 60, 78], firmware: '1.2.3', ...extra })),
+    }
   }
 
-  async function shadowLines(): Promise<string[]> {
+  async function lines(): Promise<string[]> {
     const { snapshotVeinLines } = await import('~/utils/vein-line-log')
-    await vi.waitFor(() => expect(snapshotVeinLines()).toContain('PC VEIN SHADOW'))
-    return snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, '')).filter(l => l.startsWith('PC VEIN SHADOW'))
+    return snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
   }
 
-  /** 本人の記録は b64(1)、他の人は b64(2) 以降。登録データの 3 番目のバイトで一致を決める (偶数は一致) */
-  function fakeVerify() {
-    match.verifyShot.mockImplementation(async (enroll: Uint8Array, shot: Uint8Array) => {
-      expect(shot).toBe(SHOT)
-      const n = enroll[2]!
-      return { matched: n % 2 === 0, scores: [60 + n, 70 + n, 80 + n] }
-    })
-  }
-
-  async function prepareAndSync(others: number[]) {
-    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12)])
-    api.getVeinModuleTemplate.mockResolvedValue({ employee_id: 'emp-1', record: b64(2), updated_at: 'v1' })
-    await mod.prepareVeinModuleRecord(port(), 'emp-1')
-    api.getVeinModuleTemplates.mockResolvedValue({
-      templates: [{ employee_id: 'emp-1', record: b64(2), updated_at: 'v1' }, ...others.map(n => ({ employee_id: `o-${n}`, record: b64(n), updated_at: 'v1' }))],
-    })
-    await mod.syncVeinModule(port())
-  }
-
-  it('★ 本人 (OK) と他の人 (n 人中 m 人一致) の点数と合否を 1 行で残す。本番の結果 (通す・record) は変えない', async () => {
-    fakeVerify()
-    await prepareAndSync([3, 4, 5])
-    const result = await mod.matchVeinModuleEmployee(keep(12, SHOT, 71), 'emp-1')
-    expect(result).toEqual({ id: 12, record: SHOT })
-    const [line] = await shadowLines()
-    // 本人 n=2 → 一致・62,72,82。他の 3 人 (3, 4, 5) のうち 4 だけ一致、最大は 5 の 65,75,85
-    expect(line).toMatch(/^PC VEIN SHADOW MODULE=IDENTIFIED:12 HIT=self MSCORE=71 SELF=OK S=62,72,82 OTHERS=1\/3 OMAX=65,75,85 MS=\d+$/)
-    expect(match.verifyShot).toHaveBeenCalledTimes(4)
-    expect(line).not.toContain('emp-')
-  })
-
-  it('★ 不一致・他人の枠でも撮った記録があれば影の照合を行う。本番は不一致・他人のまま', async () => {
-    fakeVerify()
-    await prepareAndSync([3])
-    expect(await mod.matchVeinModuleEmployee(keep(null, SHOT, null), 'emp-1', undefined, () => {})).toBeNull()
-    const lines = await shadowLines()
-    expect(lines[0]).toMatch(/MODULE=NOMATCH HIT=none MSCORE=- SELF=OK /)
+  beforeEach(async () => {
+    // 前のテストが裏に回した送信が落ち着いてから始める
+    await new Promise(r => setTimeout(r, 10))
+    mod.resetVeinAuthLogEnabled()
+    api.getVeinAuthLogEnabled.mockReset().mockResolvedValue({ enabled: true })
+    api.postVeinAuthShot.mockReset().mockResolvedValue(undefined)
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12), entry('emp-9', 13)])
-    expect(await mod.matchVeinModuleEmployee(keep(13), 'emp-1', undefined, () => {})).toBeNull()
-    await vi.waitFor(async () => expect((await shadowLines()).some(l => l.includes('MODULE=IDENTIFIED:13 HIT=other'))).toBe(true))
   })
 
-  it('本人の記録に通らなかった (SELF=NG) 点数も残す', async () => {
-    match.verifyShot.mockResolvedValue({ matched: false, scores: [10, 20, 30] })
-    await prepareAndSync([])
-    await mod.matchVeinModuleEmployee(keep(null), 'emp-1', undefined, () => {})
-    const [line] = await shadowLines()
-    expect(line).toMatch(/SELF=NG S=10,20,30 OTHERS=0\/0 /)
+  it('★ 本人: body は employee_id・撮影・モジュールの結果 (slot・hit=self・点数・閾値)・ファームの版・captured_at。結果は変えない', async () => {
+    expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(1))
+    const [body, scope] = api.postVeinAuthShot.mock.calls[0]!
+    expect(body).toMatchObject({
+      employee_id: 'emp-1',
+      shot: SHOT,
+      module: { result: 'IDENTIFIED', slot: 12, hit: 'self', score: 71, thresholds: [65, 60, 78] },
+      firmware: '1.2.3',
+    })
+    expect(Number.isNaN(Date.parse(body.captured_at))).toBe(false)
+    expect(scope).toBe('default')
+    await vi.waitFor(async () => expect((await lines()).some(l => /^PC VEIN AUTHLOG OK \d+$/.test(l))).toBe(true))
   })
 
-  it('撮った記録が無い (古いファーム・当たらなかった KEEP) ときは影の照合をしない', async () => {
-    fakeVerify()
-    await prepareAndSync([3])
+  it('★ 他人の枠: hit=other、本番は不一致のまま。不一致: result=NOMATCH・slot=null・hit=none。点数・閾値・ファームが無ければ null', async () => {
+    expect(await mod.matchVeinModuleEmployee(keep(13), 'emp-1', undefined, () => {}, 'manager-device')).toBeNull()
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(2)) // 1 回やり直すので 2 回
+    expect(api.postVeinAuthShot.mock.calls[0]![0].module).toMatchObject({ result: 'IDENTIFIED', slot: 13, hit: 'other' })
+    expect(api.postVeinAuthShot.mock.calls[0]![1]).toBe('manager-device')
+
+    api.postVeinAuthShot.mockClear()
+    const miss = keep(null, SHOT, { score: undefined, thresholds: undefined, firmware: undefined })
+    expect(await mod.matchVeinModuleEmployee(miss, 'emp-1', undefined, () => {})).toBeNull()
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(2))
+    const body = api.postVeinAuthShot.mock.calls[0]![0]
+    expect(body.module).toEqual({ result: 'NOMATCH', slot: null, hit: 'none', score: null, thresholds: null })
+    expect(body.firmware).toBeNull()
+  })
+
+  it('★ enabled=false (対象外のテナント) は送らない。問い合わせは 1 度だけ', async () => {
+    api.getVeinAuthLogEnabled.mockResolvedValue({ enabled: false })
+    await mod.matchVeinModuleEmployee(keep(12), 'emp-1')
+    await mod.matchVeinModuleEmployee(keep(12), 'emp-1')
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.getVeinAuthLogEnabled).toHaveBeenCalledTimes(1)
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+  })
+
+  it('enabled の問い合わせが失敗したら false 扱い (送らない・投げない)', async () => {
+    api.getVeinAuthLogEnabled.mockRejectedValue(new Error('network'))
+    expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+  })
+
+  it('撮った記録が無い (古いファーム) ときは送らない', async () => {
     expect(await mod.matchVeinModuleEmployee(keep(12, null), 'emp-1')).toEqual({ id: 12, record: null })
     await new Promise(r => setTimeout(r, 20))
-    expect(match.verifyShot).not.toHaveBeenCalled()
+    expect(api.getVeinAuthLogEnabled).not.toHaveBeenCalled()
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
   })
 
-  it('本人の記録を用意していない (サーバーに届かない等)・別の人の用意だけ: SELF=NA。他の人は本人を除く', async () => {
-    fakeVerify()
-    await prepareAndSync([3, 4])
-    // 用意したのは emp-1 だけ。emp-7 の照合では SELF=NA、他の人は emp-1 を含めた 3 人 (emp-7 は一覧に居ない)
-    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-7', 12)])
-    await mod.matchVeinModuleEmployee(keep(12), 'emp-7')
-    const [line] = await shadowLines()
-    expect(line).toMatch(/SELF=NA S=- OTHERS=2\/3 /)
-  })
-
-  it('★ 他の人は同期のたびに最大 20 人 (前の分は捨てる)。本人は照合の時に除く', async () => {
-    fakeVerify()
-    await prepareAndSync(Array.from({ length: 30 }, (_, i) => 10 + i))
-    await mod.matchVeinModuleEmployee(keep(12), 'emp-1')
-    const [first] = await shadowLines()
-    expect(first).toMatch(/OTHERS=\d+\/(19|20) /) // 抜いた 20 人に本人が入っていたら 19 人
-    // 次の同期で 2 人に減れば、前の 20 人は残らない
-    match.verifyShot.mockClear()
-    api.getVeinModuleTemplates.mockResolvedValue({ templates: [{ employee_id: 'o-1', record: b64(3), updated_at: 'v1' }, { employee_id: 'o-2', record: b64(5), updated_at: 'v1' }] })
-    await mod.syncVeinModule(port())
-    await mod.matchVeinModuleEmployee(keep(12), 'emp-1')
-    await vi.waitFor(() => expect(match.verifyShot).toHaveBeenCalledTimes(3))
-  })
-
-  it('★ 計算が読めない撮影 (null) は SELF=ERR・他の人は数えない。計算が落ちても投げず FAILED を残し、本番の結果は変えない', async () => {
-    match.verifyShot.mockResolvedValue(null)
-    await prepareAndSync([3])
+  it('★ 送信が失敗しても投げず、照合の結果は変えない。診断ログに FAILED を 1 行 (生体データは載せない)', async () => {
+    api.postVeinAuthShot.mockRejectedValue(new Error('API エラー (500)'))
     expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })
-    const [line] = await shadowLines()
-    expect(line).toMatch(/SELF=ERR S=- OTHERS=0\/1 OMAX=0,0,0 /)
-
-    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
-    match.verifyShot.mockRejectedValue(new Error('wasm 読み込み失敗'))
-    expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })
-    await vi.waitFor(() => expect(snapshotVeinLines()).toContain('PC VEIN SHADOW FAILED wasm 読み込み失敗'))
+    await vi.waitFor(async () => expect((await lines()).some(l => l === 'PC VEIN AUTHLOG FAILED API エラー (500)')).toBe(true))
+    expect((await lines()).join('\n')).not.toContain(btoa(String.fromCharCode(...SHOT)))
   })
 })
