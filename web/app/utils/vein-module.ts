@@ -32,6 +32,7 @@ import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { recordVeinLine } from '~/utils/vein-line-log'
+import { verifyShot } from '~/utils/vein-match'
 
 export const VEIN_MODULE_ID_MIN = 10
 export const VEIN_MODULE_ID_MAX = 100
@@ -147,11 +148,88 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+// ---- 影の照合 (Refs ippoan/alc-app-s3#352) ----
+//
+// 本番の判定はモジュールのまま。認証のたびに、同じ撮影 (`VEIN IDENTIFY KEEP ALL` が出す 1 本撮りの記録) を
+// ブラウザの wasm (`chara_verify`) でも、(a) 本人のサーバーの記録 (b) 他の乗務員の記録に 1:1 でかけ、
+// **点数と合否だけ**を診断ログに残す (生体データは残さない)。乗り換えの判断と閾値調整のためのデータ取り。
+// 記録はメモリに置くだけ (保存しない): 本人の記録は用意 (`prepareVeinModuleRecord`) が取ったもの、
+// 他の人の記録は同期 (`syncVeinModule`) がすでに取った一覧から少人数を抜く — 通信は増やさない。
+
+/** 他の人として使う最大人数 (同期のたびに入れ替える。1 人 1 ms 前後なので 1 回 20〜30 ms) */
+export const VEIN_SHADOW_OTHERS_MAX = 20
+
+interface ShadowRecord { employeeId: string; record: string }
+
+let shadowOwn: ShadowRecord | null = null
+let shadowOthers: ShadowRecord[] = []
+
+/** 同期で取った一覧から、他の人として使う記録を無作為に {@link VEIN_SHADOW_OTHERS_MAX} 人まで抜いて持つ (前の分は捨てる) */
+function pickShadowOthers(templates: readonly ApiVeinModuleRecord[]): void {
+  const pool = templates.map(t => ({ employeeId: t.employee_id, record: t.record }))
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
+  }
+  shadowOthers = pool.slice(0, VEIN_SHADOW_OTHERS_MAX)
+}
+
+/**
+ * 照合の後に裏で影の照合を走らせる (画面・待ち時間に触らないよう次のタスクへ回す)。撮った記録が無ければ何もしない。
+ * `hit` はモジュールが当たった枠: `self` = 本人 / `other` = 他人 / `none` = 不一致
+ */
+function scheduleVeinShadow(employeeId: string, got: KeepResult, hit: 'self' | 'other' | 'none'): void {
+  if (!got.record) return
+  const shot = got.record
+  // 照合の最中に次の人の用意が上書きしないよう、この時点の記録を握る
+  const own = shadowOwn?.employeeId === employeeId ? shadowOwn.record : null
+  const others = shadowOthers.filter(o => o.employeeId !== employeeId)
+  setTimeout(() => {
+    void runVeinShadow(shot, own, others, got, hit)
+  }, 0)
+}
+
+async function runVeinShadow(shot: Uint8Array, own: string | null, others: readonly ShadowRecord[], got: KeepResult, hit: 'self' | 'other' | 'none'): Promise<void> {
+  const started = performance.now()
+  try {
+    let self = 'NA'
+    let scores = '-'
+    if (own) {
+      const r = await verifyShot(base64ToBytes(own), shot)
+      self = r ? (r.matched ? 'OK' : 'NG') : 'ERR'
+      if (r) scores = r.scores.join(',')
+    }
+    let matched = 0
+    let best: [number, number, number] = [0, 0, 0]
+    for (const o of others) {
+      const r = await verifyShot(base64ToBytes(o.record), shot)
+      if (!r) continue
+      if (r.matched) matched += 1
+      best = [Math.max(best[0], r.scores[0]), Math.max(best[1], r.scores[1]), Math.max(best[2], r.scores[2])]
+    }
+    const module = got.id === null ? 'NOMATCH' : `IDENTIFIED:${got.id}`
+    recordVeinLine(
+      `PC VEIN SHADOW MODULE=${module} HIT=${hit} MSCORE=${got.score ?? '-'} SELF=${self} S=${scores} `
+      + `OTHERS=${matched}/${others.length} OMAX=${best.join(',')} MS=${Math.round(performance.now() - started)}`,
+    )
+  }
+  catch (e) {
+    recordVeinLine(`PC VEIN SHADOW FAILED ${messageOf(e)}`)
+  }
+}
+
 /** 本人が決まった人の照合が使うモジュールの口 (`useVeinSerial` の一部) */
 export interface VeinMatchPort {
   identify: (onAgain?: () => void) => Promise<number | null>
   /** 置いた 1 回の指を撮ってから照合する (`VEIN IDENTIFY KEEP`)。無い・古いファームは `identify` に戻す */
-  identifyKeep?: (onAgain?: () => void) => Promise<{ id: number | null; record: Uint8Array | null }>
+  identifyKeep?: (onAgain?: () => void) => Promise<KeepResult>
+}
+
+/** `VEIN IDENTIFY KEEP` の結果: 当たった ID (不一致は null)・撮った記録 (撮れなかった・当たらなかった古いファームは null)・モジュールの点数 (無ければ null) */
+export interface KeepResult {
+  id: number | null
+  record: Uint8Array | null
+  score?: number | null
 }
 
 /** 本人が決まった人の照合の結果: 当たった ID と、同じ置き方で撮った記録 (撮れなかった・古いファームは null) */
@@ -182,9 +260,14 @@ export async function matchVeinModuleEmployee(
 ): Promise<VeinMatch | null> {
   const read = async (): Promise<VeinMatch | null> => {
     const got = await readKeeping(port, onAgain)
-    if (got.id === null) return null
+    if (got.id === null) {
+      scheduleVeinShadow(employeeId, got, 'none')
+      return null
+    }
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
-    if (entry?.employeeId === employeeId && entry.approved) return { id: got.id, record: got.record }
+    const self = entry?.employeeId === employeeId && entry.approved
+    scheduleVeinShadow(employeeId, got, self ? 'self' : 'other')
+    if (self) return { id: got.id, record: got.record }
     // 他人の枠に当たった: 本人ではない (乗務員の ID は残さない。撮った記録も捨てる)
     recordVeinLine(`PC VEIN OTHER ${got.id}`)
     return null
@@ -193,7 +276,7 @@ export async function matchVeinModuleEmployee(
 }
 
 /** 撮ってから照合する。`KEEP` を知らないファームなら、このページの間は普通の照合 (記録なし) に戻す */
-async function readKeeping(port: VeinMatchPort, onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null }> {
+async function readKeeping(port: VeinMatchPort, onAgain?: () => void): Promise<KeepResult> {
   if (port.identifyKeep && !identifyKeepUnsupported) {
     try {
       return await port.identifyKeep(onAgain)
@@ -313,6 +396,7 @@ export async function prepareVeinModuleRecord(port: VeinModulePort, employeeId: 
     return own.moduleId
   }
   if (!template) return null
+  shadowOwn = { employeeId, record: template.record }
   // その場の記録 (native) は、同じ版でも混ぜた記録とは中身が違う: 設定が native なら残し、mixed なら書き直す
   if (own?.approved && (keepsOnSpotRecord(own) || (own.updatedAt === template.updated_at && !own.native))) {
     // 出どころを持たない古い対応表にも残す (どの端末の記録を置いているかの診断用)
@@ -359,6 +443,7 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     const { templates } = await getVeinModuleTemplates(opts.scope, recordPick())
     const entries = new Map((await loadVeinModuleEntries()).map(e => [e.employeeId, e]))
     const listed = new Set(templates.map(t => t.employee_id))
+    pickShadowOthers(templates)
 
     // 一覧から消えた (承認の取り消し・削除・退職) 乗務員をモジュールから消す。承認待ちは一覧に
     // 載らないので残す (この端末で登録して承認を待っている人)

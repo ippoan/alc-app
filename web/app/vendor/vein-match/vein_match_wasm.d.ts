@@ -28,9 +28,22 @@ export class VeinLibrary {
     store(): Uint8Array;
 }
 
+export class VerifyResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly info: Uint8Array;
+    readonly matched: boolean;
+    readonly score0: number;
+    readonly score1: number;
+    readonly score2: number;
+}
+
 export function chara_match(a: Uint8Array, b: Uint8Array, th: number): number;
 
 export function chara_match_hex(a: string, b: string, th: number): number;
+
+export function chara_verify_shot(enroll: Uint8Array, shot: Uint8Array): VerifyResult | undefined;
 
 export function create_template_b64(charas_hex: string[], group: number): string;
 
@@ -42,8 +55,10 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_searchresult_free: (a: number, b: number) => void;
     readonly __wbg_veinlibrary_free: (a: number, b: number) => void;
+    readonly __wbg_verifyresult_free: (a: number, b: number) => void;
     readonly chara_match: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly chara_match_hex: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly chara_verify_shot: (a: number, b: number, c: number, d: number) => number;
     readonly create_template_b64: (a: number, b: number, c: number) => [number, number, number, number];
     readonly logic_version: () => [number, number];
     readonly searchresult_info: (a: number) => [number, number];
@@ -62,6 +77,11 @@ export interface InitOutput {
     readonly veinlibrary_search_user: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly veinlibrary_search_user_hex: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly veinlibrary_store: (a: number) => [number, number];
+    readonly verifyresult_info: (a: number) => [number, number];
+    readonly verifyresult_matched: (a: number) => number;
+    readonly verifyresult_score0: (a: number) => number;
+    readonly verifyresult_score1: (a: number) => number;
+    readonly verifyresult_score2: (a: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

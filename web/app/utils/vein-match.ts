@@ -8,7 +8,7 @@
  * テンプレートを書き換えない。登録データの正本はサーバーで、手元の写し
  * (`vein-db.ts`) は次の同期でまるごと差し替わるだけなので、ここで学習しても捨てられる。
  */
-import initVeinWasm, { VeinLibrary, logic_version as wasmLogicVersion } from '~/vendor/vein-match/vein_match_wasm'
+import initVeinWasm, { VeinLibrary, chara_verify_shot, logic_version as wasmLogicVersion } from '~/vendor/vein-match/vein_match_wasm'
 import type { VeinTemplateSnapshot } from '~/utils/vein-db'
 
 /** wasm 本体の URL (`public/vein/`) */
@@ -84,5 +84,28 @@ export async function matchVeinOffline(chara: string, snapshot: VeinTemplateSnap
   }
   finally {
     library.free()
+  }
+}
+
+/** {@link verifyShot} の結果: 一致したか・点数 (s0, s1, s2) */
+export interface VeinShotVerify {
+  matched: boolean
+  scores: [number, number, number]
+}
+
+/**
+ * 撮影 `shot` (`VEIN RECORD 1 …` で届いた生のテンプレート) を、登録データ `enroll` (サーバーの記録を
+ * 復号した生のテンプレート) と 1:1 で確かめる (影の照合。wasm の `chara_verify_shot`)。
+ * 学習後の記録は受け取らない。撮影が読めなければ null
+ */
+export async function verifyShot(enroll: Uint8Array, shot: Uint8Array): Promise<VeinShotVerify | null> {
+  await loadVeinWasm()
+  const result = chara_verify_shot(enroll, shot)
+  if (!result) return null
+  try {
+    return { matched: result.matched, scores: [result.score0, result.score1, result.score2] }
+  }
+  finally {
+    result.free()
   }
 }

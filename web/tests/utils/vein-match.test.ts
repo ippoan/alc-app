@@ -16,6 +16,10 @@ const wasm = vi.hoisted(() => ({
   importRc: new Map<number, number>(),
   /** true なら search_user_hex が投げる */
   searchThrows: false,
+  /** chara_verify_shot が返す値 (undefined は読めない撮影) */
+  shotResult: undefined as undefined | { matched: boolean; score0: number; score1: number; score2: number },
+  shotFreed: false,
+  shotArgs: [] as unknown[],
 }))
 
 interface FakeLibrary {
@@ -28,6 +32,10 @@ interface FakeLibrary {
 
 vi.mock('~/vendor/vein-match/vein_match_wasm', () => ({
   default: wasm.init,
+  chara_verify_shot: (enroll: Uint8Array, shot: Uint8Array) => {
+    wasm.shotArgs = [enroll, shot]
+    return wasm.shotResult && { ...wasm.shotResult, free: () => { wasm.shotFreed = true } }
+  },
   logic_version: wasm.logicVersion,
   VeinLibrary: class {
     state: FakeLibrary
@@ -170,5 +178,20 @@ describe('vein-match — wasm の読み込み', () => {
     await expect(mod.loadVeinWasm()).rejects.toThrow('offline')
     await mod.loadVeinWasm()
     expect(wasm.init).toHaveBeenCalledTimes(2)
+  })
+
+  it('★ verifyShot: 登録データと撮影を wasm の chara_verify_shot に渡し、一致と点数を返す (結果は解放する)', async () => {
+    wasm.shotResult = { matched: true, score0: 60, score1: 70, score2: 80 }
+    wasm.shotFreed = false
+    const enroll = new Uint8Array([1])
+    const shot = new Uint8Array([2])
+    expect(await mod.verifyShot(enroll, shot)).toEqual({ matched: true, scores: [60, 70, 80] })
+    expect(wasm.shotArgs).toEqual([enroll, shot])
+    expect(wasm.shotFreed).toBe(true)
+  })
+
+  it('verifyShot: 撮影が読めない (wasm が undefined) ときは null', async () => {
+    wasm.shotResult = undefined
+    expect(await mod.verifyShot(new Uint8Array(), new Uint8Array())).toBeNull()
   })
 })
