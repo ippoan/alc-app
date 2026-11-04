@@ -77,6 +77,9 @@ const CAPTURE_TIMEOUT_MS = 20000
  */
 const IDENTIFY_TIMEOUT_MS = 55_000
 
+/** `VEIN IDENTIFY KEEP ALL` を知らないファームだった (このページの間は `KEEP` だけにする) */
+let keepAllUnsupported = false
+
 /** モジュールの照合結果。`SCORE=`・`TH=`・`VIA=`・`THS=` は新しいファームだけが付ける (無ければ null) */
 export interface VeinMatchResult {
   kind: 'IDENTIFIED' | 'VERIFIED' | 'NOMATCH'
@@ -634,10 +637,11 @@ export function useVeinSerial() {
   /**
    * 置いた 1 回の指を撮ってから、離さずに 1:N 照合する (`VEIN IDENTIFY KEEP`、ファームは ippoan/alc-app-s3 の同名の口)。
    * 照合でモジュールが撮った指は外へ出せないため、ファームが先に作業用 ID 1 へ 1 本撮って読み出す。当たれば撮った記録
-   * (`VEIN RECORD 1 …`) も返す (不一致は `record: null`)。途中の「離して」はファームが鳴らさず、当たったときだけ最後に鳴らす。
+   * (`VEIN RECORD 1 …`) も返す。`KEEP ALL` を使い、外れても記録を返す (影の照合用。`KEEP ALL` を知らないファームは `KEEP` に戻し、
+   * 不一致は `record: null`)。`score` はモジュールの点数 (無ければ null)。途中の「離して」はファームが鳴らさず、当たったときだけ最後に鳴らす。
    * 古いファーム (`KEEP` を知らない) は {@link VEIN_IDENTIFY_KEEP_UNSUPPORTED} の Error。ほかの失敗は reason の Error
    */
-  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null }> {
+  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null; score: number | null }> {
     const prefix = 'VEIN RECORD 1 '
     const endPrefix = `${prefix}END `
     const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
@@ -660,7 +664,15 @@ export function useVeinSerial() {
     const offAgain = watchAgain(onAgain)
     let line: string
     try {
-      line = await veinRequest('VEIN IDENTIFY KEEP', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+      try {
+        line = await veinRequest(keepAllUnsupported ? 'VEIN IDENTIFY KEEP' : 'VEIN IDENTIFY KEEP ALL', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+      }
+      catch (e) {
+        // KEEP は知っているが ALL を知らないファーム: このページの間は KEEP に戻す (影の照合は当たった回だけになる)
+        if (keepAllUnsupported || !(e as Error).message.includes('IDENTIFY は引数なしか KEEP です')) throw e
+        keepAllUnsupported = true
+        line = await veinRequest('VEIN IDENTIFY KEEP', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+      }
     }
     catch (e) {
       if ((e as Error).message.includes('IDENTIFY に引数は要りません')) throw new Error(VEIN_IDENTIFY_KEEP_UNSUPPORTED)
@@ -671,10 +683,9 @@ export function useVeinSerial() {
       offAgain()
     }
     const id = identifiedId(line)
-    if (id === null) return { id, record: null }
-    // 記録が壊れていても照合の結果は使う (入れ替えだけ見送る)
+    // 記録が壊れていても照合の結果は使う (入れ替えだけ見送る)。KEEP ALL は外れても記録を出す (影の照合用)
     const record = broken || !Number.isInteger(total) || total < 0 ? null : assembleRecordOrNull(chunks, total)
-    return { id, record }
+    return { id, record, score: lastMatch.value?.score ?? null }
   }
 
   /** {@link assembleRecord} の、壊れていれば null を返す版 */

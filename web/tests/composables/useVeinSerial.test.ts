@@ -1053,17 +1053,48 @@ describe('useVeinSerial', () => {
       let again = 0
       const hit = vein.identifyKeep(() => { again += 1 })
       await vi.advanceTimersByTimeAsync(0)
-      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP\n')
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP ALL\n')
       // 後ろの塊が先に来ても・前の行に連結されても拾う。ほかの ID の行は混ぜない
       await reply(dev, 'EVT VEIN AGAIN 11\nVEIN RECORD 2 0 FFFF\nVEIN RECORD 1 2 dead\nEVT NFC_READY VEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 4\n')
       await reply(dev, 'VEIN IDENTIFIED 12 SCORE=71 TH=60 VIA=FV THS=65,60,78\n')
-      await expect(hit).resolves.toEqual({ id: 12, record: new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]) })
+      await expect(hit).resolves.toEqual({ id: 12, record: new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]), score: 71 })
       expect(again).toBe(1)
       expect(vein.lastMatch.value).toMatchObject({ kind: 'IDENTIFIED', id: 12, via: 'FV' })
 
       const miss = vein.identifyKeep()
       await reply(dev, 'VEIN NOMATCH SCORE=0\n')
-      await expect(miss).resolves.toEqual({ id: null, record: null })
+      await expect(miss).resolves.toEqual({ id: null, record: null, score: null })
+    })
+
+    it('★ KEEP ALL は外れても記録を出す: 不一致でも撮った記録を返す (影の照合用)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const miss = vein.identifyKeep()
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'VEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 2\n')
+      await reply(dev, 'VEIN NOMATCH SCORE=0\n')
+      await expect(miss).resolves.toEqual({ id: null, record: new Uint8Array([0xDE, 0xED]), score: null })
+    })
+
+    it('★ KEEP ALL を知らないファーム (KEEP は知っている) は KEEP に戻し、以後は KEEP だけを送る', async () => {
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const first = vein.identifyKeep()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP ALL\n')
+      await reply(dev, 'ERR VEIN: IDENTIFY は引数なしか KEEP です\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP\n')
+      await reply(dev, 'VEIN IDENTIFIED 12\n')
+      await expect(first).resolves.toEqual({ id: 12, record: null, score: null })
+      const second = vein.identifyKeep()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP\n')
+      // 2 回目の同じ失敗は戻さず、そのまま失敗にする
+      const caught = second.catch(e => e)
+      await reply(dev, 'ERR VEIN: IDENTIFY は引数なしか KEEP です\n')
+      expect(((await caught) as Error).message).toContain('引数なしか KEEP')
     })
 
     it('記録が欠けた・壊れた・END が無いときは、照合の結果だけ返す (記録は null)', async () => {
@@ -1079,7 +1110,7 @@ describe('useVeinSerial', () => {
         const p = vein.identifyKeep()
         await vi.advanceTimersByTimeAsync(0)
         await reply(dev, `${lines}VEIN IDENTIFIED 12\n`)
-        await expect(p).resolves.toEqual({ id: 12, record: null })
+        await expect(p).resolves.toEqual({ id: 12, record: null, score: null })
       }
     })
 

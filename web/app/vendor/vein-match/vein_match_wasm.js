@@ -179,6 +179,63 @@ export class VeinLibrary {
 }
 if (Symbol.dispose) VeinLibrary.prototype[Symbol.dispose] = VeinLibrary.prototype.free;
 
+export class VerifyResult {
+    static __wrap(ptr) {
+        const obj = Object.create(VerifyResult.prototype);
+        obj.__wbg_ptr = ptr;
+        VerifyResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        VerifyResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_verifyresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get info() {
+        const ret = wasm.verifyresult_info(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {boolean}
+     */
+    get matched() {
+        const ret = wasm.verifyresult_matched(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get score0() {
+        const ret = wasm.verifyresult_score0(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get score1() {
+        const ret = wasm.verifyresult_score1(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get score2() {
+        const ret = wasm.verifyresult_score2(this.__wbg_ptr);
+        return ret;
+    }
+}
+if (Symbol.dispose) VerifyResult.prototype[Symbol.dispose] = VerifyResult.prototype.free;
+
 /**
  * @param {Uint8Array} a
  * @param {Uint8Array} b
@@ -207,6 +264,20 @@ export function chara_match_hex(a, b, th) {
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.chara_match_hex(ptr0, len0, ptr1, len1, th);
     return ret;
+}
+
+/**
+ * @param {Uint8Array} enroll
+ * @param {Uint8Array} shot
+ * @returns {VerifyResult | undefined}
+ */
+export function chara_verify_shot(enroll, shot) {
+    const ptr0 = passArray8ToWasm0(enroll, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(shot, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.chara_verify_shot(ptr0, len0, ptr1, len1);
+    return ret === 0 ? undefined : VerifyResult.__wrap(ret);
 }
 
 /**
@@ -290,6 +361,9 @@ const SearchResultFinalization = (typeof FinalizationRegistry === 'undefined')
 const VeinLibraryFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_veinlibrary_free(ptr, 1));
+const VerifyResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_verifyresult_free(ptr, 1));
 
 function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();
