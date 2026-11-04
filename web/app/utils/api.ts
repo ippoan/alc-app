@@ -863,6 +863,36 @@ export async function rotateVeinModuleDeviceRecord(
   )
 }
 
+/**
+ * 認証ログ (撮影 + 状態をサーバーへ送って保存する) の対象のテナントか (`GET /api/vein/auth-log/enabled`、auth-worker が答える)。
+ * 対象外・失敗は呼び出し側が false 扱い (Refs ippoan/alc-app-s3#352)
+ */
+export async function getVeinAuthLogEnabled(scope: RequestTokenScope = 'default'): Promise<{ enabled: boolean }> {
+  return request<{ enabled: boolean }>('/api/vein/auth-log/enabled', {}, scope)
+}
+
+/** 認証ログ 1 件 (`POST /api/vein/auth-shots`)。`shot` は `VEIN IDENTIFY KEEP ALL` で撮った生の記録 (送るとき base64 にする) */
+export interface VeinAuthShot {
+  employee_id: string
+  shot: Uint8Array
+  module: {
+    result: 'IDENTIFIED' | 'NOMATCH'
+    slot: number | null
+    hit: 'self' | 'other' | 'none'
+    score: number | null
+    thresholds: number[] | null
+  }
+  firmware: string | null
+  captured_at: string
+  /** 端末が今どちらの組み方で記録を取っているか (`own` / 無し)。サーバーが本人の記録を同じ組み方で組んで判定する */
+  pick?: 'own'
+}
+
+/** 認証ログを 1 件送る。対象外のテナントは 204 (保存しない) */
+export async function postVeinAuthShot(shot: VeinAuthShot, scope: RequestTokenScope = 'default'): Promise<void> {
+  await request<void>('/api/vein/auth-shots', { method: 'POST', body: JSON.stringify({ ...shot, shot: bytesToBase64(shot.shot) }) }, scope)
+}
+
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
 export interface ApiVeinModuleRecord {
   employee_id: string

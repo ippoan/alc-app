@@ -1047,6 +1047,20 @@ describe('useVeinSerial', () => {
   })
 
   describe('identifyKeep (VEIN IDENTIFY KEEP)', () => {
+    it('ファームが版 (VER=) を名乗らなければ firmware は null', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      dev.emit('DEVICE timecard\n')
+      expect(await connect()).toBe(true)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('OMRON BP=0\n')
+      await vi.advanceTimersByTimeAsync(0)
+      const miss = vein.identifyKeep()
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect(miss).resolves.toEqual({ id: null, record: null, score: null, thresholds: null, firmware: null })
+    })
+
     it('★ 撮った記録 (VEIN RECORD 1 …) を集め、当たれば ID と記録、不一致は記録なし', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
@@ -1057,23 +1071,23 @@ describe('useVeinSerial', () => {
       // 後ろの塊が先に来ても・前の行に連結されても拾う。ほかの ID の行は混ぜない
       await reply(dev, 'EVT VEIN AGAIN 11\nVEIN RECORD 2 0 FFFF\nVEIN RECORD 1 2 dead\nEVT NFC_READY VEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 4\n')
       await reply(dev, 'VEIN IDENTIFIED 12 SCORE=71 TH=60 VIA=FV THS=65,60,78\n')
-      await expect(hit).resolves.toEqual({ id: 12, record: new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]), score: 71 })
+      await expect(hit).resolves.toEqual({ id: 12, record: new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]), score: 71, thresholds: [65, 60, 78], firmware: '0.1.0' })
       expect(again).toBe(1)
       expect(vein.lastMatch.value).toMatchObject({ kind: 'IDENTIFIED', id: 12, via: 'FV' })
 
       const miss = vein.identifyKeep()
       await reply(dev, 'VEIN NOMATCH SCORE=0\n')
-      await expect(miss).resolves.toEqual({ id: null, record: null, score: null })
+      await expect(miss).resolves.toEqual({ id: null, record: null, score: null, thresholds: null, firmware: '0.1.0' })
     })
 
-    it('★ KEEP ALL は外れても記録を出す: 不一致でも撮った記録を返す (影の照合用)', async () => {
+    it('★ KEEP ALL は外れても記録を出す: 不一致でも撮った記録を返す (認証ログ用)', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
       const miss = vein.identifyKeep()
       await vi.advanceTimersByTimeAsync(0)
       await reply(dev, 'VEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 2\n')
       await reply(dev, 'VEIN NOMATCH SCORE=0\n')
-      await expect(miss).resolves.toEqual({ id: null, record: new Uint8Array([0xDE, 0xED]), score: null })
+      await expect(miss).resolves.toEqual({ id: null, record: new Uint8Array([0xDE, 0xED]), score: null, thresholds: null, firmware: '0.1.0' })
     })
 
     it('★ KEEP ALL を知らないファーム (KEEP は知っている) は KEEP に戻し、以後は KEEP だけを送る', async () => {
@@ -1087,7 +1101,7 @@ describe('useVeinSerial', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP\n')
       await reply(dev, 'VEIN IDENTIFIED 12\n')
-      await expect(first).resolves.toEqual({ id: 12, record: null, score: null })
+      await expect(first).resolves.toEqual({ id: 12, record: null, score: null, thresholds: null, firmware: '0.1.0' })
       const second = vein.identifyKeep()
       await vi.advanceTimersByTimeAsync(0)
       expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP\n')
@@ -1110,7 +1124,7 @@ describe('useVeinSerial', () => {
         const p = vein.identifyKeep()
         await vi.advanceTimersByTimeAsync(0)
         await reply(dev, `${lines}VEIN IDENTIFIED 12\n`)
-        await expect(p).resolves.toEqual({ id: 12, record: null, score: null })
+        await expect(p).resolves.toEqual({ id: 12, record: null, score: null, thresholds: null, firmware: '0.1.0' })
       }
     })
 

@@ -637,11 +637,11 @@ export function useVeinSerial() {
   /**
    * 置いた 1 回の指を撮ってから、離さずに 1:N 照合する (`VEIN IDENTIFY KEEP`、ファームは ippoan/alc-app-s3 の同名の口)。
    * 照合でモジュールが撮った指は外へ出せないため、ファームが先に作業用 ID 1 へ 1 本撮って読み出す。当たれば撮った記録
-   * (`VEIN RECORD 1 …`) も返す。`KEEP ALL` を使い、外れても記録を返す (影の照合用。`KEEP ALL` を知らないファームは `KEEP` に戻し、
-   * 不一致は `record: null`)。`score` はモジュールの点数 (無ければ null)。途中の「離して」はファームが鳴らさず、当たったときだけ最後に鳴らす。
+   * (`VEIN RECORD 1 …`) も返す。`KEEP ALL` を使い、外れても記録を返す (認証ログ用。`KEEP ALL` を知らないファームは `KEEP` に戻し、
+   * 不一致は `record: null`)。`score`・`thresholds` はモジュールの点数・閾値、`firmware` はファームの版 (無ければ null)。途中の「離して」はファームが鳴らさず、当たったときだけ最後に鳴らす。
    * 古いファーム (`KEEP` を知らない) は {@link VEIN_IDENTIFY_KEEP_UNSUPPORTED} の Error。ほかの失敗は reason の Error
    */
-  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null; score: number | null }> {
+  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null; score: number | null; thresholds: number[] | null; firmware: string | null }> {
     const prefix = 'VEIN RECORD 1 '
     const endPrefix = `${prefix}END `
     const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
@@ -685,7 +685,7 @@ export function useVeinSerial() {
     const id = identifiedId(line)
     // 記録が壊れていても照合の結果は使う (入れ替えだけ見送る)。KEEP ALL は外れても記録を出す (影の照合用)
     const record = broken || !Number.isInteger(total) || total < 0 ? null : assembleRecordOrNull(chunks, total)
-    return { id, record, score: lastMatch.value?.score ?? null }
+    return { id, record, score: lastMatch.value?.score ?? null, thresholds: lastMatch.value?.thresholds ?? null, firmware: deviceInfo.value?.ver ?? null }
   }
 
   /** {@link assembleRecord} の、壊れていれば null を返す版 */
