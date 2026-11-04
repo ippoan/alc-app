@@ -1047,6 +1047,20 @@ describe('useVeinSerial', () => {
   })
 
   describe('identifyKeep (VEIN IDENTIFY KEEP)', () => {
+    it('ファームが版 (VER=) を名乗らなければ firmware は null', async () => {
+      const dev = createMockPort()
+      installSerialMock({ getPorts: vi.fn(async () => [dev.port]) })
+      await load()
+      dev.emit('DEVICE timecard\n')
+      expect(await connect()).toBe(true)
+      await vi.advanceTimersByTimeAsync(0)
+      dev.emit('OMRON BP=0\n')
+      await vi.advanceTimersByTimeAsync(0)
+      const miss = vein.identifyKeep()
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect(miss).resolves.toEqual({ id: null, record: null, score: null, thresholds: null, firmware: null })
+    })
+
     it('★ 撮った記録 (VEIN RECORD 1 …) を集め、当たれば ID と記録、不一致は記録なし', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
