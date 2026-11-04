@@ -80,6 +80,8 @@ import {
   putVeinModuleDeviceRecord,
   rotateVeinModuleDeviceRecord,
   getVeinModuleTemplates,
+  getVeinAuthLogEnabled,
+  postVeinAuthShot,
   getVeinModuleTemplate,
   identifyVein,
   getVeinTemplates,
@@ -1240,6 +1242,31 @@ describe.skipIf(isLive)('api', () => {
       await callApi(() => getVeinModuleTemplates())
       assertMock(() => {
         expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/module-templates')
+      })
+    })
+
+    it.skipIf(isLive)('getVeinAuthLogEnabled は GET /api/vein/auth-log/enabled', async () => {
+      stubOk({ enabled: true })
+      await callApi(() => getVeinAuthLogEnabled())
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/auth-log/enabled')
+      })
+    })
+
+    it.skipIf(isLive)('postVeinAuthShot は POST /api/vein/auth-shots で、撮影を base64 にして送る', async () => {
+      stubOk({})
+      await callApi(() => postVeinAuthShot({
+        employee_id: 'e1',
+        shot: new Uint8Array([0xDE, 0xAD]),
+        module: { result: 'NOMATCH', slot: null, hit: 'none', score: null, thresholds: null },
+        firmware: null,
+        captured_at: '2026-11-04T00:00:00.000Z',
+      }))
+      assertMock(() => {
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/auth-shots')
+        const init = mockFetch.mock.calls[0][1] as RequestInit
+        expect(init.method).toBe('POST')
+        expect(JSON.parse(init.body as string)).toMatchObject({ employee_id: 'e1', shot: '3q0=', module: { hit: 'none' } })
       })
     })
 
