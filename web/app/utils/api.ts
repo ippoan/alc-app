@@ -884,6 +884,8 @@ export interface VeinAuthShot {
   }
   firmware: string | null
   captured_at: string
+  /** 端末が今どちらの組み方で記録を取っているか (`own` / 無し)。サーバーが本人の記録を同じ組み方で組んで判定する */
+  pick?: 'own'
 }
 
 /** 認証ログを 1 件送る。対象外のテナントは 204 (保存しない) */

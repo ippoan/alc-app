@@ -203,6 +203,7 @@ async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepR
       },
       firmware: got.firmware ?? null,
       captured_at: capturedAt,
+      pick: recordPick(),
     }, scope)
     recordVeinLine(`PC VEIN AUTHLOG OK ${Math.round(performance.now() - started)}`)
   }
