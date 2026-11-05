@@ -5,7 +5,7 @@ import type {
   TenkoSession, StartTenkoSession, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
   SubmitManagerJudgment, UpdateTenkoSessionVehicle, TenkoSettings,
-  TenkoOffice, TenkoOfficeInput, TenkoOfficesResponse, InPersonScope,
+  TenkoOffice, TenkoOfficeInput, TenkoOfficesResponse, InPersonScope, VehicleCandidate,
   TenkoRemoteEscalationReason,
   TenkoSessionFilter, TenkoSessionsResponse,
   TenkoRecordFilter,
@@ -1636,6 +1636,20 @@ export async function updateTenkoSessionVehicle(
     method: 'PUT',
     body: JSON.stringify(data),
   }, scope)
+}
+
+/**
+ * キオスクの車両番号の候補。`q` はテンキーで打った数字 (1〜8 桁)。端末の鍵で送ると端末の営業所の車両が先に並ぶ
+ * (`scope` の既定はキオスクの口)
+ */
+export async function getVehicleCandidates(
+  sessionId: string,
+  q: string,
+  scope: RequestTokenScope = 'default',
+): Promise<VehicleCandidate[]> {
+  const res = await request<{ candidates: VehicleCandidate[] }>(
+    `/api/tenko/sessions/${sessionId}/vehicle-candidates?q=${encodeURIComponent(q)}`, {}, scope)
+  return res.candidates
 }
 
 /**

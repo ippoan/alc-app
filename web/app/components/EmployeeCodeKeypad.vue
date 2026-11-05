@@ -2,9 +2,11 @@
 /**
  * 社員番号のキーパッド。端末のキーボードを出さないよう input 要素にせず、表示だけにする。
  * 打った番号は親が `v-model` で持つ (親が「次の人へ」で消す)。決定で `submit` を出す。
- * 指静脈の登録 (`VeinRegistration`) と血圧測定 (`BloodPressureMeasurement`) の入口が使う
+ * 指静脈の登録 (`VeinRegistration`) と血圧測定 (`BloodPressureMeasurement`) の入口が使う。
+ * 点呼の車両番号の段 (`TenkoVehicleEntry`) は候補を選んで決めるので、`showSubmit` を false にして決定を出さない
  */
 const code = defineModel<string>({ default: '' })
+withDefaults(defineProps<{ showSubmit?: boolean }>(), { showSubmit: true })
 const emit = defineEmits<{ submit: [code: string] }>()
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 </script>
@@ -35,6 +37,7 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
       </button>
     </div>
     <button
+      v-if="showSubmit"
       data-key="submit"
       class="w-full mt-2 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
       :disabled="!code"

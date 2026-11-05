@@ -868,6 +868,7 @@ onUnmounted(() => {
           <TenkoVehicleEntry
             v-model="vehicleInput"
             :manual-required="vehicleManualRequired"
+            :session-id="session?.id"
             @submit="onVehicleSubmit"
           />
         </div>
