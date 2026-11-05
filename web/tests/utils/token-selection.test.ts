@@ -11,6 +11,7 @@ import {
   setKioskDeviceKeyRequired,
   dropDevMarksWithoutOwnDevice,
   reloadDevMarksFromStorage,
+  lastDeviceId,
 } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, dummyJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
 
@@ -633,5 +634,24 @@ describe('dropDevMarksWithoutOwnDevice / reloadDevMarksFromStorage — 機体の
 
     for (const kind of KINDS) expect(isDevDevice(kind)).toBe(false)
     expect(onMark).not.toHaveBeenCalled()
+  })
+})
+
+describe('lastDeviceId — このブラウザで最後に取れた端末の鍵の端末 ID', () => {
+  it('トークンの sub を種類ごとに覚え、トークンを捨てても消さない。sub の無い・読めないトークンは覚えない', () => {
+    expect(lastDeviceId('kiosk')).toBeNull()
+    noteDeviceToken('kiosk', dummyJwt({ aud: 'device', sub: 'alarm:5de95ff4aabbccdd' }))
+    expect(lastDeviceId('kiosk')).toBe('alarm:5de95ff4aabbccdd')
+    expect(lastDeviceId('bp-station')).toBeNull()
+    noteDeviceToken('kiosk', null)
+    noteDeviceToken('kiosk', dummyJwt({ aud: 'device' }))
+    noteDeviceToken('kiosk', 'not-a-jwt')
+    expect(lastDeviceId('kiosk')).toBe('alarm:5de95ff4aabbccdd')
+  })
+
+  it('localStorage が無い環境 (SSR) では覚えず、読んでも null。トークンの扱いは止めない', () => {
+    vi.stubGlobal('localStorage', undefined)
+    expect(() => noteDeviceToken('kiosk', dummyJwt({ aud: 'device', sub: 'alarm:1111222233334444' }))).not.toThrow()
+    expect(lastDeviceId('kiosk')).toBeNull()
   })
 })

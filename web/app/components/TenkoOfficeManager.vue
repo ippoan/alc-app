@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ApiEmployee, TenkoOffice, TenkoOfficeCarinsBase, TenkoOfficeCarinsBaseKey, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
 import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listCamHostKeys, updateTenkoOffice } from '~/utils/api'
+import { lastDeviceId } from '~/utils/token-selection'
 
 /**
  * 点呼の営業所 (システム管理者)。営業所ごとに所属の運行管理者 (兼務あり) と車両を決める。車両の所属は基本を車検証の
@@ -34,6 +35,9 @@ const carinsBases = ref<TenkoOfficeCarinsBase[]>([])
 /** 点呼端末 (用途 kiosk の機体の鍵)。読めなくても営業所の設定は止めない */
 const devices = ref<{ device_id: string, label: string | null }[]>([])
 
+/** このブラウザで最後にキオスクの鍵を取った機体 (= この端末)。一覧の先頭に出して印を付ける */
+const thisDeviceId = lastDeviceId('kiosk')
+
 /**
  * 点呼端末の表示名。同じ名前の機体 (cores3 が何台も) を見分けられるよう、鍵の指紋の頭 8 桁を必ず添える
  * (`VeinFleetManager` と同じ切り出し)。名前の無い機体は「名前の無い機体」
@@ -65,7 +69,8 @@ async function load() {
     vehicles.value = res.vehicles
     carinsBases.value = res.carins_bases
     managers.value = employees.filter(e => e.role.includes('manager') || e.role.includes('admin'))
-    devices.value = await listCamHostKeys().then(r => r.keys, () => [])
+    const keys = await listCamHostKeys().then(r => r.keys, () => [])
+    devices.value = [...keys.filter(k => k.device_id === thisDeviceId), ...keys.filter(k => k.device_id !== thisDeviceId)]
   }
   catch (e) {
     loadError.value = messageOf(e, '営業所を取得できませんでした')
@@ -230,6 +235,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           <label v-for="d in devices" :key="d.device_id" class="flex items-center gap-1 text-sm text-gray-800">
             <input v-model="row.device_ids" type="checkbox" :value="d.device_id" data-testid="tenko-office-device">
             {{ deviceName(d) }}
+            <span v-if="d.device_id === thisDeviceId" class="text-xs font-medium text-blue-700" data-testid="tenko-office-this-device">(この端末)</span>
             <span v-if="deviceElsewhere(d.device_id, row)" class="text-xs text-gray-500" data-testid="tenko-office-device-elsewhere">— いまは {{ deviceElsewhere(d.device_id, row) }}</span>
           </label>
         </div>
