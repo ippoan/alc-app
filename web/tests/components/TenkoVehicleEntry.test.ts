@@ -41,18 +41,18 @@ describe('TenkoVehicleEntry', () => {
     carinsHandler = null
   })
 
-  it('★ CoreS3 がつながっていれば車検証を優先して案内し、入力欄は隠しておく', async () => {
-    const w = await mountEntry({ modelValue: '予定の車' })
-    expect(w.text()).toContain('電子車検証を CoreS3 にかざしてください')
-    expect(input(w).exists()).toBe(false)
-    expect(w.find('[data-testid="show-manual-vehicle"]').exists()).toBe(true)
+  it('★ CoreS3 がつながっていれば車検証の案内を出し、テンキーと入力欄も最初から並べる', async () => {
+    const w = await mountEntry({ modelValue: '予定の車', sessionId: 's-1' })
+    expect(w.text()).toContain('電子車検証を CoreS3 にかざすか、下で車両番号を選んでください')
+    expect(w.find('[data-testid="vehicle-keypad"]').exists()).toBe(true)
+    expect((input(w).element as HTMLInputElement).value).toBe('予定の車')
     w.unmount()
   })
 
   it('★ Vein Station がつながっていれば、Vein Station にかざす案内を出し、読めた管理番号で submit する', async () => {
     label.value = 'Vein Station'
     const w = await mountEntry()
-    expect(w.text()).toContain('電子車検証を Vein Station にかざしてください')
+    expect(w.text()).toContain('電子車検証を Vein Station にかざすか')
     carinsHandler!('NFC_CARINS', ['mgno=CERT-V', 'carid=ID-V'], 'vein-station')
     expect(w.emitted('submit')![0]).toEqual([{ carins_cert_no: 'CERT-V' }])
     w.unmount()
@@ -92,17 +92,17 @@ describe('TenkoVehicleEntry', () => {
     w.unmount()
   })
 
-  it('「車検証が使えないときは…」を押すと入力欄が開く', async () => {
+  it('★ サーバーが車検証を見つけられなかった (manualRequired) ときは、車両番号を入力するよう案内する', async () => {
     const w = await mountEntry()
-    await w.find('[data-testid="show-manual-vehicle"]').trigger('click')
+    expect(w.find('[data-testid="carins-not-matched"]').exists()).toBe(false)
+    await w.setProps({ manualRequired: true })
+    expect(w.find('[data-testid="carins-not-matched"]').exists()).toBe(true)
     expect(input(w).exists()).toBe(true)
-    expect(w.find('[data-testid="show-manual-vehicle"]').exists()).toBe(false)
-    w.unmount()
-  })
-
-  it('★ サーバーが車検証を見つけられなかった (manualRequired) ときは入力欄を開く', async () => {
-    const w = await mountEntry({ manualRequired: true })
-    expect(input(w).exists()).toBe(true)
+    // 読み取り失敗の案内が出ているときはそちらだけ
+    carinsHandler!('NFC_CARINS', ['rc=12'], 'cores3')
+    await w.vm.$nextTick()
+    expect(w.find('[data-testid="carins-read-error"]').exists()).toBe(true)
+    expect(w.find('[data-testid="carins-not-matched"]').exists()).toBe(false)
     w.unmount()
   })
 
