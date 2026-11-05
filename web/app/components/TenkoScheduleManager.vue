@@ -20,6 +20,20 @@ async function loadEmployees() {
     employeeMap.value = Object.fromEntries(list.map(e => [e.id, e.name]))
   } catch {}
 }
+/**
+ * 予定の「管理者名」の候補 = 役割に運行管理者 (manager) か管理者 (admin) を持つ社員の氏名 (重複は 1 つ)。
+ * 自由入力だと表記がぶれて、点呼の記録の責任者 (業務前 二十 イ) が揃わないので選ばせる
+ */
+const managerNames = computed(() => [...new Set(
+  employees.value
+    .filter(e => e.role?.some(r => r === 'manager' || r === 'admin'))
+    .map(e => e.name),
+)])
+/** 選択肢。今の値が候補に無い (退職・役割の変更・昔の自由入力) ときは、それも残して選べるようにする */
+function managerOptions(current: string): string[] {
+  return current && !managerNames.value.includes(current) ? [current, ...managerNames.value] : managerNames.value
+}
+
 function employeeName(id: string) {
   return employeeMap.value[id] || id.slice(0, 8)
 }
@@ -226,7 +240,27 @@ function formatDate(iso: string) {
   })
 }
 
+/**
+ * 指示事項の候補 = これまでの予定で使った指示事項 (重複なし・新しい予定の順)。選ぶか、その場で打ち込む
+ * (`<datalist>`)。打ち込んだものは保存した予定に入るので、次から候補に出る。取れなければ候補なしで入力だけ。
+ * 読むのは入力を始めるとき (作成のフォームを開く・編集を始める) で、一覧の読み込みとは分ける
+ */
+const INSTRUCTION_HISTORY_SIZE = 200
+const instructionOptions = ref<string[]>([])
+async function loadInstructionOptions() {
+  try {
+    const res = await listSchedules({ page: 1, per_page: INSTRUCTION_HISTORY_SIZE })
+    instructionOptions.value = [...new Set(
+      res.schedules.map(s => s.instruction?.trim()).filter((t): t is string => !!t),
+    )]
+  } catch {
+    instructionOptions.value = []
+  }
+}
+
 onMounted(() => { loadEmployees(); fetchData(); loadSettings() })
+// 候補は入力を始めるとき (作成のフォームを開いた・編集を始めた) に読む。一覧の読み込みとは分ける
+watch(() => showForm.value || editingId.value !== null, (open) => { if (open) loadInstructionOptions() })
 
 // 席の端末を確認できなかった後に、確認できた (警告デバイスを後から繋いだ・繋ぎ直した):
 // その失敗の表示が出たままなら一覧を読み直す。`fetchData` は表を「読み込み中」に差し替えて
@@ -304,8 +338,11 @@ watch(managerJwtRecoveredCount, () => {
           <option value="post_operation">{{ tenkoTypeLabel('post_operation') }}</option>
         </select>
         <input v-model="row.scheduled_at" type="datetime-local" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <input v-model="row.responsible_manager_name" type="text" placeholder="管理者名" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <input v-model="row.instruction" type="text" :placeholder="instructionLabel(row.tenko_type)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <select v-model="row.responsible_manager_name" data-testid="new-manager-select" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="" disabled>管理者を選択</option>
+          <option v-for="name in managerOptions(row.responsible_manager_name)" :key="name" :value="name">{{ name }}</option>
+        </select>
+        <input v-model="row.instruction" type="text" list="instruction-options" data-testid="new-instruction" :placeholder="instructionLabel(row.tenko_type)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input v-model="row.vehicle_number" type="text" placeholder="車両番号 (任意)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button class="px-2 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm" @click="removeRow(i)">削除</button>
       </div>
@@ -320,6 +357,10 @@ watch(managerJwtRecoveredCount, () => {
         </button>
       </div>
       <p v-if="instructionError" class="text-red-600 text-xs mt-2">{{ instructionError }}</p>
+      <!-- 指示事項の候補 (作成と編集の欄で共有) -->
+      <datalist id="instruction-options" data-testid="instruction-options">
+        <option v-for="t in instructionOptions" :key="t" :value="t" />
+      </datalist>
     </div>
 
     <!-- エラー -->
@@ -354,10 +395,12 @@ watch(managerJwtRecoveredCount, () => {
                   <input v-model="editScheduledAt" type="datetime-local" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
                 </td>
                 <td class="px-4 py-3">
-                  <input v-model="editManager" type="text" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                  <select v-model="editManager" data-testid="edit-manager-select" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                    <option v-for="name in managerOptions(editManager)" :key="name" :value="name">{{ name }}</option>
+                  </select>
                 </td>
                 <td class="px-4 py-3">
-                  <input v-model="editInstruction" type="text" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                  <input v-model="editInstruction" type="text" list="instruction-options" data-testid="edit-instruction" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
                 </td>
                 <td class="px-4 py-3">
                   <input v-model="editVehicleNumber" type="text" data-testid="edit-vehicle-number" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">

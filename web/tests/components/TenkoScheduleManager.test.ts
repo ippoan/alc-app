@@ -136,6 +136,8 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     responsible_manager_name: '鈴木一郎', instruction: '安全運転', consumed: false,
   }
   const listMock = vi.mocked(listSchedules)
+  /** 一覧の読み込みの回数 (指示事項の候補の読み込み `per_page: 200` は数えない) */
+  const tableCalls = () => listMock.mock.calls.filter(c => c[0]?.per_page !== 200).length
   const keyFailure = () => Promise.reject(new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE))
   /** 返らないままの呼び出し (操作の最中を作る) */
   const hanging = () => new Promise<never>(() => {})
@@ -163,7 +165,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     await flush()
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     return wrapper
   }
 
@@ -172,7 +174,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(tableCalls()).toBe(2)
     expect(wrapper.text()).not.toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
     wrapper.unmount()
   })
@@ -181,7 +183,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     recoveredCountRef.value = 3
     const wrapper = await mountWithKeyFailure()
     await flush()
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     wrapper.unmount()
   })
 
@@ -194,7 +196,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     expect(wrapper.text()).toContain('API エラー (500)')
     wrapper.unmount()
   })
@@ -209,7 +211,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     expect(wrapper.text()).toContain('削除できませんでした')
     wrapper.unmount()
   })
@@ -217,11 +219,11 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
   it('エラーが無いときは読み直さない (正常に出ている一覧を「読み込み中」に差し替えない)', async () => {
     const wrapper = await mountSuspended(TenkoScheduleManager)
     await flush()
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     wrapper.unmount()
   })
 
@@ -231,7 +233,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     expect(wrapper.text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
     wrapper.unmount()
   })
@@ -243,7 +245,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(tableCalls()).toBe(1)
     wrapper.unmount()
   })
 
@@ -257,16 +259,16 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     listMock.mockImplementationOnce(hanging).mockImplementationOnce(keyFailure)
     void (wrapper.vm as any).handleCreate()
     await flush()
-    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(tableCalls()).toBe(2)
     ;(wrapper.vm as any).applyFilter()
     await flush()
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
-    expect(listMock).toHaveBeenCalledTimes(3)
+    expect(tableCalls()).toBe(3)
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(3)
+    expect(tableCalls()).toBe(3)
     wrapper.unmount()
   })
 
@@ -274,11 +276,13 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     const wrapper = await mountSuspended(TenkoScheduleManager)
     await flush()
     ;(wrapper.vm as any).startEdit(SCHEDULE)
+    // 編集を始めると指示事項の候補を読むので、それが済んでから一覧の応答を仕込む
+    await flush()
     vi.mocked(updateSchedule).mockResolvedValueOnce({} as never)
     listMock.mockImplementationOnce(hanging).mockImplementationOnce(keyFailure)
     void (wrapper.vm as any).handleUpdate()
     await flush()
-    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(tableCalls()).toBe(2)
     ;(wrapper.vm as any).applyFilter()
     await flush()
     await wrapper.vm.$nextTick()
@@ -286,7 +290,7 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(3)
+    expect(tableCalls()).toBe(3)
     wrapper.unmount()
   })
 
@@ -300,11 +304,11 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     await flush()
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
-    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(tableCalls()).toBe(2)
 
     await recover(wrapper)
 
-    expect(listMock).toHaveBeenCalledTimes(2)
+    expect(tableCalls()).toBe(2)
     wrapper.unmount()
   })
 })
@@ -422,5 +426,64 @@ describe('TenkoScheduleManager — 車両番号と予定超過の分数', () => 
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="overdue-error"]').text()).toBe('設定の取得エラー')
     wrapper.unmount()
+  })
+})
+
+describe('TenkoScheduleManager — 管理者名と指示事項の選択', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('★ 管理者名は運行管理者・管理者の社員から選ぶ (乗務員は出さない)', async () => {
+    const { getEmployees } = await import('~/utils/api')
+    vi.mocked(getEmployees).mockResolvedValueOnce([
+      { id: 'm-1', name: '鈴木一郎', role: ['manager'] },
+      { id: 'a-1', name: '佐藤花子', role: ['admin', 'driver'] },
+      { id: 'd-1', name: '山田太郎', role: ['driver'] },
+    ] as never)
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    const options = wrapper.find('[data-testid="new-manager-select"]').findAll('option').map(o => o.text())
+    expect(options).toEqual(['管理者を選択', '鈴木一郎', '佐藤花子'])
+  })
+
+  it('編集では、候補に無い今の管理者名も選べるように残す', async () => {
+    const { getEmployees } = await import('~/utils/api')
+    vi.mocked(getEmployees).mockResolvedValueOnce([{ id: 'm-1', name: '鈴木一郎', role: ['manager'] }] as never)
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await flush()
+    ;(wrapper.vm as any).startEdit({
+      id: 's-9', employee_id: 'emp-1', tenko_type: 'pre_operation', scheduled_at: '2026-09-18T00:00:00Z',
+      responsible_manager_name: '退職 次郎', instruction: '安全運転', consumed: false,
+    })
+    await flush()
+    await wrapper.vm.$nextTick()
+    const options = wrapper.find('[data-testid="edit-manager-select"]').findAll('option').map(o => o.text())
+    expect(options).toEqual(['退職 次郎', '鈴木一郎'])
+  })
+
+  it('★ 指示事項は、これまでの予定で使った指示を候補に出す (重複・空は除く)。取れなければ候補なし', async () => {
+    vi.mocked(listSchedules).mockImplementation(async (f) => (f?.per_page === 200
+      ? { schedules: [{ instruction: '安全運転' }, { instruction: ' 安全運転 ' }, { instruction: '' }, { instruction: null }, { instruction: '休憩を取る' }], total: 5, page: 1, per_page: 200 }
+      : { schedules: [], total: 0, page: 1, per_page: 20 }) as never)
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="new-instruction"]').attributes('list')).toBe('instruction-options')
+    const opts = wrapper.find('[data-testid="instruction-options"]').findAll('option').map(o => o.attributes('value'))
+    expect(opts).toEqual(['安全運転', '休憩を取る'])
+    expect(listSchedules).toHaveBeenCalledWith({ page: 1, per_page: 200 })
+
+    vi.mocked(listSchedules).mockImplementation(async (f) => {
+      if (f?.per_page === 200) throw new Error('offline')
+      return { schedules: [], total: 0, page: 1, per_page: 20 } as never
+    })
+    ;(wrapper.vm as any).showForm = false
+    await wrapper.vm.$nextTick()
+    ;(wrapper.vm as any).showForm = true
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="instruction-options"]').findAll('option')).toHaveLength(0)
+    vi.mocked(listSchedules).mockReset()
+    vi.mocked(listSchedules).mockResolvedValue({ schedules: [], total: 0, page: 1, per_page: 20 } as never)
   })
 })
