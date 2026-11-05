@@ -624,23 +624,6 @@ export function useDeviceToken() {
     }
   }
 
-  /**
-   * ボンド状態を取り直す (Refs ippoan/alc-app#336)。「不明」は**その端末が永久に駄目**
-   * という意味ではなく、CoreS3 がその瞬間つながっていなかっただけのことがある。
-   * だから画面の「もう一度試す」からここを呼べるようにし、抑止 (backoff) を解いて
-   * **CoreS3 の再探索から**署名をやり直す。
-   *
-   * `getDeviceJwt()` ではなく CoreS3 の `trySignerJwt()` を直に呼ぶ — cache が生きていると
-   * `getDeviceJwt()` は署名をやり直さず、ボンド状態が「不明」のまま戻らないため。
-   * credential 経路には触れない (CoreS3 が居なければ従来どおり何も変わらない)。
-   */
-  async function refreshSignedBpBonded(): Promise<boolean | null> {
-    const { signedBpBonded } = useSignedBpBond()
-    coreS3BackoffUntil.value = 0
-    await trySignerJwt(coreS3Signer, Date.now())
-    return signedBpBonded.value
-  }
-
   /** 既存の credential 経路 (`/device/token`)。挙動は変えない。 */
   async function tryCredentialJwt(nowMs: number): Promise<string | null> {
     const id = kioskDeviceId.value
@@ -753,10 +736,5 @@ export function useDeviceToken() {
      * 失敗がまだ無ければ CoreS3 の値
      */
     failureBackoffUntil: computed(() => (lastFailureSigner.value === 'vein' ? veinBackoffUntil.value : coreS3BackoffUntil.value)),
-    /**
-     * ボンド状態を取り直す (#336)。抑止を解き、CoreS3 の再探索から署名をやり直す。
-     * **値そのものは返さない** — 読むのは `useSignedBpBond()` の 1 か所だけ (#353)。
-     */
-    refreshSignedBpBonded,
   }
 }

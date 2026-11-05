@@ -84,13 +84,10 @@ export function useBloodPressureSetting() {
  * (`useSignedBpBond.ts` の `hasProbedBpBond` の doc と同じ流儀)。
  *
  * **読む先は機種に依らない 1 か所** (Refs ippoan/alc-app#353) — CoreS3 キオスク
- * (`useDeviceToken`) も血圧測定台の ATOM S3 も、同じ値へ書き込む。読み手がここと
- * `useTenkoKiosk.isBpRequirementUnknown` の 2 つに分かれているので、**値を機種ごとに
- * 分けると片方だけ直す事故**になる。
+ * (`useDeviceToken`) も血圧測定台の ATOM S3 も、同じ値へ書き込む。**値を機種ごとに
+ * 分けない。**
  *
- * **`refreshSignedBpBonded()` はここから呼ばない (読むだけ)** — あれは backoff を
- * 解くので、自動点呼の入口ガード (`useTenkoKiosk.isBpRequirementUnknown`) の
- * 「試す前に止めない」判定と競合する。
+ * **`refreshSignedBpBonded()` はここから呼ばない (読むだけ)** — あれは backoff を解く。
  *
  * ## 測定台はボンド状態を待たない (最優先、Refs ippoan/alc-app#368)
  *

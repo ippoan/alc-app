@@ -31,6 +31,7 @@ vi.mock('~/utils/api', () => ({
   cancelTenkoSession: vi.fn(),
   uploadFacePhoto: vi.fn(),
   getCarryingItems: vi.fn(async () => []),
+  getMeasurements: vi.fn(async () => ({ measurements: [], total: 0, page: 1, per_page: 50 })),
   submitCarryingItemChecks: vi.fn(),
   listTenkoSessions: vi.fn(async () => ({ sessions: [], total: 0, page: 1, per_page: 50 })),
 }))

@@ -1,31 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
-import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
+import type { ApiMeasurement, TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { onGpsLine, resetGpsFix } from '~/composables/useGpsFix'
 
 const deviceId = ref<string | null>('device-1')
 mockNuxtImport('useAuth', () => () => ({ deviceId }))
-
-// 署名つきボンド状態 (Refs ippoan/alc-app#336)。null = 不明
-const signedBpBonded = ref<boolean | null>(false)
-// ボンド状態を一度でも取りに行ったか。false = 「未取得」であって「不明」ではない
-const hasProbedBpBond = ref(true)
-const refreshSignedBpBonded = vi.fn(async () => {
-  hasProbedBpBond.value = true
-  return signedBpBonded.value
-})
-// 値の置き場所は機種に依らない 1 か所 (`useSignedBpBond`、Refs ippoan/alc-app#353)。
-// 取り直しだけが CoreS3 の再探索なので `useDeviceToken` 側に残る
-mockNuxtImport('useSignedBpBond', () => () => ({ signedBpBonded, hasProbedBpBond }))
-mockNuxtImport('useDeviceToken', () => () => ({ refreshSignedBpBonded }))
-
-// 血圧を出せる見込み (BleStatus の showBpUi と同じ 2 つ)。既定は「出せない端末」
-const bpEnabled = ref(false)
-const hasBpHardware = ref(false)
-mockNuxtImport('useBloodPressureSetting', () => () => ({ bpEnabled, setBpEnabled: vi.fn() }))
-mockNuxtImport('useBleGateway', () => () => ({ hasBpHardware }))
 
 // `apiErrorCode` は**実物を使う** (Refs ippoan/alc-app#351) — 400 の body から
 // コードを取り出すのは api.ts が作った文言の読み方そのものなので、ここで差し替えると
@@ -48,6 +29,7 @@ vi.mock('~/utils/api', async () => ({
   listTenkoSessions: vi.fn(),
   selfResumeTenkoSession: vi.fn(),
   updateTenkoSessionVehicle: vi.fn(),
+  getMeasurements: vi.fn(),
 }))
 vi.mock('~/utils/equipment-failure-report', async () => ({
   ...(await vi.importActual<typeof import('~/utils/equipment-failure-report')>('~/utils/equipment-failure-report')),
@@ -55,8 +37,8 @@ vi.mock('~/utils/equipment-failure-report', async () => ({
 }))
 
 import {
-  useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE, RESUMABLE_TENKO_STATUSES,
-  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE,
+  useTenkoKiosk, RESUMABLE_TENKO_STATUSES,
+  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, STATION_BP_LOOKBACK_HOURS, SESSION_NOT_RESUMABLE_MESSAGE,
 } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
@@ -75,6 +57,7 @@ import {
   listTenkoSessions,
   selfResumeTenkoSession,
   updateTenkoSessionVehicle,
+  getMeasurements,
 } from '~/utils/api'
 import { reportApiFailure } from '~/utils/equipment-failure-report'
 
@@ -148,14 +131,36 @@ function makeSession(overrides?: Partial<TenkoSession>): TenkoSession {
   }
 }
 
+function makeMeasurement(overrides?: Partial<ApiMeasurement>): ApiMeasurement {
+  return {
+    id: 'm-1',
+    tenant_id: 't-1',
+    employee_id: 'emp-1',
+    alcohol_value: null,
+    result_type: null,
+    device_use_count: 0,
+    measured_at: '2026-03-31T22:30:00Z',
+    created_at: '2026-03-31T22:30:00Z',
+    updated_at: '2026-03-31T22:31:00Z',
+    status: 'completed',
+    systolic: 128,
+    diastolic: 82,
+    pulse: 70,
+    medical_measured_at: '2026-03-31T22:31:00Z',
+    ...overrides,
+  }
+}
+
+function servedMeasurements(...rows: ApiMeasurement[]) {
+  vi.mocked(getMeasurements).mockResolvedValue({ measurements: rows, total: rows.length, page: 1, per_page: 50 })
+}
+
 describe('useTenkoKiosk', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     deviceId.value = 'device-1'
-    signedBpBonded.value = false
-    hasProbedBpBond.value = true
-    bpEnabled.value = false
-    hasBpHardware.value = false
+    // 体温・血圧の段に入ると測定台の血圧を引きに行く。既定は「測っていない」
+    vi.mocked(getMeasurements).mockResolvedValue({ measurements: [], total: 0, page: 1, per_page: 50 })
   })
 
   // ---------- 初期状態 ----------
@@ -545,272 +550,6 @@ describe('useTenkoKiosk', () => {
     })
   })
 
-  // ---------- 血圧の要否が確定できない端末を入口で止める (Refs ippoan/alc-app#336) ----------
-
-  describe('業務前の自動点呼: 血圧の要否が確定できない端末は入口で止める (Refs #336)', () => {
-    /**
-     * 「不明」の端末 = 署名でボンド状態を得られず (`signedBpBonded === null`)、
-     * device_id も無い (CoreS3 端末は devices に行が無く構造的にこうなる)。
-     * この端末で進むと、体温を送った時点で必ず 400 (`bp_required`) になる。
-     */
-    function unknownDevice() {
-      deviceId.value = null
-      signedBpBonded.value = null
-      // 「試した結果、分からなかった」端末。「まだ試していない」とは区別する
-      hasProbedBpBond.value = true
-    }
-
-    function startedSession() {
-      const sess = makeSession({ status: 'identity_verified' })
-      vi.mocked(startTenkoSession).mockResolvedValue(sess)
-      return sess
-    }
-
-    it('★ 不明 → セッションを開始せず、理由を出して止まる (体温まで歩かせない)', async () => {
-      unknownDevice()
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).not.toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(true)
-      // 無言で止めない — 理由と次の行動が出ている
-      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
-      expect(k.isLoading.value).toBe(false)
-    })
-
-    it('★ 未ボンド (false = 血圧計が無いと確認できた) は通す — 「不明」と混ぜない (#322 の踏み方)', async () => {
-      unknownDevice()
-      signedBpBonded.value = false
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('ボンドあり (true) は通す (血圧を測って進む端末)', async () => {
-      unknownDevice()
-      signedBpBonded.value = true
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-    })
-
-    it('device_id がある端末は止めない (サーバが devices.bp_enabled を引ける)', async () => {
-      signedBpBonded.value = null
-      deviceId.value = 'device-1'
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-    })
-
-    it('★ 血圧計の設定が入っている端末は止めない — 不明 (= 血圧必須) でも測って通れる', async () => {
-      unknownDevice()
-      bpEnabled.value = true
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('★ 血圧計が繋がっている端末は止めない (古いファーム + 血圧計を締め出さない)', async () => {
-      unknownDevice()
-      hasBpHardware.value = true
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('★ Vein Station が中継する血圧計 (bp_bond で hasBpHardware が立つ) でも止めない — 設定が OFF のままでも', async () => {
-      unknownDevice()
-      bpEnabled.value = false
-      hasBpHardware.value = true
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('★ まだ署名を試していない端末は止めない — その場で 1 度取りに行ってから判定する', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = false
-      // 取りに行ったら「血圧計は無い」と確認できた
-      refreshSignedBpBonded.mockImplementationOnce(async () => {
-        hasProbedBpBond.value = true
-        signedBpBonded.value = false
-        return false
-      })
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('★ 未取得のまま取りに行っても分からなければ止める (試した結果が不明なときだけ止まる)', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = false
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
-      expect(startTenkoSession).not.toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(true)
-    })
-
-    it('取得済みなら入口で取りに行かない (毎回署名しなおさない)', async () => {
-      unknownDevice()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(refreshSignedBpBonded).not.toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(true)
-    })
-
-    it('業務後は対象外 — 不明でも進める', async () => {
-      unknownDevice()
-      vi.mocked(startTenkoSession).mockResolvedValue(
-        makeSession({ tenko_type: 'post_operation', status: 'identity_verified' }),
-      )
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.proceedWithoutSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('遠隔点呼は対象外 — 不明でも進める (自動点呼だけを止める)', async () => {
-      unknownDevice()
-      startedSession()
-
-      const k = useTenkoKiosk({ remoteMode: true })
-      k.employeeId.value = 'emp-1'
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      expect(startTenkoSession).toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('★ もう一度試す → 取得しなおして確定したら、止めた所から再開する', async () => {
-      unknownDevice()
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-      expect(k.bpRequirementUnknown.value).toBe(true)
-
-      // CoreS3 が繋がり直し、「この端末に血圧計は無い」と確認できた
-      refreshSignedBpBonded.mockImplementationOnce(async () => {
-        signedBpBonded.value = false
-        return false
-      })
-      await k.retryBpRequirement()
-
-      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
-      expect(k.bpRequirementUnknown.value).toBe(false)
-      expect(k.error.value).toBeNull()
-      expect(startTenkoSession).toHaveBeenCalledWith({
-        schedule_id: 'sched-1',
-        employee_id: 'emp-1',
-        identity_face_photo_url: undefined,
-      })
-      expect(k.step.value).toBe('alcohol')
-    })
-
-    it('★ もう一度試してもなお不明 → 同じ画面に戻るだけ (リロードなしで再試行できる)', async () => {
-      unknownDevice()
-      startedSession()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-
-      await k.retryBpRequirement()
-
-      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
-      expect(k.bpRequirementUnknown.value).toBe(true)
-      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
-      expect(startTenkoSession).not.toHaveBeenCalled()
-      expect(k.isLoading.value).toBe(false)
-    })
-
-    it('止まっていないときの もう一度試す は何もしない', async () => {
-      const k = useTenkoKiosk()
-      await k.retryBpRequirement()
-
-      expect(refreshSignedBpBonded).not.toHaveBeenCalled()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-    })
-
-    it('reset() で止めた状態が残らない (次の乗務員に引きずらない)', async () => {
-      unknownDevice()
-
-      const k = useTenkoKiosk()
-      k.employeeId.value = 'emp-1'
-      k.selectedSchedule.value = makeSchedule()
-      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
-      expect(k.bpRequirementUnknown.value).toBe(true)
-
-      k.reset()
-      expect(k.bpRequirementUnknown.value).toBe(false)
-      expect(k.error.value).toBeNull()
-    })
-  })
-
   // ---------- 遠隔点呼: 画面で選んだ点呼種別 (Refs #310) ----------
   // 本番には予定 (pending schedule) を持つ社員が 1 人もいないため #309 の
   // 「予定があれば種別を引き継ぐ」修正は一度も発火しなかった。予定に依存せず
@@ -1041,6 +780,237 @@ describe('useTenkoKiosk', () => {
 
       await k.onMedicalSubmit({ temperature: 36.5 })
       expect(k.error.value).toBe('医療データ送信に失敗しました')
+    })
+  })
+
+  // ---------- 測定台の血圧の引き当て (業務前の自動点呼) ----------
+
+  describe('測定台の血圧', () => {
+    /** 体温・血圧の段に着いた状態 (予定あり・業務前) */
+    async function atMedicalStep() {
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'medical_pending' }))
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      await vi.waitFor(() => expect(k.stationBpLoading.value).toBe(false))
+      return k
+    }
+
+    it('★ 体温・血圧の段に入ると、その乗務員の直近 24 時間の測定を引く', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-04-01T00:00:00Z'))
+      try {
+        servedMeasurements(makeMeasurement())
+        const k = await atMedicalStep()
+
+        expect(k.step.value).toBe('medical')
+        expect(getMeasurements).toHaveBeenCalledTimes(1)
+        const filter = vi.mocked(getMeasurements).mock.calls[0]![0]!
+        expect(filter.employee_id).toBe('emp-1')
+        expect(filter.date_from).toBe('2026-03-31T00:00:00.000Z')
+        expect(STATION_BP_LOOKBACK_HOURS).toBe(24)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('★ 見つかった → 値と測定時刻を持つ', async () => {
+      servedMeasurements(makeMeasurement())
+      const k = await atMedicalStep()
+
+      expect(k.stationBp.value).toEqual({
+        systolic: 128, diastolic: 82, pulse: 70, measuredAt: '2026-03-31T22:31:00Z',
+      })
+    })
+
+    it('★ 血圧の入っていない測定・完了していない測定は拾わない。複数あれば測定時刻が最も新しいもの', async () => {
+      servedMeasurements(
+        makeMeasurement({ id: 'no-bp', systolic: null, diastolic: null, medical_measured_at: '2026-03-31T23:50:00Z' }),
+        makeMeasurement({ id: 'started', status: 'started', medical_measured_at: '2026-03-31T23:55:00Z' }),
+        makeMeasurement({ id: 'old', systolic: 140, diastolic: 90, medical_measured_at: '2026-03-31T20:00:00Z' }),
+        makeMeasurement({ id: 'new', systolic: 118, diastolic: 76, pulse: null, medical_measured_at: '2026-03-31T23:00:00Z' }),
+        makeMeasurement({ id: 'older-again', systolic: 150, diastolic: 95, medical_measured_at: '2026-03-31T21:00:00Z' }),
+      )
+      const k = await atMedicalStep()
+
+      expect(k.stationBp.value).toEqual({
+        systolic: 118, diastolic: 76, pulse: null, measuredAt: '2026-03-31T23:00:00Z',
+      })
+    })
+
+    it('測定時刻 (medical_measured_at) が無い測定は measured_at を使う', async () => {
+      servedMeasurements(makeMeasurement({ medical_measured_at: null, measured_at: '2026-03-31T22:10:00Z' }))
+      const k = await atMedicalStep()
+
+      expect(k.stationBp.value?.measuredAt).toBe('2026-03-31T22:10:00Z')
+    })
+
+    it('★ 見つからない → null のまま (画面が案内を出す)', async () => {
+      servedMeasurements(makeMeasurement({ systolic: null, diastolic: null }))
+      const k = await atMedicalStep()
+
+      expect(k.stationBp.value).toBeNull()
+      expect(k.error.value).toBeNull()
+    })
+
+    it('★ 「血圧を読み込む」で引き直せる。測り終えた値が取れる', async () => {
+      const k = await atMedicalStep()
+      expect(k.stationBp.value).toBeNull()
+
+      servedMeasurements(makeMeasurement())
+      await k.loadStationBp()
+
+      expect(getMeasurements).toHaveBeenCalledTimes(2)
+      expect(k.stationBp.value?.systolic).toBe(128)
+    })
+
+    it('読み込み中は stationBpLoading が立つ', async () => {
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      let release!: () => void
+      vi.mocked(getMeasurements).mockReturnValue(new Promise((resolve) => {
+        release = () => resolve({ measurements: [], total: 0, page: 1, per_page: 50 })
+      }))
+
+      const pending = k.loadStationBp()
+      expect(k.stationBpLoading.value).toBe(true)
+      release()
+      await pending
+      expect(k.stationBpLoading.value).toBe(false)
+    })
+
+    it('乗務員が決まっていなければ引かない', async () => {
+      const k = useTenkoKiosk()
+      await k.loadStationBp()
+
+      expect(getMeasurements).not.toHaveBeenCalled()
+    })
+
+    it('引くのに失敗したら値は消して理由を出し、故障として記録する (無言にしない)', async () => {
+      vi.mocked(getMeasurements).mockRejectedValue(new Error('Failed to fetch'))
+      const k = await atMedicalStep()
+
+      expect(k.stationBp.value).toBeNull()
+      expect(k.error.value).toBe('Failed to fetch')
+      expect(reportApiFailure).toHaveBeenCalledWith(expect.any(Error), '測定台の血圧の読み込み', expect.anything())
+    })
+
+    it('Error でない失敗でも文言を出す', async () => {
+      vi.mocked(getMeasurements).mockRejectedValue('boom')
+      const k = await atMedicalStep()
+
+      expect(k.error.value).toBe('測定台の血圧の読み込みに失敗しました')
+    })
+
+    it('遠隔点呼 (運行管理者が見る) では引かない', async () => {
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'medical_pending' }))
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.employeeId.value = 'emp-1'
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(k.step.value).toBe('medical')
+      expect(getMeasurements).not.toHaveBeenCalled()
+    })
+
+    it('業務後は体温・血圧の段が無いので引かない', async () => {
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ tenko_type: 'post_operation', status: 'identity_verified' }))
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedTenkoType.value = 'post_operation'
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+
+      expect(getMeasurements).not.toHaveBeenCalled()
+    })
+
+    it('★ 体温だけ送ると、測定台の血圧を足して送る。測定時刻は古い方 (測定台の血圧が古いとき)', async () => {
+      servedMeasurements(makeMeasurement({ medical_measured_at: '2026-03-31T22:00:00Z' }))
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = await atMedicalStep()
+
+      await k.onMedicalSubmit({ temperature: 36.5, medical_measured_at: '2026-03-31T22:40:00Z' })
+
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', {
+        temperature: 36.5,
+        systolic: 128,
+        diastolic: 82,
+        pulse: 70,
+        medical_measured_at: '2026-03-31T22:00:00.000Z',
+        device_id: 'device-1',
+      })
+    })
+
+    it('★ 測定時刻は古い方 (体温が古いとき)', async () => {
+      servedMeasurements(makeMeasurement({ medical_measured_at: '2026-03-31T22:45:00Z' }))
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = await atMedicalStep()
+
+      await k.onMedicalSubmit({ temperature: 36.5, medical_measured_at: '2026-03-31T22:40:00Z' })
+
+      expect(vi.mocked(submitMedical).mock.calls[0]![1].medical_measured_at).toBe('2026-03-31T22:40:00.000Z')
+    })
+
+    it('体温に測定時刻が無ければ測定台の血圧の時刻を使う。脈拍が無ければ送らない', async () => {
+      servedMeasurements(makeMeasurement({ pulse: null }))
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = await atMedicalStep()
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      const body = vi.mocked(submitMedical).mock.calls[0]![1]
+      expect(body.medical_measured_at).toBe('2026-03-31T22:31:00.000Z')
+      expect('pulse' in body).toBe(false)
+    })
+
+    it('★ この端末で測った血圧 (BLE) があれば、測定台の血圧より優先する。測定時刻にも測定台は混ぜない', async () => {
+      servedMeasurements(makeMeasurement({ medical_measured_at: '2026-03-31T20:00:00Z' }))
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = await atMedicalStep()
+
+      const data = {
+        temperature: 36.5, systolic: 110, diastolic: 70, pulse: 64, medical_measured_at: '2026-03-31T22:40:00Z',
+      }
+      await k.onMedicalSubmit(data)
+
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', { ...data, device_id: 'device-1' })
+    })
+
+    it('測定台の血圧が無ければ、送る内容は今までどおり (サーバーが bp_required で止める)', async () => {
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = await atMedicalStep()
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5, device_id: 'device-1' })
+    })
+
+    it('★ 測定台の血圧が有効時間切れ (400 measurement_expired) → サーバーの文言を出し、段に留まる', async () => {
+      servedMeasurements(makeMeasurement({ medical_measured_at: '2026-03-31T10:00:00Z' }))
+      vi.mocked(submitMedical).mockRejectedValue(Object.assign(
+        new Error(`API エラー (400): ${JSON.stringify({
+          error: 'measurement_expired',
+          message: '測定から有効時間 (30 分) を過ぎています。もう一度測定してください',
+        })}`),
+        { status: 400 },
+      ))
+      const k = await atMedicalStep()
+
+      await k.onMedicalSubmit({ temperature: 36.5, medical_measured_at: '2026-03-31T22:40:00Z' })
+
+      expect(vi.mocked(submitMedical).mock.calls[0]![1].medical_measured_at).toBe('2026-03-31T10:00:00.000Z')
+      expect(k.error.value).toBe('測定から有効時間 (30 分) を過ぎています。もう一度測定してください')
+      expect(k.step.value).toBe('medical')
+    })
+
+    it('reset() で測定台の血圧が次の乗務員に残らない', async () => {
+      servedMeasurements(makeMeasurement())
+      const k = await atMedicalStep()
+      expect(k.stationBp.value).not.toBeNull()
+
+      k.reset()
+
+      expect(k.stationBp.value).toBeNull()
+      expect(k.stationBpLoading.value).toBe(false)
     })
   })
 
@@ -1866,78 +1836,6 @@ describe('useTenkoKiosk', () => {
       expect(k.step.value).toBe('medical')
     })
 
-    it('★ 再開の経路も #336 の入口ガードを通る — 血圧の要否が不明な端末の業務前は止める', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
-      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
-
-      const k = useTenkoKiosk({ allowResume: true })
-      await resume(k, stuck)
-
-      expect(k.step.value).not.toBe('medical')
-      expect(k.step.value).not.toBe('face_auth')
-      expect(k.pendingResume.value).toBeNull()
-      expect(k.bpRequirementUnknown.value).toBe(true)
-      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
-      expect(k.isLoading.value).toBe(false)
-    })
-
-    it('要否が不明でも業務後の再開は止めない (既定を今までどおりに保つ)', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
-      const stuck = makeSession({ status: 'identity_verified', tenko_type: 'post_operation' })
-
-      const k = useTenkoKiosk({ allowResume: true })
-      await resume(k, stuck)
-      await k.onFaceAuthComplete(VEIN_OK)
-
-      expect(k.bpRequirementUnknown.value).toBe(false)
-      expect(k.step.value).toBe('alcohol')
-    })
-
-    it('★ 止めた再開も「もう一度試す」で本人確認の段に戻れる (リロードなし)', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
-      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
-
-      const k = useTenkoKiosk({ allowResume: true })
-      await resume(k, stuck)
-      expect(k.bpRequirementUnknown.value).toBe(true)
-
-      refreshSignedBpBonded.mockImplementationOnce(async () => {
-        signedBpBonded.value = false
-        return false
-      })
-      await k.retryBpRequirement()
-
-      expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
-      expect(k.bpRequirementUnknown.value).toBe(false)
-      expect(k.error.value).toBeNull()
-      expect(k.step.value).toBe('face_auth')
-      expect(k.pendingResume.value?.id).toBe(stuck.id)
-      // 本人確認はまだなので、サーバーは呼ばない
-      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
-      expect(startTenkoSession).not.toHaveBeenCalled()
-    })
-
-    it('もう一度試してもなお不明なら、同じ画面に戻るだけ', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
-      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
-
-      const k = useTenkoKiosk({ allowResume: true })
-      await resume(k, stuck)
-      await k.retryBpRequirement()
-
-      expect(k.bpRequirementUnknown.value).toBe(true)
-      expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
-      expect(k.step.value).not.toBe('medical')
-    })
-
     // ----- 再開した時刻をサーバに残す (Refs ippoan/alc-app#351) -----
 
     /** サーバの 400 (`{"error": …, "message": …}`) と同じ形の失敗 */
@@ -1982,30 +1880,6 @@ describe('useTenkoKiosk', () => {
       expect(k.session.value?.resume_reason).toBe('管理者の再開')
       expect(k.step.value).toBe('daily_inspection')
       expect(k.error.value).toBeNull()
-    })
-
-    it('★ 入口ガードで止めた分はサーバーを呼ばない。通ったあと、本人確認を経て初めて呼ぶ', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
-      const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
-
-      const k = useTenkoKiosk({ allowResume: true })
-      await resume(k, stuck)
-
-      expect(k.bpRequirementUnknown.value).toBe(true)
-      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
-
-      refreshSignedBpBonded.mockImplementationOnce(async () => {
-        signedBpBonded.value = false
-        return false
-      })
-      await k.retryBpRequirement()
-      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
-
-      await k.onFaceAuthComplete(VEIN_OK)
-      expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
-      expect(k.step.value).toBe('medical')
     })
 
     it('★ session_not_resumable は理由の分かる文言を出して最初の画面へ戻す', async () => {
@@ -2105,20 +1979,8 @@ describe('useTenkoKiosk', () => {
       expect(k.resumableSessions.value).toEqual([])
     })
 
-    it('reset() で止めた再開・待っている再開が残らない', async () => {
-      deviceId.value = null
-      signedBpBonded.value = null
-      hasProbedBpBond.value = true
+    it('reset() で待っている再開が残らない', async () => {
       const k = useTenkoKiosk({ allowResume: true })
-      await resume(k, makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' }))
-      expect(k.bpRequirementUnknown.value).toBe(true)
-
-      k.reset()
-
-      expect(k.bpRequirementUnknown.value).toBe(false)
-      expect(k.session.value).toBeNull()
-
-      signedBpBonded.value = false
       await resume(k, makeSession({ status: 'medical_pending' }))
       expect(k.pendingResume.value).not.toBeNull()
       k.reset()
