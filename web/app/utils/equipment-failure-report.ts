@@ -18,7 +18,7 @@
  * `MeasurementResult` 専用で形が合わないので使わない — **ページを読み込み直すと待ち行列は消える**
  * (消えて困る重さの記録ではない: 同じ故障が続けば次に再び記録される)。
  */
-import { reportEquipmentFailure } from '~/utils/api'
+import { apiErrorCode, reportEquipmentFailure } from '~/utils/api'
 import type { CreateEquipmentFailure } from '~/types'
 
 /** サーバーが受ける `failure_type` のうち、キオスクが自動で使うもの */
@@ -161,6 +161,8 @@ export function reportApiFailure(
 ): void {
   const status = httpStatusOf(e)
   if (status !== null && status >= 400 && status < 500) return
+  // 点呼の記録が書けなかった (`record_failed`) は、サーバーが機器故障として記録済み。重ねて残さない
+  if (apiErrorCode(e) === 'record_failed') return
   const type: KioskFailureType = opts.type ?? (status === null ? 'kiosk_offline' : 'database_sync_error')
   const description = status === null
     ? `${what}に失敗しました (サーバーに接続できません)`

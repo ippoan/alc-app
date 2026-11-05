@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { TenkoSession, CancelTenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
 import { tenkoStatusLabel } from '~/utils/tenko-status'
+import { medicalDiffRows as toMedicalDiffRows } from '~/utils/medical-diffs'
 import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
 import { tenkoMethodLabel, tenkoTypeLabel } from '~/utils/tenko-type'
 import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
@@ -203,6 +204,8 @@ async function handleBulkCancel() {
 
 // 詳細モーダル
 const selectedSession = ref<TenkoSession | null>(null)
+/** 詳細の安全判定に出す、通常の値との差 (業務前 二十三 ヌ) */
+const medicalDiffRows = computed(() => toMedicalDiffRows(selectedSession.value?.safety_judgment?.medical_diffs))
 
 // セッション詳細内の測定 (動画・顔写真)
 const sessionMeasurement = ref<ApiMeasurement | null>(null)
@@ -597,6 +600,12 @@ onMounted(() => { loadEmployees(); fetchData() })
               <span v-if="selectedSession.safety_judgment.failed_items.length > 0" class="ml-2 text-red-700">
                 不合格項目: {{ selectedSession.safety_judgment.failed_items.map(selfDeclarationLabel).join(', ') }}
               </span>
+            </div>
+            <!-- 通常の値 (基準値) との差 (業務前 二十三 ヌ)。測っていない・基準値が無い項目は出さない -->
+            <div v-if="medicalDiffRows.length > 0" data-testid="medical-diffs" class="mt-2 grid grid-cols-3 gap-2">
+              <div v-for="row in medicalDiffRows" :key="row.label">
+                <span class="text-gray-500">{{ row.label }}:</span> {{ row.text }}
+              </div>
             </div>
           </div>
 

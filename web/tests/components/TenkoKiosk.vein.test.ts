@@ -84,7 +84,7 @@ const onFaceAuthCompleteMock = vi.fn()
 const employeeId = ref('emp-1')
 const employeeName = ref('山田 太郎')
 /** 指静脈で本人確認できたときに渡す結果 */
-const VEIN_OK = { verified: true, similarity: 0, skipped: true }
+const VEIN_OK = { verified: true, similarity: 0, skipped: true, method: 'vein' }
 
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,

@@ -39,7 +39,7 @@ vi.mock('~/utils/equipment-failure-report', async () => ({
 
 import {
   useTenkoKiosk, RESUMABLE_TENKO_STATUSES,
-  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE,
+  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE, STAND_BP_MISSING_REASON,
 } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
@@ -891,6 +891,72 @@ describe('useTenkoKiosk', () => {
       expect(k.error.value).toBe('測定から有効時間 (30 分) を過ぎています。もう一度測定してください')
       expect(k.step.value).toBe('medical')
     })
+
+    describe('測定台の血圧 (業務前 七・八・十)', () => {
+      const jwt = (payload: object) => `h.${btoa(JSON.stringify(payload))}.s`
+      beforeEach(() => { noteDeviceToken('kiosk', null) })
+      afterEach(() => { noteDeviceToken('kiosk', null) })
+
+      it('★ 血圧が無く、サーバーが遠隔点呼へ切り替えて返したら、同じセッションのまま遠隔へ移して理由を出す', async () => {
+        vi.mocked(submitMedical).mockResolvedValue(makeSession({
+          status: 'self_declaration_pending', tenko_method: '遠隔点呼', systolic: null,
+        }))
+        const k = useTenkoKiosk()
+        k.session.value = makeSession({ status: 'medical_pending' })
+
+        await k.onMedicalSubmit({ temperature: 36.5 })
+
+        expect(k.escalatedToRemote.value).toBe(true)
+        expect(k.isRemote.value).toBe(true)
+        expect(k.escalationReason.value).toBe(STAND_BP_MISSING_REASON)
+        expect(k.step.value).toBe('self_declaration')
+      })
+
+      it('測定台の血圧が結ばれた (systolic あり) ら自動点呼のまま進む', async () => {
+        vi.mocked(submitMedical).mockResolvedValue(makeSession({
+          status: 'self_declaration_pending', tenko_method: '自動点呼', systolic: 128, diastolic: 82,
+        }))
+        const k = useTenkoKiosk()
+        k.session.value = makeSession({ status: 'medical_pending' })
+        await k.onMedicalSubmit({ temperature: 36.5 })
+        expect(k.escalatedToRemote.value).toBe(false)
+        expect(k.startNotice.value).toBeNull()
+      })
+
+      it('開発用の端末は切り替えず (サーバーが自動点呼のまま返す)、警告だけ出す', async () => {
+        noteDeviceToken('kiosk', jwt({ dev_device: true }))
+        vi.mocked(submitMedical).mockResolvedValue(makeSession({
+          status: 'self_declaration_pending', tenko_method: '自動点呼', systolic: null,
+        }))
+        const k = useTenkoKiosk()
+        k.session.value = makeSession({ status: 'medical_pending' })
+        await k.onMedicalSubmit({ temperature: 36.5 })
+        expect(k.escalatedToRemote.value).toBe(false)
+        expect(k.startNotice.value).toBe('測定台の血圧がありません (開発用の端末なので、自動点呼のまま進めます)')
+      })
+
+      it('本番の端末で血圧が無いまま自動点呼で返っても (対面点呼など)、何も足さない', async () => {
+        vi.mocked(submitMedical).mockResolvedValue(makeSession({
+          status: 'self_declaration_pending', tenko_method: '通常点呼', systolic: null,
+        }))
+        const k = useTenkoKiosk()
+        k.session.value = makeSession({ status: 'medical_pending' })
+        await k.onMedicalSubmit({ temperature: 36.5 })
+        expect(k.escalatedToRemote.value).toBe(false)
+        expect(k.startNotice.value).toBeNull()
+      })
+
+      it('最初から遠隔点呼なら切り替えの扱いをしない', async () => {
+        vi.mocked(submitMedical).mockResolvedValue(makeSession({
+          status: 'self_declaration_pending', tenko_method: '遠隔点呼', systolic: null,
+        }))
+        const k = useTenkoKiosk({ remoteMode: true })
+        k.session.value = makeSession({ status: 'medical_pending' })
+        await k.onMedicalSubmit({ temperature: 36.5 })
+        expect(k.escalatedToRemote.value).toBe(false)
+        expect(k.escalationReason.value).toBeNull()
+      })
+    })
   })
 
   // ---------- onSelfDeclarationSubmit ----------
@@ -1130,6 +1196,24 @@ describe('useTenkoKiosk', () => {
 
       await k.onInstructionConfirm()
       expect(k.error.value).toBe('指示確認に失敗しました')
+    })
+
+    it('★ 車両番号が無い (400 vehicle_required) → 車両番号の段へ戻して入力欄を開く (業務前 二十 ハ)', async () => {
+      vi.mocked(confirmInstruction).mockRejectedValue(Object.assign(
+        new Error('API エラー (400): {"error":"vehicle_required","message":"x"}'),
+        { status: 400 },
+      ))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession({ status: 'instruction_pending' })
+      k.step.value = 'instruction'
+
+      await k.onInstructionConfirm()
+
+      expect(k.step.value).toBe('vehicle')
+      expect(k.vehicleManualRequired.value).toBe(true)
+      expect(k.vehicleInput.value).toBe('')
+      expect(k.error.value).toBe('車両番号を登録してから点呼を終えてください')
+      expect(k.isLoading.value).toBe(false)
     })
   })
 
@@ -1656,7 +1740,7 @@ describe('useTenkoKiosk', () => {
     }
 
     /** 指静脈で本人と分かった (TenkoKiosk が onEmployee から渡す形) */
-    const VEIN_OK = { verified: true, similarity: 0, skipped: true } as const
+    const VEIN_OK = { verified: true, similarity: 0, skipped: true, method: 'vein' } as const
 
     it('★ 再開を選んでも、本人確認(指静脈)が通るまでサーバーへ何も言わない', async () => {
       const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
@@ -1740,18 +1824,44 @@ describe('useTenkoKiosk', () => {
       expect(KIOSK_SELF_RESUME_REASON).not.toContain('顔認証')
     })
 
-    it('★ 本人確認の後に self-resume を 1 回だけ、固定の理由 1 つだけを添えて呼ぶ', async () => {
+    it('★ 本人確認の後に self-resume を 1 回だけ、固定の理由と照合した社員・方法を添えて呼ぶ (業務前 十三)', async () => {
       const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending', started_at: '2026-03-31T15:12:26Z' })
       const k = useTenkoKiosk({ allowResume: true })
+      k.employeeId.value = 'emp-1'
 
       await resume(k, stuck)
       await k.onFaceAuthComplete(VEIN_OK)
 
       expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
-      expect(selfResumeTenkoSession).toHaveBeenCalledWith('sess-stuck', { reason: KIOSK_SELF_RESUME_REASON })
+      expect(selfResumeTenkoSession).toHaveBeenCalledWith('sess-stuck', {
+        reason: KIOSK_SELF_RESUME_REASON,
+        identity: { employee_id: 'emp-1', method: 'vein' },
+      })
       // `started_at` は送らない — 記録は書き換えず、再開の事実を足す
-      expect(Object.keys(vi.mocked(selfResumeTenkoSession).mock.calls[0]![1])).toEqual(['reason'])
+      expect(Object.keys(vi.mocked(selfResumeTenkoSession).mock.calls[0]![1])).toEqual(['reason', 'identity'])
       expect(k.step.value).toBe('medical')
+    })
+
+    it('顔認証 (デモの端末) で通ったときは方法を face で送る', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+      k.employeeId.value = 'emp-1'
+      await resume(k, stuck)
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(vi.mocked(selfResumeTenkoSession).mock.calls[0]![1].identity).toEqual({ employee_id: 'emp-1', method: 'face' })
+    })
+
+    it('★ 照合した人が点呼の乗務員と違う (403 identity_mismatch) なら、本人確認の段に留めて置き直させる', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+      await resume(k, stuck)
+      vi.mocked(selfResumeTenkoSession).mockRejectedValueOnce(
+        new Error('API エラー (403): {"error":"identity_mismatch","message":"x"}'),
+      )
+      await k.onFaceAuthComplete(VEIN_OK)
+      expect(k.step.value).toBe('face_auth')
+      expect(k.error.value).toBe('本人確認の結果が点呼の乗務員と一致しません。本人の指を置いてください')
+      expect(k.pendingResume.value).not.toBeNull()
     })
 
     it('★ 管理者が再開済みのセッションも self-resume を呼んで続く (already_resumed で止めない)', async () => {

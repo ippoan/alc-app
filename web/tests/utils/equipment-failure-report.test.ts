@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const api = vi.hoisted(() => ({ reportEquipmentFailure: vi.fn() }))
-vi.mock('~/utils/api', () => api)
+vi.mock('~/utils/api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('~/utils/api')>()
+  return { apiErrorCode: real.apiErrorCode, ...api }
+})
 
 import {
   reportFailure, reportApiFailure, flushPending, httpStatusOf, resetFailureReportState, pendingFailureCount,
@@ -173,6 +176,12 @@ describe('equipment-failure-report (故障の自動記録)', () => {
     it('★ 4xx は記録しない (入力の不備・権限・存在しない ID は故障ではない)', async () => {
       reportApiFailure(http(400), '体温・血圧の記録')
       reportApiFailure(http(404), '乗務員の照会', { type: 'measurement_recording_failed' })
+      await settle()
+      expect(api.reportEquipmentFailure).not.toHaveBeenCalled()
+    })
+
+    it('★ 点呼の記録が書けなかった (500 record_failed) は記録しない (サーバーが機器故障として記録済み)', async () => {
+      reportApiFailure(Object.assign(new Error('API エラー (500): {"error":"record_failed","message":"x"}'), { status: 500 }), '指示確認の送信')
       await settle()
       expect(api.reportEquipmentFailure).not.toHaveBeenCalled()
     })

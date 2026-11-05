@@ -479,6 +479,28 @@ describe('TenkoSessionMonitor — 再開の氏名・代替措置・車両番号'
     w.unmount()
   })
 
+  it('詳細の安全判定に通常の値との差を出す (業務前 二十三 ヌ)。判定に差が無ければ出さない', async () => {
+    const judged = {
+      ...SESSION_NORMAL,
+      safety_judgment: {
+        status: 'fail', failed_items: ['systolic'], judged_at: '2026-09-12T00:01:00Z',
+        medical_diffs: { temperature_diff: -0.2, systolic_diff: 30, diastolic_diff: null },
+      },
+    }
+    const w = await mountWith([judged, { ...SESSION_NORMAL, id: 's-2', safety_judgment: { ...judged.safety_judgment, medical_diffs: null } }])
+    await w.findAll('tbody > tr')[0]!.trigger('click')
+    const diffs = w.find('[data-testid="medical-diffs"]').text()
+    expect(diffs).toContain('体温の差: -0.2 ℃')
+    expect(diffs).toContain('最高血圧の差: +30 mmHg')
+    expect(diffs).not.toContain('最低血圧')
+    w.unmount()
+    const w2 = await mountWith([{ ...SESSION_NORMAL, id: 's-2', safety_judgment: { ...judged.safety_judgment, medical_diffs: null } }])
+    await w2.find('tbody > tr').trigger('click')
+    expect(w2.text()).toContain('安全判定')
+    expect(w2.find('[data-testid="medical-diffs"]').exists()).toBe(false)
+    w2.unmount()
+  })
+
   it('車両番号が無ければ詳細に欄を出さない', async () => {
     const w = await mountWith([SESSION_NORMAL])
     await w.find('tbody > tr').trigger('click')

@@ -402,11 +402,6 @@ watch(bleError, (message) => {
  */
 const { showBpUi } = useBpUiEnabled()
 
-// 医療ステップ: BLE / 手動入力 タブ
-const medicalInputTab = ref<'ble' | 'manual'>('ble')
-watch(isDemoMode, (v) => {
-  if (v) medicalInputTab.value = 'manual'
-}, { immediate: true })
 
 // --- NFC / 手動入力 ---
 const manualIdInput = ref('')
@@ -452,7 +447,7 @@ const vein = useVeinEmployeeIdentify({
     if (emp.id !== employeeId.value) {
       return `${employeeName.value || '最初に確認した人'}さんの指静脈と一致しません。本人の指を置いてください`
     }
-    onFaceAuthResult({ verified: true, similarity: 0, skipped: true })
+    onFaceAuthResult({ verified: true, similarity: 0, skipped: true, method: 'vein' })
     return null
   },
   // 指が置かれた合図で照合を始めるのは、顔認証の段で指静脈を使っているときだけ
@@ -602,7 +597,6 @@ function handleReset() {
   useManualInput.value = false
   vein.error.value = null
   medicalInputSource.value = null
-  medicalInputTab.value = isDemoMode.value ? 'manual' : 'ble'
   isChoosingEscalationReason.value = false
   alcoholMeasurementId.value = null
   sessionMeasurementUsed.value = false
@@ -912,26 +906,16 @@ onUnmounted(() => {
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showBpUi ? '体温・血圧' : '体温' }}</h2>
 
-          <!-- タブ切替 (デモ時は BLE タブ非表示) -->
-          <div v-if="!isDemoMode" class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
-            <button
-              class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-              :class="medicalInputTab === 'ble' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'"
-              @click="medicalInputTab = 'ble'"
-            >
-              CoreS3
-            </button>
-            <button
-              class="flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-              :class="medicalInputTab === 'manual' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'"
-              @click="medicalInputTab = 'manual'"
-            >
-              手動入力
-            </button>
-          </div>
+          <!--
+            体温は機体 (CoreS3) から受けるだけ。手入力はデモの端末だけ (業務前 七・八・十)。
+            血圧はキオスクで測らず、測定台で測った有効時間内の最新の値をサーバーが点呼に結ぶ
+          -->
+          <p v-if="!isDemoMode" class="mb-3 text-sm text-gray-600">
+            血圧は測定台で測った値を使います。測っていないときは遠隔点呼に切り替わります。
+          </p>
 
           <BleStatus
-            v-if="medicalInputTab === 'ble'"
+            v-if="!isDemoMode"
             :allow-skip="false"
             :hide-bp-status="!showBpUi"
             @next="onMedicalNext"

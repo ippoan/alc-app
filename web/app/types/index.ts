@@ -8,6 +8,8 @@ export interface FaceAuthResult {
   snapshot?: Blob
   /** 顔が未登録でスキップした本人確認 (顔写真は無い。Refs ippoan/alc-app-s3#135) */
   skipped?: boolean
+  /** 本人確認の方法 (指静脈で置き換えたときは `vein`。無ければ顔認証) */
+  method?: ResumeIdentityMethod
 }
 
 /** 測定結果 */
@@ -504,6 +506,8 @@ export interface TenkoSession {
   resumed_by_name?: string | null
   /** 従事できない・中止としたときの代替措置の内容 */
   alternative_measure?: string | null
+  /** キオスクで自己再開したときの本人確認の方法 (古い記録・管理者の再開は未定義か null) */
+  resume_identity_method?: ResumeIdentityMethod | null
   /** 車両番号 (車検証 / 予定 / 入力のどれから得たかは `vehicle_number_source`) */
   vehicle_number?: string | null
   vehicle_number_source?: VehicleNumberSource | null
@@ -695,6 +699,19 @@ export interface ResumeSession {
   reason: string
   /** 再開の判断を行った運行管理者の氏名。運行管理者席の鍵からは必須、ログイン中は省略で利用者名 */
   resumed_by_name?: string
+  /**
+   * 自己再開 (`self-resume`) の前に行った本人確認: 照合で決まった社員と方法 (業務前 十三)。
+   * self-resume では必須 (無ければ 400 `identity_required`、点呼の乗務員と違えば 403 `identity_mismatch`)
+   */
+  identity?: ResumeIdentity
+}
+
+/** 本人確認の方法: 指静脈 / 顔認証 (デモの端末) */
+export type ResumeIdentityMethod = 'vein' | 'face'
+
+export interface ResumeIdentity {
+  employee_id: string
+  method: ResumeIdentityMethod
 }
 
 /** 車両番号の登録 (`PUT /tenko/sessions/{id}/vehicle`)。どちらも無ければ 400 */
