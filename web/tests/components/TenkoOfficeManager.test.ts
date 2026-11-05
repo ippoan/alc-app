@@ -101,6 +101,16 @@ describe('TenkoOfficeManager', () => {
     expect(api.updateTenkoOffice.mock.calls[0][1].device_ids).toEqual(['alarm:aa11bb22cc33dd44'])
   })
 
+  it('このブラウザで最後にキオスクの鍵を取った機体は「(この端末)」と出し、一覧の先頭に置く', async () => {
+    localStorage.setItem('alc_device_id_kiosk', 'alarm:5de95ff4aabbccdd')
+    const w = await mountIt()
+    const devs = cards(w)[0]!.findAll('[data-testid="tenko-office-device"]')
+    expect(devs[0]!.element.parentElement!.textContent).toContain('名前の無い機体 5de95ff4')
+    expect(cards(w)[0]!.findAll('[data-testid="tenko-office-this-device"]')).toHaveLength(1)
+    expect(devs[0]!.element.parentElement!.textContent).toContain('(この端末)')
+    localStorage.removeItem('alc_device_id_kiosk')
+  })
+
   it('既存の営業所を保存すると全部を置き換えて読み直す (空の会社名・所在地は null)', async () => {
     api.updateTenkoOffice.mockResolvedValue(OFFICES.offices[0])
     const w = await mountIt()

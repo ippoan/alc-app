@@ -131,7 +131,41 @@ export function isDevDeviceToken(token: string | null | undefined): boolean {
 export function noteDeviceToken(kind: DeviceTokenKind, token: string | null): void {
   const dev = isDevDeviceToken(token)
   setDevMark(kind, dev)
-  if (token) writeStoredMark(kind, dev)
+  if (token) {
+    writeStoredMark(kind, dev)
+    writeDeviceId(kind, token)
+  }
+}
+
+/** 最後に取れた端末の鍵の端末 ID の保存先 (kind ごと) */
+function deviceIdKey(kind: DeviceTokenKind): string {
+  return `alc_device_id_${kind}`
+}
+
+/** トークンの `sub` (端末 ID) を覚える。読めない・保存できないときは何もしない */
+function writeDeviceId(kind: DeviceTokenKind, token: string): void {
+  const sub = (decodeJwtPayloadFromToken(token) as { sub?: unknown } | null)?.sub
+  if (typeof sub !== 'string' || !sub) return
+  try {
+    localStorage.setItem(deviceIdKey(kind), sub)
+  }
+  catch {
+    // private mode・容量超過など。覚えられなくても点呼は止めない
+  }
+}
+
+/**
+ * このブラウザで最後に取れた、その種類の端末の鍵の端末 ID (JWT の `sub`。機体の鍵なら `alarm:<指紋>`)。
+ * 管理画面が「この端末」を見分けるのに使う (新しくトークンは取りに行かない)。取れたことが無ければ null。
+ * 機体を抜いても消さない (同じ PC に同じ機体を挿して使う前提の目印)
+ */
+export function lastDeviceId(kind: DeviceTokenKind): string | null {
+  try {
+    return localStorage.getItem(deviceIdKey(kind))
+  }
+  catch {
+    return null
+  }
 }
 
 /**
