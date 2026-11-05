@@ -124,6 +124,11 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       </p>
       <p class="text-xs text-gray-500">
         グループ企業の営業所は会社名を入れます。他社の営業所の運行管理者が行う点呼は、点呼の受委託の許可が前提です。
+      </p>
+      <p class="text-xs text-gray-500" data-testid="tenko-offices-cohabit-hint">
+        同じ建物でも会社が違えば、会社ごとに別の営業所として登録します。自社の車両をグループ企業の営業所の運行管理者が判定すると、遠隔点呼として記録します。
+      </p>
+      <p class="text-xs text-gray-500">
         車両は車両整備の車両マスタに登録した車両から選びます (1 台は 1 つの営業所に所属します)。
       </p>
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-offices-load-error">{{ loadError }}</p>

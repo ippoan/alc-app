@@ -60,6 +60,7 @@ describe('TenkoOfficeManager', () => {
     expect(cards(w)[0]!.text()).toContain('品川100あ1234 (1 号車)')
     expect(cards(w)[0]!.find('[data-testid="tenko-office-vehicle-elsewhere"]').exists()).toBe(false)
     expect(cards(w)[1]!.find('[data-testid="tenko-office-vehicle-elsewhere"]').text()).toContain('いまは 本社営業所')
+    expect(w.find('[data-testid="tenko-offices-cohabit-hint"]').text()).toContain('同じ建物でも会社が違えば、会社ごとに別の営業所として登録します')
   })
 
   it('既存の営業所を保存すると全部を置き換えて読み直す (空の会社名・所在地は null)', async () => {
