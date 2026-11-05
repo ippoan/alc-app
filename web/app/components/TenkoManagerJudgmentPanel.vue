@@ -83,6 +83,7 @@ const IN_PERSON_SCOPE_LABEL: Record<InPersonScope['scope'], string> = {
   other_office: '別の営業所・グループ企業の運行管理者 (遠隔点呼とみなして記録します)',
   unknown: '車両か運行管理者の所属営業所が未設定のため、同じ営業所 (対面点呼) として記録します。所属は管理画面の「点呼の営業所」で設定できます',
 }
+const VEHICLE_SOURCE_LABEL: Record<string, string> = { carins: ' (車検証から)', manual: ' (手で選んだ所属)' }
 function officeNames(offices: InPersonScope['judge_offices']): string {
   return offices.length ? offices.map(o => o.company_name ? `${o.company_name} ${o.name}` : o.name).join('、') : '未設定'
 }
@@ -188,7 +189,7 @@ async function submit(judgment: 'ok' | 'ng') {
           {{ IN_PERSON_SCOPE_LABEL[inPersonScope.scope] }}
         </p>
         <p class="mt-1 text-xs text-gray-500" data-testid="judgment-in-person-scope-offices">
-          車両{{ inPersonScope.vehicle_number ? ` ${inPersonScope.vehicle_number}` : '' }}の営業所: {{ officeNames(inPersonScope.vehicle_offices) }}
+          車両{{ inPersonScope.vehicle_number ? ` ${inPersonScope.vehicle_number}` : '' }}の営業所: {{ officeNames(inPersonScope.vehicle_offices) }}{{ VEHICLE_SOURCE_LABEL[inPersonScope.vehicle_source ?? ''] ?? '' }}
           / 運行管理者の所属: {{ officeNames(inPersonScope.judge_offices) }}
         </p>
       </template>
