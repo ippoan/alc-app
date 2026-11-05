@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 import type { TenkoSchedule, TenkoSession, SafetyJudgment } from '~/types'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
+import { noteDeviceToken } from '~/utils/token-selection'
 import { onGpsLine, resetGpsFix } from '~/composables/useGpsFix'
 
 const deviceId = ref<string | null>('device-1')
@@ -312,6 +313,81 @@ describe('useTenkoKiosk', () => {
       await k.identifyEmployee('emp-1', '田中')
       expect(k.error.value).toBe('network')
       expect(k.isLoading.value).toBe(false)
+    })
+
+    describe('血圧の記録が 10 日分に満たないとき', () => {
+      const jwt = (payload: object) => `h.${btoa(JSON.stringify(payload))}.s`
+      const bp = (at: string, over: object = {}) => ({ id: at, employee_id: 'emp-1', measured_at: at, systolic: 120, diastolic: 80, ...over })
+      const setup = () => {
+        const k = useTenkoKiosk()
+        k.employeeId.value = 'emp-1'
+        k.selectedSchedule.value = makeSchedule()
+        return k
+      }
+      beforeEach(() => { noteDeviceToken('kiosk', null); vi.mocked(getMeasurements).mockReset() })
+      afterEach(() => { noteDeviceToken('kiosk', null); vi.mocked(getMeasurements).mockReset() })
+
+      it('サーバが遠隔点呼で返しても通常の自動点呼の段のまま進み、案内だけ出す', async () => {
+        vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ tenko_method: '遠隔点呼' }))
+        const k = setup()
+        await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+        expect(k.escalatedToRemote.value).toBe(false)
+        expect(k.isRemote.value).toBe(false)
+        expect(k.step.value).toBe('alcohol')
+        expect(k.startNotice.value).toBe('血圧の記録が 10 日分そろっていないため、遠隔点呼として記録します。最後に運行管理者が承認します。')
+        expect(k.error.value).toBeNull()
+        expect(getMeasurements).not.toHaveBeenCalled()
+        k.reset()
+        expect(k.startNotice.value).toBeNull()
+      })
+
+      it('通常端末は日数を数えに行かない', async () => {
+        vi.mocked(startTenkoSession).mockResolvedValue(makeSession())
+        const k = setup()
+        await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+        expect(getMeasurements).not.toHaveBeenCalled()
+        expect(k.escalatedToRemote.value).toBe(false)
+        expect(k.startNotice.value).toBeNull()
+      })
+
+      it('開発用の端末: 10 日分に満たなければ警告を出して続ける (日本時間の日付で数える)', async () => {
+        noteDeviceToken('kiosk', jwt({ dev_device: true }))
+        vi.mocked(getMeasurements).mockResolvedValue({
+          measurements: [
+            bp('2026-11-01T15:30:00Z'), bp('2026-11-02T10:00:00Z'), // 日本時間では同じ 11/2
+            bp('2026-11-03T10:00:00Z', { systolic: null }),
+            bp('2026-11-04T10:00:00Z', { medical_measured_at: '2026-11-04T01:00:00Z' }),
+            bp('bad-date'),
+          ],
+        } as never)
+        vi.mocked(startTenkoSession).mockResolvedValue(makeSession())
+        const k = setup()
+        await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+        expect(getMeasurements).toHaveBeenCalledWith({ employee_id: 'emp-1', per_page: 100 })
+        expect(k.startNotice.value).toBe('血圧の記録が 10 日分そろっていません (いま 2 日分)。開発用の端末なので、このまま続けます。')
+        expect(startTenkoSession).toHaveBeenCalled()
+        expect(k.step.value).toBe('alcohol')
+      })
+
+      it('開発用の端末: 10 日分そろっていれば警告なし', async () => {
+        noteDeviceToken('kiosk', jwt({ dev_device: true }))
+        const days = Array.from({ length: 10 }, (_, i) => bp(`2026-10-${String(i + 10).padStart(2, '0')}T03:00:00Z`))
+        vi.mocked(getMeasurements).mockResolvedValue({ measurements: days } as never)
+        vi.mocked(startTenkoSession).mockResolvedValue(makeSession())
+        const k = setup()
+        await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+        expect(k.startNotice.value).toBeNull()
+      })
+
+      it('開発用の端末: 取得に失敗しても警告なしで続ける', async () => {
+        noteDeviceToken('kiosk', jwt({ dev_device: true }))
+        vi.mocked(getMeasurements).mockRejectedValue(new Error('x'))
+        vi.mocked(startTenkoSession).mockResolvedValue(makeSession())
+        const k = setup()
+        await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+        expect(k.startNotice.value).toBeNull()
+        expect(startTenkoSession).toHaveBeenCalled()
+      })
     })
 
     it('API エラー (非Error) → 汎用メッセージ', async () => {
