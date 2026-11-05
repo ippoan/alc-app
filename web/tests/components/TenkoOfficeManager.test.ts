@@ -86,14 +86,14 @@ describe('TenkoOfficeManager', () => {
     expect(api.updateTenkoOffice.mock.calls[0][1].carins_bases).toEqual([{ use_base: '長崎県長崎市', user_name: '一歩運輸' }])
   })
 
-  it('点呼端末 (機体の鍵) を選ぶ。名前の無い機体は指紋の頭で出し、別の営業所の端末はその名前を出して、選ぶと移して送る', async () => {
+  it('点呼端末 (機体の鍵) を選ぶ。名前の無い機体は指紋の頭で出し、ほかの営業所にも所属する端末はその名前を出す (選んでも移らない)', async () => {
     api.updateTenkoOffice.mockResolvedValue(OFFICES.offices[1])
     const w = await mountIt()
     const devs = cards(w)[1]!.findAll('[data-testid="tenko-office-device"]')
     expect(devs).toHaveLength(2)
     expect(cards(w)[1]!.text()).toContain('長崎の点呼端末 aa11bb22')
     expect(cards(w)[1]!.text()).toContain('名前の無い機体 5de95ff4')
-    expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('いまは 本社営業所')
+    expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('ほかに 本社営業所')
     expect(cards(w)[0]!.find('[data-testid="tenko-office-device-elsewhere"]').exists()).toBe(false)
     await devs[0]!.setValue(true)
     await btn(w, 1, 'tenko-office-save').trigger('click')
