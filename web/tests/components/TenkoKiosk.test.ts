@@ -96,8 +96,9 @@ mockNuxtImport('useFaceSync', () => () => ({
   sync: vi.fn(async () => {}),
 }))
 
+const demoMode = ref(false)
 mockNuxtImport('useDemoMode', () => () => ({
-  isDemoMode: ref(false),
+  isDemoMode: demoMode,
 }))
 
 const webRtcConnectMock = vi.fn(async () => {})
@@ -236,6 +237,7 @@ describe('TenkoKiosk — 体温・血圧ステップでスキップを出さな�
   beforeEach(() => {
     vi.clearAllMocks()
     step.value = 'medical'
+    demoMode.value = false
   })
 
   it('BleStatus タブに allowSkip=false を渡す', async () => {
@@ -246,16 +248,24 @@ describe('TenkoKiosk — 体温・血圧ステップでスキップを出さな�
     wrapper.unmount()
   })
 
-  it('手動入力タブの ManualMedicalInput にも allowSkip=false を渡す', async () => {
+  it('★ 手動入力のタブは出さない (体温は機体から受けるだけ。業務前 七・八・十)', async () => {
     const wrapper = await mountKiosk()
     await wrapper.vm.$nextTick()
 
-    const manualTab = wrapper.findAll('button').find(b => b.text() === '手動入力')
-    await manualTab!.trigger('click')
+    expect(wrapper.findAll('button').some(b => b.text() === '手動入力')).toBe(false)
+    expect(wrapper.findComponent({ name: 'ManualMedicalInput' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('デモの端末だけ ManualMedicalInput を出し、allowSkip=false を渡す', async () => {
+    demoMode.value = true
+    const wrapper = await mountKiosk()
     await wrapper.vm.$nextTick()
 
+    expect(wrapper.findComponent({ name: 'BleStatus' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'ManualMedicalInput' }).props('allowSkip')).toBe(false)
     wrapper.unmount()
+    demoMode.value = false
   })
 })
 
@@ -269,14 +279,14 @@ describe('TenkoKiosk — 体温の段: 血圧計が無い端末は体温だけ',
     bleBloodPressure.value = null
   })
 
-  it('★ 見出しは「体温」。測定台の血圧の行・案内・「血圧を読み込む」は出さない', async () => {
+  it('★ 見出しは「体温」。測定台の血圧の行・「血圧を読み込む」は出さず、測定台で測る案内だけ出す', async () => {
     const wrapper = await mountKiosk()
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('h2').text()).toBe('体温')
     expect(wrapper.find('[data-testid="station-bp"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('血圧を読み込む')
-    expect(wrapper.text()).not.toContain('測定台')
+    expect(wrapper.text()).toContain('血圧は測定台で測った値を使います。測っていないときは遠隔点呼に切り替わります。')
     wrapper.unmount()
   })
 

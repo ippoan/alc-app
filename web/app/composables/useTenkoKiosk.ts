@@ -23,6 +23,17 @@ import { currentLocation } from '~/composables/useGpsFix'
 /** 自動点呼 (業務前) に要る血圧の記録の日数 */
 const BP_HISTORY_REQUIRED_DAYS = 10
 const BP_HISTORY_IN_PERSON_NOTICE = '血圧の記録が 10 日分そろっていないため、対面点呼になります。終わったら運行管理者に会って確認を受けてください。'
+/**
+ * 測定台の血圧が無い (有効時間を過ぎた) ため、サーバーが体温・血圧の段で遠隔点呼へ切り替えたときの理由
+ * (業務前 七・八・十。血圧は測定台で測り、点呼が有効時間内の最新の値を引き当てる)
+ */
+export const STAND_BP_MISSING_REASON = '測定台の血圧がありません'
+/** 開発用の端末で測定台の血圧が無いとき (サーバーは切り替えない) の警告 */
+const DEV_STAND_BP_MISSING_NOTICE = '測定台の血圧がありません (開発用の端末なので、自動点呼のまま進めます)'
+/** 指示の確認の前に車両番号が無いとサーバーが断ったとき (業務前 二十 ハ) */
+const VEHICLE_REQUIRED_MESSAGE = '車両番号を登録してから点呼を終えてください'
+/** 自己再開で、照合した人が点呼の乗務員と違うとサーバーが断ったとき */
+const IDENTITY_MISMATCH_MESSAGE = '本人確認の結果が点呼の乗務員と一致しません。本人の指を置いてください'
 
 /** UI ステップ (バックエンド status とは別) */
 export type TenkoStep =
@@ -118,7 +129,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    */
   const escalatedToRemote = ref(false)
   /** 切り替えた理由 (未切り替えは null)。画面の文言とサーバへの通知の両方が見る */
-  const escalationReason = ref<TenkoRemoteEscalationReason | null>(null)
+  const escalationReason = ref<TenkoRemoteEscalationReason | typeof STAND_BP_MISSING_REASON | null>(null)
   /**
    * いま遠隔か。最初から遠隔 / 途中で昇格 のどちらでも true。
    * **画面の「遠隔かどうか」の判定はすべてこれ 1 つを見る。**
@@ -324,15 +335,25 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    *   (`pendingResume` は残す)。ここで黙って続きへ通すと、直そうとしている #351 の症状
    *   (実施時刻がどこにも残らない点呼) をそのまま作ってしまう
    */
-  async function _finishResume(s: TenkoSession) {
+  async function _finishResume(s: TenkoSession, auth: FaceAuthResult) {
     error.value = null
     isLoading.value = true
     try {
-      const resumed = await selfResumeTenkoSession(s.id, { reason: KIOSK_SELF_RESUME_REASON })
+      // 照合で決まった人と方法をサーバーへ渡す (サーバーが点呼の乗務員と突き合わせる。業務前 十三)
+      const resumed = await selfResumeTenkoSession(s.id, {
+        reason: KIOSK_SELF_RESUME_REASON,
+        identity: { employee_id: employeeId.value, method: auth.method ?? 'face' },
+      })
       pendingResume.value = null
       medicalSentBack.value = _sentBackToMedical(s.status, resumed)
       _enterAfterStart(resumed, true)
     } catch (e) {
+      if (apiErrorCode(e) === 'identity_mismatch') {
+        // 照合した人が点呼の乗務員と違う。本人確認の段に留めて置き直させる
+        error.value = IDENTITY_MISMATCH_MESSAGE
+        step.value = 'face_auth'
+        return
+      }
       if (apiErrorCode(e) === 'session_not_resumable') {
         // reset() が error も畳むので、文言は**戻した後**に載せる
         reset()
@@ -445,7 +466,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     if (!result.verified) return
     // 再開の本人確認 (業務前 十三): 新しいセッションは起こさず、止まっている点呼を self-resume する
     if (pendingResume.value) {
-      await _finishResume(pendingResume.value)
+      await _finishResume(pendingResume.value, result)
       return
     }
     // 業務後は予定が無くても進められる (selectedTenkoType='post_operation' が
@@ -546,6 +567,15 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
       const body: SubmitMedicalData = deviceId.value ? { ...data, device_id: deviceId.value } : data
       const s = await submitMedical(session.value.id, body)
       session.value = s
+      if (!isRemote.value && s.systolic == null) {
+        if (s.tenko_method === '遠隔点呼') {
+          // 測定台の血圧が無いので、サーバーが遠隔点呼へ切り替えた。画面も同じセッションのまま遠隔へ移す
+          escalatedToRemote.value = true
+          escalationReason.value = STAND_BP_MISSING_REASON
+        } else if (isDevDevice('kiosk')) {
+          startNotice.value = DEV_STAND_BP_MISSING_NOTICE
+        }
+      }
       _advanceByStatus(s.status)
     } catch (e) {
       if (apiErrorCode(e) === 'measurement_expired') {
@@ -649,6 +679,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
       session.value = s
       _advanceByStatus(s.status)
     } catch (e) {
+      if (apiErrorCode(e) === 'vehicle_required') {
+        // 車両番号が無いまま終えようとした (業務前 二十 ハ)。車両番号の段へ戻して入れさせ、そこから指示の確認へ戻る
+        vehicleInput.value = selectedSchedule.value?.vehicle_number ?? ''
+        vehicleManualRequired.value = true
+        step.value = 'vehicle'
+        error.value = VEHICLE_REQUIRED_MESSAGE
+        return
+      }
       _fail(e, '指示確認に失敗しました', '指示確認の送信')
     } finally {
       isLoading.value = false
