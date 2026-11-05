@@ -15,9 +15,9 @@ const emit = defineEmits<{
 
 /**
  * 運行管理者が判定する理由。自動点呼から切り替えたときはその理由 (血圧計の故障・血圧の記録が足りない など)、
- * 最初から遠隔点呼で始めたときは「遠隔点呼で受けた点呼」
+ * 最初から遠隔点呼で始めたとき (理由が無い) は行を出さない
  */
-const judgmentReason = computed(() => props.session.remote_escalation_reason?.trim() || '遠隔点呼で受けた点呼')
+const judgmentReason = computed(() => props.session.remote_escalation_reason?.trim() || null)
 
 /** 血圧の記録不足で対面点呼にした点呼。運行管理者に会って確認を受ける */
 const inPerson = computed(() => isBpInPersonSession(props.session))
@@ -51,7 +51,7 @@ function formatTime(iso: string | null): string {
       <template v-else>
         入力は終わりました。判定は運行管理者が行うので、このまま終わって大丈夫です
       </template>
-      <span class="block mt-1" data-testid="judgment-reason">運行管理者が判定する理由: {{ judgmentReason }}</span>
+      <span v-if="judgmentReason" class="block mt-1" data-testid="judgment-reason">運行管理者が判定する理由: {{ judgmentReason }}</span>
     </p>
 
     <!-- 遠隔点呼の運行管理者の判定 (判定で閉じた後) -->

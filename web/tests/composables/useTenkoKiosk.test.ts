@@ -1560,6 +1560,16 @@ describe('useTenkoKiosk', () => {
       expect(k.resumableSessions.value.map(s => s.id)).toEqual(['d'])
     })
 
+    it('★ 自動点呼のタブは、遠隔点呼で始めた途中の点呼を候補に出さない', async () => {
+      serveByStatus([
+        makeSession({ id: 'auto', status: 'medical_pending', tenko_method: '自動点呼' }),
+        makeSession({ id: 'remote', status: 'medical_pending', tenko_method: '遠隔点呼', schedule_id: null }),
+      ])
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['auto'])
+    })
+
     it('★ アルコール測定済み (instruction_pending / report_pending) も候補に出ない', async () => {
       expect(RESUMABLE_TENKO_STATUSES).not.toContain('instruction_pending')
       expect(RESUMABLE_TENKO_STATUSES).not.toContain('report_pending')

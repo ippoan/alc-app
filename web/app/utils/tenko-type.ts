@@ -45,3 +45,17 @@ export function isBpInPersonSession(s: {
     && isInPersonTenkoMethod(s.tenko_method)
     && (s.remote_escalation_reason ?? '').startsWith(BP_IN_PERSON_REASON_PREFIX)
 }
+
+/**
+ * 自動点呼のタブの「続きから再開」の候補にしてよいセッションか。自動点呼 (方法の無い古い行を含む) と、
+ * 血圧の記録不足で対面点呼に切り替えたものだけ。遠隔点呼で始めた途中の点呼を拾うと、見出しは自動点呼の
+ * まま中身が遠隔点呼になり、最後に判定待ちで止まる (2026-11-05 実機)。遠隔点呼のタブは候補を引かない
+ */
+export function isResumableInAutoTab(s: {
+  schedule_id?: string | null
+  tenko_type?: string
+  tenko_method?: string | null
+  remote_escalation_reason?: string | null
+}): boolean {
+  return !s.tenko_method || s.tenko_method === '自動点呼' || isBpInPersonSession(s)
+}
