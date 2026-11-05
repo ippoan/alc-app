@@ -113,7 +113,9 @@ function makeSession(): TenkoSession {
     created_at: '2026-09-16T00:00:00Z', updated_at: '2026-09-16T00:00:00Z',
     carins_cert_no: null, carins_vehicle_id: null,
     carins_expires_on: null, carins_matched_by: null,
-  }
+    // 車検証で車両番号が決まった点呼 = 車両番号の段は通らない (この試験の関心は体温・血圧の段)
+    vehicle_number: 'テスト車両', vehicle_number_source: 'carins',
+  } as TenkoSession
 }
 
 /** 非同期の watch コールバックが落ち着くまで待つ */

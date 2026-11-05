@@ -64,16 +64,20 @@ export function useBlowVideoRecording() {
    *
    * `recordImmediately` はデモモード用。FC-1200 の state 変化が来ないので
    * `onAlcStateChange` が発火せず、録画が始まらないため。
+   *
+   * 戻り値はカメラを起こせたか (呼び手が故障の記録に使う。失敗でも例外は出さない)。
    */
-  async function startCamera(options: { recordImmediately?: boolean } = {}): Promise<void> {
+  async function startCamera(options: { recordImmediately?: boolean } = {}): Promise<boolean> {
     try {
       await camera.start('user')
       if (options.recordImmediately && camera.stream.value) {
         startRecording(camera.stream.value)
       }
+      return true
     }
     catch (e) {
       console.warn('[BlowVideo] Recording camera failed:', e)
+      return false
     }
   }
 

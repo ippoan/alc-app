@@ -49,6 +49,11 @@ export interface VeinEmployeeIdentifyOptions {
   expectedEmployeeId?: () => string | null
   /** 1:1 で照合しようとした人に、承認済みの指静脈の記録が無かったときに出す理由 (既定は `missMessage`) */
   noRecordMessage?: string
+  /**
+   * 機器・モジュールの失敗 (読み取れない・記録を用意できない) のときに呼ぶ。**利用者の操作の誤り
+   * (指を置かなかった・置き直しの不一致・別人・未承認) では呼ばない** — 故障の自動記録はこれを使う
+   */
+  onDeviceError?: (message: string) => void
   /** どの画面の照合か。診断ログ (`[vein] 照合開始 screen=…`) にだけ使う (例: manager / it-tenko / kiosk / bp) */
   label?: string
 }
@@ -87,6 +92,12 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     await vein.say('AGAIN').catch(() => {})
   }
 
+  /** 指を置かなかった (`NO_FINGER`)・置き直しの不一致 (`RETAKE`) は利用者側のこと。それ以外を機器の失敗として知らせる */
+  function deviceError(message: string): void {
+    if (/NO_FINGER|RETAKE/.test(message)) return
+    opts.onDeviceError?.(message)
+  }
+
   /** 用意しかけの記録 (同じ人なら、免許証を読んだときに始めた書き込みを照合が待つ) */
   let prepared: { employeeId: string; promise: Promise<number | null> } | null = null
 
@@ -116,6 +127,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       moduleId = await prepare(employeeId)
     }
     catch (e) {
+      deviceError((e as Error).message)
       return `指静脈の記録をこの端末に用意できませんでした (${(e as Error).message})`
     }
     finally {
@@ -131,6 +143,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       match = await matchVeinModuleEmployee(vein, employeeId, onAgain, sayAgain, opts.scope)
     }
     catch (e) {
+      deviceError((e as Error).message)
       return `指静脈を読み取れませんでした (${(e as Error).message})`
     }
     if (match === null) return opts.missMessage
@@ -168,6 +181,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
         : await vein.capture()
     }
     catch (e) {
+      deviceError((e as Error).message)
       return `指静脈を読み取れませんでした (${(e as Error).message})`
     }
     const outcome = viaModule

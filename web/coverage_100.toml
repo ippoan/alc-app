@@ -426,3 +426,8 @@ branches = true
 # 点呼の届出・認定申請の様式への差し込み (行。分岐は ?? の既定の数か所が残る)
 [[files]]
 path = "app/utils/tenko-forms.ts"
+
+# 故障の自動記録 (機器・保存・通信の失敗)
+[[files]]
+path = "app/utils/equipment-failure-report.ts"
+branches = true

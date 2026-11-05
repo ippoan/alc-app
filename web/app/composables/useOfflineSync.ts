@@ -3,6 +3,7 @@ import { isClient } from '~/utils/env'
 import type { PendingMeasurement } from '~/utils/offline-queue'
 import { saveMeasurement, updateMeasurement } from '~/utils/api'
 import { enqueue, flush, getAllWithStatus, remove, clearAll, cleanupOld } from '~/utils/offline-queue'
+import { reportApiFailure, reportFailure } from '~/utils/equipment-failure-report'
 
 const DEFAULT_RETENTION_DAYS = 730 // 2年
 
@@ -40,8 +41,9 @@ export function useOfflineSync() {
       await enqueue(result, undefined, activeMeasurementId, new Date().toISOString(), videoStoreId)
       await refreshQueue()
       return 'saved'
-    } catch {
-      // API 失敗時もキューに退避
+    } catch (e) {
+      // API 失敗時もキューに退避。通信・サーバーの失敗は故障として残す (4xx は残さない)
+      reportApiFailure(e, '測定結果の送信', { type: 'measurement_recording_failed' })
       await enqueue(result, facePhotoBlob, activeMeasurementId, undefined, videoStoreId)
       await refreshQueue()
       return 'queued'
@@ -55,6 +57,13 @@ export function useOfflineSync() {
     try {
       const result = await flush(saveMeasurement, updateMeasurement)
       lastSyncResult.value = result
+      if (result.failed > 0) {
+        reportFailure({
+          type: 'database_sync_error',
+          description: '端末に保存した測定結果をサーバーへ送り直せませんでした',
+          device: 'オフラインキュー',
+        })
+      }
       await refreshQueue()
     } finally {
       isSyncing.value = false

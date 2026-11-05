@@ -18,6 +18,12 @@ vi.mock('~/utils/offline-queue', () => ({
   cleanupOld: vi.fn().mockResolvedValue(undefined),
 }))
 
+// 故障の自動記録 (記録の中身は tests/utils/equipment-failure-report.test.ts)
+vi.mock('~/utils/equipment-failure-report', () => ({
+  reportApiFailure: vi.fn(),
+  reportFailure: vi.fn(),
+}))
+
 const envMock = vi.hoisted(() => ({
   isClient: true,
 }))
@@ -26,6 +32,7 @@ vi.mock('~/utils/env', () => envMock)
 import { useOfflineSync } from '~/composables/useOfflineSync'
 import { saveMeasurement, updateMeasurement } from '~/utils/api'
 import { enqueue, flush, getAllWithStatus, remove, clearAll, cleanupOld } from '~/utils/offline-queue'
+import { reportApiFailure, reportFailure } from '~/utils/equipment-failure-report'
 
 function createResult(overrides: Partial<MeasurementResult> = {}): MeasurementResult {
   return {
@@ -75,6 +82,17 @@ describe('useOfflineSync', () => {
 
       expect(status).toBe('queued')
       expect(enqueue).toHaveBeenCalledTimes(1)
+      // 通信・サーバーの失敗は故障として記録する
+      expect(reportApiFailure).toHaveBeenCalledWith(
+        expect.any(Error), '測定結果の送信', { type: 'measurement_recording_failed' },
+      )
+    })
+
+    it('正常に送れたときは故障を記録しない', async () => {
+      vi.mocked(saveMeasurement).mockResolvedValueOnce({} as never)
+      const { save } = useOfflineSync()
+      await save(createResult())
+      expect(reportApiFailure).not.toHaveBeenCalled()
     })
   })
 
@@ -87,6 +105,20 @@ describe('useOfflineSync', () => {
 
       expect(flush).toHaveBeenCalledWith(saveMeasurement, updateMeasurement)
       expect(lastSyncResult.value).toEqual({ sent: 3, failed: 0 })
+    })
+
+    it('★ 送り直せなかった測定が残ったら database_sync_error で記録する。全部送れたら記録しない', async () => {
+      vi.mocked(flush).mockResolvedValueOnce({ sent: 1, failed: 2 })
+      const { syncQueue } = useOfflineSync()
+      await syncQueue()
+      expect(reportFailure).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'database_sync_error', device: 'オフラインキュー',
+      }))
+
+      vi.mocked(reportFailure).mockClear()
+      vi.mocked(flush).mockResolvedValueOnce({ sent: 2, failed: 0 })
+      await syncQueue()
+      expect(reportFailure).not.toHaveBeenCalled()
     })
 
     it('should not sync when already syncing', async () => {

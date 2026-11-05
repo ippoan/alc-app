@@ -47,11 +47,16 @@ vi.mock('~/utils/api', async () => ({
   submitCarryingItemChecks: vi.fn(),
   listTenkoSessions: vi.fn(),
   selfResumeTenkoSession: vi.fn(),
+  updateTenkoSessionVehicle: vi.fn(),
+}))
+vi.mock('~/utils/equipment-failure-report', async () => ({
+  ...(await vi.importActual<typeof import('~/utils/equipment-failure-report')>('~/utils/equipment-failure-report')),
+  reportApiFailure: vi.fn(),
 }))
 
 import {
   useTenkoKiosk, BP_REQUIREMENT_UNKNOWN_MESSAGE, RESUMABLE_TENKO_STATUSES,
-  KIOSK_SELF_RESUME_REASON, ALREADY_RESUMED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE,
+  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE,
 } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
@@ -69,7 +74,9 @@ import {
   submitCarryingItemChecks,
   listTenkoSessions,
   selfResumeTenkoSession,
+  updateTenkoSessionVehicle,
 } from '~/utils/api'
+import { reportApiFailure } from '~/utils/equipment-failure-report'
 
 // --- helpers ---
 
@@ -124,6 +131,11 @@ function makeSession(overrides?: Partial<TenkoSession>): TenkoSession {
     resumed_at: null,
     resume_reason: null,
     resumed_by_user_id: null,
+    resumed_by_name: null,
+    alternative_measure: null,
+    // 既定は車検証で車両番号が決まった点呼 = 車両番号の段は通らない。車両番号の段を見る試験は上書きする
+    vehicle_number: '車両A',
+    vehicle_number_source: 'carins',
     self_declaration: null,
     safety_judgment: null,
     daily_inspection: null,
@@ -1633,6 +1645,8 @@ describe('useTenkoKiosk', () => {
       })
     }
 
+    /** いま再開を選んでいる行 (サーバー(モック)が status を変えずに返す) */
+    let held: TenkoSession | null = null
     /** サーバが返す「再開済みにした行」 (Refs ippoan/alc-app#351) */
     const RESUMED_AT = '2026-03-31T23:05:00Z'
 
@@ -1641,8 +1655,9 @@ describe('useTenkoKiosk', () => {
       vi.mocked(listTenkoSessions).mockResolvedValue(page([]))
       // 既定はサーバが受け付ける。`started_at` は**サーバも書き換えない**ので、
       // 返ってくるのは元の行に resumed_at / resume_reason が乗ったものになる
+      held = null
       vi.mocked(selfResumeTenkoSession).mockImplementation(async (id, data) =>
-        makeSession({ id, resumed_at: RESUMED_AT, resume_reason: data.reason }),
+        ({ ...(held?.id === id ? held : makeSession({ id })), resumed_at: RESUMED_AT, resume_reason: data.reason }),
       )
     })
 
@@ -1773,7 +1788,38 @@ describe('useTenkoKiosk', () => {
       expect(k.resumableSessions.value).toEqual([])
     })
 
-    // ----- resumeSession: 拾った status から正しい step へ -----
+    // ----- resumeSession: 指静脈の本人確認を待ち、通ってから self-resume して続きへ (業務前 十三) -----
+
+    /** 再開を選ぶ。サーバー(モック)は、選んだ行の status のまま「再開済みにした行」を返す */
+    async function resume(k: ReturnType<typeof useTenkoKiosk>, row: TenkoSession) {
+      held = row
+      await k.resumeSession(row)
+    }
+
+    /** 指静脈で本人と分かった (TenkoKiosk が onEmployee から渡す形) */
+    const VEIN_OK = { verified: true, similarity: 0, skipped: true } as const
+
+    it('★ 再開を選んでも、本人確認(指静脈)が通るまでサーバーへ何も言わない', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+      await resume(k, stuck)
+
+      expect(k.step.value).toBe('face_auth')
+      expect(k.pendingResume.value?.id).toBe('sess-stuck')
+      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('★ 本人確認が通っていない結果(verified:false)では再開しない', async () => {
+      const k = useTenkoKiosk({ allowResume: true })
+      await resume(k, makeSession({ status: 'medical_pending' }))
+      await k.onFaceAuthComplete({ verified: false, similarity: 0 })
+
+      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
+      expect(k.step.value).toBe('face_auth')
+      expect(k.pendingResume.value).not.toBeNull()
+    })
 
     it.each([
       ['identity_verified', 'alcohol'],
@@ -1781,16 +1827,18 @@ describe('useTenkoKiosk', () => {
       ['self_declaration_pending', 'self_declaration'],
       ['daily_inspection_pending', 'daily_inspection'],
       ['carrying_items_pending', 'carrying_items'],
-    ] as const)('★ %s のセッションを選ぶと %s から続く', async (status, expected) => {
+    ] as const)('★ %s のセッションは本人確認の後 self-resume して %s から続く', async (status, expected) => {
       const stuck = makeSession({ id: 'sess-stuck', status })
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
       // サーバが返した「再開済みにした行」を載せる (Refs ippoan/alc-app#351)
       expect(k.session.value?.id).toBe('sess-stuck')
       expect(k.session.value?.resumed_at).toBe(RESUMED_AT)
       expect(k.step.value).toBe(expected)
       expect(k.error.value).toBeNull()
+      expect(k.pendingResume.value).toBeNull()
       expect(k.isLoading.value).toBe(false)
       // 新しいセッションは起こさない
       expect(startTenkoSession).not.toHaveBeenCalled()
@@ -1803,15 +1851,16 @@ describe('useTenkoKiosk', () => {
 
       const k = useTenkoKiosk({ allowResume: true })
       await k.identifyEmployee('emp-1', '田中')
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
 
       expect(k.selectedSchedule.value).toStrictEqual(sched)
     })
 
-    it('予定が消費済みで拾えなくても続きへ進む (指示は出ないだけ)', async () => {
+    it('予定が消費済みで拾えなくても続きへ進む (指示は出ないだけ)。予定の無い業務前でも再開の本人確認は通る', async () => {
       const stuck = makeSession({ status: 'medical_pending', schedule_id: 'sched-gone' })
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
       expect(k.selectedSchedule.value).toBeNull()
       expect(k.step.value).toBe('medical')
@@ -1824,9 +1873,11 @@ describe('useTenkoKiosk', () => {
       const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
 
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
 
       expect(k.step.value).not.toBe('medical')
+      expect(k.step.value).not.toBe('face_auth')
+      expect(k.pendingResume.value).toBeNull()
       expect(k.bpRequirementUnknown.value).toBe(true)
       expect(k.error.value).toBe(BP_REQUIREMENT_UNKNOWN_MESSAGE)
       expect(k.isLoading.value).toBe(false)
@@ -1839,20 +1890,21 @@ describe('useTenkoKiosk', () => {
       const stuck = makeSession({ status: 'identity_verified', tenko_type: 'post_operation' })
 
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
       expect(k.bpRequirementUnknown.value).toBe(false)
       expect(k.step.value).toBe('alcohol')
     })
 
-    it('★ 止めた再開も「もう一度試す」で続きから戻れる (リロードなし)', async () => {
+    it('★ 止めた再開も「もう一度試す」で本人確認の段に戻れる (リロードなし)', async () => {
       deviceId.value = null
       signedBpBonded.value = null
       hasProbedBpBond.value = true
       const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
 
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
       expect(k.bpRequirementUnknown.value).toBe(true)
 
       refreshSignedBpBonded.mockImplementationOnce(async () => {
@@ -1864,8 +1916,10 @@ describe('useTenkoKiosk', () => {
       expect(refreshSignedBpBonded).toHaveBeenCalledTimes(1)
       expect(k.bpRequirementUnknown.value).toBe(false)
       expect(k.error.value).toBeNull()
-      expect(k.step.value).toBe('medical')
-      // 顔認証の経路を巻き込まない
+      expect(k.step.value).toBe('face_auth')
+      expect(k.pendingResume.value?.id).toBe(stuck.id)
+      // 本人確認はまだなので、サーバーは呼ばない
+      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
       expect(startTenkoSession).not.toHaveBeenCalled()
     })
 
@@ -1876,7 +1930,7 @@ describe('useTenkoKiosk', () => {
       const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
 
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
       await k.retryBpRequirement()
 
       expect(k.bpRequirementUnknown.value).toBe(true)
@@ -1894,105 +1948,101 @@ describe('useTenkoKiosk', () => {
       )
     }
 
-    it('★ 再開したらサーバに知らせる — 固定の理由を添えて self-resume を 1 回だけ呼ぶ', async () => {
-      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
-      const k = useTenkoKiosk({ allowResume: true })
-
-      await k.resumeSession(stuck)
-
-      expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
-      expect(selfResumeTenkoSession).toHaveBeenCalledWith('sess-stuck', { reason: KIOSK_SELF_RESUME_REASON })
-      expect(k.step.value).toBe('medical')
-      expect(k.error.value).toBeNull()
-      expect(k.isLoading.value).toBe(false)
+    it('★ 理由は指静脈で本人確認済みと書く (実際の確認方法と食い違わない)', () => {
+      expect(KIOSK_SELF_RESUME_REASON).toContain('指静脈')
+      expect(KIOSK_SELF_RESUME_REASON).not.toContain('顔認証')
     })
 
-    it('★ `started_at` は送らない — 送るのは reason だけ (記録は書き換えず、再開の事実を足す)', async () => {
+    it('★ 本人確認の後に self-resume を 1 回だけ、固定の理由 1 つだけを添えて呼ぶ', async () => {
       const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending', started_at: '2026-03-31T15:12:26Z' })
       const k = useTenkoKiosk({ allowResume: true })
 
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
-      const body = vi.mocked(selfResumeTenkoSession).mock.calls[0]![1]
-      expect(Object.keys(body)).toEqual(['reason'])
-      // 管理者用の `/resume` (status を書き換える口) は使わない
-      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
+      expect(selfResumeTenkoSession).toHaveBeenCalledWith('sess-stuck', { reason: KIOSK_SELF_RESUME_REASON })
+      // `started_at` は送らない — 記録は書き換えず、再開の事実を足す
+      expect(Object.keys(vi.mocked(selfResumeTenkoSession).mock.calls[0]![1])).toEqual(['reason'])
+      expect(k.step.value).toBe('medical')
     })
 
-    it('★ 入口ガードで止めた分は「1 回まで」を食い潰さない (サーバを呼ばない)', async () => {
+    it('★ 管理者が再開済みのセッションも self-resume を呼んで続く (already_resumed で止めない)', async () => {
+      const managerResumed = makeSession({
+        id: 'sess-mgr', status: 'daily_inspection_pending',
+        resumed_at: RESUMED_AT, resume_reason: '管理者の再開', resumed_by_name: '運行管理者',
+      })
+      vi.mocked(selfResumeTenkoSession).mockResolvedValue(managerResumed)
+      const k = useTenkoKiosk({ allowResume: true })
+
+      await resume(k, managerResumed)
+      await k.onFaceAuthComplete(VEIN_OK)
+
+      expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
+      expect(k.session.value?.resume_reason).toBe('管理者の再開')
+      expect(k.step.value).toBe('daily_inspection')
+      expect(k.error.value).toBeNull()
+    })
+
+    it('★ 入口ガードで止めた分はサーバーを呼ばない。通ったあと、本人確認を経て初めて呼ぶ', async () => {
       deviceId.value = null
       signedBpBonded.value = null
       hasProbedBpBond.value = true
       const stuck = makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' })
 
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
 
       expect(k.bpRequirementUnknown.value).toBe(true)
       expect(selfResumeTenkoSession).not.toHaveBeenCalled()
 
-      // 「もう一度試す」で通ったときに初めて 1 回ぶんを使う
       refreshSignedBpBonded.mockImplementationOnce(async () => {
         signedBpBonded.value = false
         return false
       })
       await k.retryBpRequirement()
+      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
 
+      await k.onFaceAuthComplete(VEIN_OK)
       expect(selfResumeTenkoSession).toHaveBeenCalledTimes(1)
       expect(k.step.value).toBe('medical')
     })
 
-    it('★ already_resumed は無言で止めず、文言を出して最初の画面へ戻す', async () => {
-      vi.mocked(selfResumeTenkoSession).mockRejectedValue(
-        badRequest('already_resumed', 'この点呼は既に再開済みです。新しく点呼をやり直してください'),
-      )
-      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
-
-      const k = useTenkoKiosk({ allowResume: true })
-      await k.identifyEmployee('emp-1', '田中')
-      await k.resumeSession(stuck)
-
-      expect(k.error.value).toBe(ALREADY_RESUMED_MESSAGE)
-      // 押し直しても永久に通らないので、乗務員 ID の画面まで戻す
-      expect(k.step.value).toBe('nfc')
-      expect(k.session.value).toBeNull()
-      expect(k.employeeId.value).toBe('')
-      expect(k.isLoading.value).toBe(false)
-    })
-
-    it('★ session_not_resumable も理由の分かる文言を出して最初の画面へ戻す', async () => {
+    it('★ session_not_resumable は理由の分かる文言を出して最初の画面へ戻す', async () => {
       vi.mocked(selfResumeTenkoSession).mockRejectedValue(
         badRequest('session_not_resumable', 'この点呼は再開できません。新しく点呼をやり直してください'),
       )
       const stuck = makeSession({ status: 'medical_pending' })
 
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
       expect(k.error.value).toBe(SESSION_NOT_RESUMABLE_MESSAGE)
       expect(k.error.value).toContain('やり直して')
       expect(k.step.value).toBe('nfc')
       expect(k.session.value).toBeNull()
+      expect(k.pendingResume.value).toBeNull()
     })
 
-    it('★ 通信が落ちたときは続きへ通さない — 予定選択に留めて押し直させる', async () => {
-      vi.mocked(selfResumeTenkoSession).mockRejectedValue(new Error('Failed to fetch'))
+    it('★ 通信が落ちたときは続きへ通さない — 本人確認の段に留めて、もう一度置かせる', async () => {
+      vi.mocked(selfResumeTenkoSession).mockRejectedValueOnce(new Error('Failed to fetch'))
       const stuck = makeSession({ status: 'medical_pending' })
 
       const k = useTenkoKiosk({ allowResume: true })
       await k.identifyEmployee('emp-1', '田中')
-      await k.resumeSession(stuck)
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
       // 黙って通すと #351 の症状 (実施時刻の残らない点呼) をそのまま作ってしまう
-      expect(k.step.value).toBe('schedule_select')
+      expect(k.step.value).toBe('face_auth')
       expect(k.error.value).toBe('Failed to fetch')
-      // やり直せるように乗務員は保ったまま
+      expect(k.pendingResume.value?.id).toBe(stuck.id)
       expect(k.employeeId.value).toBe('emp-1')
+      // 通信の失敗は故障として残す
+      expect(reportApiFailure).toHaveBeenCalledWith(expect.any(Error), '点呼の再開', expect.objectContaining({ sessionId: stuck.id }))
 
-      vi.mocked(selfResumeTenkoSession).mockResolvedValueOnce(
-        makeSession({ status: 'medical_pending', resumed_at: RESUMED_AT }),
-      )
-      await k.resumeSession(stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
 
       expect(k.error.value).toBeNull()
       expect(k.step.value).toBe('medical')
@@ -2001,36 +2051,425 @@ describe('useTenkoKiosk', () => {
     it('Error でないもので落ちても文言を出す (無言で止めない)', async () => {
       vi.mocked(selfResumeTenkoSession).mockRejectedValue('boom')
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(makeSession({ status: 'medical_pending' }))
+      await resume(k, makeSession({ status: 'medical_pending' }))
+      await k.onFaceAuthComplete(VEIN_OK)
 
       expect(k.error.value).toBe('点呼の再開に失敗しました')
-      expect(k.step.value).not.toBe('medical')
+      expect(k.step.value).toBe('face_auth')
     })
 
-    it('★ 1 度再開した点呼は再開候補に出さない (押してから断らない)', async () => {
+    // ----- 測定の有効時間 (業務前 八) -----
+
+    it('★ 再開したら有効時間切れで medical_pending に戻された → 体温・血圧の測り直しの段へ、理由つき', async () => {
+      const stuck = makeSession({ id: 'sess-stuck', status: 'daily_inspection_pending' })
+      vi.mocked(selfResumeTenkoSession).mockResolvedValue(
+        makeSession({ id: 'sess-stuck', status: 'medical_pending', resumed_at: RESUMED_AT }),
+      )
+      const k = useTenkoKiosk({ allowResume: true })
+      await resume(k, stuck)
+      await k.onFaceAuthComplete(VEIN_OK)
+
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBe(MEDICAL_EXPIRED_MESSAGE)
+    })
+
+    it('もともと medical_pending の再開では、有効時間切れの案内は出さない', async () => {
+      const k = useTenkoKiosk({ allowResume: true })
+      await resume(k, makeSession({ status: 'medical_pending' }))
+      await k.onFaceAuthComplete(VEIN_OK)
+
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBeNull()
+    })
+
+    it('★ 管理者が再開済みでも候補に出す (resumed_at で落とさない)', async () => {
       serveByStatus([
-        makeSession({ id: 'resumed', status: 'medical_pending', resumed_at: RESUMED_AT }),
+        makeSession({ id: 'resumed', status: 'daily_inspection_pending', resumed_at: RESUMED_AT }),
         makeSession({ id: 'fresh', status: 'medical_pending' }),
       ])
 
       const k = useTenkoKiosk({ allowResume: true })
       await k.identifyEmployee('emp-1', '田中')
 
-      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['fresh'])
+      expect(k.resumableSessions.value.map(s => s.id).sort()).toEqual(['fresh', 'resumed'])
     })
 
-    it('reset() で止めた再開が残らない', async () => {
+    it('アルコール測定済みの行は、再開済みかどうかに関わらず候補に出さない', async () => {
+      serveByStatus([
+        makeSession({ id: 'tested', status: 'medical_pending', alcohol_tested_at: '2026-03-31T00:00:00Z' }),
+      ])
+
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+
+      expect(k.resumableSessions.value).toEqual([])
+    })
+
+    it('reset() で止めた再開・待っている再開が残らない', async () => {
       deviceId.value = null
       signedBpBonded.value = null
       hasProbedBpBond.value = true
       const k = useTenkoKiosk({ allowResume: true })
-      await k.resumeSession(makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' }))
+      await resume(k, makeSession({ status: 'medical_pending', tenko_type: 'pre_operation' }))
       expect(k.bpRequirementUnknown.value).toBe(true)
 
       k.reset()
 
       expect(k.bpRequirementUnknown.value).toBe(false)
       expect(k.session.value).toBeNull()
+
+      signedBpBonded.value = false
+      await resume(k, makeSession({ status: 'medical_pending' }))
+      expect(k.pendingResume.value).not.toBeNull()
+      k.reset()
+      expect(k.pendingResume.value).toBeNull()
+    })
+  })
+
+  // ---------- 車両番号の段 (自己点検表 業務前 二十 ハ) ----------
+
+  describe('車両番号の段', () => {
+    /** サーバの 400 と同じ形 */
+    function badRequest(code: string, message: string): Error {
+      return Object.assign(
+        new Error(`API エラー (400): ${JSON.stringify({ error: code, message })}`),
+        { status: 400 },
+      )
+    }
+    const noVehicle = { vehicle_number: null, vehicle_number_source: null } as const
+
+    async function startWith(started: TenkoSession, schedule = makeSchedule()) {
+      vi.mocked(startTenkoSession).mockResolvedValue(started)
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = schedule
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      return k
+    }
+
+    it('★ 段の名前と並びに「車両番号」が本人確認の直後に入り、他の段の順序は変わらない', () => {
+      const pre = useTenkoKiosk()
+      pre.selectedSchedule.value = makeSchedule({ tenko_type: 'pre_operation' })
+      expect(pre.stepKeys.value).toEqual([
+        'nfc', 'schedule_select', 'face_auth', 'vehicle', 'medical', 'self_declaration',
+        'daily_inspection', 'carrying_items', 'alcohol', 'instruction', 'completed',
+      ])
+      expect(pre.stepLabels.value).toHaveLength(pre.stepKeys.value.length)
+      expect(pre.stepLabels.value[pre.stepKeys.value.indexOf('vehicle')]).toBe('車両番号')
+
+      const post = useTenkoKiosk()
+      post.selectedSchedule.value = makeSchedule({ tenko_type: 'post_operation' })
+      expect(post.stepKeys.value).toEqual([
+        'nfc', 'schedule_select', 'face_auth', 'vehicle', 'alcohol', 'instruction', 'report', 'completed',
+      ])
+      expect(post.stepLabels.value).toHaveLength(post.stepKeys.value.length)
+    })
+
+    it('遠隔点呼 (最初から) には車両番号の段が無い', () => {
+      const k = useTenkoKiosk({ remoteMode: true })
+      expect(k.stepKeys.value).not.toContain('vehicle')
+      expect(k.stepLabels.value).not.toContain('車両番号')
+    })
+
+    it('★ 点呼の開始の直後に車両番号の段へ入る (車検証由来でなければ。予定の車両番号が初期値)', async () => {
+      const k = await startWith(
+        makeSession({ status: 'medical_pending', vehicle_number: '予定の車', vehicle_number_source: 'schedule' }),
+        makeSchedule({ vehicle_number: '予定の車' }),
+      )
+      expect(k.step.value).toBe('vehicle')
+      expect(k.vehicleInput.value).toBe('予定の車')
+      expect(k.vehicleManualRequired.value).toBe(false)
+    })
+
+    it('予定にも車両番号が無ければ入力欄は空', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', ...noVehicle }))
+      expect(k.step.value).toBe('vehicle')
+      expect(k.vehicleInput.value).toBe('')
+    })
+
+    it('★ 業務後の開始でも車両番号の段に入る', async () => {
+      const k = await startWith(
+        makeSession({ tenko_type: 'post_operation', status: 'identity_verified', ...noVehicle }),
+        makeSchedule({ tenko_type: 'post_operation' }),
+      )
+      expect(k.step.value).toBe('vehicle')
+    })
+
+    it('★ 車検証から取れた車両番号 (carins) が既にあれば段を飛ばす', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', vehicle_number: '車検証の車', vehicle_number_source: 'carins' }))
+      expect(k.step.value).toBe('medical')
+    })
+
+    it('★ 車検証で登録: carins_cert_no を渡し、返ってきた status の段へ進む', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', ...noVehicle }))
+      vi.mocked(updateTenkoSessionVehicle).mockResolvedValue(
+        makeSession({ status: 'medical_pending', vehicle_number: '登録番号', vehicle_number_source: 'carins' }),
+      )
+
+      await k.onVehicleSubmit({ carins_cert_no: 'CERT-1' })
+
+      expect(updateTenkoSessionVehicle).toHaveBeenCalledWith('sess-1', { carins_cert_no: 'CERT-1' })
+      expect(k.session.value?.vehicle_number_source).toBe('carins')
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBeNull()
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('★ 入力した車両番号で登録: 業務後は alcohol の段へ', async () => {
+      const k = await startWith(
+        makeSession({ tenko_type: 'post_operation', status: 'identity_verified', ...noVehicle }),
+        makeSchedule({ tenko_type: 'post_operation' }),
+      )
+      vi.mocked(updateTenkoSessionVehicle).mockResolvedValue(
+        makeSession({ tenko_type: 'post_operation', status: 'identity_verified', vehicle_number: '手入力', vehicle_number_source: 'manual' }),
+      )
+
+      await k.onVehicleSubmit({ vehicle_number: '手入力' })
+
+      expect(updateTenkoSessionVehicle).toHaveBeenCalledWith('sess-1', { vehicle_number: '手入力' })
+      expect(k.step.value).toBe('alcohol')
+    })
+
+    it('★ 車検証が見つからない (vehicle_required) → サーバーの文言を出し、入力欄を要求する。段は動かない', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', ...noVehicle }))
+      vi.mocked(updateTenkoSessionVehicle).mockRejectedValue(
+        badRequest('vehicle_required', '車検証が見つかりません。車両番号を入力してください'),
+      )
+
+      await k.onVehicleSubmit({ carins_cert_no: 'NONE' })
+
+      expect(k.step.value).toBe('vehicle')
+      expect(k.error.value).toBe('車検証が見つかりません。車両番号を入力してください')
+      expect(k.vehicleManualRequired.value).toBe(true)
+      // 利用者の入力の不備は故障ではない
+      expect(reportApiFailure).not.toHaveBeenCalled()
+    })
+
+    it('vehicle_required で文言が読めなくても入力を促す', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', ...noVehicle }))
+      vi.mocked(updateTenkoSessionVehicle).mockRejectedValue(
+        new Error(`API エラー (400): ${JSON.stringify({ error: 'vehicle_required' })}`),
+      )
+
+      await k.onVehicleSubmit({ carins_cert_no: 'NONE' })
+
+      expect(k.error.value).toBe('車両番号を入力してください')
+    })
+
+    it('通信の失敗は画面に出し、故障として記録する (段に留まって押し直せる)', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', ...noVehicle }))
+      const down = new Error('Failed to fetch')
+      vi.mocked(updateTenkoSessionVehicle).mockRejectedValue(down)
+
+      await k.onVehicleSubmit({ vehicle_number: 'X' })
+
+      expect(k.step.value).toBe('vehicle')
+      expect(k.error.value).toBe('Failed to fetch')
+      expect(reportApiFailure).toHaveBeenCalledWith(down, '車両番号の登録', { sessionId: 'sess-1', type: undefined })
+    })
+
+    it('Error でない失敗でも文言を出す', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', ...noVehicle }))
+      vi.mocked(updateTenkoSessionVehicle).mockRejectedValue('boom')
+
+      await k.onVehicleSubmit({ vehicle_number: 'X' })
+
+      expect(k.error.value).toBe('車両番号の登録に失敗しました')
+    })
+
+    it('session なしでは何もしない', async () => {
+      const k = useTenkoKiosk()
+      await k.onVehicleSubmit({ vehicle_number: 'X' })
+      expect(updateTenkoSessionVehicle).not.toHaveBeenCalled()
+    })
+
+    it('★ 再開した点呼に車両番号が無ければ、本人確認の後に車両番号の段を通る(予定の値が初期値)', async () => {
+      const sched = makeSchedule({ id: 'sched-1', vehicle_number: '予定の車' })
+      vi.mocked(getPendingSchedules).mockResolvedValue([sched])
+      const stuck = makeSession({ status: 'daily_inspection_pending', ...noVehicle })
+      vi.mocked(selfResumeTenkoSession).mockResolvedValue({ ...stuck, resumed_at: '2026-03-31T23:05:00Z' })
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.identifyEmployee('emp-1', '田中')
+      await k.resumeSession(stuck)
+      await k.onFaceAuthComplete({ verified: true, similarity: 0, skipped: true })
+
+      expect(k.step.value).toBe('vehicle')
+      expect(k.vehicleInput.value).toBe('予定の車')
+
+      vi.mocked(updateTenkoSessionVehicle).mockResolvedValue({ ...stuck, vehicle_number: '予定の車', vehicle_number_source: 'schedule' })
+      await k.onVehicleSubmit({ vehicle_number: '予定の車' })
+      expect(k.step.value).toBe('daily_inspection')
+    })
+
+    it('再開した点呼に車両番号がある (予定・手入力でも) なら段を飛ばす', async () => {
+      const stuck = makeSession({ status: 'daily_inspection_pending', vehicle_number: '手入力の車', vehicle_number_source: 'manual' })
+      vi.mocked(selfResumeTenkoSession).mockResolvedValue(stuck)
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+      await k.onFaceAuthComplete({ verified: true, similarity: 0, skipped: true })
+
+      expect(k.step.value).toBe('daily_inspection')
+    })
+
+    it('★ 再開で有効時間切れ → 車両番号の段を挟んでも、測り直しの案内は体温・血圧の段で出る', async () => {
+      const stuck = makeSession({ status: 'daily_inspection_pending', ...noVehicle })
+      vi.mocked(selfResumeTenkoSession).mockResolvedValue({ ...stuck, status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+      await k.resumeSession(stuck)
+      await k.onFaceAuthComplete({ verified: true, similarity: 0, skipped: true })
+      expect(k.step.value).toBe('vehicle')
+      expect(k.error.value).toBeNull()
+
+      vi.mocked(updateTenkoSessionVehicle).mockResolvedValue({ ...stuck, status: 'medical_pending', vehicle_number: 'V', vehicle_number_source: 'manual' })
+      await k.onVehicleSubmit({ vehicle_number: 'V' })
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBe(MEDICAL_EXPIRED_MESSAGE)
+    })
+
+    it('遠隔点呼(最初から)の開始では車両番号の段を通らない', async () => {
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'medical_pending', ...noVehicle }))
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.employeeId.value = 'emp-1'
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(k.step.value).toBe('medical')
+    })
+
+    it('reset() で車両番号の状態が残らない', async () => {
+      const k = await startWith(makeSession({ status: 'medical_pending', vehicle_number: '予定の車', vehicle_number_source: 'schedule' }))
+      vi.mocked(updateTenkoSessionVehicle).mockRejectedValue(badRequest('vehicle_required', 'x'))
+      await k.onVehicleSubmit({ carins_cert_no: 'N' })
+      expect(k.vehicleManualRequired.value).toBe(true)
+
+      k.reset()
+
+      expect(k.vehicleInput.value).toBe('')
+      expect(k.vehicleManualRequired.value).toBe(false)
+    })
+  })
+
+  // ---------- 測定の有効時間 (業務前 八) ----------
+
+  describe('測定の有効時間切れ', () => {
+    function badRequest(code: string, message: string): Error {
+      return Object.assign(
+        new Error(`API エラー (400): ${JSON.stringify({ error: code, message })}`),
+        { status: 400 },
+      )
+    }
+
+    it('★ 体温・血圧の送信が measurement_expired → サーバーの文言を出し、体温・血圧の段に留まる(故障にしない)', async () => {
+      vi.mocked(submitMedical).mockRejectedValue(
+        badRequest('measurement_expired', '測定から有効時間 (30 分) を過ぎています。もう一度測定してください'),
+      )
+      const k = useTenkoKiosk()
+      k.session.value = makeSession({ status: 'medical_pending' })
+      k.step.value = 'medical'
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBe('測定から有効時間 (30 分) を過ぎています。もう一度測定してください')
+      expect(k.isLoading.value).toBe(false)
+      expect(reportApiFailure).not.toHaveBeenCalled()
+    })
+
+    it('measurement_expired で文言が読めなければ既定の案内', async () => {
+      vi.mocked(submitMedical).mockRejectedValue(
+        new Error(`API エラー (400): ${JSON.stringify({ error: 'measurement_expired' })}`),
+      )
+      const k = useTenkoKiosk()
+      k.session.value = makeSession({ status: 'medical_pending' })
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(k.error.value).toBe(MEDICAL_EXPIRED_MESSAGE)
+    })
+
+    it('★ 携行品の後に medical_pending へ戻されたら、体温・血圧の段で理由を出す', async () => {
+      vi.mocked(submitCarryingItemChecks).mockResolvedValue(makeSession({ status: 'medical_pending' }))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession({ status: 'carrying_items_pending' })
+      k.step.value = 'carrying_items'
+
+      await k.onCarryingItemsSubmit([])
+
+      expect(k.step.value).toBe('medical')
+      expect(k.error.value).toBe(MEDICAL_EXPIRED_MESSAGE)
+    })
+
+    it('携行品の後に普通にアルコールの段へ進むときは案内を出さない', async () => {
+      vi.mocked(submitCarryingItemChecks).mockResolvedValue(makeSession({ status: 'identity_verified' }))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession({ status: 'carrying_items_pending' })
+
+      await k.onCarryingItemsSubmit([])
+
+      expect(k.step.value).toBe('alcohol')
+      expect(k.error.value).toBeNull()
+    })
+  })
+
+  // ---------- 故障の自動記録 (機器・保存・通信の失敗だけ) ----------
+
+  describe('故障の自動記録の配線', () => {
+    const boom = new Error('boom')
+
+    it('予定の取得の失敗 → 通信の失敗として記録', async () => {
+      vi.mocked(getPendingSchedules).mockRejectedValue(boom)
+      const k = useTenkoKiosk()
+      await k.identifyEmployee('emp-1', '田中')
+      expect(reportApiFailure).toHaveBeenCalledWith(boom, '予定の取得', { sessionId: undefined, type: undefined })
+    })
+
+    it('点呼の開始の失敗 → 通信の失敗として記録(セッション ID はまだ無い)', async () => {
+      vi.mocked(startTenkoSession).mockRejectedValue(boom)
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
+      expect(reportApiFailure).toHaveBeenCalledWith(boom, '点呼の開始', { sessionId: undefined, type: undefined })
+    })
+
+    it('★ 顔写真の保存の失敗 → photo_storage_error で記録し、点呼は開始しない', async () => {
+      vi.mocked(uploadFacePhoto).mockRejectedValue(boom)
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0.9, snapshot: new Blob(['x']) })
+      expect(reportApiFailure).toHaveBeenCalledWith(boom, '顔写真の保存', { sessionId: undefined, type: 'photo_storage_error' })
+      expect(startTenkoSession).not.toHaveBeenCalled()
+      expect(k.error.value).toBe('boom')
+      expect(k.isLoading.value).toBe(false)
+    })
+
+    it('★ アルコール測定の記録の失敗 → measurement_recording_failed', async () => {
+      vi.mocked(updateMeasurement).mockRejectedValue(boom)
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await k.onAlcoholMeasured('m-1', {})
+      expect(reportApiFailure).toHaveBeenCalledWith(boom, 'アルコール測定の記録', { sessionId: 'sess-1', type: 'measurement_recording_failed' })
+    })
+
+    it('★ 体温・血圧の記録の失敗 → measurement_recording_failed', async () => {
+      vi.mocked(submitMedical).mockRejectedValue(boom)
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await k.onMedicalSubmit({ temperature: 36.5 })
+      expect(reportApiFailure).toHaveBeenCalledWith(boom, '体温・血圧の記録', { sessionId: 'sess-1', type: 'measurement_recording_failed' })
+    })
+
+    it.each([
+      ['自己申告の送信', (k: ReturnType<typeof useTenkoKiosk>) => { vi.mocked(submitSelfDeclaration).mockRejectedValue(boom); return k.onSelfDeclarationSubmit({ illness: false, fatigue: false, sleep_deprivation: false }) }],
+      ['日常点検の送信', (k: ReturnType<typeof useTenkoKiosk>) => { vi.mocked(submitDailyInspection).mockRejectedValue(boom); return k.onDailyInspectionSubmit({} as never) }],
+      ['携行品チェックの送信', (k: ReturnType<typeof useTenkoKiosk>) => { vi.mocked(submitCarryingItemChecks).mockRejectedValue(boom); return k.onCarryingItemsSubmit([]) }],
+      ['指示確認の送信', (k: ReturnType<typeof useTenkoKiosk>) => { vi.mocked(confirmInstruction).mockRejectedValue(boom); return k.onInstructionConfirm() }],
+      ['運行報告の送信', (k: ReturnType<typeof useTenkoKiosk>) => { vi.mocked(submitReport).mockRejectedValue(boom); return k.onReportSubmit({} as never) }],
+      ['点呼の中止の送信', (k: ReturnType<typeof useTenkoKiosk>) => { vi.mocked(cancelTenkoSession).mockRejectedValue(boom); return k.cancel('理由') }],
+    ] as const)('%s の失敗 → 通信の失敗として記録', async (what, run) => {
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await run(k)
+      expect(reportApiFailure).toHaveBeenCalledWith(boom, what, { sessionId: 'sess-1', type: undefined })
     })
   })
 })

@@ -6,6 +6,7 @@ import { cancelTenkoSession, getEmployeeByNfcId, getEmployeeByCode, getTenkoSess
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
+import { reportApiFailure, reportFailure } from '~/utils/equipment-failure-report'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -45,6 +46,7 @@ const {
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
   bpRequirementUnknown, retryBpRequirement,
+  vehicleInput, vehicleManualRequired, onVehicleSubmit,
   identifyEmployee, selectSchedule, resumeSession, proceedWithoutSchedule, onFaceAuthComplete,
   onAlcoholMeasured, onMedicalSubmit, onSelfDeclarationSubmit,
   onDailyInspectionSubmit, carryingItems, loadCarryingItems, onCarryingItemsSubmit,
@@ -117,6 +119,10 @@ async function startAlcoholMeasurement() {
   catch (e) {
     console.warn('[TenkoKiosk] startMeasurement failed:', e)
     alcoholMeasurementId.value = null
+    // 測定の記録を作れなかった (通信・サーバーの失敗) — 故障として残す。4xx は残さない
+    reportApiFailure(e, 'アルコール測定の記録の作成', {
+      sessionId: session.value?.id, type: 'measurement_recording_failed',
+    })
   }
 }
 
@@ -142,9 +148,46 @@ function completedMeasurementFields(result: MeasurementResult): Record<string, u
 watch(step, async (s) => {
   if (s !== 'alcohol') return
   // デモモードは FC-1200 の state 変化が来ないので即録画
-  await startBlowCamera({ recordImmediately: isDemoMode.value })
+  await openBlowCamera()
   await startAlcoholMeasurement()
 })
+
+/**
+ * 録画カメラを起こす。起こせなかったときは (測定は続けるが) 機器の故障として残す —
+ * 吹きかけ録画・顔写真が残らない点呼になるため
+ */
+async function openBlowCamera() {
+  const ok = await startBlowCamera({ recordImmediately: isDemoMode.value })
+  if (!ok) {
+    reportFailure({
+      type: 'photo_storage_error',
+      description: 'カメラを起動できず、吹きかけ録画を撮れませんでした',
+      device: 'カメラ',
+      sessionId: session.value?.id,
+    })
+  }
+}
+
+// 録画のアップロードに失敗したら故障として残す (録画はローカルに残り、次回起動時にリトライされる)
+watch(blowVideoUploadStatus, (status) => {
+  if (status !== 'failed') return
+  reportFailure({
+    type: 'photo_storage_error',
+    description: '吹きかけ録画のアップロードに失敗しました',
+    device: 'カメラ録画',
+    sessionId: session.value?.id,
+  })
+})
+
+/** アルコール測定器 (FC-1200) の接続・読み取りの失敗 (`AlcMeasurement` の `error`) を故障として残す */
+function onAlcDeviceError() {
+  reportFailure({
+    type: 'measurement_recording_failed',
+    description: 'アルコール測定器 (FC-1200) の接続・読み取りに失敗しました',
+    device: 'FC-1200',
+    sessionId: session.value?.id,
+  })
+}
 
 // PC の今の段を CoreS3 に送り、画面を連動させる (Refs ippoan/alc-app-s3#135)
 const { syncStep, sendResult, sendMeasurementId } = useCoreS3Stage()
@@ -332,7 +375,20 @@ async function reconnect() {
 const {
   latestTemperature: bleTemperature,
   latestBloodPressure: bleBloodPressure,
+  error: bleError,
 } = useBleGateway()
+
+// 体温計・血圧計 (BLE ゲートウェイ) の接続・読み取りの失敗は、体温・血圧の段にいるあいだだけ故障として残す
+// (他の段・他の画面で出たものは、この点呼の記録ではない)
+watch(bleError, (message) => {
+  if (!message || step.value !== 'medical') return
+  reportFailure({
+    type: 'measurement_recording_failed',
+    description: '体温計・血圧計の接続・読み取りに失敗しました',
+    device: '体温計・血圧計',
+    sessionId: session.value?.id,
+  })
+})
 
 /**
  * この端末で血圧を使うか (Refs ippoan/alc-app-s3#135 / ippoan/alc-app#347)。
@@ -358,6 +414,7 @@ async function onNfcRead(nfcId: string) {
     const emp = await getEmployeeByNfcId(nfcId)
     await identifyEmployee(emp.id, emp.name)
   } catch (e) {
+    reportApiFailure(e, '乗務員の照会')
     error.value = employeeLookupFailureMessage(e, employeeNotFoundByNfc(nfcId))
   }
 }
@@ -370,6 +427,7 @@ async function onManualSubmit() {
     const emp = await getEmployeeByCode(input)
     await identifyEmployee(emp.id, emp.name)
   } catch (e) {
+    reportApiFailure(e, '乗務員の照会')
     manualError.value = employeeLookupFailureMessage(e, employeeNotFoundByCode(input))
   }
 }
@@ -398,6 +456,14 @@ const vein = useVeinEmployeeIdentify({
   // 本人は最初の段で決まっている: その人の記録だけをモジュールに用意して 1:1 で照合する (Refs ippoan/alc-app-s3#352)
   expectedEmployeeId: () => employeeId.value || null,
   noRecordMessage: 'この人の承認済みの指静脈の記録がありません。登録して運行管理者の承認を受けてください',
+  // 指静脈リーダー (Vein Station) の読み取り・記録の用意の失敗だけを故障として残す。
+  // 不一致・別人・未承認・指を置かなかった、は利用者側のことなので残さない
+  onDeviceError: () => reportFailure({
+    type: 'face_recognition_error',
+    description: '指静脈リーダーの読み取りに失敗しました',
+    device: '指静脈リーダー',
+    sessionId: session.value?.id,
+  }),
 })
 
 /** 指静脈の照合を始めてよいか (本人確認の段・血圧の確認で止めていない・Vein Station がつながっている) */
@@ -471,7 +537,7 @@ async function onMeasurementResult(result: MeasurementResult) {
   if (retry) {
     // 測り直しは新しい測定で (この測定は完了済みかもしれない)
     alcoholMeasurementId.value = null
-    await startBlowCamera({ recordImmediately: isDemoMode.value })
+    await openBlowCamera()
     await startAlcoholMeasurement()
   }
 }
@@ -817,6 +883,18 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Step 3.5: 車両番号 (車検証の読み取りを優先。業務前 二十 ハ) -->
+      <div v-else-if="step === 'vehicle'" class="flex flex-col gap-4">
+        <div class="bg-white rounded-2xl p-4 shadow-sm">
+          <h2 class="text-lg font-semibold text-gray-700 mb-4">車両番号</h2>
+          <TenkoVehicleEntry
+            v-model="vehicleInput"
+            :manual-required="vehicleManualRequired"
+            @submit="onVehicleSubmit"
+          />
+        </div>
+      </div>
+
       <!-- Step 4: アルコール測定 -->
       <div v-else-if="step === 'alcohol'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
@@ -844,6 +922,7 @@ onUnmounted(() => {
             :employee-id="employeeId"
             :demo-mode="isDemoMode"
             @result="onMeasurementResult"
+            @error="onAlcDeviceError"
             @state-change="onAlcStateChange"
           />
         </div>
