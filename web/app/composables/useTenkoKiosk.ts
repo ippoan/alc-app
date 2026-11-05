@@ -17,7 +17,7 @@ import {
 import { isDevDevice } from '~/utils/token-selection'
 import { reportApiFailure } from '~/utils/equipment-failure-report'
 import type { KioskFailureType } from '~/utils/equipment-failure-report'
-import { isInPersonTenkoMethod } from '~/utils/tenko-type'
+import { isInPersonTenkoMethod, isResumableInAutoTab } from '~/utils/tenko-type'
 import { currentLocation } from '~/composables/useGpsFix'
 
 /** 自動点呼 (業務前) に要る血圧の記録の日数 */
@@ -285,8 +285,9 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     // ここでも直接確かめる** — 判定を別 repo の不変条件だけに預けない。
     // `resumed_at` では落とさない — self-resume は管理者が再開済みの点呼も受ける
     // (再開の時刻・理由は上書きしない)。管理者が再開した点呼こそ、キオスクで続きを実施する対象
+    // タブと点呼の方法を合わせる (自動点呼のタブで遠隔点呼の途中の点呼を拾わない。`isResumableInAutoTab`)
     return found
-      .filter(s => s.alcohol_tested_at === null)
+      .filter(s => s.alcohol_tested_at === null && isResumableInAutoTab(s))
       .sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''))
   }
 

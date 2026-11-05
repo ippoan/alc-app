@@ -41,7 +41,7 @@ describe('tenkoMethodLabel', () => {
   })
 })
 
-import { isBpInPersonSession, isInPersonTenkoMethod } from '~/utils/tenko-type'
+import { isBpInPersonSession, isInPersonTenkoMethod, isResumableInAutoTab } from '~/utils/tenko-type'
 
 describe('isBpInPersonSession / isInPersonTenkoMethod', () => {
   const base = { schedule_id: 's', tenko_type: 'pre_operation', tenko_method: '対面点呼', remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 2 日分) ため対面点呼' }
@@ -57,5 +57,17 @@ describe('isBpInPersonSession / isInPersonTenkoMethod', () => {
     expect(isBpInPersonSession({ ...base, tenko_type: 'post_operation' })).toBe(false)
     expect(isBpInPersonSession({ ...base, tenko_method: '遠隔点呼' })).toBe(false)
     expect(isBpInPersonSession({ ...base, remote_escalation_reason: null })).toBe(false)
+  })
+})
+
+describe('isResumableInAutoTab (自動点呼のタブの再開の候補)', () => {
+  const inPerson = { schedule_id: 's', tenko_type: 'pre_operation', tenko_method: '通常点呼', remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 2 日分) ため対面点呼' }
+  it('自動点呼・方法の無い古い行・血圧の記録不足で対面点呼にしたものだけ', () => {
+    expect(isResumableInAutoTab({ tenko_method: '自動点呼' })).toBe(true)
+    expect(isResumableInAutoTab({})).toBe(true)
+    expect(isResumableInAutoTab(inPerson)).toBe(true)
+    expect(isResumableInAutoTab({ tenko_method: '遠隔点呼' })).toBe(false)
+    expect(isResumableInAutoTab({ tenko_method: '通常点呼' })).toBe(false)
+    expect(isResumableInAutoTab({ tenko_method: 'IT点呼' })).toBe(false)
   })
 })
