@@ -9,7 +9,7 @@ import { getVehicleCandidates } from '~/utils/api'
  * **車検証の読み取りを優先する**: CoreS3 がつながっていれば電子車検証をかざしてもらい、
  * 管理番号 (`NFC_CARINS` の `mgno`) をそのままサーバーへ渡す。サーバーが車検証データに照合し、
  * 一致すればその登録番号が車両番号になる (取得元 `carins`)。
- * つながっていない・読めない・一致しないときは、テンキーで登録番号の数字を打って候補から選ぶ
+ * つながっていない・読めない・一致しないときは、テンキーで一連指定番号 (ナンバーのひらがなの後の数字) を打って候補から選ぶ
  * (`sessionId` を渡したときだけ。候補は端末の営業所の車両が先、点呼の営業所に紐づいていない車両は色を変えて出す)。
  * 候補に無いときは、予定の車両番号を初期値にした入力欄で登録する。
  *
@@ -59,7 +59,9 @@ function submitManual() {
   emit('submit', { vehicle_number: trimmed.value })
 }
 
-// テンキーで打った数字と候補。打つたびに引き直し、古い応答は捨てる
+// テンキーで打った数字と候補。打つたびに引き直し、古い応答は捨てる。1 桁では候補が多すぎるので
+// MIN_DIGITS 桁から引く
+const MIN_DIGITS = 2
 const digits = ref('')
 const candidates = ref<VehicleCandidate[]>([])
 const candidatesError = ref(false)
@@ -67,7 +69,7 @@ let latestRequest = 0
 watch(digits, async (q) => {
   const mine = ++latestRequest
   candidatesError.value = false
-  if (!q || !props.sessionId) {
+  if (q.length < MIN_DIGITS || !props.sessionId) {
     candidates.value = []
     return
   }
@@ -114,10 +116,13 @@ function officeLabel(c: VehicleCandidate): string {
     </template>
 
     <div v-if="manualVisible && sessionId" class="flex flex-col gap-2" data-testid="vehicle-keypad">
-      <p class="text-sm text-gray-600">ナンバーの数字を打って、候補から選んでください</p>
+      <p class="text-sm text-gray-600">ナンバーの右側の数字 (例: 7601) を打って、候補から選んでください</p>
       <EmployeeCodeKeypad v-model="digits" :show-submit="false" />
       <p v-if="candidatesError" data-testid="vehicle-candidates-error" class="text-sm text-red-600">
         候補を読み込めませんでした。下の欄に車両番号を入力してください
+      </p>
+      <p v-else-if="digits && digits.length < MIN_DIGITS" data-testid="vehicle-candidates-more" class="text-sm text-gray-500">
+        {{ MIN_DIGITS }} 桁以上打つと候補が出ます
       </p>
       <p v-else-if="digits && !candidates.length" data-testid="vehicle-candidates-empty" class="text-sm text-gray-500">
         候補がありません。下の欄に車両番号を入力してください

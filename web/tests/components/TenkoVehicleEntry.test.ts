@@ -162,7 +162,7 @@ describe('TenkoVehicleEntry', () => {
     it('★ 車検証から出た候補は管理番号で、ほかは車両番号で submit する', async () => {
       getVehicleCandidates.mockResolvedValue([SAGA, LOOSE])
       const w = await mountEntry({ sessionId: 'sess-1' })
-      await press(w, '7')
+      await press(w, '76')
       await cards(w)[0]!.trigger('click')
       await cards(w)[1]!.trigger('click')
       expect(w.emitted('submit')).toEqual([[{ carins_cert_no: 'CERT-1' }], [{ vehicle_number: '福岡 100 さ 1760' }]])
@@ -173,6 +173,11 @@ describe('TenkoVehicleEntry', () => {
       getVehicleCandidates.mockResolvedValueOnce([])
       const w = await mountEntry({ sessionId: 'sess-1' })
       await press(w, '9')
+      // 1 桁では引かず、もう 1 桁打つよう案内する
+      expect(getVehicleCandidates).not.toHaveBeenCalled()
+      expect(w.find('[data-testid="vehicle-candidates-more"]').text()).toContain('2 桁以上打つと候補が出ます')
+      await press(w, '9')
+      expect(getVehicleCandidates).toHaveBeenLastCalledWith('sess-1', '99')
       expect(w.find('[data-testid="vehicle-candidates-empty"]').exists()).toBe(true)
       getVehicleCandidates.mockRejectedValueOnce(new Error('x'))
       await press(w, '9')
@@ -195,6 +200,7 @@ describe('TenkoVehicleEntry', () => {
       await w.find('[data-key="1"]').trigger('click')
       await w.find('[data-key="7"]').trigger('click')
       await w.find('[data-key="6"]').trigger('click')
+      await w.find('[data-key="0"]').trigger('click')
       await flushPromises()
       resolveFirst([SAGA])
       await flushPromises()
