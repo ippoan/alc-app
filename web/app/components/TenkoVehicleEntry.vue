@@ -6,15 +6,16 @@ import { getVehicleCandidates } from '~/utils/api'
 /**
  * 車両番号の段 (自己点検表 業務前 二十 ハ)。点呼の開始 (再開) の直後に出る。
  *
- * **車検証の読み取りを優先する**: CoreS3 がつながっていれば電子車検証をかざしてもらい、
+ * **車検証の読み取りを優先する**: NFC を読める機体 (CoreS3・Vein Station) がつながっていれば電子車検証をかざしてもらい、
  * 管理番号 (`NFC_CARINS` の `mgno`) をそのままサーバーへ渡す。サーバーが車検証データに照合し、
  * 一致すればその登録番号が車両番号になる (取得元 `carins`)。
  * つながっていない・読めない・一致しないときは、テンキーで一連指定番号 (ナンバーのひらがなの後の数字) を打って候補から選ぶ
  * (`sessionId` を渡したときだけ。候補は端末の営業所の車両が先、点呼の営業所に紐づいていない車両は色を変えて出す)。
  * 候補に無いときは、予定の車両番号を初期値にした入力欄で登録する。
  *
- * 電子車検証の読み取りは通常点呼 (`NormalMeasurement`) と同じ CoreS3 のイベント (`NFC_CARINS`) で、
- * 番号の取り出しも同じ `evtArg`。
+ * 電子車検証の読み取りは通常点呼 (`NormalMeasurement`) と同じイベント (`NFC_CARINS`) で、
+ * 番号の取り出しも同じ `evtArg`。Vein Station のファームも CoreS3 と同じ hub-drivers の NFC で車検証を読んで
+ * 同じ行を出すので、機体は `useUsbHub().nfc` の組から取る (キオスクは Vein Station のことが多い)。
  */
 const props = defineProps<{
   /** 入力欄の値 (予定・セッションの車両番号が初期値)。親が持つ — 登録中の読み込み表示で消えないように */
@@ -30,9 +31,9 @@ const emit = defineEmits<{
   submit: [data: UpdateTenkoSessionVehicle]
 }>()
 
-// CoreS3 のみ (Vein Station・測定台の ATOM S3 には無い機能)
-const coreS3 = useCoreS3Serial()
-const carinsAvailable = computed(() => coreS3.isConnected.value)
+const nfc = useUsbHub().nfc
+const carinsAvailable = nfc.isConnected
+const readerLabel = nfc.label
 /** rc= (読み取り失敗) か、管理番号の無い古いファーム */
 const readError = ref(false)
 const showManual = ref(false)
@@ -40,7 +41,7 @@ const manualVisible = computed(
   () => !carinsAvailable.value || props.manualRequired === true || readError.value || showManual.value,
 )
 
-const offCarinsEvent = coreS3.onEvent((name, args) => {
+const offCarinsEvent = nfc.onEvent((name, args) => {
   if (name !== 'NFC_CARINS') return
   const mgno = evtArg(args, 'mgno')
   if (evtArg(args, 'rc') || !mgno) {
@@ -100,7 +101,7 @@ function officeLabel(c: VehicleCandidate): string {
   <div class="flex flex-col gap-4" data-testid="vehicle-entry">
     <template v-if="carinsAvailable">
       <p class="text-sm text-gray-600">
-        電子車検証を CoreS3 にかざしてください
+        電子車検証を {{ readerLabel }} にかざしてください
       </p>
       <p v-if="readError" data-testid="carins-read-error" class="text-sm text-red-600">
         車検証を読み取れませんでした。もう一度かざすか、車両番号を入力してください
