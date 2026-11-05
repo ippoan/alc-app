@@ -15,8 +15,8 @@
  * 判定を送る口は prop `scope` (既定は遠隔点呼モニターの `'tenko-monitor'`)。IT点呼 の受け画面だけが
  * `'manager-device'` (運行管理者席の鍵) を渡す。
  */
-import type { TenkoSession, SubmitManagerJudgment } from '~/types'
-import { submitManagerJudgment, type RequestTokenScope } from '~/utils/api'
+import type { TenkoSession, SubmitManagerJudgment, InPersonScope } from '~/types'
+import { getInPersonScope, submitManagerJudgment, type RequestTokenScope } from '~/utils/api'
 import { isBpInPersonSession } from '~/utils/tenko-type'
 import { MANAGER_JUDGMENT_METHOD, itTenkoRoomId, type ManagerJudgmentMethod } from '~/utils/it-tenko'
 
@@ -62,13 +62,30 @@ const METHOD_OPTIONS: { value: ManagerJudgmentMethod, label: string }[] = [
 // `defaultMethod` が無ければ undefined のまま (欄を出さず、送信にも足さない)
 const method = ref(props.defaultMethod && (props.session.manager_judgment_method ?? props.defaultMethod))
 
-// 血圧の記録不足で対面点呼にした点呼だけ、会った運行管理者の所属を選ばせる (既定は同じ営業所)
+// 血圧の記録不足で対面点呼にした点呼だけ、会った運行管理者の範囲を見せる。範囲は判定のときサーバが車両と運行管理者の
+// 所属営業所で決める (同じ営業所 = 対面点呼 / 別の営業所・グループ企業 = 遠隔点呼とみなす)。ここは表示だけで、送らない
 const isBpInPerson = computed(() => isBpInPersonSession(props.session))
-const IN_PERSON_SCOPE_OPTIONS: { value: 'same_office' | 'other_office', label: string }[] = [
-  { value: 'same_office', label: '同じ営業所の運行管理者 (対面点呼)' },
-  { value: 'other_office', label: '別の営業所・グループ企業の運行管理者 (遠隔点呼とみなす)' },
-]
-const inPersonScope = ref<'same_office' | 'other_office'>('same_office')
+const inPersonScope = ref<InPersonScope | null>(null)
+const inPersonScopeError = ref(false)
+watch(() => [isBpInPerson.value, props.session.id, props.managerId] as const, async ([show, id, judge]) => {
+  inPersonScope.value = null
+  inPersonScopeError.value = false
+  if (!show || !judge) return
+  try {
+    inPersonScope.value = await getInPersonScope(id, judge, props.scope)
+  }
+  catch {
+    inPersonScopeError.value = true
+  }
+}, { immediate: true })
+const IN_PERSON_SCOPE_LABEL: Record<InPersonScope['scope'], string> = {
+  same_office: '同じ営業所の運行管理者 (対面点呼として記録します)',
+  other_office: '別の営業所・グループ企業の運行管理者 (遠隔点呼とみなして記録します)',
+  unknown: '車両か運行管理者の所属営業所が未設定のため、同じ営業所 (対面点呼) として記録します。所属は管理画面の「点呼の営業所」で設定できます',
+}
+function officeNames(offices: InPersonScope['judge_offices']): string {
+  return offices.length ? offices.map(o => o.company_name ? `${o.company_name} ${o.name}` : o.name).join('、') : '未設定'
+}
 
 // NG 理由の入力中と送信中は、リロードで入力や送信結果が消えるので新版への載せ替えを止める
 // (Refs #345)。待機中の TenkoRemoteAdminView が出している「安全」の申告より拒否が優先される。
@@ -111,7 +128,6 @@ async function submit(judgment: 'ok' | 'ng') {
     const alt = alternativeMeasure.value.trim()
     if (judgment === 'ng' && alt) body.alternative_measure = alt
     if (method.value) body.method = method.value
-    if (isBpInPerson.value) body.in_person_scope = inPersonScope.value
     const updated = await submitManagerJudgment(props.session.id, body, props.scope)
     // 判定が付いた点呼の部屋は、相手が閉じて消えるまで着信として数えない (警告デバイスを
     // 鳴らさない)。部屋の id は遠隔点呼なら記録の id そのまま、IT点呼 なら `it-<id>` —
@@ -161,15 +177,25 @@ async function submit(judgment: 'ok' | 'ng') {
       </div>
     </div>
 
- <!-- 血圧の記録不足で対面点呼にした点呼: 会った運行管理者の所属 -->
+    <!-- 血圧の記録不足で対面点呼にした点呼: 会った運行管理者の範囲 (所属営業所で自動で決まる。表示だけ) -->
     <div v-if="isBpInPerson" class="mb-2" data-testid="judgment-in-person-scope">
       <div class="text-xs text-gray-500 mb-1">会った運行管理者</div>
-      <div class="flex flex-col gap-1">
-        <label v-for="opt in IN_PERSON_SCOPE_OPTIONS" :key="opt.value" class="flex items-center gap-1 text-sm text-gray-800">
-          <input v-model="inPersonScope" type="radio" name="judgment-in-person-scope" :value="opt.value" :disabled="submitting">
-          {{ opt.label }}
-        </label>
-      </div>
+      <template v-if="inPersonScope">
+        <p
+          data-testid="judgment-in-person-scope-result"
+          :class="inPersonScope.scope === 'unknown' ? 'rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800' : 'text-sm text-gray-800'"
+        >
+          {{ IN_PERSON_SCOPE_LABEL[inPersonScope.scope] }}
+        </p>
+        <p class="mt-1 text-xs text-gray-500" data-testid="judgment-in-person-scope-offices">
+          車両{{ inPersonScope.vehicle_number ? ` ${inPersonScope.vehicle_number}` : '' }}の営業所: {{ officeNames(inPersonScope.vehicle_offices) }}
+          / 運行管理者の所属: {{ officeNames(inPersonScope.judge_offices) }}
+        </p>
+      </template>
+      <p v-else-if="inPersonScopeError" class="text-xs text-gray-600" data-testid="judgment-in-person-scope-error">
+        所属営業所を確かめられませんでした。記録の方法は判定のときに所属営業所で決まります
+      </p>
+      <p v-else class="text-xs text-gray-500">所属営業所を確かめています</p>
     </div>
 
     <p v-if="waitingForDriver" data-testid="waiting-for-driver" class="mb-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
