@@ -621,8 +621,22 @@ export interface TenkoOffice {
   address: string | null
   /** 所属する運行管理者 (兼務あり) */
   manager_ids: string[]
-  /** 所属する車両 (車両マスタの id。車両は 1 営業所) */
+  /** 手で選んだ所属の車両 (車両マスタの id。車両は 1 営業所。車検証の対応より優先する) */
   vehicle_ids: string[]
+  /** この営業所に対応づけた車検証の「使用の本拠の位置 + 使用者」の組 (組は 1 営業所) */
+  carins_bases: TenkoOfficeCarinsBaseKey[]
+}
+
+/** 車検証の「使用の本拠の位置 + 使用者の氏名又は名称」の組 */
+export interface TenkoOfficeCarinsBaseKey {
+  use_base: string
+  user_name: string
+}
+
+/** 車検証に出てくる組 (対応の選択肢)。`office_id` は今の対応、`vehicle_count` はその組の車両の台数 */
+export interface TenkoOfficeCarinsBase extends TenkoOfficeCarinsBaseKey {
+  office_id: string | null
+  vehicle_count: number
 }
 
 /** 車両マスタの車両 (所属の選択肢) */
@@ -636,6 +650,8 @@ export interface TenkoOfficeVehicle {
 export interface TenkoOfficesResponse {
   offices: TenkoOffice[]
   vehicles: TenkoOfficeVehicle[]
+  /** 車検証に出てくる組 (carins の無いテナントは空) */
+  carins_bases: TenkoOfficeCarinsBase[]
 }
 
 /** 営業所の作成・置き換えの本文 (所属も全部置き換える) */
@@ -651,6 +667,8 @@ export interface InPersonScope {
   scope: 'same_office' | 'other_office' | 'unknown'
   vehicle_number: string | null
   vehicle_offices: { id: string, name: string, company_name: string | null }[]
+  /** 車両の所属の出どころ (`manual` = 手で選んだ所属 / `carins` = 車検証の対応 / null = 未設定) */
+  vehicle_source: 'manual' | 'carins' | null
   judge_offices: { id: string, name: string, company_name: string | null }[]
 }
 

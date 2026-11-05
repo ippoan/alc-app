@@ -20,7 +20,7 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   updateFirmware,
   getBpNotifySettings: vi.fn(async () => ({ employees: [] })),
   getLineworksUsers: vi.fn(async () => ({ users: [] })),
-  getTenkoOffices: vi.fn(async () => ({ offices: [], vehicles: [] })),
+  getTenkoOffices: vi.fn(async () => ({ offices: [], vehicles: [], carins_bases: [] })),
   getEmployees: vi.fn(async () => []),
 }))
 

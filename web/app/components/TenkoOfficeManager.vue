@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import type { ApiEmployee, TenkoOffice, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
+import type { ApiEmployee, TenkoOffice, TenkoOfficeCarinsBase, TenkoOfficeCarinsBaseKey, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
 import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, updateTenkoOffice } from '~/utils/api'
 
 /**
- * 点呼の営業所 (システム管理者)。営業所ごとに所属の運行管理者 (兼務あり) と車両 (1 台 1 営業所) を決める。
+ * 点呼の営業所 (システム管理者)。営業所ごとに所属の運行管理者 (兼務あり) と車両を決める。車両の所属は基本を車検証の
+ * 「使用の本拠の位置 + 使用者」の組で決め (組は 1 営業所)、手で選んだ車両 (1 台 1 営業所) はその上書きにする。
  * 血圧の記録が足りず対面点呼に切り替えた点呼は、判定のとき車両の営業所と判定した運行管理者の所属営業所を比べ、
  * 同じなら対面点呼、別の営業所・グループ企業なら遠隔点呼とみなして記録する (告示 266 号 第四条 2 項)。
- * 車両の一覧は車両整備の車両マスタ。保存は営業所ごとに全部の欄と所属を置き換える。
+ * 手で選ぶ車両の一覧は車両整備の車両マスタ。保存は営業所ごとに全部の欄と所属を置き換える。
  */
 
 const ERRORS: Record<string, string> = {
@@ -15,6 +16,7 @@ const ERRORS: Record<string, string> = {
   too_many_offices: '営業所は 100 件までです',
   invalid_manager: '運行管理者を選び直してください',
   invalid_vehicle: '車両を選び直してください',
+  invalid_carins_base: '車検証の使用の本拠・使用者を選び直してください',
   forbidden: 'システム管理者だけが変更できます',
 }
 
@@ -25,6 +27,7 @@ interface Row extends TenkoOfficeInput {
 
 const rows = ref<Row[]>([])
 const vehicles = ref<TenkoOfficeVehicle[]>([])
+const carinsBases = ref<TenkoOfficeCarinsBase[]>([])
 const managers = ref<ApiEmployee[]>([])
 const loadError = ref('')
 const busy = ref(false)
@@ -47,6 +50,7 @@ async function load() {
     const [res, employees] = await Promise.all([getTenkoOffices(), getEmployees('admin')])
     rows.value = res.offices.map(toRow)
     vehicles.value = res.vehicles
+    carinsBases.value = res.carins_bases
     managers.value = employees.filter(e => e.role.includes('manager') || e.role.includes('admin'))
   }
   catch (e) {
@@ -62,13 +66,18 @@ function keyOf(row: Row, i: number): string {
 }
 
 function addOffice() {
-  rows.value.push({ id: null, name: '', company_name: '', address: '', manager_ids: [], vehicle_ids: [] })
+  rows.value.push({ id: null, name: '', company_name: '', address: '', manager_ids: [], vehicle_ids: [], carins_bases: [] })
 }
 
-/** 車両がいま別の営業所に所属していればその名前 (選ぶと移ることを見せる) */
-function otherOfficeName(v: TenkoOfficeVehicle, row: Row): string {
-  if (!v.office_id || v.office_id === row.id) return ''
-  return rows.value.find(r => r.id === v.office_id)?.name ?? ''
+/** 車両・車検証の組がいま別の営業所に所属していればその名前 (選ぶと移ることを見せる) */
+function otherOfficeName(item: { office_id: string | null }, row: Row): string {
+  if (!item.office_id || item.office_id === row.id) return ''
+  return rows.value.find(r => r.id === item.office_id)?.name ?? ''
+}
+
+/** チェックボックスの値 (組の 2 項目だけ。v-model の配列と形をそろえる) */
+function baseKey(b: TenkoOfficeCarinsBase): TenkoOfficeCarinsBaseKey {
+  return { use_base: b.use_base, user_name: b.user_name }
 }
 
 /** 保存・削除の共通の流れ。成功したら全部を読み直す (車両が別の営業所から移ることがあるため) */
@@ -97,6 +106,7 @@ function save(row: Row, i: number) {
     address: row.address || null,
     manager_ids: row.manager_ids,
     vehicle_ids: row.vehicle_ids,
+    carins_bases: row.carins_bases,
   }
   const id = row.id
   return act(row, i, () => id ? updateTenkoOffice(id, body) : createTenkoOffice(body), '保存', '保存できませんでした')
@@ -129,7 +139,8 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         同じ建物でも会社が違えば、会社ごとに別の営業所として登録します。自社の車両をグループ企業の営業所の運行管理者が判定すると、遠隔点呼として記録します。
       </p>
       <p class="text-xs text-gray-500">
-        車両は車両整備の車両マスタに登録した車両から選びます (1 台は 1 つの営業所に所属します)。
+        車両の所属は、車検証の「使用の本拠の位置」と「使用者」の組ごとに営業所を選んで決めます。車検証と違う営業所に置く車両や、
+        車検証の無い車両だけ、車両整備の車両マスタから手で選びます (手で選んだ所属が優先します)。
       </p>
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-offices-load-error">{{ loadError }}</p>
       <p v-if="notice" class="text-sm text-green-700" data-testid="tenko-offices-notice">{{ notice }}</p>
@@ -168,7 +179,20 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       </fieldset>
 
       <fieldset class="space-y-1">
-        <legend class="text-sm text-gray-500">所属する車両</legend>
+        <legend class="text-sm text-gray-500">車検証の使用の本拠・使用者</legend>
+        <p v-if="!carinsBases.length" class="text-xs text-gray-500">車検証が取り込まれていません</p>
+        <div class="flex flex-col gap-1">
+          <label v-for="b in carinsBases" :key="`${b.use_base}\n${b.user_name}`" class="flex items-center gap-1 text-sm text-gray-800">
+            <input v-model="row.carins_bases" type="checkbox" :value="baseKey(b)" data-testid="tenko-office-carins-base">
+            {{ b.use_base }} / {{ b.user_name }}
+            <span class="text-xs text-gray-500">({{ b.vehicle_count }} 台)</span>
+            <span v-if="otherOfficeName(b, row)" class="text-xs text-gray-500" data-testid="tenko-office-carins-base-elsewhere">— いまは {{ otherOfficeName(b, row) }}</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="space-y-1">
+        <legend class="text-sm text-gray-500">手で選ぶ車両 (車検証と違うとき・車検証の無い車両)</legend>
         <p v-if="!vehicles.length" class="text-xs text-gray-500">車両マスタに車両がありません</p>
         <div class="flex flex-wrap gap-x-4 gap-y-1">
           <label v-for="v in vehicles" :key="v.id" class="flex items-center gap-1 text-sm text-gray-800">

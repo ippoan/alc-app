@@ -13,7 +13,7 @@ const submitManagerJudgmentMock = vi.fn(async (_id: string, data: any) => ({
 }))
 
 const getInPersonScopeMock = vi.fn(async (..._args: any[]): Promise<any> => ({
-  scope: 'unknown', vehicle_number: null, vehicle_offices: [], judge_offices: [],
+  scope: 'unknown', vehicle_number: null, vehicle_offices: [], vehicle_source: null, judge_offices: [],
 }))
 
 vi.mock('~/utils/api', () => ({
@@ -483,14 +483,14 @@ describe('TenkoManagerJudgmentPanel — 血圧の記録不足で対面点呼に�
 
   it('同じ営業所なら対面点呼と出し、範囲を送らない (判定した人と運行管理者の口で照合を引く)', async () => {
     getInPersonScopeMock.mockResolvedValueOnce({
-      scope: 'same_office', vehicle_number: '品川100あ1234',
+      scope: 'same_office', vehicle_number: '品川100あ1234', vehicle_source: 'carins',
       vehicle_offices: [{ id: 'o1', name: '本社営業所', company_name: null }],
       judge_offices: [{ id: 'o1', name: '本社営業所', company_name: null }],
     })
     current = await mountPanel(SWITCHED)
     expect(getInPersonScopeMock).toHaveBeenCalledWith(SESSION_ID, MANAGER_ID, 'tenko-monitor')
     expect(scopeOf().text()).toContain('同じ営業所の運行管理者 (対面点呼として記録します)')
-    expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('車両 品川100あ1234の営業所: 本社営業所')
+    expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('車両 品川100あ1234の営業所: 本社営業所 (車検証から)')
     expect(scopeOf().find('input').exists()).toBe(false)
     await current.findAll('button').find((b: any) => b.text() === 'OK')!.trigger('click')
     await flush()
@@ -499,13 +499,14 @@ describe('TenkoManagerJudgmentPanel — 血圧の記録不足で対面点呼に�
 
   it('別の営業所・グループ企業なら遠隔点呼とみなすと出す (会社名を添える)', async () => {
     getInPersonScopeMock.mockResolvedValueOnce({
-      scope: 'other_office', vehicle_number: null,
+      scope: 'other_office', vehicle_number: null, vehicle_source: 'manual',
       vehicle_offices: [{ id: 'o1', name: '帯広営業所', company_name: null }],
       judge_offices: [{ id: 'o2', name: '本社', company_name: 'グループ運輸' }],
     })
     current = await mountPanel(SWITCHED)
     expect(scopeOf().text()).toContain('遠隔点呼とみなして記録します')
     expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('運行管理者の所属: グループ運輸 本社')
+    expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('帯広営業所 (手で選んだ所属)')
   })
 
   it('所属が未設定なら警告を出す', async () => {

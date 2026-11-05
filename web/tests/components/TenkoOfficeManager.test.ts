@@ -18,8 +18,12 @@ vi.mock('~/utils/api', async importOriginal => ({
 
 const OFFICES = {
   offices: [
-    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'] },
-    { id: 'o2', name: '帯広営業所', company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [] },
+    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }] },
+    { id: 'o2', name: '帯広営業所', company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [], carins_bases: [] },
+  ],
+  carins_bases: [
+    { use_base: '長崎県長崎市', user_name: '一歩運輸', office_id: 'o1', vehicle_count: 3 },
+    { use_base: '佐賀県佐賀市', user_name: '一歩運輸', office_id: null, vehicle_count: 1 },
   ],
   vehicles: [
     { id: 'v1', registration_number: '品川100あ1234', display_name: '1 号車', office_id: 'o1' },
@@ -63,6 +67,20 @@ describe('TenkoOfficeManager', () => {
     expect(w.find('[data-testid="tenko-offices-cohabit-hint"]').text()).toContain('同じ建物でも会社が違えば、会社ごとに別の営業所として登録します')
   })
 
+  it('車検証の使用の本拠・使用者の組を選ぶ。台数と、別の営業所の組はその名前を出し、選ぶと移して送る', async () => {
+    api.updateTenkoOffice.mockResolvedValue(OFFICES.offices[1])
+    const w = await mountIt()
+    const bases = cards(w)[0]!.findAll('[data-testid="tenko-office-carins-base"]')
+    expect((bases[0]!.element as HTMLInputElement).checked).toBe(true)
+    expect(cards(w)[0]!.text()).toContain('長崎県長崎市 / 一歩運輸')
+    expect(cards(w)[0]!.text()).toContain('(3 台)')
+    expect(cards(w)[1]!.find('[data-testid="tenko-office-carins-base-elsewhere"]').text()).toContain('いまは 本社営業所')
+    await cards(w)[1]!.findAll('[data-testid="tenko-office-carins-base"]')[0]!.setValue(true)
+    await btn(w, 1, 'tenko-office-save').trigger('click')
+    await flushPromises()
+    expect(api.updateTenkoOffice.mock.calls[0][1].carins_bases).toEqual([{ use_base: '長崎県長崎市', user_name: '一歩運輸' }])
+  })
+
   it('既存の営業所を保存すると全部を置き換えて読み直す (空の会社名・所在地は null)', async () => {
     api.updateTenkoOffice.mockResolvedValue(OFFICES.offices[0])
     const w = await mountIt()
@@ -71,6 +89,7 @@ describe('TenkoOfficeManager', () => {
     await flushPromises()
     expect(api.updateTenkoOffice).toHaveBeenCalledWith('o1', {
       name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1', 'v2'],
+      carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }],
     })
     expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
     expect(w.find('[data-testid="tenko-offices-notice"]').text()).toBe('本社営業所 を保存しました')
@@ -92,7 +111,7 @@ describe('TenkoOfficeManager', () => {
     await btn(w, 2, 'tenko-office-save').trigger('click')
     await flushPromises()
     expect(api.createTenkoOffice).toHaveBeenCalledWith({
-      name: '釧路営業所', company_name: 'グループ運輸', address: '釧路市', manager_ids: ['m2'], vehicle_ids: [],
+      name: '釧路営業所', company_name: 'グループ運輸', address: '釧路市', manager_ids: ['m2'], vehicle_ids: [], carins_bases: [],
     })
   })
 
@@ -125,11 +144,12 @@ describe('TenkoOfficeManager', () => {
     api.getTenkoOffices.mockRejectedValueOnce(new Error('API error 403: {"error":"forbidden"}'))
     const w = await mountIt()
     expect(w.find('[data-testid="tenko-offices-load-error"]').text()).toBe('システム管理者だけが変更できます')
-    api.getTenkoOffices.mockResolvedValue({ offices: [], vehicles: [] })
+    api.getTenkoOffices.mockResolvedValue({ offices: [], vehicles: [], carins_bases: [] })
     api.getEmployees.mockResolvedValue([])
     const empty = await mountIt()
     await empty.find('[data-testid="tenko-offices-add"]').trigger('click')
     expect(cards(empty)[0]!.text()).toContain('運行管理者がまだいません')
     expect(cards(empty)[0]!.text()).toContain('車両マスタに車両がありません')
+    expect(cards(empty)[0]!.text()).toContain('車検証が取り込まれていません')
   })
 })
