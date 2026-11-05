@@ -4,7 +4,7 @@ import type { TenkoStep } from '~/composables/useTenkoKiosk'
 import { TENKO_REMOTE_ESCALATION_REASONS } from '~/types'
 import { cancelTenkoSession, getEmployeeByNfcId, getEmployeeByCode, getTenkoSession, startMeasurement } from '~/utils/api'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
-import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { tenkoTypeLabel, isBpInPersonSession } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 import { reportApiFailure, reportFailure } from '~/utils/equipment-failure-report'
 
@@ -257,11 +257,12 @@ function stopAutoReset(): void {
  * 遠隔点呼が閉じた (運行管理者の判定が済んだ) 完了の画面。30 秒で次の点呼へ移る (2026-11-02 ユーザー指示)。
  * 判定は下の「判定待ちの間はセッションを取り直し」で入る。押せば待たずに移る。
  * **判定待ちの画面も同じく 30 秒で移る** — 乗務員が判定を待つ必要は無い (2026-11-05 ユーザー指示)。
+ * ただし血圧の記録不足で対面点呼にした点呼は移らない (運行管理者に会って確認を受けるまで画面に指示を出し続ける)。
  * ただし運行管理者が通話に出ている間は数えない (数えると通話を切ってしまう)
  */
 const remoteClosed = computed(() => step.value === 'completed' && (
   (isRemote.value && session.value?.status === 'completed')
-  || (awaitingJudgment.value && !webRtc.isPeerConnected.value)
+  || (awaitingJudgment.value && !webRtc.isPeerConnected.value && !(session.value && isBpInPersonSession(session.value)))
 ))
 watch(remoteClosed, (closed) => {
   stopAutoReset()
