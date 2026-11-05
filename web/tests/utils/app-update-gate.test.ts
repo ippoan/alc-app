@@ -130,7 +130,7 @@ describe('utils/app-update-gate', () => {
 
     context = onKiosk({ step: 'medical', busy: false })
     expect(gate.tick()).toBe('not-safe')
-
+    // 読み込み中は「最初の画面」に見えても手が離せない
     // 入口で止まっている状態を「最初の画面」と誤認しない (#339 の blockedFaceAuthResult)
     context = onKiosk({ step: 'face_auth', busy: true })
     expect(gate.tick()).toBe('not-safe')

@@ -10,7 +10,7 @@ import {
   updateMeasurement, submitMedical, submitSelfDeclaration,
   submitDailyInspection, confirmInstruction, submitReport,
   cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
-  getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
+  getCarryingItems, submitCarryingItemChecks, listTenkoSessions, getMeasurements,
   selfResumeTenkoSession, updateTenkoSessionVehicle, apiErrorCode, apiErrorMessage,
 } from '~/utils/api'
 import { reportApiFailure } from '~/utils/equipment-failure-report'
@@ -35,14 +35,20 @@ export type TenkoStep =
   | 'interrupted'
   | 'cancelled'
 
-/**
- * 業務前の自動点呼を入口で止めたときの文言 (Refs ippoan/alc-app#336)。
- * `BleStatus.vue` の「血圧計: 未確認 (…)」と同じ語を使い、言い回しを増やさない。
- * **次の行動 (もう一度試す / 運行管理者に連絡) を必ず書く。**
- */
-export const BP_REQUIREMENT_UNKNOWN_MESSAGE
-  = 'この端末では自動点呼の業務前を実施できません (血圧計: 未確認)。'
-    + '「もう一度試す」を押して確認し直すか、運行管理者に連絡してください。'
+/** 測定台で測った血圧を「直近」として引き当てる範囲 (時間)。これより古い測定は拾わない */
+export const STATION_BP_LOOKBACK_HOURS = 24
+
+/** 測定台の血圧がまだ無いときの案内 (画面の案内と同じ文言) */
+export const STATION_BP_MISSING_MESSAGE = '測定台で血圧を測ってから、「血圧を読み込む」を押してください。'
+
+/** 測定台で測った血圧 (点呼の体温・血圧の段で引き当てたもの) */
+export interface StationBp {
+  systolic: number
+  diastolic: number
+  pulse: number | null
+  /** 測定した時刻 (ISO 8601) */
+  measuredAt: string
+}
 
 /**
  * 「続きから再開」をサーバに残すときの `resume_reason` (Refs ippoan/alc-app#351)。
@@ -131,25 +137,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    * CoreS3 端末では `devices` に行が無いので**構造的に常に空**。
    */
   const { deviceId } = useAuth()
-  /**
-   * 署名つきで auth-worker へ渡したボンド状態 (#336)。null = 不明。
-   * **読む先は機種に依らない 1 か所** (`useSignedBpBond`、Refs ippoan/alc-app#353) —
-   * CoreS3 キオスクも血圧測定台の ATOM S3 も、同じ値へ書き込む。
-   * 取り直し (`refreshSignedBpBonded`) は CoreS3 の再探索そのものなので `useDeviceToken` 側。
-   */
-  const { signedBpBonded, hasProbedBpBond } = useSignedBpBond()
-  const { refreshSignedBpBonded } = useDeviceToken()
-  /**
-   * この端末で血圧を出せる見込みがあるか。**入口ガード専用の 2 材料**で、
-   * `BleStatus` の表示判定 (`useBpUiEnabled`) とは**意図的に別**
-   * (Refs ippoan/alc-app#347)。表示側は `signedBpBonded` も足して 3 材料で判定するが、
-   * ここは `signedBpBonded` を**その上の行で先に見て**いる (`!== null` なら通す) ため、
-   * 同じ値を混ぜると `signedBpBonded === null` 以外に到達しない条件になり、
-   * fail-closed のゲートが意味を失う。表示用の値とゲート用の判定は混ぜない。
-   */
-  const { bpEnabled } = useBloodPressureSetting()
-  const { hasBpHardware } = useBleGateway()
   const step = ref<TenkoStep>('nfc')
+  /**
+   * 血圧測定台 (`?station=bp`) で測った直近の血圧。業務前の自動点呼の体温・血圧の段に入ったときに
+   * 引き当てる (`loadStationBp`)。キオスク自身が血圧を測れなくても、血圧はここから来る。
+   */
+  const stationBp = ref<StationBp | null>(null)
+  /** 測定台の血圧を引いている最中か */
+  const stationBpLoading = ref(false)
   const employeeId = ref('')
   const employeeName = ref('')
   const pendingSchedules = ref<TenkoSchedule[]>([])
@@ -312,31 +307,15 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    * 「指静脈の本人確認待ち」に置くだけ (`pendingResume` + `face_auth` の段)。
    * 本人確認が通ると `onFaceAuthComplete` が self-resume を呼び、返ってきた status で
    * 既存の `_advanceByStatus` に渡す。**指静脈で本人と分かる前に、サーバーへは何も言わない。**
-   *
-   * **#336 の入口ガードを必ず通す。** 血圧の要否が確定できない端末で業務前を再開すると、
-   * 体温を送った時点で必ず 400 (`bp_required`) になり行き止まりへ入る — 再開の経路が
-   * そこを迂回しないように、`onFaceAuthComplete` と同じ判定を同じ文言で掛ける。
    */
   async function resumeSession(s: TenkoSession) {
     error.value = null
     // 指示事項と運行管理者名は予定側にしか無い。まだ未実施予定として残っていれば拾う
     // (消費済みなら取れないので、指示は出ないまま続きへ進む)
     selectedSchedule.value = pendingSchedules.value.find(p => p.id === s.schedule_id) ?? null
-    // ガードが見る `tenkoType` はこのセッションの種別なので、判定より前に載せ替える
     session.value = s
-    isLoading.value = true
-    try {
-      if (await isBpRequirementUnknown()) {
-        blockedResumeSession.value = s
-        error.value = BP_REQUIREMENT_UNKNOWN_MESSAGE
-        return
-      }
-      blockedResumeSession.value = null
-      pendingResume.value = s
-      step.value = 'face_auth'
-    } finally {
-      isLoading.value = false
-    }
+    pendingResume.value = s
+    step.value = 'face_auth'
   }
 
   /**
@@ -451,84 +430,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     step.value = 'face_auth'
   }
 
-  /**
-   * 業務前の自動点呼で、血圧の要否が確定できないか (Refs ippoan/alc-app#336)。
-   *
-   * サーバは「不明」を安全側 (血圧必須) に倒すので、このまま進めると体温を送った
-   * 時点で必ず 400 (`bp_required`) になる。**体温を測る意味が無いのに測らせない。**
-   *
-   * - **遠隔点呼・業務後は対象外** — 既定を今までどおりに保つ (止めるのは業務前の自動点呼だけ)
-   * - **`signedBpBonded === false` は通す** — 血圧計が無いと**確認できた**端末を
-   *   締め出さない (混ぜると #322 で踏んだ形になる)
-   * - **`deviceId` があれば止めない** — サーバが `devices.bp_enabled` を引けるので
-   *   行き止まりにならない
-   * - **血圧を出せる見込みがある端末は止めない** — 「不明」は「血圧必須」であって
-   *   「進めない」ではない。血圧を測れる端末は測って通れるので行き止まりではなく、
-   *   ここで締め出すと**古いファーム + 血圧計**の端末が今日できていることを失う。
-   *   条件は `bpEnabled` / `hasBpHardware` の 2 つ — **入力欄すら出ないまま血圧必須に
-   *   なる端末だけ**が行き止まり (issue の症状そのもの)。測れるはずが測れなかった
-   *   ときは、体温・血圧の段の「遠隔点呼へ切り替え」が受け皿になる。
-   *   **表示側 (`useBpUiEnabled` の `showBpUi`) は `signedBpBonded === true` も
-   *   足した 3 材料だが、ここには足さない** (Refs ippoan/alc-app#347) — 1 つ上の
-   *   `signedBpBonded.value !== null` で既に通しているので、足しても判定は変わらず、
-   *   表示側の都合でゲートを緩める経路を作るだけになる。据え置きは意図的。
-   * - **試す前には止めない** — `signedBpBonded` の `null` には「まだ署名を試していない」
-   *   (起動直後・探索中) も乗る。そこで止めると**署名を試す前に端末を締め出す**ので、
-   *   まだ試していなければ**ここで 1 度試してから**判定する (`hasProbedBpBond`)。
-   *   止めるのは**試した結果、ボンド状態が分からなかったとき**だけ。
-   *
-   * (#401: `unused` の端末は index.vue が自動点呼のタブごと塞ぐので、ここには来ない。)
-   */
-  async function isBpRequirementUnknown(): Promise<boolean> {
-    if (remoteMode || tenkoType.value === 'post_operation') return false
-    if (deviceId.value) return false
-    if (signedBpBonded.value !== null) return false
-    if (bpEnabled.value || hasBpHardware.value) return false
-    if (!hasProbedBpBond.value) await refreshSignedBpBonded()
-    return signedBpBonded.value === null
-  }
-
-  /**
-   * 入口で止めたときの顔認証結果。「もう一度試す」で**続きから**再開するために持つ
-   * (非 null = いま入口で止まっている)。
-   */
-  const blockedFaceAuthResult = ref<FaceAuthResult | null>(null)
-  /**
-   * 入口で止めた「続きから再開」(Refs ippoan/alc-app#343)。顔認証と同じく、
-   * 「もう一度試す」で**続きから**やり直せるように持つ。
-   */
-  const blockedResumeSession = ref<TenkoSession | null>(null)
-  /** 血圧の要否が確定できず、業務前の自動点呼を入口で止めているか (#336) */
-  const bpRequirementUnknown = computed(
-    () => blockedFaceAuthResult.value !== null || blockedResumeSession.value !== null,
-  )
-
-  /**
-   * ボンド状態を取り直して、確定したら止めた所から再開する (#336)。
-   * 「不明」は一時的なこともある (CoreS3 がその瞬間つながっていなかった等) ので、
-   * **リロードなしで復帰できる導線**を必ず残す。取り直しても不明なら同じ画面に戻るだけ。
-   */
-  async function retryBpRequirement() {
-    const pendingResume = blockedResumeSession.value
-    const pendingFace = blockedFaceAuthResult.value
-    if (!pendingResume && !pendingFace) return
-    error.value = null
-    isLoading.value = true
-    try {
-      await refreshSignedBpBonded()
-    } finally {
-      isLoading.value = false
-    }
-    // 止めた経路へそのまま戻す。両方が同時に立つことはない (入口はどちらか一方)
-    if (pendingResume) {
-      blockedResumeSession.value = null
-      await resumeSession(pendingResume)
-    }
-    if (pendingFace) {
-      await onFaceAuthComplete(pendingFace)
-    }
-  }
-
   // --- 顔認証完了 → セッション開始 + アルコール測定 ---
   async function onFaceAuthComplete(result: FaceAuthResult) {
     if (!result.verified) return
@@ -542,17 +443,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     if (!remoteMode && !selectedSchedule.value && tenkoType.value !== 'post_operation') return
     error.value = null
     isLoading.value = true
-
-    // 血圧の要否が確定できない端末は、体温・血圧まで歩かせずここで止める (#336)。
-    // 判定は署名の取得を待つことがあるので isLoading の中で回す。
-    // 無言では止めない — 理由と次の行動 (もう一度試す) を必ず出す
-    if (await isBpRequirementUnknown()) {
-      blockedFaceAuthResult.value = result
-      error.value = BP_REQUIREMENT_UNKNOWN_MESSAGE
-      isLoading.value = false
-      return
-    }
-    blockedFaceAuthResult.value = null
 
     faceSnapshot.value = result.snapshot ?? null
     faceSkipped.value = result.skipped === true
@@ -625,16 +515,86 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     }
   }
 
+  /**
+   * 測定台で測った直近の血圧を引き当てる (業務前の自動点呼の体温・血圧の段)。
+   *
+   * 測定台は通常点呼と同じ測定の口で `systolic` / `diastolic` / `medical_measured_at` を保存し、
+   * 点呼の記録は作らない。ここでは**その乗務員の直近 24 時間の測定**から、完了していて血圧が
+   * 入っているもののうち測定時刻が最も新しいものを採る (並び順には頼らない)。
+   * 見つからなければ `stationBp` は null — 画面が「測定台で測ってから読み込む」案内を出す。
+   */
+  async function loadStationBp() {
+    if (!employeeId.value) return
+    // 引いている最中に呼ばれたら同じ要求を待つ (二重に投げない)
+    stationBpPending ??= _fetchStationBp().finally(() => { stationBpPending = null })
+    await stationBpPending
+  }
+
+  let stationBpPending: Promise<void> | null = null
+
+  async function _fetchStationBp() {
+    stationBpLoading.value = true
+    try {
+      const since = new Date(Date.now() - STATION_BP_LOOKBACK_HOURS * 3600 * 1000).toISOString()
+      const res = await getMeasurements({ employee_id: employeeId.value, date_from: since, per_page: 50 })
+      let best: StationBp | null = null
+      for (const m of res.measurements) {
+        if (m.status !== 'completed' || m.systolic == null || m.diastolic == null) continue
+        const measuredAt = m.medical_measured_at ?? m.measured_at
+        if (best && Date.parse(measuredAt) <= Date.parse(best.measuredAt)) continue
+        best = { systolic: m.systolic, diastolic: m.diastolic, pulse: m.pulse ?? null, measuredAt }
+      }
+      stationBp.value = best
+    } catch (e) {
+      stationBp.value = null
+      _fail(e, '測定台の血圧の読み込みに失敗しました', '測定台の血圧の読み込み')
+    } finally {
+      stationBpLoading.value = false
+    }
+  }
+
+  /**
+   * 体温・血圧の送信内容に測定台の血圧を足す。**この端末で測った血圧 (`systolic` が入っている) が
+   * 常に優先**。足すときの `medical_measured_at` は体温と血圧の**古い方** — サーバーの有効時間の
+   * 判定 (業務前 八) が測定台の血圧にも掛かるように、新しい方に揃えない。
+   */
+  function _withStationBp(data: SubmitMedicalData): SubmitMedicalData {
+    const bp = stationBp.value
+    if (!bp || data.systolic !== undefined) return data
+    const times = [data.medical_measured_at, bp.measuredAt].filter((t): t is string => Boolean(t))
+    const oldest = times.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a))
+    const merged: SubmitMedicalData = {
+      ...data,
+      systolic: bp.systolic,
+      diastolic: bp.diastolic,
+      medical_measured_at: new Date(oldest).toISOString(),
+    }
+    if (bp.pulse !== null && data.pulse === undefined) merged.pulse = bp.pulse
+    return merged
+  }
+
   // --- 医療データ送信 (業務前のみ) ---
   async function onMedicalSubmit(data: SubmitMedicalData) {
     if (!session.value) return
     error.value = null
+
+    // 業務前の自動点呼で、この端末の血圧が入っていなければ測定台の血圧を使う。引いている最中なら
+    // 待ち、まだ無ければ先に引く。**それでも無ければサーバーへ送らない** — 体温の読み値は
+    // 画面に残るので、測定台で測ってもらい「血圧を読み込む」の後にもう一度送れる
+    if (!isRemote.value && data.systolic === undefined && !stationBp.value) {
+      await loadStationBp()
+      if (!stationBp.value) {
+        error.value ??= STATION_BP_MISSING_MESSAGE
+        return
+      }
+    }
     isLoading.value = true
 
     try {
       // 端末の血圧計有無 (devices.bp_enabled) をサーバが判定するための端末識別子。
       // bp_enabled 自体は送らない (フェイルクローズ設計、Refs ippoan/alc-app#322)
-      const body: SubmitMedicalData = deviceId.value ? { ...data, device_id: deviceId.value } : data
+      const merged = _withStationBp(data)
+      const body: SubmitMedicalData = deviceId.value ? { ...merged, device_id: deviceId.value } : merged
       const s = await submitMedical(session.value.id, body)
       session.value = s
       _advanceByStatus(s.status)
@@ -785,6 +745,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
         break
       case 'medical_pending':
         step.value = 'medical'
+        // 業務前の自動点呼は血圧を測定台から引き当てる (遠隔点呼は運行管理者が見るので引かない)
+        if (!isRemote.value) void loadStationBp()
         if (medicalSentBack.value) {
           medicalSentBack.value = false
           error.value = MEDICAL_EXPIRED_MESSAGE
@@ -869,12 +831,12 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     safetyJudgment.value = null
     escalatedToRemote.value = false
     escalationReason.value = null
-    blockedFaceAuthResult.value = null
-    blockedResumeSession.value = null
     pendingResume.value = null
     vehicleInput.value = ''
     vehicleManualRequired.value = false
     medicalSentBack.value = false
+    stationBp.value = null
+    stationBpLoading.value = false
   }
 
   return {
@@ -882,6 +844,9 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     step,
     employeeId,
     employeeName,
+    stationBp,
+    stationBpLoading,
+    loadStationBp,
     pendingSchedules,
     resumableSessions,
     selectedSchedule,
@@ -897,7 +862,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     escalatedToRemote,
     escalationReason,
     isRemote,
-    bpRequirementUnknown,
     pendingResume,
     vehicleInput,
     vehicleManualRequired,
@@ -914,7 +878,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     proceedWithoutSchedule,
     onFaceAuthComplete,
     onVehicleSubmit,
-    retryBpRequirement,
     onAlcoholMeasured,
     onMedicalSubmit,
     onSelfDeclarationSubmit,

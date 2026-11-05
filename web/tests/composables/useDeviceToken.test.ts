@@ -1278,7 +1278,7 @@ describe('useDeviceToken (#434 step 3c)', () => {
 
     // 画面 (自動点呼の入口) が「この端末で血圧が必須になるか」を先に知るための公開
     // (Refs ippoan/alc-app#336)。3 状態を潰さない。
-    describe('signedBpBonded / refreshSignedBpBonded (#336)', () => {
+    describe('signedBpBonded (#336)', () => {
       const tokenRoutes = {
         '/device/alarm-nonce': () => ({ ok: true, json: () => Promise.resolve({ nonce: 'n1', expires_in: 60 }) }),
         '/device/alarm-token': () => ({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) }),
@@ -1378,61 +1378,6 @@ describe('useDeviceToken (#434 step 3c)', () => {
         expect(lastFailureStage.value).toBe('token-exchange')
         expect(signedBpBonded.value).toBeNull()
         expect(hasProbedBpBond.value).toBe(true)
-      })
-
-      it('★ refreshSignedBpBonded: cache が生きていても署名からやり直して確定させる', async () => {
-        // 1 回目は古いファーム扱い (不明) で JWT だけ取れる
-        coreS3Mock.isConnected.value = true
-        coreS3Mock.request.mockImplementation(async () => { throw new Error('ERR AUTH: unknown command') })
-        signAlarmDeviceNonceMock.mockResolvedValue({ pubkey: 'pub-1', sig: 'sig-1' })
-        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
-
-        const useDeviceToken = await load()
-        const { getDeviceJwt, refreshSignedBpBonded } = useDeviceToken()
-        const { signedBpBonded } = await loadSignedBpBond()
-
-        expect(await getDeviceJwt()).toBe('s3r-jwt')
-        expect(signedBpBonded.value).toBeNull()
-
-        // CoreS3 が繋がり直し、今度は SIGNBP に答えた
-        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=0')
-        expect(await refreshSignedBpBonded()).toBe(false)
-        expect(signedBpBonded.value).toBe(false)
-      })
-
-      it('★ refreshSignedBpBonded: 抑止 (backoff) 中でも試し直す — 行き止まりを作らない', async () => {
-        coreS3Mock.isConnected.value = true
-        coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=0')
-        // 1 回目は nonce で失敗させて backoff を立てる
-        vi.stubGlobal('fetch', routeFetch({
-          '/device/alarm-nonce': () => ({ ok: false, status: 500, json: () => Promise.resolve({}) }),
-        }))
-
-        const useDeviceToken = await load()
-        const { getDeviceJwt, refreshSignedBpBonded, coreS3BackoffUntil } = useDeviceToken()
-        const { signedBpBonded } = await loadSignedBpBond()
-
-        expect(await getDeviceJwt()).toBeNull()
-        expect(coreS3BackoffUntil.value).toBeGreaterThan(0)
-        expect(signedBpBonded.value).toBeNull()
-
-        vi.stubGlobal('fetch', routeFetch(tokenRoutes))
-        expect(await refreshSignedBpBonded()).toBe(false)
-        expect(signedBpBonded.value).toBe(false)
-      })
-
-      it('refreshSignedBpBonded: やり直しても駄目なら null のまま (同じ画面に戻るだけ)', async () => {
-        coreS3Mock.isConnected.value = false
-        vi.stubGlobal('fetch', vi.fn())
-
-        const useDeviceToken = await load()
-        const { refreshSignedBpBonded } = useDeviceToken()
-        const { signedBpBonded } = await loadSignedBpBond()
-
-        expect(await refreshSignedBpBonded()).toBeNull()
-        expect(signedBpBonded.value).toBeNull()
-        // CoreS3 の再探索まで含めてやり直している
-        expect(coreS3Mock.startupProbe).toHaveBeenCalled()
       })
     })
   })
@@ -1687,29 +1632,6 @@ describe('auth-worker への HTTP の上限 (Refs ippoan/alc-app#338)', () => {
 
     expect(await getDeviceJwt()).toBe('jwt-1')
     expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
-  })
-
-  // #336 の refreshSignedBpBonded() は getDeviceJwt() を通さず tryCoreS3Jwt を
-  // 直に呼ぶ (cache を返して終わりにしないため)。timeout は tryCoreS3Jwt の中の
-  // fetch に入れてあるので、この入口からも効く — それを固定する。
-  it('refreshSignedBpBonded (#336 の直呼び経路) の fetch にも signal が載る', async () => {
-    coreS3Mock.isConnected.value = true
-    coreS3Mock.request.mockImplementation(async () => 'AUTH SIGBP pub-bp sig-bp BP=1')
-    const fetchMock = vi.fn((url: string) => {
-      if (url.endsWith('/device/alarm-nonce')) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ nonce: 'n1' }) })
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ access_token: 's3r-jwt', expires_in: 900 }) })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    const useDeviceToken = await load()
-    expect(await useDeviceToken().refreshSignedBpBonded()).toBe(true)
-
-    expect(fetchMock.mock.calls).toHaveLength(2)
-    for (const [, init] of fetchMock.mock.calls) {
-      expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal)
-    }
   })
 
   it('pairKioskDevice (/device/pair) にも signal が載る', async () => {

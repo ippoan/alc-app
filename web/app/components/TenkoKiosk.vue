@@ -45,7 +45,7 @@ const {
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
-  bpRequirementUnknown, retryBpRequirement,
+  stationBp, stationBpLoading, loadStationBp,
   vehicleInput, vehicleManualRequired, onVehicleSubmit,
   identifyEmployee, selectSchedule, resumeSession, proceedWithoutSchedule, onFaceAuthComplete,
   onAlcoholMeasured, onMedicalSubmit, onSelfDeclarationSubmit,
@@ -200,15 +200,14 @@ watch(() => session.value?.measurement_id, (id) => {
 
 // 本番 flip 後の新版への載せ替えを「最初の画面に居るとき」だけ許すための現在地 (Refs #338)。
 // `useTenkoKiosk` の state は component ごとの素の ref で外からは読めないので、ここで出す。
-// 入口で止まっている間 (bpRequirementUnknown) と読み込み中は、リロードで止めた理由や
-// 照会中の要求が消えるため busy 扱いにする。
+// 読み込み中は、照会中の要求が消えるため busy 扱いにする。
 // ファームの更新中 (待機画面 = `nfc` のまま始まる) も busy — 書き込みの途中でページを落とさない
 // (Refs ippoan/alc-app#403)。`track` の getter は登録した時点で評価されるので、`serialOta` は
 // これより前で定義する (受けの配線は下の「端末のシリアル OTA」の節)
 const serialOta = useSerialOta()
 useKioskScreen().track(() => ({
   step: step.value,
-  busy: bpRequirementUnknown.value || isLoading.value || serialOta.state.value.kind !== 'idle',
+  busy: isLoading.value || serialOta.state.value.kind !== 'idle',
 }))
 
 /**
@@ -398,6 +397,23 @@ watch(bleError, (message) => {
  */
 const { showBpUi } = useBpUiEnabled()
 
+/**
+ * 体温・血圧の段で血圧の行を出すか。**この端末の血圧計の有無 (`showBpUi`) に依らず、自動点呼なら
+ * 出す** — 業務前の血圧は血圧測定台で測った直近の値を引き当てる (`stationBp`)。
+ * 遠隔点呼は運行管理者が見るので出さない。
+ */
+const showMedicalBp = computed(() => showBpUi.value || !isRemote.value)
+
+/** この端末で測った血圧 (BLE) があるか。あれば測定台の血圧より優先して使う */
+const hasKioskBp = computed(() => Boolean(bleBloodPressure.value))
+
+/** 測定台の血圧の測定時刻 (「07:31」の形) */
+const stationBpTime = computed(() =>
+  stationBp.value
+    ? new Date(stationBp.value.measuredAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+    : '',
+)
+
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
 watch(isDemoMode, (v) => {
@@ -466,9 +482,9 @@ const vein = useVeinEmployeeIdentify({
   }),
 })
 
-/** 指静脈の照合を始めてよいか (本人確認の段・血圧の確認で止めていない・Vein Station がつながっている) */
+/** 指静脈の照合を始めてよいか (本人確認の段・Vein Station がつながっている) */
 const useVeinForIdentity = computed(() =>
-  step.value === 'face_auth' && !bpRequirementUnknown.value && !isDemoMode.value
+  step.value === 'face_auth' && !isDemoMode.value
   && veinSerial.isSupported && veinSerial.isConnected.value,
 )
 /** 本人確認の段で止めている理由 (Vein Station が無い)。`null` なら止めていない */
@@ -811,21 +827,6 @@ onUnmounted(() => {
 
       <!-- Step 2: スケジュール選択 -->
       <div v-else-if="step === 'schedule_select'" class="flex flex-col gap-4">
-        <!--
-          再開を選んだが血圧の要否が確定できず入口で止めた場合 (Refs #336 / #343)。
-          再開の経路が #339 の入口ガードを迂回しないよう、顔認証の段と同じ文言・同じ
-          「もう一度試す」を出す (理由は上のグローバルエラーに出ている)。
-        -->
-        <div v-if="bpRequirementUnknown" class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-4">血圧計: 未確認</h2>
-          <button
-            data-testid="retry-bp-from-schedule-select"
-            class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-            @click="retryBpRequirement"
-          >
-            もう一度試す
-          </button>
-        </div>
         <div class="bg-white rounded-2xl p-4 shadow-sm">
           <h2 class="text-lg font-semibold text-gray-700 mb-4">点呼予定選択</h2>
           <TenkoScheduleSelect
@@ -841,21 +842,7 @@ onUnmounted(() => {
 
       <!-- Step 3: 本人確認 (指静脈) -->
       <div v-else-if="step === 'face_auth'" class="flex flex-col gap-4">
-        <!--
-          血圧の要否が確定できない端末は、体温・血圧まで歩かせずここで止める (Refs #336)。
-          理由は上のグローバルエラーに出る (BP_REQUIREMENT_UNKNOWN_MESSAGE)。
-          「不明」は一時的なこともあるので、リロードなしでやり直せる導線を必ず残す。
-        -->
-        <div v-if="bpRequirementUnknown" class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-4">血圧計: 未確認</h2>
-          <button
-            class="w-full px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
-            @click="retryBpRequirement"
-          >
-            もう一度試す
-          </button>
-        </div>
-        <div v-else class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="bg-white rounded-2xl p-4 shadow-sm">
           <!-- 本人確認は指静脈 (遠隔点呼・自動点呼は Vein Station でしか行わない)。デモだけ顔認証の画面 -->
           <FaceAuth
             v-if="isDemoMode"
@@ -931,7 +918,7 @@ onUnmounted(() => {
       <!-- Step 5: 体温・血圧 (業務前のみ) -->
       <div v-else-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showBpUi ? '体温・血圧' : '体温' }}</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showMedicalBp ? '体温・血圧' : '体温' }}</h2>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
           <div v-if="!isDemoMode" class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
@@ -951,9 +938,39 @@ onUnmounted(() => {
             </button>
           </div>
 
+          <!--
+            血圧測定台で測った直近の血圧 (業務前の自動点呼)。この端末で血圧を測っていれば
+            そちらを使うので出さない。見つからないときは測定台で測ってもらい、読み込み直す。
+          -->
+          <div v-if="!isRemote && !hasKioskBp" class="mb-4" data-testid="station-bp">
+            <p
+              v-if="stationBp"
+              class="rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium text-center px-4 py-3"
+              data-testid="station-bp-value"
+            >
+              測定台の血圧: {{ stationBp.systolic }}/{{ stationBp.diastolic }} mmHg ({{ stationBpTime }} 測定)
+            </p>
+            <p v-else-if="stationBpLoading" class="text-sm text-blue-600 text-center">
+              測定台の血圧を確認しています...
+            </p>
+            <div v-else class="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-center">
+              <p class="text-sm text-amber-800 mb-2" data-testid="station-bp-missing">
+                測定台で血圧を測ってから、「血圧を読み込む」を押してください。
+              </p>
+              <button
+                class="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors"
+                data-testid="station-bp-load"
+                @click="loadStationBp"
+              >
+                血圧を読み込む
+              </button>
+            </div>
+          </div>
+
           <BleStatus
             v-if="medicalInputTab === 'ble'"
             :allow-skip="false"
+            :hide-bp-status="!showBpUi && !isRemote"
             @next="onMedicalNext"
           />
           <ManualMedicalInput
@@ -965,10 +982,10 @@ onUnmounted(() => {
           <!--
             血圧が測れないときの逃げ道 (Refs ippoan/alc-app-s3#135)。
             血圧は必須なのでスキップも手入力もさせず、運行管理者が遠隔で対応する経路へ移す。
-            自動点呼で血圧を使う端末のときだけ出す (最初から遠隔なら出ない)。
+            自動点呼のとき出す (最初から遠隔なら出ない)。
             理由は自由入力にせず選択肢から選ばせる — サーバが `reason` を必須で受ける。
           -->
-          <template v-if="showBpUi && !isRemote">
+          <template v-if="!isRemote">
             <button
               v-if="!isChoosingEscalationReason"
               class="w-full mt-4 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"

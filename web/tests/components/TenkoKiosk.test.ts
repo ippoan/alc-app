@@ -34,9 +34,10 @@ const proceedWithoutScheduleMock = vi.fn()
 // 途中で止まった点呼の再開 (Refs ippoan/alc-app#343)
 const resumableSessions = ref<TenkoSession[]>([])
 const resumeSessionMock = vi.fn()
-// 血圧の要否が確定できず入口で止めているか (Refs ippoan/alc-app#336)
-const bpRequirementUnknown = ref(false)
-const retryBpRequirementMock = vi.fn()
+// 測定台で測った直近の血圧 (体温・血圧の段で引き当てる)
+const stationBp = ref<{ systolic: number, diastolic: number, pulse: number | null, measuredAt: string } | null>(null)
+const stationBpLoading = ref(false)
+const loadStationBpMock = vi.fn()
 // アルコール測定の録画 + 測定レコード (Refs ippoan/alc-app#349)
 const employeeId = ref('')
 const tenkoType = ref<TenkoType | null>(null)
@@ -77,8 +78,9 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   selectSchedule: vi.fn(async () => {}),
   resumeSession: resumeSessionMock,
   proceedWithoutSchedule: proceedWithoutScheduleMock,
-  bpRequirementUnknown,
-  retryBpRequirement: retryBpRequirementMock,
+  stationBp,
+  stationBpLoading,
+  loadStationBp: loadStationBpMock,
   onFaceAuthComplete: vi.fn(),
   vehicleInput,
   vehicleManualRequired,
@@ -143,9 +145,10 @@ mockNuxtImport('useVideoRecorder', () => () => ({
 
 // 体温計・血圧計 (BLE ゲートウェイ) のエラー
 const bleError = ref<string | null>(null)
+const bleBloodPressure = ref<{ systolic: number, diastolic: number, pulse: number } | null>(null)
 mockNuxtImport('useBleGateway', () => () => ({
   latestTemperature: ref(null),
-  latestBloodPressure: ref(null),
+  latestBloodPressure: bleBloodPressure,
   error: bleError,
 }))
 
@@ -261,35 +264,97 @@ describe('TenkoKiosk — 体温・血圧ステップでスキップを出さな�
   })
 })
 
-// 業務後は予定なしでも進められる (Refs ippoan/alc-app#322)
-describe('TenkoKiosk — 血圧の要否が確定できないときの顔認証画面 (Refs ippoan/alc-app#336)', () => {
+// 業務前の自動点呼の血圧は測定台で測った直近の値を引き当てる。この端末に血圧計が無くても
+// (showBpUi=false) 体温・血圧の段に血圧の行と遠隔点呼への逃げ道を出す
+describe('TenkoKiosk — 体温・血圧の段: 測定台の血圧', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    step.value = 'face_auth'
-    bpRequirementUnknown.value = false
+    step.value = 'medical'
+    isRemote.value = false
+    stationBp.value = null
+    stationBpLoading.value = false
+    bleBloodPressure.value = null
   })
 
-  it('確定していれば本人確認 (指静脈) の段を出す。顔認証は出さない', async () => {
+  it('★ 見つかった血圧を「測定台の血圧: 128/82 mmHg (07:31 測定)」の形で出す', async () => {
+    // 時刻は端末のタイムゾーンで表示する。表示側と同じ変換で期待値を作る
+    const measuredAt = new Date(2026, 3, 1, 7, 31).toISOString()
+    stationBp.value = { systolic: 128, diastolic: 82, pulse: 70, measuredAt }
     const wrapper = await mountKiosk()
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
-    expect(wrapper.text()).toContain('指静脈で本人確認')
-    expect(wrapper.findAll('button').some(b => b.text() === 'もう一度試す')).toBe(false)
+    expect(wrapper.find('[data-testid="station-bp-value"]').text()).toBe('測定台の血圧: 128/82 mmHg (07:31 測定)')
+    expect(wrapper.find('[data-testid="station-bp-missing"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('★ 不明なら顔認証を出さず、「もう一度試す」を出す (行き止まりを作らない)', async () => {
-    bpRequirementUnknown.value = true
+  it('★ 見つからなければ案内と「血圧を読み込む」を出し、押すと引き直す', async () => {
     const wrapper = await mountKiosk()
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.findComponent({ name: 'FaceAuth' }).exists()).toBe(false)
-    const retry = wrapper.findAll('button').find(b => b.text() === 'もう一度試す')
-    expect(retry).toBeTruthy()
+    expect(wrapper.find('[data-testid="station-bp-missing"]').text())
+      .toBe('測定台で血圧を測ってから、「血圧を読み込む」を押してください。')
+    const load = wrapper.find('[data-testid="station-bp-load"]')
+    expect(load.text()).toBe('血圧を読み込む')
 
-    await retry!.trigger('click')
-    expect(retryBpRequirementMock).toHaveBeenCalledTimes(1)
+    await load.trigger('click')
+    expect(loadStationBpMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('引いている最中は案内でなく確認中の表示を出す', async () => {
+    stationBpLoading.value = true
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('測定台の血圧を確認しています')
+    expect(wrapper.find('[data-testid="station-bp-missing"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ この端末で血圧を測っていれば (BLE)、測定台の行は出さない', async () => {
+    bleBloodPressure.value = { systolic: 110, diastolic: 70, pulse: 64 }
+    stationBp.value = { systolic: 128, diastolic: 82, pulse: 70, measuredAt: new Date().toISOString() }
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="station-bp"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('見出しは血圧計が無い端末でも「体温・血圧」', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('h2').text()).toBe('体温・血圧')
+    wrapper.unmount()
+  })
+
+  it('★ 血圧計が無い端末でも「遠隔点呼に切り替える」の逃げ道を出す', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('button').some(b => b.text() === '遠隔点呼に切り替える')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ 血圧計が無い端末では BleStatus の血圧計の未確認表示を隠す', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'BleStatus' }).props('hideBpStatus')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('遠隔点呼では測定台の行も逃げ道も出さない', async () => {
+    isRemote.value = true
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="station-bp"]').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(b => b.text() === '遠隔点呼に切り替える')).toBe(false)
+    expect(wrapper.find('h2').text()).toBe('体温')
+    expect(wrapper.findComponent({ name: 'BleStatus' }).props('hideBpStatus')).toBe(false)
     wrapper.unmount()
   })
 })
@@ -314,7 +379,6 @@ describe('TenkoKiosk — schedule_select の再開の導線', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     step.value = 'schedule_select'
-    bpRequirementUnknown.value = false
     resumableSessions.value = []
   })
 
@@ -336,29 +400,6 @@ describe('TenkoKiosk — schedule_select の再開の導線', () => {
     await wrapper.vm.$nextTick()
 
     expect(resumeSessionMock).toHaveBeenCalledWith(stuck)
-    wrapper.unmount()
-  })
-
-  it('血圧の要否が確定していれば、この画面に「もう一度試す」は出ない', async () => {
-    const wrapper = await mountKiosk()
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.find('[data-testid="retry-bp-from-schedule-select"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('★ 再開が入口で止められたら、この画面にも「もう一度試す」を出す (#336 の行き止まりを作らない)', async () => {
-    bpRequirementUnknown.value = true
-    const wrapper = await mountKiosk()
-    await wrapper.vm.$nextTick()
-
-    const retry = wrapper.find('[data-testid="retry-bp-from-schedule-select"]')
-    expect(retry.exists()).toBe(true)
-    // 予定一覧は消さない — 別の予定を選ぶ道を残す
-    expect(wrapper.findComponent({ name: 'TenkoScheduleSelect' }).exists()).toBe(true)
-
-    await retry.trigger('click')
-    expect(retryBpRequirementMock).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })
