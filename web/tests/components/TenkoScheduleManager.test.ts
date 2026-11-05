@@ -16,9 +16,11 @@ vi.mock('~/utils/api', async importOriginal => ({
   batchCreateSchedules: vi.fn(async () => []),
   updateSchedule: vi.fn(),
   deleteSchedule: vi.fn(),
+  getTenkoSettings: vi.fn(async () => ({ overdue_minutes: 60 })),
+  updateTenkoSettings: vi.fn(async (d: { overdue_minutes: number }) => d),
 }))
 
-import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, createSchedule, deleteSchedule, listSchedules, updateSchedule } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, createSchedule, deleteSchedule, listSchedules, updateSchedule, getTenkoSettings, updateTenkoSettings } from '~/utils/api'
 
 // 席の鍵のトークンが、失敗の後に取れた回数 (実物は useManagerDeviceToken が数える module の ref)
 const recoveredCountRef = ref(0)
@@ -303,6 +305,122 @@ describe('TenkoScheduleManager — 席の鍵が取れたら一覧を読み直す
     await recover(wrapper)
 
     expect(listMock).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+})
+
+
+// 自己点検表の不足を埋める: 予定に車両番号、予定超過の分数
+describe('TenkoScheduleManager — 車両番号と予定超過の分数', () => {
+  const SCHEDULE = {
+    id: 's-9', employee_id: 'emp-1', tenko_type: 'pre_operation', scheduled_at: '2026-09-18T00:00:00Z',
+    responsible_manager_name: '鈴木一郎', instruction: '安全運転', consumed: false, vehicle_number: '品川 100 あ 12-34',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(listSchedules).mockReset()
+    vi.mocked(listSchedules).mockResolvedValue({ schedules: [SCHEDULE], total: 1, page: 1, per_page: 20 } as never)
+    vi.mocked(getTenkoSettings).mockResolvedValue({ overdue_minutes: 60 })
+    vi.mocked(updateTenkoSettings).mockImplementation(async d => d)
+  })
+
+  it('一覧に車両番号が出る (無い予定は「-」)', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="schedule-vehicle-number"]').text()).toBe('品川 100 あ 12-34')
+    vi.mocked(listSchedules).mockResolvedValue({ schedules: [{ ...SCHEDULE, vehicle_number: null }], total: 1, page: 1, per_page: 20 } as never)
+    await (wrapper.vm as any).applyFilter()
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="schedule-vehicle-number"]').text()).toBe('-')
+    wrapper.unmount()
+  })
+
+  it('新規作成で入力した車両番号が createSchedule に載る (空なら載せない)', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    fillRequiredFields(wrapper)
+    const row = (wrapper.vm as any).newRows[0]
+    row.instruction = '指示'
+    row.vehicle_number = ' 品川 100 あ 12-34 '
+    await (wrapper.vm as any).handleCreate()
+    await flush()
+    expect(vi.mocked(createSchedule).mock.calls[0]![0]).toMatchObject({ vehicle_number: '品川 100 あ 12-34' })
+
+    await openFormWithRow(wrapper)
+    await wrapper.find('button.bg-green-600').trigger('click')
+    fillRequiredFields(wrapper)
+    const row2 = (wrapper.vm as any).newRows[0]
+    row2.instruction = '指示'
+    await (wrapper.vm as any).handleCreate()
+    await flush()
+    expect(vi.mocked(createSchedule).mock.calls[1]![0].vehicle_number).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('編集で車両番号を直して保存すると updateSchedule に載る', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await flush()
+    await wrapper.vm.$nextTick()
+    await wrapper.findAll('button').find(b => b.text() === '編集')!.trigger('click')
+    const input = wrapper.find('[data-testid="edit-vehicle-number"]')
+    expect((input.element as HTMLInputElement).value).toBe('品川 100 あ 12-34')
+    await input.setValue('横浜 200 い 5-6')
+    await wrapper.findAll('button').find(b => b.text() === '保存' && b.classes().includes('bg-blue-600') && b.attributes('data-testid') !== 'overdue-save')!.trigger('click')
+    await flush()
+    expect(vi.mocked(updateSchedule).mock.calls[0]![1]).toMatchObject({ vehicle_number: '横浜 200 い 5-6' })
+    wrapper.unmount()
+  })
+
+  it('予定超過の分数は設定から読み込まれ、保存すると updateTenkoSettings に数値で送る', async () => {
+    vi.mocked(getTenkoSettings).mockResolvedValue({ overdue_minutes: 90 })
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await flush()
+    await wrapper.vm.$nextTick()
+    const input = wrapper.find('[data-testid="overdue-minutes"]')
+    expect((input.element as HTMLInputElement).value).toBe('90')
+    await input.setValue('120')
+    await wrapper.find('[data-testid="overdue-save"]').trigger('click')
+    await flush()
+    expect(updateTenkoSettings).toHaveBeenCalledWith({ overdue_minutes: 120 })
+    expect(wrapper.find('[data-testid="overdue-saved"]').exists()).toBe(true)
+    await input.setValue('130')
+    expect(wrapper.find('[data-testid="overdue-saved"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each(['0', '1441', '1.5', ''])('範囲外の分数 (%s) は保存ボタンが無効で送らない', async v => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await flush()
+    await wrapper.find('[data-testid="overdue-minutes"]').setValue(v)
+    expect(wrapper.find('[data-testid="overdue-save"]').attributes('disabled')).toBeDefined()
+    await (wrapper.vm as any).saveOverdue()
+    await flush()
+    expect(updateTenkoSettings).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="overdue-error"]').text()).toContain('1 〜 1440')
+    wrapper.unmount()
+  })
+
+  it('設定の取得・保存に失敗したら理由を出す (非 Error は既定文言)', async () => {
+    vi.mocked(getTenkoSettings).mockRejectedValueOnce(new Error('取得できません'))
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="overdue-error"]').text()).toBe('取得できません')
+
+    vi.mocked(updateTenkoSettings).mockRejectedValueOnce('x')
+    await wrapper.find('[data-testid="overdue-minutes"]').setValue('30')
+    await wrapper.find('[data-testid="overdue-save"]').trigger('click')
+    await flush()
+    expect(wrapper.find('[data-testid="overdue-error"]').text()).toBe('設定の保存エラー')
+
+    vi.mocked(getTenkoSettings).mockRejectedValueOnce('x')
+    await (wrapper.vm as any).loadSettings()
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="overdue-error"]').text()).toBe('設定の取得エラー')
     wrapper.unmount()
   })
 })

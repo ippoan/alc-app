@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { ref } from 'vue'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import TenkoSessionMonitor from '~/components/TenkoSessionMonitor.vue'
 
 // 「点呼記録」タブを廃止し、CSV 出力をここへ移植する (Refs #238, ippoan/alc-app-s3#135)
@@ -22,6 +23,10 @@ vi.mock('~/utils/api', () => ({
   resumeTenkoSession: (...args: any[]) => resumeTenkoSessionMock(...args),
   cancelTenkoSession: (...args: any[]) => cancelTenkoSessionMock(...args),
 }))
+
+// ログイン中の利用者 (実物の useAuth().user は readonly なのでテストでは差し替える)
+const authUser = ref<{ name: string } | null>(null)
+mockNuxtImport('useAuth', () => () => ({ user: authUser }))
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
@@ -367,9 +372,10 @@ describe('TenkoSessionMonitor — 取り消し・中断・再開は席の鍵 (te
 
     await button(rows()[1], '再開').trigger('click')
     await rows()[1].find('input[placeholder="再開理由"]').setValue('確認済み')
+    await rows()[1].find('[data-testid="resume-by-name"]').setValue('鈴木一郎')
     await button(rows()[1], '再開').trigger('click')
     await flush()
-    expect(resumeTenkoSessionMock).toHaveBeenCalledWith('s-stop', { reason: '確認済み' }, 'tenko-monitor')
+    expect(resumeTenkoSessionMock).toHaveBeenCalledWith('s-stop', { reason: '確認済み', resumed_by_name: '鈴木一郎' }, 'tenko-monitor')
     wrapper.unmount()
   })
 
@@ -383,5 +389,100 @@ describe('TenkoSessionMonitor — 取り消し・中断・再開は席の鍵 (te
     expect(cancelTenkoSessionMock).toHaveBeenCalledWith('s-run', { reason: '' }, 'tenko-monitor')
     expect(cancelTenkoSessionMock).toHaveBeenCalledWith('s-stop', { reason: '' }, 'tenko-monitor')
     wrapper.unmount()
+  })
+})
+
+
+// 自己点検表の不足を埋める: 再開した運行管理者の氏名 / 代替措置 / 車両番号 / 保存の注記
+describe('TenkoSessionMonitor — 再開の氏名・代替措置・車両番号', () => {
+  const INTERRUPTED = { ...SESSION_NORMAL, id: 's-int', status: 'interrupted', interrupted_at: '2026-09-12T00:01:00Z' }
+  const ACTIVE = { ...SESSION_NORMAL, id: 's-act', status: 'alcohol_testing' }
+
+  beforeEach(() => {
+    listTenkoSessionsMock.mockReset()
+    resumeTenkoSessionMock.mockClear()
+    cancelTenkoSessionMock.mockClear()
+    getEmployeesMock.mockResolvedValue([])
+  })
+
+  async function mountWith(sessions: any[]) {
+    listTenkoSessionsMock.mockResolvedValue({ sessions, total: sessions.length, page: 1, per_page: 20 })
+    return mountMonitor()
+  }
+  const btn = (w: any, text: string) => w.findAll('button').find((b: any) => b.text() === text)
+
+  it('記録の画面に保存期間の注記が出る', async () => {
+    const w = await mountWith([SESSION_NORMAL])
+    expect(w.find('[data-testid="retention-note"]').text()).toBe('記録は 1 年間以上保存され、修正・削除できません。')
+    w.unmount()
+  })
+
+  it('再開は氏名が空だと押せず、入力した氏名が resumed_by_name で送られる', async () => {
+    const w = await mountWith([INTERRUPTED])
+    await btn(w, '再開')!.trigger('click')
+    const name = w.find('[data-testid="resume-by-name"]')
+    expect((name.element as HTMLInputElement).value).toBe('')
+    await w.find('input[placeholder="再開理由"]').setValue(' 復帰 ')
+    expect(btn(w, '再開')!.attributes('disabled')).toBeDefined()
+    await (w.vm as any).handleResume('s-int')
+    expect(resumeTenkoSessionMock).not.toHaveBeenCalled()
+    await name.setValue(' 鈴木一郎 ')
+    await btn(w, '再開')!.trigger('click')
+    await flush()
+    expect(resumeTenkoSessionMock).toHaveBeenCalledWith('s-int', { reason: '復帰', resumed_by_name: '鈴木一郎' }, 'tenko-monitor')
+    w.unmount()
+  })
+
+  it('ログイン中の利用者名が再開の氏名の初期値になる', async () => {
+    authUser.value = { name: '田中花子' }
+    const w = await mountWith([INTERRUPTED])
+    await btn(w, '再開')!.trigger('click')
+    expect((w.find('[data-testid="resume-by-name"]').element as HTMLInputElement).value).toBe('田中花子')
+    authUser.value = null
+    w.unmount()
+  })
+
+  it.each([['進行中', ACTIVE], ['中断中', INTERRUPTED]])('%sのキャンセルで代替措置が alternative_measure で送られる (空なら載せない)', async (_n, sess) => {
+    const w = await mountWith([sess])
+    await btn(w, 'キャンセル')!.trigger('click')
+    await w.find('[data-testid="cancel-alternative"]').setValue(' 代わりの乗務員を手配 ')
+    await btn(w, '確定')!.trigger('click')
+    await flush()
+    expect(cancelTenkoSessionMock).toHaveBeenLastCalledWith(sess.id, { reason: '', alternative_measure: '代わりの乗務員を手配' }, 'tenko-monitor')
+    await btn(w, 'キャンセル')!.trigger('click')
+    await btn(w, '確定')!.trigger('click')
+    await flush()
+    expect(cancelTenkoSessionMock).toHaveBeenLastCalledWith(sess.id, { reason: '' }, 'tenko-monitor')
+    w.unmount()
+  })
+
+  it('詳細に車両番号 (取得元つき)・再開した運行管理者・代替措置が出る', async () => {
+    const full = {
+      ...INTERRUPTED, vehicle_number: '品川 100 あ 12-34', vehicle_number_source: 'carins',
+      resumed_at: '2026-09-12T00:02:00Z', resume_reason: '復帰', resumed_by_name: '鈴木一郎', alternative_measure: '配車を変更',
+    }
+    const w = await mountWith([full])
+    await w.find('tbody > tr').trigger('click')
+    expect(w.find('[data-testid="detail-vehicle-number"]').text()).toContain('品川 100 あ 12-34')
+    expect(w.find('[data-testid="detail-vehicle-number"]').text()).toContain('(車検証)')
+    expect(w.find('[data-testid="detail-resumed-by"]').text()).toContain('鈴木一郎')
+    expect(w.find('[data-testid="detail-alternative"]').text()).toContain('配車を変更')
+    w.unmount()
+  })
+
+  it.each([['schedule', '(予定)'], ['manual', '(入力)'], [null, '']])('車両番号の取得元 %s の表示', async (src, label) => {
+    const w = await mountWith([{ ...SESSION_NORMAL, vehicle_number: '1234', vehicle_number_source: src }])
+    await w.find('tbody > tr').trigger('click')
+    const t = w.find('[data-testid="detail-vehicle-number"]').text()
+    expect(t).toContain('1234')
+    if (label) expect(t).toContain(label); else expect(t).not.toContain('(')
+    w.unmount()
+  })
+
+  it('車両番号が無ければ詳細に欄を出さない', async () => {
+    const w = await mountWith([SESSION_NORMAL])
+    await w.find('tbody > tr').trigger('click')
+    expect(w.find('[data-testid="detail-vehicle-number"]').exists()).toBe(false)
+    w.unmount()
   })
 })

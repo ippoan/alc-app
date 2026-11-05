@@ -419,3 +419,46 @@ describe('TenkoManagerJudgmentPanel — 遠隔点呼は乗務員の確定を待�
     wrapper.unmount()
   })
 })
+
+
+describe('TenkoManagerJudgmentPanel — 代替措置', () => {
+  beforeEach(() => {
+    submitManagerJudgmentMock.mockClear()
+  })
+
+  it('NG のとき代替措置の内容が alternative_measure で送られる', async () => {
+    const wrapper = await mountPanel()
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    await wrapper.find('[data-testid="judgment-alternative"]').setValue(' 別の乗務員に交代 ')
+    await wrapper.findAll('button').find(b => b.text().includes('NG として記録'))!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ng', alternative_measure: '別の乗務員に交代' })
+    wrapper.unmount()
+  })
+
+  it('NG で代替措置が空なら載せず、OK は入力があっても載せない', async () => {
+    const wrapper = await mountPanel()
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    await wrapper.findAll('button').find(b => b.text().includes('NG として記録'))!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).not.toHaveProperty('alternative_measure')
+
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    await wrapper.find('[data-testid="judgment-alternative"]').setValue('x')
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[1][1]).not.toHaveProperty('alternative_measure')
+    wrapper.unmount()
+  })
+
+  it('取り消すと代替措置の入力も消え、記録済みの代替措置は判定の横に出る', async () => {
+    const wrapper = await mountPanel({ ...SESSION_UNJUDGED, manager_judgment: 'ng', alternative_measure: '配車変更' })
+    expect(wrapper.find('[data-testid="judgment-alternative-shown"]').text()).toContain('配車変更')
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    await wrapper.find('[data-testid="judgment-alternative"]').setValue('y')
+    await wrapper.findAll('button').find(b => b.text() === 'キャンセル')!.trigger('click')
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
+    expect((wrapper.find('[data-testid="judgment-alternative"]').element as HTMLTextAreaElement).value).toBe('')
+    wrapper.unmount()
+  })
+})

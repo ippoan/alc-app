@@ -4,14 +4,14 @@ import type {
   TenkoSchedule, CreateTenkoSchedule, UpdateTenkoSchedule, TenkoScheduleFilter, TenkoSchedulesResponse,
   TenkoSession, StartTenkoSession, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
-  SubmitManagerJudgment,
+  SubmitManagerJudgment, UpdateTenkoSessionVehicle, TenkoSettings,
   TenkoRemoteEscalationReason,
   TenkoSessionFilter, TenkoSessionsResponse,
   TenkoRecordFilter,
   WebhookConfig, CreateWebhookConfig, WebhookDelivery,
   TenkoDashboard,
   EmployeeHealthBaseline, CreateHealthBaseline, UpdateHealthBaseline,
-  EquipmentFailure, CreateEquipmentFailure, UpdateEquipmentFailure, EquipmentFailureFilter, EquipmentFailuresResponse,
+  EquipmentFailure, EquipmentFailureHistory, CreateEquipmentFailure, UpdateEquipmentFailure, EquipmentFailureFilter, EquipmentFailuresResponse,
   // Timecard
   TimecardCard, CreateTimecardCard, TimePunchFilter, TimePunchesResponse,
   // Device Registration
@@ -1410,6 +1410,21 @@ export async function getPendingSchedules(employeeId: string): Promise<TenkoSche
   return request<TenkoSchedule[]>(`/api/tenko/schedules/pending/${employeeId}`)
 }
 
+/**
+ * 予定超過とみなすまでの分数 (1〜1440、設定が無ければ 60)。予定の口と同じ権限なので
+ * 予定 CRUD と同じく運行管理者席の鍵 (`'manager-device'`) で通す。
+ */
+export async function getTenkoSettings(): Promise<TenkoSettings> {
+  return request<TenkoSettings>('/api/tenko/settings', {}, 'manager-device')
+}
+
+export async function updateTenkoSettings(data: TenkoSettings): Promise<TenkoSettings> {
+  return request<TenkoSettings>('/api/tenko/settings', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }, 'manager-device')
+}
+
 // --- セッション (キオスク) ---
 
 export async function startTenkoSession(data: StartTenkoSession): Promise<TenkoSession> {
@@ -1572,6 +1587,22 @@ export async function selfResumeTenkoSession(sessionId: string, data: ResumeSess
 }
 
 /**
+ * 点呼セッションの車両番号を登録する。終わっていないセッションだけ。キオスクの鍵・ログインで通る
+ * (`scope` の既定はキオスクの口)。`carins_cert_no` が車検証に一致すればその登録番号、
+ * 無ければ `vehicle_number` を使う (どちらも無ければ 400)。応答は更新後のセッション。
+ */
+export async function updateTenkoSessionVehicle(
+  sessionId: string,
+  data: UpdateTenkoSessionVehicle,
+  scope: RequestTokenScope = 'default',
+): Promise<TenkoSession> {
+  return request<TenkoSession>(`/api/tenko/sessions/${sessionId}/vehicle`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }, scope)
+}
+
+/**
  * rust-alc-api が 4xx で返す body (`{"error": "…", "message": "…"}`) を Error.message から
  * 取り出す ({@link apiErrorCode} / {@link apiErrorMessage} の共通実装)。
  *
@@ -1677,12 +1708,31 @@ export async function createFailure(data: CreateEquipmentFailure): Promise<Equip
   })
 }
 
+/**
+ * キオスクが機器の故障を自動で記録する口。`createFailure` と同じ `POST` だが、
+ * 呼び手がキオスクの鍵 (admin JWT が無ければ device の鍵) で送ることをここで固定する。
+ */
+export async function reportEquipmentFailure(data: CreateEquipmentFailure): Promise<EquipmentFailure> {
+  return request<EquipmentFailure>('/api/tenko/equipment-failures', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }, 'default')
+}
+
 export async function listFailures(filter: EquipmentFailureFilter = {}, scope: RequestTokenScope = 'default'): Promise<EquipmentFailuresResponse> {
   return request<EquipmentFailuresResponse>(`/api/tenko/equipment-failures${toParams(filter)}`, {}, scope)
 }
 
 export async function getFailure(id: string): Promise<EquipmentFailure> {
   return request<EquipmentFailure>(`/api/tenko/equipment-failures/${id}`)
+}
+
+/** 故障記録の変更履歴 (古い順)。解決を記録するたびに変更前の行が 1 件残る */
+export async function getEquipmentFailureHistory(
+  id: string,
+  scope: RequestTokenScope = 'default',
+): Promise<EquipmentFailureHistory[]> {
+  return request<EquipmentFailureHistory[]>(`/api/tenko/equipment-failures/${id}/history`, {}, scope)
 }
 
 export async function resolveFailure(id: string, data: UpdateEquipmentFailure): Promise<EquipmentFailure> {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TenkoSchedule, TenkoScheduleFilter, CreateTenkoSchedule, ApiEmployee, TenkoType } from '~/types'
-import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, listSchedules, createSchedule, batchCreateSchedules, updateSchedule, deleteSchedule, getEmployees } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, listSchedules, createSchedule, batchCreateSchedules, updateSchedule, deleteSchedule, getEmployees, getTenkoSettings, updateTenkoSettings } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const schedules = ref<TenkoSchedule[]>([])
@@ -58,11 +58,11 @@ const totalPages = computed(() => Math.ceil(total.value / perPage))
 // 新規作成
 const showForm = ref(false)
 const isSaving = ref(false)
-const newRows = ref<{ employee_id: string; tenko_type: TenkoType; scheduled_at: string; responsible_manager_name: string; instruction: string }[]>([])
+const newRows = ref<{ employee_id: string; tenko_type: TenkoType; scheduled_at: string; responsible_manager_name: string; instruction: string; vehicle_number: string }[]>([])
 const instructionError = ref<string | null>(null)
 
 function addRow() {
-  newRows.value.push({ employee_id: '', tenko_type: 'pre_operation', scheduled_at: '', responsible_manager_name: '', instruction: '' })
+  newRows.value.push({ employee_id: '', tenko_type: 'pre_operation', scheduled_at: '', responsible_manager_name: '', instruction: '', vehicle_number: '' })
 }
 
 function removeRow(i: number) {
@@ -100,6 +100,7 @@ async function handleCreate() {
       scheduled_at: new Date(r.scheduled_at).toISOString(),
       responsible_manager_name: r.responsible_manager_name,
       instruction: r.instruction || undefined,
+      vehicle_number: r.vehicle_number.trim() || undefined,
     }))
     if (data.length === 1) {
       await createSchedule(data[0]!)
@@ -121,6 +122,7 @@ const editingId = ref<string | null>(null)
 const editManager = ref('')
 const editScheduledAt = ref('')
 const editInstruction = ref('')
+const editVehicleNumber = ref('')
 const isUpdating = ref(false)
 
 // 予定フォームを開いている / 保存中は、リロードで入力が消えるので新版への載せ替えを止める
@@ -134,6 +136,7 @@ function startEdit(s: TenkoSchedule) {
   editManager.value = s.responsible_manager_name
   editScheduledAt.value = s.scheduled_at.slice(0, 16)
   editInstruction.value = s.instruction || ''
+  editVehicleNumber.value = s.vehicle_number || ''
   deletingId.value = null
 }
 
@@ -148,6 +151,7 @@ async function handleUpdate() {
       responsible_manager_name: editManager.value.trim(),
       scheduled_at: new Date(editScheduledAt.value).toISOString(),
       instruction: editInstruction.value.trim() || undefined,
+      vehicle_number: editVehicleNumber.value.trim() || undefined,
     })
     editingId.value = null
     await fetchData()
@@ -155,6 +159,45 @@ async function handleUpdate() {
     error.value = e instanceof Error ? e.message : '更新エラー'
   } finally {
     isUpdating.value = false
+  }
+}
+
+// 予定超過の分数 (テナントの設定)
+const OVERDUE_MIN = 1
+const OVERDUE_MAX = 1440
+const overdueMinutes = ref<number | string>(60)
+const overdueError = ref<string | null>(null)
+const overdueSaved = ref(false)
+const isSavingOverdue = ref(false)
+
+const overdueValid = computed(() => {
+  const n = Number(overdueMinutes.value)
+  return overdueMinutes.value !== '' && Number.isInteger(n) && n >= OVERDUE_MIN && n <= OVERDUE_MAX
+})
+
+async function loadSettings() {
+  try {
+    overdueMinutes.value = (await getTenkoSettings()).overdue_minutes
+  } catch (e) {
+    overdueError.value = e instanceof Error ? e.message : '設定の取得エラー'
+  }
+}
+
+async function saveOverdue() {
+  if (!overdueValid.value) {
+    overdueError.value = `${OVERDUE_MIN} 〜 ${OVERDUE_MAX} の整数で入力してください`
+    return
+  }
+  isSavingOverdue.value = true
+  overdueError.value = null
+  overdueSaved.value = false
+  try {
+    overdueMinutes.value = (await updateTenkoSettings({ overdue_minutes: Number(overdueMinutes.value) })).overdue_minutes
+    overdueSaved.value = true
+  } catch (e) {
+    overdueError.value = e instanceof Error ? e.message : '設定の保存エラー'
+  } finally {
+    isSavingOverdue.value = false
   }
 }
 
@@ -183,7 +226,7 @@ function formatDate(iso: string) {
   })
 }
 
-onMounted(() => { loadEmployees(); fetchData() })
+onMounted(() => { loadEmployees(); fetchData(); loadSettings() })
 
 // 席の端末を確認できなかった後に、確認できた (警告デバイスを後から繋いだ・繋ぎ直した):
 // その失敗の表示が出たままなら一覧を読み直す。`fetchData` は表を「読み込み中」に差し替えて
@@ -199,6 +242,33 @@ watch(managerJwtRecoveredCount, () => {
 
 <template>
   <div>
+    <!-- 予定超過の分数 -->
+    <div class="bg-white rounded-xl p-4 shadow-sm mb-4" data-testid="overdue-settings">
+      <h3 class="text-sm font-medium text-gray-700 mb-1">予定超過の分数</h3>
+      <p class="text-xs text-gray-500 mb-2">予定の時刻からこの分数を過ぎても点呼が完了していないと、予定超過として通知します (1 〜 1440 分)。</p>
+      <div class="flex items-center gap-2">
+        <input
+          v-model="overdueMinutes"
+          type="number"
+          :min="OVERDUE_MIN"
+          :max="OVERDUE_MAX"
+          step="1"
+          data-testid="overdue-minutes"
+          class="w-24 px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          @input="overdueSaved = false"
+        >
+        <span class="text-sm text-gray-600">分</span>
+        <button
+          :disabled="isSavingOverdue || !overdueValid"
+          data-testid="overdue-save"
+          class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors disabled:opacity-50"
+          @click="saveOverdue"
+        >{{ isSavingOverdue ? '保存中...' : '保存' }}</button>
+        <span v-if="overdueSaved" class="text-xs text-green-700" data-testid="overdue-saved">保存しました</span>
+      </div>
+      <p v-if="overdueError" class="text-red-600 text-xs mt-2" data-testid="overdue-error">{{ overdueError }}</p>
+    </div>
+
     <!-- フィルタ -->
     <div class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -227,7 +297,7 @@ watch(managerJwtRecoveredCount, () => {
     <!-- 新規作成フォーム -->
     <div v-if="showForm" class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <h3 class="text-sm font-medium text-gray-700 mb-3">スケジュール作成</h3>
-      <div v-for="(row, i) in newRows" :key="i" class="grid grid-cols-1 sm:grid-cols-6 gap-2 mb-2">
+      <div v-for="(row, i) in newRows" :key="i" class="grid grid-cols-1 sm:grid-cols-7 gap-2 mb-2">
         <EmployeeSearchSelect v-model="row.employee_id" :employees="employees" placeholder="乗務員を選択 (名前・社員番号で検索)" />
         <select v-model="row.tenko_type" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="pre_operation">{{ tenkoTypeLabel('pre_operation') }}</option>
@@ -236,6 +306,7 @@ watch(managerJwtRecoveredCount, () => {
         <input v-model="row.scheduled_at" type="datetime-local" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input v-model="row.responsible_manager_name" type="text" placeholder="管理者名" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <input v-model="row.instruction" type="text" :placeholder="instructionLabel(row.tenko_type)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <input v-model="row.vehicle_number" type="text" placeholder="車両番号 (任意)" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button class="px-2 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm" @click="removeRow(i)">削除</button>
       </div>
       <div class="flex gap-2 mt-2">
@@ -268,6 +339,7 @@ watch(managerJwtRecoveredCount, () => {
               <th class="px-4 py-3 text-left font-medium">予定日時</th>
               <th class="px-4 py-3 text-left font-medium">管理者</th>
               <th class="px-4 py-3 text-left font-medium">指示</th>
+              <th class="px-4 py-3 text-left font-medium">車両番号</th>
               <th class="px-4 py-3 text-center font-medium">状態</th>
               <th class="px-4 py-3 text-center font-medium">操作</th>
             </tr>
@@ -286,6 +358,9 @@ watch(managerJwtRecoveredCount, () => {
                 </td>
                 <td class="px-4 py-3">
                   <input v-model="editInstruction" type="text" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                </td>
+                <td class="px-4 py-3">
+                  <input v-model="editVehicleNumber" type="text" data-testid="edit-vehicle-number" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
                 </td>
                 <td class="px-4 py-3 text-center">
                   <span class="inline-block px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">未消費</span>
@@ -312,6 +387,7 @@ watch(managerJwtRecoveredCount, () => {
                 <td class="px-4 py-3 text-gray-700">{{ formatDate(s.scheduled_at) }}</td>
                 <td class="px-4 py-3 text-gray-700">{{ s.responsible_manager_name }}</td>
                 <td class="px-4 py-3 text-gray-500 truncate max-w-[200px]">{{ s.instruction || '-' }}</td>
+                <td class="px-4 py-3 text-gray-700" data-testid="schedule-vehicle-number">{{ s.vehicle_number || '-' }}</td>
                 <td class="px-4 py-3 text-center">
                   <span
                     class="inline-block px-2 py-1 rounded-full text-xs font-medium"

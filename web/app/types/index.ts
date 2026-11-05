@@ -374,6 +374,8 @@ export interface TenkoSchedule {
   responsible_manager_name: string
   scheduled_at: string
   instruction: string | null
+  /** 予定の車両番号 (点呼の開始でセッションへ写る) */
+  vehicle_number?: string | null
   consumed: boolean
   consumed_by_session_id: string | null
   overdue_notified_at: string | null
@@ -387,12 +389,14 @@ export interface CreateTenkoSchedule {
   responsible_manager_name: string
   scheduled_at: string
   instruction?: string
+  vehicle_number?: string
 }
 
 export interface UpdateTenkoSchedule {
   responsible_manager_name?: string
   scheduled_at?: string
   instruction?: string
+  vehicle_number?: string
 }
 
 export interface TenkoScheduleFilter {
@@ -461,6 +465,9 @@ export const TENKO_REMOTE_ESCALATION_REASONS = ['血圧計の故障', '血圧計
 /** 上の選択肢のどれか。`reason` に入れて送る短い語 */
 export type TenkoRemoteEscalationReason = typeof TENKO_REMOTE_ESCALATION_REASONS[number]
 
+/** 車両番号の取得元: 電子車検証 / 点呼の予定 / 乗務員の入力 */
+export type VehicleNumberSource = 'carins' | 'schedule' | 'manual'
+
 export interface TenkoSession {
   id: string
   tenant_id: string
@@ -493,6 +500,13 @@ export interface TenkoSession {
   resumed_at: string | null
   resume_reason: string | null
   resumed_by_user_id: string | null
+  /** 再開の判断を行った運行管理者の氏名 (任意。古い記録は未定義) */
+  resumed_by_name?: string | null
+  /** 従事できない・中止としたときの代替措置の内容 */
+  alternative_measure?: string | null
+  /** 車両番号 (車検証 / 予定 / 入力のどれから得たかは `vehicle_number_source`) */
+  vehicle_number?: string | null
+  vehicle_number_source?: VehicleNumberSource | null
   self_declaration: SelfDeclaration | null
   safety_judgment: SafetyJudgment | null
   daily_inspection: DailyInspection | null
@@ -582,12 +596,16 @@ export interface SubmitOperationReport {
 
 export interface CancelTenkoSession {
   reason: string
+  /** 代替措置の内容 */
+  alternative_measure?: string
 }
 
 /** 運行管理者による点呼 OK/NG 判定 (Refs ippoan/alc-app#315)。`judgment` 以外は任意 */
 export interface SubmitManagerJudgment {
   judgment: 'ok' | 'ng'
   reason?: string
+  /** 従事できないとする判定 (NG) のときの代替措置の内容 */
+  alternative_measure?: string
   judged_by_employee_id: string
   /** IT点呼 の記録を確定するときの確認の方法。IT点呼 でない記録には送らない (400 になる) */
   method?: ManagerJudgmentMethod
@@ -599,6 +617,20 @@ export interface InterruptSession {
 
 export interface ResumeSession {
   reason: string
+  /** 再開の判断を行った運行管理者の氏名。運行管理者席の鍵からは必須、ログイン中は省略で利用者名 */
+  resumed_by_name?: string
+}
+
+/** 車両番号の登録 (`PUT /tenko/sessions/{id}/vehicle`)。どちらも無ければ 400 */
+export interface UpdateTenkoSessionVehicle {
+  /** 電子車検証の管理番号 (一致すれば登録番号が車両番号になる) */
+  carins_cert_no?: string
+  vehicle_number?: string
+}
+
+/** テナントの点呼の設定 (予定超過とみなすまでの分数。1〜1440、既定 60) */
+export interface TenkoSettings {
+  overdue_minutes: number
 }
 
 export interface TenkoSessionFilter {
@@ -763,6 +795,12 @@ export interface EquipmentFailure {
   session_id: string | null
   created_at: string
   updated_at: string
+}
+
+/** 故障記録の変更履歴 1 件 (古い順)。`old_row` は変更前の行 */
+export interface EquipmentFailureHistory {
+  changed_at: string
+  old_row: Record<string, unknown>
 }
 
 export interface CreateEquipmentFailure {
