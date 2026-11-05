@@ -538,6 +538,8 @@ export interface TenkoSession {
    * null / 未定義 = 切り替えていない。**サーバ側で埋めるのは別 PR** なので optional。
    */
   escalated_to_remote_at?: string | null
+  /** 自動点呼から遠隔点呼へ切り替えた理由 (例: 血圧計の故障、血圧の記録が 10 日分に満たない)。切り替えていなければ null */
+  remote_escalation_reason?: string | null
   /** 点呼の方法 (`IT_TENKO_METHOD` なら IT点呼。Refs ippoan/alc-app#387) */
   tenko_method?: string
   /**
