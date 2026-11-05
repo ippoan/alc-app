@@ -38,6 +38,9 @@ export type TenkoStep =
 /** 測定台で測った血圧を「直近」として引き当てる範囲 (時間)。これより古い測定は拾わない */
 export const STATION_BP_LOOKBACK_HOURS = 24
 
+/** 測定台の血圧がまだ無いときの案内 (画面の案内と同じ文言) */
+export const STATION_BP_MISSING_MESSAGE = '測定台で血圧を測ってから、「血圧を読み込む」を押してください。'
+
 /** 測定台で測った血圧 (点呼の体温・血圧の段で引き当てたもの) */
 export interface StationBp {
   systolic: number
@@ -522,6 +525,14 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    */
   async function loadStationBp() {
     if (!employeeId.value) return
+    // 引いている最中に呼ばれたら同じ要求を待つ (二重に投げない)
+    stationBpPending ??= _fetchStationBp().finally(() => { stationBpPending = null })
+    await stationBpPending
+  }
+
+  let stationBpPending: Promise<void> | null = null
+
+  async function _fetchStationBp() {
     stationBpLoading.value = true
     try {
       const since = new Date(Date.now() - STATION_BP_LOOKBACK_HOURS * 3600 * 1000).toISOString()
@@ -566,6 +577,17 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
   async function onMedicalSubmit(data: SubmitMedicalData) {
     if (!session.value) return
     error.value = null
+
+    // 業務前の自動点呼で、この端末の血圧が入っていなければ測定台の血圧を使う。引いている最中なら
+    // 待ち、まだ無ければ先に引く。**それでも無ければサーバーへ送らない** — 体温の読み値は
+    // 画面に残るので、測定台で測ってもらい「血圧を読み込む」の後にもう一度送れる
+    if (!isRemote.value && data.systolic === undefined && !stationBp.value) {
+      await loadStationBp()
+      if (!stationBp.value) {
+        error.value ??= STATION_BP_MISSING_MESSAGE
+        return
+      }
+    }
     isLoading.value = true
 
     try {

@@ -10,8 +10,14 @@ import { MEDICAL_AUTO_NEXT_DELAY_MS } from '~/utils/medical-inputs'
  */
 withDefaults(defineProps<{
   allowSkip?: boolean
+  /**
+   * 血圧計の「未使用 / 未確認」の表示を隠す。既定 false (従来どおり)。血圧を測定台で測る
+   * 自動点呼の体温・血圧ステップだけ `TenkoKiosk.vue` から `true` を渡す。
+   */
+  hideBpStatus?: boolean
 }>(), {
   allowSkip: true,
+  hideBpStatus: false,
 })
 
 const emit = defineEmits<{
@@ -171,18 +177,20 @@ function handleRescan() {
             />
             血圧計
           </span>
-          <span v-else-if="bpUiState === 'unused'" class="text-gray-400">
-            血圧計: この端末では未使用
-          </span>
-          <span v-else-if="bpUiState === 'checking'" class="text-gray-400">
-            血圧計: まだ確認できていません
-          </span>
-          <span v-else-if="bpUiState === 'unregistered'" class="text-amber-600">
-            血圧計: 未確認 (この端末は端末登録されていません)
-          </span>
-          <span v-else class="text-amber-600">
-            血圧計: 未確認 (設定を取得できませんでした)
-          </span>
+          <template v-else-if="!hideBpStatus">
+            <span v-if="bpUiState === 'unused'" class="text-gray-400">
+              血圧計: この端末では未使用
+            </span>
+            <span v-else-if="bpUiState === 'checking'" class="text-gray-400">
+              血圧計: まだ確認できていません
+            </span>
+            <span v-else-if="bpUiState === 'unregistered'" class="text-amber-600">
+              血圧計: 未確認 (この端末は端末登録されていません)
+            </span>
+            <span v-else class="text-amber-600">
+              血圧計: 未確認 (設定を取得できませんでした)
+            </span>
+          </template>
         </div>
 
         <!-- 測定値カード -->

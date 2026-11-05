@@ -38,7 +38,7 @@ vi.mock('~/utils/equipment-failure-report', async () => ({
 
 import {
   useTenkoKiosk, RESUMABLE_TENKO_STATUSES,
-  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, STATION_BP_LOOKBACK_HOURS, SESSION_NOT_RESUMABLE_MESSAGE,
+  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, STATION_BP_LOOKBACK_HOURS, STATION_BP_MISSING_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE,
 } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
@@ -154,6 +154,9 @@ function makeMeasurement(overrides?: Partial<ApiMeasurement>): ApiMeasurement {
 function servedMeasurements(...rows: ApiMeasurement[]) {
   vi.mocked(getMeasurements).mockResolvedValue({ measurements: rows, total: rows.length, page: 1, per_page: 50 })
 }
+
+/** この端末で測った血圧 (測定台の血圧を引き当てなくても送れる) */
+const BP = { systolic: 120, diastolic: 80 }
 
 describe('useTenkoKiosk', () => {
   beforeEach(() => {
@@ -722,7 +725,7 @@ describe('useTenkoKiosk', () => {
   describe('onMedicalSubmit', () => {
     it('session なし → 何もしない', async () => {
       const k = useTenkoKiosk()
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       expect(submitMedical).not.toHaveBeenCalled()
     })
 
@@ -733,7 +736,7 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       expect(k.step.value).toBe('self_declaration')
       expect(k.isLoading.value).toBe(false)
     })
@@ -746,8 +749,8 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
-      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5, device_id: 'device-1' })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5, ...BP, device_id: 'device-1' })
     })
 
     it('device_id が取れない端末 → device_id を付けずに送信 (サーバはフェイルクローズ)', async () => {
@@ -758,8 +761,8 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
-      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
+      expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5, ...BP })
     })
 
     it('API エラー', async () => {
@@ -768,7 +771,7 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       expect(k.error.value).toBe('med fail')
     })
 
@@ -778,7 +781,7 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       expect(k.error.value).toBe('医療データ送信に失敗しました')
     })
   })
@@ -975,12 +978,78 @@ describe('useTenkoKiosk', () => {
       expect(submitMedical).toHaveBeenCalledWith('sess-1', { ...data, device_id: 'device-1' })
     })
 
-    it('測定台の血圧が無ければ、送る内容は今までどおり (サーバーが bp_required で止める)', async () => {
+    it('★ 測定台の血圧がまだ無ければ先に引いてから送る (体温が先に届いて自動で送られても 400 にしない)', async () => {
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'medical_pending' }))
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.session.value = makeSession({ status: 'medical_pending' })
+      servedMeasurements(makeMeasurement())
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(getMeasurements).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(submitMedical).mock.calls[0]![1].systolic).toBe(128)
+    })
+
+    it('★ 引いている最中なら同じ要求を待つ (二重に引かない)', async () => {
+      let release!: () => void
+      vi.mocked(getMeasurements).mockReturnValue(new Promise((resolve) => {
+        release = () => resolve({ measurements: [makeMeasurement()], total: 1, page: 1, per_page: 50 })
+      }))
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.session.value = makeSession({ status: 'medical_pending' })
+
+      const loading = k.loadStationBp()
+      const submitting = k.onMedicalSubmit({ temperature: 36.5 })
+      await Promise.resolve()
+      expect(submitMedical).not.toHaveBeenCalled()
+      release()
+      await Promise.all([loading, submitting])
+
+      expect(getMeasurements).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(submitMedical).mock.calls[0]![1].systolic).toBe(128)
+    })
+
+    it('★ 引いても無ければサーバーへ送らず案内を出し、段に留まる。読み込み後にもう一度送れる', async () => {
       vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
       const k = await atMedicalStep()
 
       await k.onMedicalSubmit({ temperature: 36.5 })
 
+      expect(submitMedical).not.toHaveBeenCalled()
+      expect(k.error.value).toBe(STATION_BP_MISSING_MESSAGE)
+      expect(k.step.value).toBe('medical')
+      expect(k.isLoading.value).toBe(false)
+
+      servedMeasurements(makeMeasurement())
+      await k.loadStationBp()
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(submitMedical).toHaveBeenCalledTimes(1)
+      expect(k.step.value).toBe('self_declaration')
+    })
+
+    it('引くのに失敗したときは、その理由を残して送らない (案内で上書きしない)', async () => {
+      const k = await atMedicalStep()
+      vi.mocked(getMeasurements).mockRejectedValue(new Error('Failed to fetch'))
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(submitMedical).not.toHaveBeenCalled()
+      expect(k.error.value).toBe('Failed to fetch')
+    })
+
+    it('遠隔点呼では測定台の血圧を待たずにそのまま送る', async () => {
+      vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'self_declaration_pending' }))
+      const k = useTenkoKiosk({ remoteMode: true })
+      k.session.value = makeSession()
+
+      await k.onMedicalSubmit({ temperature: 36.5 })
+
+      expect(getMeasurements).not.toHaveBeenCalled()
       expect(submitMedical).toHaveBeenCalledWith('sess-1', { temperature: 36.5, device_id: 'device-1' })
     })
 
@@ -1349,7 +1418,7 @@ describe('useTenkoKiosk', () => {
       vi.mocked(submitMedical).mockResolvedValue(makeSession({ status: 'identity_verified' }))
       const k = useTenkoKiosk()
       k.session.value = makeSession()
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       expect(k.step.value).toBe('alcohol')
     })
 
@@ -1428,7 +1497,7 @@ describe('useTenkoKiosk', () => {
       k.session.value = makeSession()
       k.step.value = 'medical'
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       // default case does nothing, so step stays
       expect(k.step.value).toBe('medical')
     })
@@ -1441,7 +1510,7 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession()
 
-      await k.onMedicalSubmit({ temperature: 39.0 })
+      await k.onMedicalSubmit({ temperature: 39.0, ...BP })
       expect(k.session.value?.safety_judgment?.status).toBe('fail')
       expect(k.step.value).toBe('interrupted')
     })
@@ -2227,7 +2296,7 @@ describe('useTenkoKiosk', () => {
       k.session.value = makeSession({ status: 'medical_pending' })
       k.step.value = 'medical'
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
 
       expect(k.step.value).toBe('medical')
       expect(k.error.value).toBe('測定から有効時間 (30 分) を過ぎています。もう一度測定してください')
@@ -2242,7 +2311,7 @@ describe('useTenkoKiosk', () => {
       const k = useTenkoKiosk()
       k.session.value = makeSession({ status: 'medical_pending' })
 
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
 
       expect(k.error.value).toBe(MEDICAL_EXPIRED_MESSAGE)
     })
@@ -2316,7 +2385,7 @@ describe('useTenkoKiosk', () => {
       vi.mocked(submitMedical).mockRejectedValue(boom)
       const k = useTenkoKiosk()
       k.session.value = makeSession()
-      await k.onMedicalSubmit({ temperature: 36.5 })
+      await k.onMedicalSubmit({ temperature: 36.5, ...BP })
       expect(reportApiFailure).toHaveBeenCalledWith(boom, '体温・血圧の記録', { sessionId: 'sess-1', type: 'measurement_recording_failed' })
     })
 

@@ -338,6 +338,14 @@ describe('TenkoKiosk — 体温・血圧の段: 測定台の血圧', () => {
     wrapper.unmount()
   })
 
+  it('★ 血圧計が無い端末では BleStatus の血圧計の未確認表示を隠す', async () => {
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'BleStatus' }).props('hideBpStatus')).toBe(true)
+    wrapper.unmount()
+  })
+
   it('遠隔点呼では測定台の行も逃げ道も出さない', async () => {
     isRemote.value = true
     const wrapper = await mountKiosk()
@@ -346,6 +354,7 @@ describe('TenkoKiosk — 体温・血圧の段: 測定台の血圧', () => {
     expect(wrapper.find('[data-testid="station-bp"]').exists()).toBe(false)
     expect(wrapper.findAll('button').some(b => b.text() === '遠隔点呼に切り替える')).toBe(false)
     expect(wrapper.find('h2').text()).toBe('体温')
+    expect(wrapper.findComponent({ name: 'BleStatus' }).props('hideBpStatus')).toBe(false)
     wrapper.unmount()
   })
 })

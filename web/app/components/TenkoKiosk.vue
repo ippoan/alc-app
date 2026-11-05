@@ -970,6 +970,7 @@ onUnmounted(() => {
           <BleStatus
             v-if="medicalInputTab === 'ble'"
             :allow-skip="false"
+            :hide-bp-status="!showBpUi && !isRemote"
             @next="onMedicalNext"
           />
           <ManualMedicalInput

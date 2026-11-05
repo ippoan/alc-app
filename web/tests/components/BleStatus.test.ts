@@ -265,6 +265,30 @@ describe('BleStatus — 血圧の 5 分岐を bpUiState で描き分ける (Refs
     wrapper.unmount()
   })
 
+  it.each(['unused', 'checking', 'unregistered', 'unavailable'] as const)(
+    "★ hideBpStatus なら '%s' でも血圧計の「未使用 / 未確認」を出さない (体温計の表示は残る)",
+    async (state) => {
+      bpUiState.value = state
+      const { default: BleStatus } = await import('~/components/BleStatus.vue')
+      const wrapper = await mountSuspended(BleStatus, { props: { hideBpStatus: true } })
+
+      expect(wrapper.text()).not.toContain('血圧計')
+      expect(wrapper.text()).toContain('体温計')
+
+      wrapper.unmount()
+    },
+  )
+
+  it("hideBpStatus でも 'show' (血圧計を使う端末) の血圧計の表示は隠さない", async () => {
+    bpUiState.value = 'show'
+    const { default: BleStatus } = await import('~/components/BleStatus.vue')
+    const wrapper = await mountSuspended(BleStatus, { props: { hideBpStatus: true } })
+
+    expect(wrapper.text()).toContain('血圧計')
+
+    wrapper.unmount()
+  })
+
   it("'show' 以外なら血圧の測定値カードは出ない", async () => {
     latestBloodPressure.value = { systolic: 118, diastolic: 76 }
     const { default: BleStatus } = await import('~/components/BleStatus.vue')
