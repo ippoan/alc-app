@@ -5,7 +5,7 @@ import { tenkoTypeLabel } from '~/utils/tenko-type'
 defineProps<{
   session: TenkoSession
   employeeName: string
-  /** 次の点呼へ自動で移るまでの残り秒数 (遠隔点呼が判定で閉じた後)。数えていなければ null / 省略 */
+  /** 次の点呼へ自動で移るまでの残り秒数 (遠隔点呼が判定で閉じた後と、判定待ち)。数えていなければ null / 省略 */
   autoResetSeconds?: number | null
 }>()
 
@@ -36,7 +36,7 @@ function formatTime(iso: string | null): string {
       class="w-full rounded-xl bg-amber-50 text-amber-800 text-sm text-center px-4 py-2"
       data-testid="judgment-pending"
     >
-      入力は終わりました。運行管理者の判定を待っています
+      入力は終わりました。判定は運行管理者が行うので、このまま終わって大丈夫です
     </p>
 
     <!-- 遠隔点呼の運行管理者の判定 (判定で閉じた後) -->

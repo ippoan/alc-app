@@ -599,8 +599,41 @@ describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
     wrapper.unmount()
   })
 
+  it('★ 判定待ちでも 30 秒で次の点呼へ移る (乗務員は判定を待たない)。運行管理者が通話に出ている間は数えない', async () => {
+    vi.useFakeTimers()
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession).mockResolvedValue({ id: 'sess-1', status: 'judgment_pending' } as never)
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    const left = () => wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')
+    try {
+      await flushPromises()
+      expect(left()).toBe(30)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(left()).toBe(20)
+      // 通話に出たら止める
+      isPeerConnected.value = true
+      await flushPromises()
+      expect(left()).toBeNull()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(resetMock).not.toHaveBeenCalled()
+      // 通話が切れたら数え直す
+      isPeerConnected.value = false
+      await flushPromises()
+      expect(left()).toBe(30)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(resetMock).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      wrapper.unmount()
+      step.value = 'nfc'
+    }
+  })
+
   it('★ 判定で閉じたら完了の画面で 30 秒数え、次の点呼へ移る。最初の画面に戻ったら数えない', async () => {
     vi.useFakeTimers()
+    // 通話中の判定待ちは数えない (判定が入ってから数え始めることを見る)
+    isPeerConnected.value = true
     step.value = 'completed'
     const wrapper = await mountKiosk()
     const left = () => wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')

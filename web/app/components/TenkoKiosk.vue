@@ -255,9 +255,14 @@ function stopAutoReset(): void {
 }
 /**
  * 遠隔点呼が閉じた (運行管理者の判定が済んだ) 完了の画面。30 秒で次の点呼へ移る (2026-11-02 ユーザー指示)。
- * 判定は下の「判定待ちの間はセッションを取り直し」で入る。押せば待たずに移る
+ * 判定は下の「判定待ちの間はセッションを取り直し」で入る。押せば待たずに移る。
+ * **判定待ちの画面も同じく 30 秒で移る** — 乗務員が判定を待つ必要は無い (2026-11-05 ユーザー指示)。
+ * ただし運行管理者が通話に出ている間は数えない (数えると通話を切ってしまう)
  */
-const remoteClosed = computed(() => isRemote.value && step.value === 'completed' && session.value?.status === 'completed')
+const remoteClosed = computed(() => step.value === 'completed' && (
+  (isRemote.value && session.value?.status === 'completed')
+  || (awaitingJudgment.value && !webRtc.isPeerConnected.value)
+))
 watch(remoteClosed, (closed) => {
   stopAutoReset()
   if (!closed) return
