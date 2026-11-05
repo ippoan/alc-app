@@ -715,7 +715,7 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
 
   it('★ 1:N: 不一致は 1 回やり直して null・送らない (乗務員が決まらない)。対応表に無い・未承認の枠に当たっても送らない', async () => {
     const miss = keep(null)
-    expect(await mod.identifyVeinModuleAnyone(miss, undefined, () => {})).toBeNull()
+    expect(await mod.identifyVeinModuleAnyone(miss)).toBeNull()
     expect(miss.identifyKeep).toHaveBeenCalledTimes(2)
     db.loadVeinModuleEntries.mockResolvedValue([{ ...entry('emp-1', 12), approved: false }])
     expect(await mod.identifyVeinModuleAnyone(keep(12))).toBe(12)
