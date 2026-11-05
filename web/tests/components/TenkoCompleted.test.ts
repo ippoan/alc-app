@@ -22,7 +22,7 @@ describe('TenkoCompleted — 遠隔点呼の判定待ち (Refs ippoan/rust-alc-a
   it('判定待ちは「入力完了」と判定を待っている旨を出す', async () => {
     const w = await mountSuspended(TenkoCompleted, { props: { session: session('judgment_pending'), employeeName: '点呼 太郎' } })
     expect(w.find('h3').text()).toBe('入力完了')
-    expect(w.find('[data-testid="judgment-pending"]').text()).toContain('運行管理者の判定を待っています')
+    expect(w.find('[data-testid="judgment-pending"]').text()).toContain('判定は運行管理者が行うので、このまま終わって大丈夫です')
   })
 
   it('完了は今までどおり「点呼完了」で、判定待ちの表示は出ない', async () => {
