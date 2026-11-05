@@ -19,7 +19,7 @@ vi.mock('~/utils/api', async importOriginal => ({
 
 const OFFICES = {
   offices: [
-    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['kiosk-1'] },
+    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['alarm:aa11bb22cc33dd44'] },
     { id: 'o2', name: '帯広営業所', company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] },
   ],
   carins_bases: [
@@ -51,7 +51,7 @@ beforeEach(() => {
   api.getTenkoOffices.mockResolvedValue(OFFICES)
   api.getEmployees.mockResolvedValue(EMPLOYEES)
   api.listCamHostKeys.mockResolvedValue({ keys: [
-    { device_id: 'kiosk-1', label: '長崎の点呼端末' },
+    { device_id: 'alarm:aa11bb22cc33dd44', label: '長崎の点呼端末' },
     { device_id: 'alarm:5de95ff4aabbccdd', label: null },
   ] })
 })
@@ -91,14 +91,14 @@ describe('TenkoOfficeManager', () => {
     const w = await mountIt()
     const devs = cards(w)[1]!.findAll('[data-testid="tenko-office-device"]')
     expect(devs).toHaveLength(2)
-    expect(cards(w)[1]!.text()).toContain('長崎の点呼端末')
+    expect(cards(w)[1]!.text()).toContain('長崎の点呼端末 aa11bb22')
     expect(cards(w)[1]!.text()).toContain('名前の無い機体 5de95ff4')
     expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('いまは 本社営業所')
     expect(cards(w)[0]!.find('[data-testid="tenko-office-device-elsewhere"]').exists()).toBe(false)
     await devs[0]!.setValue(true)
     await btn(w, 1, 'tenko-office-save').trigger('click')
     await flushPromises()
-    expect(api.updateTenkoOffice.mock.calls[0][1].device_ids).toEqual(['kiosk-1'])
+    expect(api.updateTenkoOffice.mock.calls[0][1].device_ids).toEqual(['alarm:aa11bb22cc33dd44'])
   })
 
   it('既存の営業所を保存すると全部を置き換えて読み直す (空の会社名・所在地は null)', async () => {
@@ -109,7 +109,7 @@ describe('TenkoOfficeManager', () => {
     await flushPromises()
     expect(api.updateTenkoOffice).toHaveBeenCalledWith('o1', {
       name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1', 'v2'],
-      carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['kiosk-1'],
+      carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['alarm:aa11bb22cc33dd44'],
     })
     expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
     expect(w.find('[data-testid="tenko-offices-notice"]').text()).toBe('本社営業所 を保存しました')

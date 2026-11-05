@@ -34,9 +34,12 @@ const carinsBases = ref<TenkoOfficeCarinsBase[]>([])
 /** 点呼端末 (用途 kiosk の機体の鍵)。読めなくても営業所の設定は止めない */
 const devices = ref<{ device_id: string, label: string | null }[]>([])
 
-/** 点呼端末の表示名。名前の無い機体は鍵の指紋の頭で見分ける (`VeinFleetManager` と同じ) */
+/**
+ * 点呼端末の表示名。同じ名前の機体 (cores3 が何台も) を見分けられるよう、鍵の指紋の頭 8 桁を必ず添える
+ * (`VeinFleetManager` と同じ切り出し)。名前の無い機体は「名前の無い機体」
+ */
 function deviceName(d: { device_id: string, label: string | null }): string {
-  return d.label || `名前の無い機体 ${d.device_id.slice(6, 14)}`
+  return `${d.label || '名前の無い機体'} ${d.device_id.slice(6, 14)}`
 }
 const managers = ref<ApiEmployee[]>([])
 const loadError = ref('')
