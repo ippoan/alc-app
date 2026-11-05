@@ -167,39 +167,33 @@ describe('TenkoScheduleSelect', () => {
     wrapper.unmount()
   })
 
-  // --- 1 度再開した点呼は導線ごと出さない (Refs ippoan/alc-app#351) ---
+  // --- 管理者が再開済みの点呼も出す (業務前 十三。self-resume は受ける) ---
 
-  it('★ resumed_at が入っている行は「続きから再開」を描かない', async () => {
+  it('★ 管理者が再開済み (resumed_at あり) の行も「続きから再開」を描き、押せば resume が発火する', async () => {
+    const managerResumed = makeSession({ id: 'resumed', resumed_at: '2026-03-31T23:05:00Z', status: 'daily_inspection_pending' })
     const wrapper = await mountSuspended(TenkoScheduleSelect, {
-      props: {
-        schedules: [],
-        employeeName: '田中',
-        resumableSessions: [makeSession({ id: 'resumed', resumed_at: '2026-03-31T23:05:00Z' })],
-      },
-    })
-
-    // 再開は 1 回までで、押した先で必ず 400 になる。押せるボタンを描いてから断らない
-    expect(wrapper.find('[data-testid="resume-session"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('続きから再開')
-    expect(wrapper.text()).not.toContain('さんの途中で止まっている点呼')
-
-    wrapper.unmount()
-  })
-
-  it('★ 再開済みが混ざっていても、まだ再開していない行は出る', async () => {
-    const fresh = makeSession({ id: 'fresh' })
-    const wrapper = await mountSuspended(TenkoScheduleSelect, {
-      props: {
-        schedules: [],
-        employeeName: '田中',
-        resumableSessions: [makeSession({ id: 'resumed', resumed_at: '2026-03-31T23:05:00Z' }), fresh],
-      },
+      props: { schedules: [], employeeName: '田中', resumableSessions: [managerResumed] },
     })
 
     const buttons = wrapper.findAll('[data-testid="resume-session"]')
     expect(buttons).toHaveLength(1)
+    expect(wrapper.text()).toContain('指静脈で本人確認')
     await buttons[0]!.trigger('click')
-    expect(wrapper.emitted('resume')![0]).toEqual([fresh])
+    expect(wrapper.emitted('resume')![0]).toEqual([managerResumed])
+
+    wrapper.unmount()
+  })
+
+  it('再開済みと未再開が混ざっていれば両方出る', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleSelect, {
+      props: {
+        schedules: [],
+        employeeName: '田中',
+        resumableSessions: [makeSession({ id: 'resumed', resumed_at: '2026-03-31T23:05:00Z' }), makeSession({ id: 'fresh' })],
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="resume-session"]')).toHaveLength(2)
 
     wrapper.unmount()
   })

@@ -25,6 +25,13 @@ vi.mock('~/utils/api', async importOriginal => ({
   updateMeasurement: vi.fn(),
 }))
 
+// 故障の自動記録 (機器の失敗だけ。利用者の誤りは記録しない)
+const failureReport = vi.hoisted(() => ({ reportFailure: vi.fn(), reportApiFailure: vi.fn() }))
+vi.mock('~/utils/equipment-failure-report', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/equipment-failure-report')>()),
+  ...failureReport,
+}))
+
 const db = vi.hoisted(() => ({
   loadVeinTemplates: vi.fn(),
   saveVeinTemplates: vi.fn(),
@@ -264,6 +271,29 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     expect(api.identifyVein).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('指静脈を読み取れませんでした (NO_FINGER)')
     expect(wrapper.find('[data-testid="vein-identify"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('★ 読み取りの機器エラー (TIMEOUT 等) は故障として記録する。指を置かなかった (NO_FINGER) は記録しない', async () => {
+    vein.capture.mockRejectedValueOnce(new Error('NO_FINGER'))
+    const wrapper = await mountKiosk()
+    await pressVein(wrapper)
+    expect(failureReport.reportFailure).not.toHaveBeenCalled()
+
+    vein.capture.mockRejectedValueOnce(new Error('NO_MODULE'))
+    await pressVein(wrapper)
+    expect(failureReport.reportFailure).toHaveBeenCalledTimes(1)
+    expect(failureReport.reportFailure).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'face_recognition_error', device: '指静脈リーダー',
+    }))
+    wrapper.unmount()
+  })
+
+  it('★ 不一致は故障として記録しない', async () => {
+    api.identifyVein.mockResolvedValue(null)
+    const wrapper = await mountKiosk()
+    await pressVein(wrapper)
+    expect(failureReport.reportFailure).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

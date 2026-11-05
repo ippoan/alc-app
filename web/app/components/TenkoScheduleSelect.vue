@@ -4,7 +4,7 @@ import { tenkoTypeLabel } from '~/utils/tenko-type'
 import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { noPendingSchedule } from '~/utils/employee-lookup-messages'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   schedules: TenkoSchedule[]
   employeeName: string
   /**
@@ -15,20 +15,6 @@ const props = withDefaults(defineProps<{
 }>(), {
   resumableSessions: () => [],
 })
-
-/**
- * 実際に「続きから再開」のボタンを出す行 (Refs ippoan/alc-app#351)。
- *
- * **1 度再開した点呼は導線ごと出さない** — 再開は 1 セッションにつき 1 回までで
- * (`resumed_at` は単数カラムなので 2 回目の時刻を持てない)、出しても押した先で必ず
- * 400 (`already_resumed`) になる。**押せるボタンを描いてから断らない。**
- *
- * 候補を作る側 (`useTenkoKiosk` の `_fetchResumableSessions`) でも同じ行を落としているが、
- * このコンポーネントは渡された配列をそのまま描くだけなので、**描く側でも確かめる**。
- */
-const visibleResumableSessions = computed(
-  () => props.resumableSessions.filter(s => s.resumed_at === null),
-)
 
 const emit = defineEmits<{
   select: [schedule: TenkoSchedule]
@@ -73,13 +59,13 @@ function formatScheduledAt(iso: string): string {
       途中で止まった点呼の再開 (Refs ippoan/alc-app#343)。**予定より先に出す** —
       顔認証の直後にフロントがハングして作られたセッションが溜まっており (#340 / #341 で
       ハング自体は手当て済み)、拾い直す手段が現場に無かった。
-      出すのはアルコール未測定で、**まだ 1 度も再開していない**ものだけ
-      (呼び出し側が絞り、`visibleResumableSessions` でも確かめる。Refs #351)。
+      出すのはアルコール未測定のものだけ (呼び出し側が絞る)。管理者が再開済みの点呼も出す
+      (self-resume は受ける)。押すと指静脈の本人確認の段へ進み、通ってから再開する。
     -->
-    <template v-if="visibleResumableSessions.length > 0">
+    <template v-if="resumableSessions.length > 0">
       <p class="text-sm text-gray-500">{{ employeeName }} さんの途中で止まっている点呼</p>
       <button
-        v-for="s in visibleResumableSessions"
+        v-for="s in resumableSessions"
         :key="s.id"
         data-testid="resume-session"
         class="w-full text-left p-4 rounded-xl border border-blue-300 bg-blue-50 hover:border-blue-500 hover:bg-blue-100 transition-colors"
@@ -92,7 +78,7 @@ function formatScheduledAt(iso: string): string {
           <span class="text-sm text-gray-500">{{ resumeSummary(s) }}</span>
         </div>
         <p class="mt-2 text-xs text-gray-500">
-          アルコールはまだ測っていません。ここから続きを実施します。
+          アルコールはまだ測っていません。指静脈で本人確認をしてから、ここから続きを実施します。
         </p>
       </button>
     </template>

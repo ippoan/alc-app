@@ -13,6 +13,15 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   updateMeasurement: vi.fn(),
   getTenkoSession: vi.fn(),
   cancelTenkoSession: vi.fn(),
+  getEmployeeByNfcId: vi.fn(),
+  getEmployeeByCode: vi.fn(),
+}))
+
+// 故障の自動記録 (記録の中身は tests/utils/equipment-failure-report.test.ts)。ここでは「どこで何を記録するか」の配線だけを見る
+const failureReport = vi.hoisted(() => ({ reportFailure: vi.fn(), reportApiFailure: vi.fn() }))
+vi.mock('~/utils/equipment-failure-report', async importOriginal => ({
+  ...(await importOriginal<typeof import('~/utils/equipment-failure-report')>()),
+  ...failureReport,
 }))
 
 // TenkoKiosk.vue は多くの composable (WebRTC・カメラ・指紋認証等) に依存するため、
@@ -41,6 +50,10 @@ const onInstructionConfirmMock = vi.fn()
 const onReportSubmitMock = vi.fn()
 const kioskError = ref<string | null>(null)
 const resetMock = vi.fn()
+// 車両番号の段 (業務前 二十 ハ)
+const vehicleInput = ref('')
+const vehicleManualRequired = ref(false)
+const onVehicleSubmitMock = vi.fn()
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
   employeeId,
@@ -67,6 +80,9 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   bpRequirementUnknown,
   retryBpRequirement: retryBpRequirementMock,
   onFaceAuthComplete: vi.fn(),
+  vehicleInput,
+  vehicleManualRequired,
+  onVehicleSubmit: onVehicleSubmitMock,
   onAlcoholMeasured: onAlcoholMeasuredMock,
   onMedicalSubmit: vi.fn(),
   onSelfDeclarationSubmit: vi.fn(),
@@ -104,11 +120,12 @@ mockNuxtImport('useWebRtc', () => () => ({
 
 // 録画のプレビュー用カメラと WebRTC の送信用カメラで同じものを返す (どちらも useCamera)
 const cameraStream = ref<MediaStream | null>(null)
+const cameraStartMock = vi.fn(async () => {})
 mockNuxtImport('useCamera', () => () => ({
   stream: cameraStream,
   videoRef: ref(null),
   isActive: ref(false),
-  start: vi.fn(async () => {}),
+  start: cameraStartMock,
   stop: vi.fn(),
 }))
 
@@ -124,9 +141,12 @@ mockNuxtImport('useVideoRecorder', () => () => ({
   stopRecording: stopRecordingMock,
 }))
 
+// 体温計・血圧計 (BLE ゲートウェイ) のエラー
+const bleError = ref<string | null>(null)
 mockNuxtImport('useBleGateway', () => () => ({
   latestTemperature: ref(null),
   latestBloodPressure: ref(null),
+  error: bleError,
 }))
 
 // この端末で血圧を使うか (Refs ippoan/alc-app#347)。判定の中身は
@@ -718,6 +738,166 @@ describe('TenkoKiosk — 最初から遠隔点呼は確定の後に部屋に入�
     await flushPromises()
     expect(webRtcConnectMock).toHaveBeenCalledWith(expect.any(String), 'sess-1', 'room', undefined)
     expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+// 車両番号の段 (業務前 二十 ハ)
+describe('TenkoKiosk — 車両番号の段', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'vehicle'
+    vehicleInput.value = '予定の車'
+    vehicleManualRequired.value = false
+  })
+
+  it('★ 車両番号の段で TenkoVehicleEntry を出し、入力欄の値と車検証で決まらなかった印を渡す', async () => {
+    vehicleManualRequired.value = true
+    const wrapper = await mountKiosk()
+    await wrapper.vm.$nextTick()
+
+    const entry = wrapper.findComponent({ name: 'TenkoVehicleEntry' })
+    expect(entry.exists()).toBe(true)
+    expect(entry.props('modelValue')).toBe('予定の車')
+    expect(entry.props('manualRequired')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('入力欄の更新は composable の値へ、submit は onVehicleSubmit へ渡す', async () => {
+    const wrapper = await mountKiosk()
+    const entry = wrapper.findComponent({ name: 'TenkoVehicleEntry' })
+
+    entry.vm.$emit('update:modelValue', '手入力')
+    await wrapper.vm.$nextTick()
+    expect(vehicleInput.value).toBe('手入力')
+
+    entry.vm.$emit('submit', { carins_cert_no: 'CERT-1' })
+    expect(onVehicleSubmitMock).toHaveBeenCalledWith({ carins_cert_no: 'CERT-1' })
+    wrapper.unmount()
+  })
+
+  it('車両番号の段は CoreS3 の車検証の段(CARINS)に連動する', async () => {
+    const wrapper = await mountKiosk()
+    expect(syncStepMock.mock.calls.map(stepArgOf)).toContain('vehicle')
+    wrapper.unmount()
+  })
+})
+
+// 故障の自動記録: 機器の接続・読取の失敗 / 記録・写真の保存の失敗 / 通信の失敗 (利用者の誤りは記録しない)
+describe('TenkoKiosk — 故障の自動記録の配線', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    step.value = 'nfc'
+    employeeId.value = 'emp-1'
+    tenkoType.value = 'pre_operation'
+    session.value = { id: 'sess-1' }
+    bleError.value = null
+    cameraStartMock.mockResolvedValue(undefined)
+    stopRecordingMock.mockResolvedValue(null)
+  })
+
+  it('★ FC-1200 のエラー(AlcMeasurement の error)→ measurement_recording_failed', async () => {
+    const wrapper = await mountKiosk()
+    step.value = 'alcohol'
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'AlcMeasurement' }).vm.$emit('error', 'FC-1200 が接続されていません')
+    expect(failureReport.reportFailure).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'measurement_recording_failed', device: 'FC-1200', sessionId: 'sess-1',
+    }))
+    wrapper.unmount()
+  })
+
+  it('★ 録画カメラを起こせない → photo_storage_error。起きれば記録しない', async () => {
+    const wrapper = await mountKiosk()
+    step.value = 'alcohol'
+    await flushPromises()
+    expect(failureReport.reportFailure).not.toHaveBeenCalled()
+    wrapper.unmount()
+
+    cameraStartMock.mockRejectedValueOnce(new Error('NotAllowedError'))
+    const wrapper2 = await mountKiosk()
+    step.value = 'nfc'
+    await wrapper2.vm.$nextTick()
+    step.value = 'alcohol'
+    await flushPromises()
+    expect(failureReport.reportFailure).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'photo_storage_error', device: 'カメラ', sessionId: 'sess-1',
+    }))
+    wrapper2.unmount()
+  })
+
+  it('★ 測定レコードを作れない(通信・サーバー)→ measurement_recording_failed として reportApiFailure に渡す', async () => {
+    const { startMeasurement } = await import('~/utils/api')
+    const down = new Error('Failed to fetch')
+    vi.mocked(startMeasurement).mockRejectedValue(down)
+    const wrapper = await mountKiosk()
+    step.value = 'alcohol'
+    await flushPromises()
+
+    expect(failureReport.reportApiFailure).toHaveBeenCalledWith(
+      down, 'アルコール測定の記録の作成', { sessionId: 'sess-1', type: 'measurement_recording_failed' },
+    )
+    wrapper.unmount()
+  })
+
+  it('★ 録画のアップロードに失敗 → photo_storage_error', async () => {
+    const { startMeasurement } = await import('~/utils/api')
+    vi.mocked(startMeasurement).mockResolvedValue({ id: 'meas-1' } as never)
+    stopRecordingMock.mockResolvedValue(new Blob(['x']))
+    // 録画の blob は有るが R2 への送信は実 API 無しで失敗する (uploadStatus が 'failed' になる)
+
+    const wrapper = await mountKiosk()
+    step.value = 'alcohol'
+    await flushPromises()
+    wrapper.findComponent({ name: 'AlcMeasurement' }).vm.$emit('result', {
+      employeeId: 'emp-1', alcoholValue: 0, resultType: 'normal', deviceUseCount: 1, measuredAt: new Date('2026-09-18T08:00:00Z'),
+    })
+    await flushPromises()
+
+    expect(failureReport.reportFailure).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'photo_storage_error', description: '吹きかけ録画のアップロードに失敗しました',
+    }))
+    wrapper.unmount()
+  })
+
+  it('★ 体温計・血圧計の接続エラーは体温・血圧の段にいるときだけ measurement_recording_failed', async () => {
+    const wrapper = await mountKiosk()
+
+    // 他の段で出たエラー・エラーの解消は記録しない
+    bleError.value = 'BLE ブリッジに接続できません'
+    await wrapper.vm.$nextTick()
+    bleError.value = null
+    await wrapper.vm.$nextTick()
+    expect(failureReport.reportFailure).not.toHaveBeenCalled()
+
+    step.value = 'medical'
+    await wrapper.vm.$nextTick()
+    bleError.value = 'BLE ブリッジとの接続でエラーが発生しました'
+    await wrapper.vm.$nextTick()
+    expect(failureReport.reportFailure).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'measurement_recording_failed', device: '体温計・血圧計', sessionId: 'sess-1',
+    }))
+    wrapper.unmount()
+  })
+
+  it('★ 乗務員の照会が通信で落ちたら reportApiFailure に渡す(NFC・手入力の両方)', async () => {
+    const { getEmployeeByNfcId, getEmployeeByCode } = await import('~/utils/api')
+    const down = new Error('Failed to fetch')
+    vi.mocked(getEmployeeByNfcId).mockRejectedValue(down)
+    vi.mocked(getEmployeeByCode).mockRejectedValue(down)
+
+    const wrapper = await mountKiosk()
+    wrapper.findComponent({ name: 'NfcStatus' }).vm.$emit('read', 'nfc-test-1')
+    await flushPromises()
+    expect(failureReport.reportApiFailure).toHaveBeenCalledWith(down, '乗務員の照会')
+
+    failureReport.reportApiFailure.mockClear()
+    await wrapper.find('button.underline').trigger('click')
+    await wrapper.find('input[type="text"]').setValue('001')
+    await wrapper.findAll('button').find(b => b.text() === '次へ')!.trigger('click')
+    await flushPromises()
+    expect(failureReport.reportApiFailure).toHaveBeenCalledWith(down, '乗務員の照会')
     wrapper.unmount()
   })
 })

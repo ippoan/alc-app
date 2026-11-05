@@ -217,6 +217,55 @@ describe('useVeinEmployeeIdentify', () => {
     app.unmount()
   })
 
+  describe('機器の失敗の通知 (onDeviceError)', () => {
+    it('★ 読み取り・用意の失敗は onDeviceError に渡す (1:N と 1:1 のどちらでも)', async () => {
+      const onDeviceError = vi.fn()
+      const { api, app } = setup({ onDeviceError })
+      vein.identify.mockRejectedValueOnce(new Error('NO_MODULE'))
+      await api.identify()
+      expect(onDeviceError).toHaveBeenLastCalledWith('NO_MODULE')
+      app.unmount()
+
+      const { api: api2, app: app2 } = setup({ onDeviceError, expectedEmployeeId: () => 'emp-test-1' })
+      mod.prepareVeinModuleRecord.mockRejectedValueOnce(new Error('WRITE_SEQ'))
+      await api2.identify()
+      expect(onDeviceError).toHaveBeenLastCalledWith('WRITE_SEQ')
+      mod.matchVeinModuleEmployee.mockRejectedValueOnce(new Error('READ_FAIL'))
+      await api2.identify()
+      expect(onDeviceError).toHaveBeenLastCalledWith('READ_FAIL')
+      expect(onDeviceError).toHaveBeenCalledTimes(3)
+      app2.unmount()
+    })
+
+    it('★ 指を置かなかった (NO_FINGER)・置き直しの不一致 (RETAKE) は利用者側のことなので通知しない', async () => {
+      const onDeviceError = vi.fn()
+      const { api, app } = setup({ onDeviceError })
+      vein.identify.mockRejectedValueOnce(new Error('NO_FINGER'))
+      await api.identify()
+      vein.identify.mockRejectedValueOnce(new Error('RETAKE'))
+      await api.identify()
+      expect(onDeviceError).not.toHaveBeenCalled()
+      // 画面の理由は従来どおり出る
+      expect(api.error.value).toBe('指静脈を読み取れませんでした (RETAKE)')
+      app.unmount()
+    })
+
+    it('不一致・未承認・別人は機器の失敗ではない。onDeviceError が無くても落ちない', async () => {
+      const onDeviceError = vi.fn()
+      const { api, app } = setup({ onDeviceError })
+      mod.identifyVeinModuleEmployee.mockResolvedValueOnce({ kind: 'miss' })
+      await api.identify()
+      expect(onDeviceError).not.toHaveBeenCalled()
+      app.unmount()
+
+      const plain = setup()
+      vein.identify.mockRejectedValueOnce(new Error('NO_MODULE'))
+      await plain.api.identify()
+      expect(plain.api.error.value).toBe('指静脈を読み取れませんでした (NO_MODULE)')
+      plain.app.unmount()
+    })
+  })
+
   it('特定した人を画面が通さなかったときは、その理由を出す', async () => {
     const { api, app } = setup({ onEmployee: async () => '権限がありません' })
     await api.identify()

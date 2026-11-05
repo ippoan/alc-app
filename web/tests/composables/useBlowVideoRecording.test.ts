@@ -127,10 +127,11 @@ describe('composables/useBlowVideoRecording', () => {
       expect(startRecording).not.toHaveBeenCalled()
     })
 
-    it('カメラが起きなくても投げない (測定は続ける)', async () => {
+    it('カメラが起きなくても投げない (測定は続ける)。起きたかを戻り値で返す', async () => {
       cameraStart.mockRejectedValueOnce(new Error('NotAllowedError'))
       const { startCamera } = useBlowVideoRecording()
-      await expect(startCamera()).resolves.toBeUndefined()
+      await expect(startCamera()).resolves.toBe(false)
+      await expect(startCamera()).resolves.toBe(true)
     })
   })
 
