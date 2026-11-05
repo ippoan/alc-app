@@ -9,8 +9,8 @@ import { getVehicleCandidates } from '~/utils/api'
  * **車検証の読み取りを優先する**: NFC を読める機体 (CoreS3・Vein Station) がつながっていれば電子車検証をかざしてもらい、
  * 管理番号 (`NFC_CARINS` の `mgno`) をそのままサーバーへ渡す。サーバーが車検証データに照合し、
  * 一致すればその登録番号が車両番号になる (取得元 `carins`)。
- * つながっていない・読めない・一致しないときは、テンキーで一連指定番号 (ナンバーのひらがなの後の数字) を打って候補から選ぶ
- * (`sessionId` を渡したときだけ。候補は端末の営業所の車両が先、点呼の営業所に紐づいていない車両は色を変えて出す)。
+ * テンキーと入力欄は最初から並べて出し、車検証をかざしても、テンキーで一連指定番号 (ナンバーのひらがなの後の数字) を
+ * 打って候補から選んでもよい (`sessionId` を渡したときだけ。候補は端末の営業所の車両が先、点呼の営業所に紐づいていない車両は色を変えて出す)。
  * 候補に無いときは、予定の車両番号を初期値にした入力欄で登録する。
  *
  * 電子車検証の読み取りは通常点呼 (`NormalMeasurement`) と同じイベント (`NFC_CARINS`) で、
@@ -20,7 +20,7 @@ import { getVehicleCandidates } from '~/utils/api'
 const props = defineProps<{
   /** 入力欄の値 (予定・セッションの車両番号が初期値)。親が持つ — 登録中の読み込み表示で消えないように */
   modelValue: string
-  /** サーバーが車検証に一致する登録を見つけられなかった。入力欄を開く */
+  /** サーバーが車検証に一致する登録を見つけられなかった。テンキーで選ぶよう案内する */
   manualRequired?: boolean
   /** 点呼セッション。渡したときだけテンキーと候補を出す */
   sessionId?: string
@@ -36,10 +36,6 @@ const carinsAvailable = nfc.isConnected
 const readerLabel = nfc.label
 /** rc= (読み取り失敗) か、管理番号の無い古いファーム */
 const readError = ref(false)
-const showManual = ref(false)
-const manualVisible = computed(
-  () => !carinsAvailable.value || props.manualRequired === true || readError.value || showManual.value,
-)
 
 const offCarinsEvent = nfc.onEvent((name, args) => {
   if (name !== 'NFC_CARINS') return
@@ -101,22 +97,17 @@ function officeLabel(c: VehicleCandidate): string {
   <div class="flex flex-col gap-4" data-testid="vehicle-entry">
     <template v-if="carinsAvailable">
       <p class="text-sm text-gray-600">
-        電子車検証を {{ readerLabel }} にかざしてください
+        電子車検証を {{ readerLabel }} にかざすか、下で車両番号を選んでください
       </p>
       <p v-if="readError" data-testid="carins-read-error" class="text-sm text-red-600">
         車検証を読み取れませんでした。もう一度かざすか、車両番号を入力してください
       </p>
-      <button
-        v-if="!manualVisible"
-        data-testid="show-manual-vehicle"
-        class="text-sm text-gray-500 hover:text-gray-700 underline"
-        @click="showManual = true"
-      >
-        車検証が使えないときは車両番号を入力する
-      </button>
+      <p v-else-if="manualRequired" data-testid="carins-not-matched" class="text-sm text-red-600">
+        車検証に一致する車両が見つかりませんでした。車両番号を入力してください
+      </p>
     </template>
 
-    <div v-if="manualVisible && sessionId" class="flex flex-col gap-2" data-testid="vehicle-keypad">
+    <div v-if="sessionId" class="flex flex-col gap-2" data-testid="vehicle-keypad">
       <p class="text-sm text-gray-600">ナンバーの右側の数字 (例: 7601) を打って、候補から選んでください</p>
       <EmployeeCodeKeypad v-model="digits" :show-submit="false" />
       <p v-if="candidatesError" data-testid="vehicle-candidates-error" class="text-sm text-red-600">
@@ -146,7 +137,7 @@ function officeLabel(c: VehicleCandidate): string {
       </div>
     </div>
 
-    <div v-if="manualVisible" class="flex flex-col gap-2">
+    <div class="flex flex-col gap-2">
       <label class="text-sm text-gray-600" for="vehicle-number-input">{{ sessionId ? '候補に無いときは車両番号を入力' : '車両番号' }}</label>
       <input
         id="vehicle-number-input"
