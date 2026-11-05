@@ -703,6 +703,37 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
     expect(api.postVeinAuthShot).not.toHaveBeenCalled()
   })
 
+  it('★ 1:N (本人が決まっていない): 撮ってから照合し、承認済みの枠に当たった回を当たった人の撮影として送る (hit=self)', async () => {
+    const port = keep(13)
+    expect(await mod.identifyVeinModuleAnyone(port, undefined, () => {}, 'manager-device')).toBe(13)
+    expect(port.identify).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(1))
+    const [body, scope] = api.postVeinAuthShot.mock.calls[0]!
+    expect(body).toMatchObject({ employee_id: 'emp-9', shot: SHOT, module: { result: 'IDENTIFIED', slot: 13, hit: 'self', score: 71 } })
+    expect(scope).toBe('manager-device')
+  })
+
+  it('★ 1:N: 不一致は 1 回やり直して null・送らない (乗務員が決まらない)。対応表に無い・未承認の枠に当たっても送らない', async () => {
+    const miss = keep(null)
+    expect(await mod.identifyVeinModuleAnyone(miss)).toBeNull()
+    expect(miss.identifyKeep).toHaveBeenCalledTimes(2)
+    db.loadVeinModuleEntries.mockResolvedValue([{ ...entry('emp-1', 12), approved: false }])
+    expect(await mod.identifyVeinModuleAnyone(keep(12))).toBe(12)
+    expect(await mod.identifyVeinModuleAnyone(keep(14))).toBe(14)
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+  })
+
+  it('★ 1:N: 送らないテナントは今までどおりの照合 (撮らない)', async () => {
+    api.getVeinAuthLogEnabled.mockResolvedValue({ enabled: false })
+    const port = keep(12)
+    port.identify.mockResolvedValue(12)
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(12)
+    expect(port.identifyKeep).not.toHaveBeenCalled()
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+  })
+
   it('★ 送信が失敗しても投げず、照合の結果は変えない。診断ログに FAILED を 1 行 (生体データは載せない)', async () => {
     api.postVeinAuthShot.mockRejectedValue(new Error('API エラー (500)'))
     expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })

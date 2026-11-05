@@ -275,6 +275,31 @@ export async function matchVeinModuleEmployee(
   return await retryOnVeinMiss(read, hit => hit === null, onRetry)
 }
 
+/**
+ * 本人が決まっていない 1:N の照合 (血圧測定台・キオスクの指だけの入口・運行管理者の入口)。当たった ID (不一致は null) を返し、
+ * 不一致は {@link VEIN_NOMATCH_RETRIES} 回までやり直す (やり直す前に `onRetry`)。認証ログを送るテナントだけ、置いた 1 回の指を
+ * 撮ってから照合し (`VEIN IDENTIFY KEEP ALL`)、承認済みの枠に当たった回を、当たった人の撮影として裏で送る ({@link scheduleVeinAuthShot})。
+ * 不一致の回は乗務員が決まらないので送らない。送らないテナントは今までどおりの照合 (`VEIN IDENTIFY`、記録の読み出しで遅くしない)
+ */
+export async function identifyVeinModuleAnyone(
+  port: VeinMatchPort,
+  onAgain?: () => void,
+  onRetry: () => void | Promise<void> = () => {},
+  scope: RequestTokenScope = 'default',
+): Promise<number | null> {
+  const keep = await isAuthLogEnabled(scope)
+  const read = async (): Promise<number | null> => {
+    if (!keep) return await port.identify(onAgain)
+    const got = await readKeeping(port, onAgain)
+    if (got.id !== null) {
+      const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
+      if (entry?.approved) scheduleVeinAuthShot(entry.employeeId, got, 'self', scope)
+    }
+    return got.id
+  }
+  return await retryOnVeinMiss(read, id => id === null, onRetry)
+}
+
 /** 撮ってから照合する。`KEEP` を知らないファームなら、このページの間は普通の照合 (記録なし) に戻す */
 async function readKeeping(port: VeinMatchPort, onAgain?: () => void): Promise<KeepResult> {
   if (port.identifyKeep && !identifyKeepUnsupported) {
