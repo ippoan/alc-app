@@ -56,6 +56,29 @@ describe('ManagerSeatThermoPause', () => {
     expect(vein.request).toHaveBeenCalledTimes(1)
   })
 
+  it('★ 運行管理者でない画面 (pause=false) は、つながるたびに THERMO ON を送る (再読み込みで OFF が残らない)', async () => {
+    const wrapper = await mountSuspended(ManagerSeatThermoPause, { props: { pause: false } })
+    vein.isConnected.value = true
+    await flushPromises()
+    expect(vein.request.mock.calls).toEqual([['THERMO ON', 'OK THERMO=', 3000, 'ERR']])
+    expect(appendDiag).toHaveBeenCalledWith('[thermo] 運行管理者でない画面 OK THERMO=1')
+    // 離れても送らない (止めていないので戻す必要が無い)
+    wrapper.unmount()
+    await flushPromises()
+    expect(vein.request).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ つながったまま役割が変わったら、その役割の側を送る', async () => {
+    vein.isConnected.value = true
+    const wrapper = await mountSuspended(ManagerSeatThermoPause, { props: { pause: false } })
+    await flushPromises()
+    await wrapper.setProps({ pause: true })
+    await flushPromises()
+    await wrapper.setProps({ pause: false })
+    await flushPromises()
+    expect(vein.request.mock.calls.map(c => c[0])).toEqual(['THERMO ON', 'THERMO OFF', 'THERMO ON'])
+  })
+
   it('★ ほかの要求の応答待ちで弾かれたら、空くまで送り直す (つながった直後の鍵の署名と重なる)', async () => {
     vi.useFakeTimers()
     vein.request

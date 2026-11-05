@@ -9,6 +9,9 @@
  *
  * - つながるたびに送る (機体は保存しない。電源を入れ直すと ON に戻る)
  * - 運行管理者の画面を離れたら `THERMO ON` に戻す
+ * - **役割に関係なく置き、運行管理者でない画面 (`pause` が false) では、つながるたびに `THERMO ON` を送る**。
+ *   画面を離れたときの ON はページの再読み込みでは送られず、機体は電源を入れ直すまで OFF のまま
+ *   体温計を探さなかった (2026-11-05 実測: 運行管理者の画面の後にリロードしたキオスクで、体温計の行が 1 行も来ない)
  * - `THERMO` を知らない古いファームは断るだけ (体温計はそれまでどおり探す)。描くものは無い
  */
 import { appendDiag } from '~/utils/serialDiagLog'
@@ -24,6 +27,11 @@ const THERMO_TIMEOUT_MS = 3_000
 const THERMO_RETRY_MS = 500
 const THERMO_MAX_RETRIES = 40
 
+const props = withDefaults(defineProps<{
+  /** 運行管理者の画面か (true = 体温計を止める / false = 体温計を探させる) */
+  pause?: boolean
+}>(), { pause: true })
+
 const vein = useVeinSerial()
 
 async function setThermo(on: boolean): Promise<void> {
@@ -33,19 +41,22 @@ async function setThermo(on: boolean): Promise<void> {
       () => vein.request(`THERMO ${want}`, 'OK THERMO=', THERMO_TIMEOUT_MS, 'ERR'),
       { intervalMs: THERMO_RETRY_MS, maxRetries: THERMO_MAX_RETRIES },
     )
-    appendDiag(`[thermo] 運行管理者の画面 ${line}`)
+    appendDiag(`[thermo] ${on ? '運行管理者でない画面' : '運行管理者の画面'} ${line}`)
   }
   catch (e) {
     appendDiag(`[thermo] THERMO ${want} を送れませんでした: ${(e as Error).message}`)
   }
 }
 
-watch(vein.isConnected, (connected) => {
-  if (connected) void setThermo(false)
+watch([vein.isConnected, () => props.pause], ([connected, pause], prev) => {
+  if (!connected) return
+  // つながった直後と、役割が変わったときだけ送る
+  if (prev && prev[0] === connected && prev[1] === pause) return
+  void setThermo(!pause)
 }, { immediate: true })
 
 onUnmounted(() => {
-  if (vein.isConnected.value) void setThermo(true)
+  if (props.pause && vein.isConnected.value) void setThermo(true)
 })
 </script>
 

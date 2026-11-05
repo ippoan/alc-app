@@ -10,7 +10,7 @@ import {
   updateMeasurement, submitMedical, submitSelfDeclaration,
   submitDailyInspection, confirmInstruction, submitReport,
   cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
-  getCarryingItems, submitCarryingItemChecks, listTenkoSessions, getMeasurements,
+  getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
   selfResumeTenkoSession, updateTenkoSessionVehicle, apiErrorCode, apiErrorMessage,
 } from '~/utils/api'
 import { reportApiFailure } from '~/utils/equipment-failure-report'
@@ -34,21 +34,6 @@ export type TenkoStep =
   | 'completed'
   | 'interrupted'
   | 'cancelled'
-
-/** 測定台で測った血圧を「直近」として引き当てる範囲 (時間)。これより古い測定は拾わない */
-export const STATION_BP_LOOKBACK_HOURS = 24
-
-/** 測定台の血圧がまだ無いときの案内 (画面の案内と同じ文言) */
-export const STATION_BP_MISSING_MESSAGE = '測定台で血圧を測ってから、「血圧を読み込む」を押してください。'
-
-/** 測定台で測った血圧 (点呼の体温・血圧の段で引き当てたもの) */
-export interface StationBp {
-  systolic: number
-  diastolic: number
-  pulse: number | null
-  /** 測定した時刻 (ISO 8601) */
-  measuredAt: string
-}
 
 /**
  * 「続きから再開」をサーバに残すときの `resume_reason` (Refs ippoan/alc-app#351)。
@@ -138,13 +123,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    */
   const { deviceId } = useAuth()
   const step = ref<TenkoStep>('nfc')
-  /**
-   * 血圧測定台 (`?station=bp`) で測った直近の血圧。業務前の自動点呼の体温・血圧の段に入ったときに
-   * 引き当てる (`loadStationBp`)。キオスク自身が血圧を測れなくても、血圧はここから来る。
-   */
-  const stationBp = ref<StationBp | null>(null)
-  /** 測定台の血圧を引いている最中か */
-  const stationBpLoading = ref(false)
   const employeeId = ref('')
   const employeeName = ref('')
   const pendingSchedules = ref<TenkoSchedule[]>([])
@@ -515,86 +493,17 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     }
   }
 
-  /**
-   * 測定台で測った直近の血圧を引き当てる (業務前の自動点呼の体温・血圧の段)。
-   *
-   * 測定台は通常点呼と同じ測定の口で `systolic` / `diastolic` / `medical_measured_at` を保存し、
-   * 点呼の記録は作らない。ここでは**その乗務員の直近 24 時間の測定**から、完了していて血圧が
-   * 入っているもののうち測定時刻が最も新しいものを採る (並び順には頼らない)。
-   * 見つからなければ `stationBp` は null — 画面が「測定台で測ってから読み込む」案内を出す。
-   */
-  async function loadStationBp() {
-    if (!employeeId.value) return
-    // 引いている最中に呼ばれたら同じ要求を待つ (二重に投げない)
-    stationBpPending ??= _fetchStationBp().finally(() => { stationBpPending = null })
-    await stationBpPending
-  }
-
-  let stationBpPending: Promise<void> | null = null
-
-  async function _fetchStationBp() {
-    stationBpLoading.value = true
-    try {
-      const since = new Date(Date.now() - STATION_BP_LOOKBACK_HOURS * 3600 * 1000).toISOString()
-      const res = await getMeasurements({ employee_id: employeeId.value, date_from: since, per_page: 50 })
-      let best: StationBp | null = null
-      for (const m of res.measurements) {
-        if (m.status !== 'completed' || m.systolic == null || m.diastolic == null) continue
-        const measuredAt = m.medical_measured_at ?? m.measured_at
-        if (best && Date.parse(measuredAt) <= Date.parse(best.measuredAt)) continue
-        best = { systolic: m.systolic, diastolic: m.diastolic, pulse: m.pulse ?? null, measuredAt }
-      }
-      stationBp.value = best
-    } catch (e) {
-      stationBp.value = null
-      _fail(e, '測定台の血圧の読み込みに失敗しました', '測定台の血圧の読み込み')
-    } finally {
-      stationBpLoading.value = false
-    }
-  }
-
-  /**
-   * 体温・血圧の送信内容に測定台の血圧を足す。**この端末で測った血圧 (`systolic` が入っている) が
-   * 常に優先**。足すときの `medical_measured_at` は体温と血圧の**古い方** — サーバーの有効時間の
-   * 判定 (業務前 八) が測定台の血圧にも掛かるように、新しい方に揃えない。
-   */
-  function _withStationBp(data: SubmitMedicalData): SubmitMedicalData {
-    const bp = stationBp.value
-    if (!bp || data.systolic !== undefined) return data
-    const times = [data.medical_measured_at, bp.measuredAt].filter((t): t is string => Boolean(t))
-    const oldest = times.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a))
-    const merged: SubmitMedicalData = {
-      ...data,
-      systolic: bp.systolic,
-      diastolic: bp.diastolic,
-      medical_measured_at: new Date(oldest).toISOString(),
-    }
-    if (bp.pulse !== null && data.pulse === undefined) merged.pulse = bp.pulse
-    return merged
-  }
-
   // --- 医療データ送信 (業務前のみ) ---
   async function onMedicalSubmit(data: SubmitMedicalData) {
     if (!session.value) return
     error.value = null
 
-    // 業務前の自動点呼で、この端末の血圧が入っていなければ測定台の血圧を使う。引いている最中なら
-    // 待ち、まだ無ければ先に引く。**それでも無ければサーバーへ送らない** — 体温の読み値は
-    // 画面に残るので、測定台で測ってもらい「血圧を読み込む」の後にもう一度送れる
-    if (!isRemote.value && data.systolic === undefined && !stationBp.value) {
-      await loadStationBp()
-      if (!stationBp.value) {
-        error.value ??= STATION_BP_MISSING_MESSAGE
-        return
-      }
-    }
     isLoading.value = true
 
     try {
       // 端末の血圧計有無 (devices.bp_enabled) をサーバが判定するための端末識別子。
       // bp_enabled 自体は送らない (フェイルクローズ設計、Refs ippoan/alc-app#322)
-      const merged = _withStationBp(data)
-      const body: SubmitMedicalData = deviceId.value ? { ...merged, device_id: deviceId.value } : merged
+      const body: SubmitMedicalData = deviceId.value ? { ...data, device_id: deviceId.value } : data
       const s = await submitMedical(session.value.id, body)
       session.value = s
       _advanceByStatus(s.status)
@@ -745,8 +654,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
         break
       case 'medical_pending':
         step.value = 'medical'
-        // 業務前の自動点呼は血圧を測定台から引き当てる (遠隔点呼は運行管理者が見るので引かない)
-        if (!isRemote.value) void loadStationBp()
         if (medicalSentBack.value) {
           medicalSentBack.value = false
           error.value = MEDICAL_EXPIRED_MESSAGE
@@ -835,8 +742,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     vehicleInput.value = ''
     vehicleManualRequired.value = false
     medicalSentBack.value = false
-    stationBp.value = null
-    stationBpLoading.value = false
   }
 
   return {
@@ -844,9 +749,6 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     step,
     employeeId,
     employeeName,
-    stationBp,
-    stationBpLoading,
-    loadStationBp,
     pendingSchedules,
     resumableSessions,
     selectedSchedule,

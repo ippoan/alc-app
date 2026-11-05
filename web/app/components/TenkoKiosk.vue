@@ -45,7 +45,6 @@ const {
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
   escalatedToRemote, escalationReason, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
-  stationBp, stationBpLoading, loadStationBp,
   vehicleInput, vehicleManualRequired, onVehicleSubmit,
   identifyEmployee, selectSchedule, resumeSession, proceedWithoutSchedule, onFaceAuthComplete,
   onAlcoholMeasured, onMedicalSubmit, onSelfDeclarationSubmit,
@@ -396,23 +395,6 @@ watch(bleError, (message) => {
  * 逃げ道が出なかった。
  */
 const { showBpUi } = useBpUiEnabled()
-
-/**
- * 体温・血圧の段で血圧の行を出すか。**この端末の血圧計の有無 (`showBpUi`) に依らず、自動点呼なら
- * 出す** — 業務前の血圧は血圧測定台で測った直近の値を引き当てる (`stationBp`)。
- * 遠隔点呼は運行管理者が見るので出さない。
- */
-const showMedicalBp = computed(() => showBpUi.value || !isRemote.value)
-
-/** この端末で測った血圧 (BLE) があるか。あれば測定台の血圧より優先して使う */
-const hasKioskBp = computed(() => Boolean(bleBloodPressure.value))
-
-/** 測定台の血圧の測定時刻 (「07:31」の形) */
-const stationBpTime = computed(() =>
-  stationBp.value
-    ? new Date(stationBp.value.measuredAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
-    : '',
-)
 
 // 医療ステップ: BLE / 手動入力 タブ
 const medicalInputTab = ref<'ble' | 'manual'>('ble')
@@ -918,7 +900,7 @@ onUnmounted(() => {
       <!-- Step 5: 体温・血圧 (業務前のみ) -->
       <div v-else-if="step === 'medical'" class="flex flex-col gap-4">
         <div class="bg-white rounded-2xl p-4 shadow-sm">
-          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showMedicalBp ? '体温・血圧' : '体温' }}</h2>
+          <h2 class="text-lg font-semibold text-gray-700 mb-2">{{ showBpUi ? '体温・血圧' : '体温' }}</h2>
 
           <!-- タブ切替 (デモ時は BLE タブ非表示) -->
           <div v-if="!isDemoMode" class="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
@@ -938,39 +920,10 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!--
-            血圧測定台で測った直近の血圧 (業務前の自動点呼)。この端末で血圧を測っていれば
-            そちらを使うので出さない。見つからないときは測定台で測ってもらい、読み込み直す。
-          -->
-          <div v-if="!isRemote && !hasKioskBp" class="mb-4" data-testid="station-bp">
-            <p
-              v-if="stationBp"
-              class="rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium text-center px-4 py-3"
-              data-testid="station-bp-value"
-            >
-              測定台の血圧: {{ stationBp.systolic }}/{{ stationBp.diastolic }} mmHg ({{ stationBpTime }} 測定)
-            </p>
-            <p v-else-if="stationBpLoading" class="text-sm text-blue-600 text-center">
-              測定台の血圧を確認しています...
-            </p>
-            <div v-else class="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-center">
-              <p class="text-sm text-amber-800 mb-2" data-testid="station-bp-missing">
-                測定台で血圧を測ってから、「血圧を読み込む」を押してください。
-              </p>
-              <button
-                class="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors"
-                data-testid="station-bp-load"
-                @click="loadStationBp"
-              >
-                血圧を読み込む
-              </button>
-            </div>
-          </div>
-
           <BleStatus
             v-if="medicalInputTab === 'ble'"
             :allow-skip="false"
-            :hide-bp-status="!showBpUi && !isRemote"
+            :hide-bp-status="!showBpUi"
             @next="onMedicalNext"
           />
           <ManualMedicalInput
@@ -985,7 +938,7 @@ onUnmounted(() => {
             自動点呼のとき出す (最初から遠隔なら出ない)。
             理由は自由入力にせず選択肢から選ばせる — サーバが `reason` を必須で受ける。
           -->
-          <template v-if="!isRemote">
+          <template v-if="showBpUi && !isRemote">
             <button
               v-if="!isChoosingEscalationReason"
               class="w-full mt-4 px-4 py-3 bg-amber-600 text-white rounded-xl font-medium hover:bg-amber-700 transition-colors"
