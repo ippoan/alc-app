@@ -5,6 +5,7 @@ import type {
   TenkoSession, StartTenkoSession, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
   SubmitManagerJudgment, UpdateTenkoSessionVehicle, TenkoSettings,
+  TenkoOffice, TenkoOfficeInput, TenkoOfficesResponse, InPersonScope,
   TenkoRemoteEscalationReason,
   TenkoSessionFilter, TenkoSessionsResponse,
   TenkoRecordFilter,
@@ -1094,6 +1095,32 @@ export async function putTenkoFilingSettings(body: FilingSettings): Promise<Fili
   }, 'admin')
 }
 
+/** 点呼の営業所と、車両の選択肢 (管理者だけ) */
+export async function getTenkoOffices(): Promise<TenkoOfficesResponse> {
+  return request<TenkoOfficesResponse>('/api/tenko/offices', {}, 'admin')
+}
+
+/** 営業所を足す (管理者だけ)。所属の運行管理者・車両も一緒に決める */
+export async function createTenkoOffice(body: TenkoOfficeInput): Promise<TenkoOffice> {
+  return request<TenkoOffice>('/api/tenko/offices', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }, 'admin')
+}
+
+/** 営業所を置き換える (管理者だけ。所属の運行管理者・車両も全部置き換える) */
+export async function updateTenkoOffice(id: string, body: TenkoOfficeInput): Promise<TenkoOffice> {
+  return request<TenkoOffice>(`/api/tenko/offices/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }, 'admin')
+}
+
+/** 営業所を消す (管理者だけ。所属の運行管理者・車両は外れる) */
+export async function deleteTenkoOffice(id: string): Promise<void> {
+  await request<void>(`/api/tenko/offices/${id}`, { method: 'DELETE' }, 'admin')
+}
+
 /**
  * 免許証タブ「theearth から乗務員マスタを同期」(Refs ippoan/alc-app-s3#125)。
  * rust-alc-api ではなく alc-app 自身の server route `/api/driver-master/run` を
@@ -1514,6 +1541,15 @@ export async function cancelTenkoSession(
  * 運行管理者が点呼の OK/NG を判定して記録する (Refs ippoan/alc-app#315)。
  * NG でも `status` は変えない (点呼は完了扱いのまま、判定だけ記録する)。
  */
+/** 対面点呼に切り替えた点呼で、その運行管理者が判定したときの範囲 (車両と運行管理者の所属営業所の照合) */
+export async function getInPersonScope(
+  sessionId: string,
+  judgeId: string,
+  scope: RequestTokenScope = 'default',
+): Promise<InPersonScope> {
+  return request<InPersonScope>(`/api/tenko/sessions/${sessionId}/in-person-scope?judge=${judgeId}`, {}, scope)
+}
+
 export async function submitManagerJudgment(
   sessionId: string,
   data: SubmitManagerJudgment,

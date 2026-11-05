@@ -611,12 +611,47 @@ export interface SubmitManagerJudgment {
   judged_by_employee_id: string
   /** IT点呼 の記録を確定するときの確認の方法。IT点呼 でない記録には送らない (400 になる) */
   method?: ManagerJudgmentMethod
-  /**
-   * 血圧の記録不足で対面点呼に切り替えた点呼を確定するときの、会った運行管理者の所属。
-   * `same_office` = 同じ営業所 (対面点呼) / `other_office` = 別の営業所・グループ企業 (遠隔点呼とみなす。告示 266 第四条2項)。
-   * 切り替えた点呼でなければ送らない
-   */
-  in_person_scope?: 'same_office' | 'other_office'
+}
+
+/** 点呼の営業所 (`GET /api/tenko/offices`)。`company_name` が null なら自社、値があればグループ企業の営業所 */
+export interface TenkoOffice {
+  id: string
+  name: string
+  company_name: string | null
+  address: string | null
+  /** 所属する運行管理者 (兼務あり) */
+  manager_ids: string[]
+  /** 所属する車両 (車両マスタの id。車両は 1 営業所) */
+  vehicle_ids: string[]
+}
+
+/** 車両マスタの車両 (所属の選択肢) */
+export interface TenkoOfficeVehicle {
+  id: string
+  registration_number: string
+  display_name: string | null
+  office_id: string | null
+}
+
+export interface TenkoOfficesResponse {
+  offices: TenkoOffice[]
+  vehicles: TenkoOfficeVehicle[]
+}
+
+/** 営業所の作成・置き換えの本文 (所属も全部置き換える) */
+export type TenkoOfficeInput = Omit<TenkoOffice, 'id'>
+
+/**
+ * 血圧の記録不足で対面点呼に切り替えた点呼の、会った運行管理者の範囲 (`GET …/in-person-scope`)。
+ * 車両の所属営業所と運行管理者の所属営業所から判定のときにサーバが決める。
+ * `same_office` = 対面点呼 / `other_office` = 別の営業所・グループ企業 (遠隔点呼とみなす。告示 266 第四条2項) /
+ * `unknown` = 所属が未設定 (同じ営業所として対面点呼で記録する)
+ */
+export interface InPersonScope {
+  scope: 'same_office' | 'other_office' | 'unknown'
+  vehicle_number: string | null
+  vehicle_offices: { id: string, name: string, company_name: string | null }[]
+  judge_offices: { id: string, name: string, company_name: string | null }[]
 }
 
 export interface InterruptSession {

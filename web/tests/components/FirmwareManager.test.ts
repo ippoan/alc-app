@@ -5,6 +5,7 @@ import FirmwareManager from '~/components/FirmwareManager.vue'
 import AdminDashboard from '~/components/AdminDashboard.vue'
 import BpNotifyManager from '~/components/BpNotifyManager.vue'
 import TenkoFilingManager from '~/components/TenkoFilingManager.vue'
+import TenkoOfficeManager from '~/components/TenkoOfficeManager.vue'
 
 // 管理者の画面のタブ「端末のファーム」(Refs ippoan/alc-app#403)。
 // api の 2 関数は mock、manifest の fetch と confirm は stubGlobal。
@@ -19,6 +20,8 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   updateFirmware,
   getBpNotifySettings: vi.fn(async () => ({ employees: [] })),
   getLineworksUsers: vi.fn(async () => ({ users: [] })),
+  getTenkoOffices: vi.fn(async () => ({ offices: [], vehicles: [] })),
+  getEmployees: vi.fn(async () => []),
 }))
 
 const NOW = new Date('2026-10-01T03:00:00Z').getTime()
@@ -402,11 +405,12 @@ describe('FirmwareManager', () => {
 // AdminDashboard のタブ。専用のテストが無かったので、このタブの分だけ小さく見る。
 // 「端末のファーム」は更新できる端末が在るときだけ並びに出す (`?tab=firmware` では直接開ける)。
 describe('AdminDashboard — 端末のファームのタブ', () => {
-  // 変更前のタブの並び (16 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436、点呼の届出は届出の様式のダウンロード)
+  // 変更前のタブの並び (17 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436、点呼の届出は届出の様式のダウンロード、
+  // 点呼の営業所は対面点呼の判定で使う所属)
   const TABS_BEFORE = [
     '乗務員', '免許証', '送信キュー', 'Webhook', '中間点呼', 'リモートカメラ',
     '拠点カメラ', 'カメラ一覧', '拠点カメラの録画', 'タイムカード', 'デバイス管理', '点呼', 'ハブ測定値', '端末の指静脈', '血圧の通知',
-    '点呼の届出',
+    '点呼の届出', '点呼の営業所',
   ]
   const TAB = '端末のファーム'
 
@@ -487,6 +491,17 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
     wrapper.unmount()
     const direct = await mountAdmin('tenko_filing')
     expect(direct.findComponent(TenkoFilingManager).exists()).toBe(true)
+    direct.unmount()
+  })
+
+  it('「点呼の営業所」のタブを押すと TenkoOfficeManager が描画される (?tab=tenko_offices でも開ける)', async () => {
+    const wrapper = await mountAdmin()
+    expect(wrapper.findComponent(TenkoOfficeManager).exists()).toBe(false)
+    await wrapper.findAll('button').find(b => b.text() === '点呼の営業所')!.trigger('click')
+    expect(wrapper.findComponent(TenkoOfficeManager).exists()).toBe(true)
+    wrapper.unmount()
+    const direct = await mountAdmin('tenko_offices')
+    expect(direct.findComponent(TenkoOfficeManager).exists()).toBe(true)
     direct.unmount()
   })
 

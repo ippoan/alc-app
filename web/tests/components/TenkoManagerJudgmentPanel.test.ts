@@ -12,8 +12,13 @@ const submitManagerJudgmentMock = vi.fn(async (_id: string, data: any) => ({
   manager_judgment_by: data.judged_by_employee_id,
 }))
 
+const getInPersonScopeMock = vi.fn(async (..._args: any[]): Promise<any> => ({
+  scope: 'unknown', vehicle_number: null, vehicle_offices: [], judge_offices: [],
+}))
+
 vi.mock('~/utils/api', () => ({
   submitManagerJudgment: (...args: any[]) => submitManagerJudgmentMock(...args),
+  getInPersonScope: (...args: any[]) => getInPersonScopeMock(...args),
 }))
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -463,36 +468,65 @@ describe('TenkoManagerJudgmentPanel — 代替措置', () => {
   })
 })
 
-describe('TenkoManagerJudgmentPanel — 血圧の記録不足で対面点呼にした点呼の所属の選択', () => {
+describe('TenkoManagerJudgmentPanel — 血圧の記録不足で対面点呼にした点呼の所属 (表示だけ)', () => {
   const SWITCHED = {
     ...SESSION_UNJUDGED, status: 'judgment_pending', schedule_id: 's-1', tenko_type: 'pre_operation',
     tenko_method: '通常点呼', remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 3 日分) ため対面点呼',
   }
-  beforeEach(() => { submitManagerJudgmentMock.mockClear() })
-
-  it('既定は同じ営業所で、in_person_scope: same_office を送る', async () => {
-    const wrapper = await mountPanel(SWITCHED)
-    expect(wrapper.find('[data-testid="judgment-in-person-scope"]').text()).toContain('同じ営業所の運行管理者 (対面点呼)')
-    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
-    await flush()
-    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ok', in_person_scope: 'same_office' })
+  const scopeOf = () => wrapper_find('[data-testid="judgment-in-person-scope"]')
+  let current: any
+  const wrapper_find = (sel: string) => current.find(sel)
+  beforeEach(() => {
+    submitManagerJudgmentMock.mockClear()
+    getInPersonScopeMock.mockClear()
   })
 
-  it('別の営業所・グループ企業を選ぶと other_office を送る', async () => {
-    const wrapper = await mountPanel(SWITCHED)
-    const radios = wrapper.findAll('[data-testid="judgment-in-person-scope"] input[type="radio"]')
-    expect(wrapper.find('[data-testid="judgment-in-person-scope"]').text()).toContain('別の営業所・グループ企業の運行管理者 (遠隔点呼とみなす)')
-    await radios[1]!.setValue(true)
-    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
-    await flush()
-    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ in_person_scope: 'other_office' })
-  })
-
-  it('切り替えた点呼でなければ選択も送信も出さない', async () => {
-    const wrapper = await mountPanel({ ...SWITCHED, remote_escalation_reason: '血圧計の故障' })
-    expect(wrapper.find('[data-testid="judgment-in-person-scope"]').exists()).toBe(false)
-    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+  it('同じ営業所なら対面点呼と出し、範囲を送らない (判定した人と運行管理者の口で照合を引く)', async () => {
+    getInPersonScopeMock.mockResolvedValueOnce({
+      scope: 'same_office', vehicle_number: '品川100あ1234',
+      vehicle_offices: [{ id: 'o1', name: '本社営業所', company_name: null }],
+      judge_offices: [{ id: 'o1', name: '本社営業所', company_name: null }],
+    })
+    current = await mountPanel(SWITCHED)
+    expect(getInPersonScopeMock).toHaveBeenCalledWith(SESSION_ID, MANAGER_ID, 'tenko-monitor')
+    expect(scopeOf().text()).toContain('同じ営業所の運行管理者 (対面点呼として記録します)')
+    expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('車両 品川100あ1234の営業所: 本社営業所')
+    expect(scopeOf().find('input').exists()).toBe(false)
+    await current.findAll('button').find((b: any) => b.text() === 'OK')!.trigger('click')
     await flush()
     expect(submitManagerJudgmentMock.mock.calls[0][1]).not.toHaveProperty('in_person_scope')
+  })
+
+  it('別の営業所・グループ企業なら遠隔点呼とみなすと出す (会社名を添える)', async () => {
+    getInPersonScopeMock.mockResolvedValueOnce({
+      scope: 'other_office', vehicle_number: null,
+      vehicle_offices: [{ id: 'o1', name: '帯広営業所', company_name: null }],
+      judge_offices: [{ id: 'o2', name: '本社', company_name: 'グループ運輸' }],
+    })
+    current = await mountPanel(SWITCHED)
+    expect(scopeOf().text()).toContain('遠隔点呼とみなして記録します')
+    expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('運行管理者の所属: グループ運輸 本社')
+  })
+
+  it('所属が未設定なら警告を出す', async () => {
+    current = await mountPanel(SWITCHED)
+    expect(current.find('[data-testid="judgment-in-person-scope-result"]').text()).toContain('所属営業所が未設定')
+    expect(current.find('[data-testid="judgment-in-person-scope-offices"]').text()).toContain('車両の営業所: 未設定')
+  })
+
+  it('照合を引けなければその旨を出す。運行管理者が分からなければ引かない', async () => {
+    getInPersonScopeMock.mockRejectedValueOnce(new Error('x'))
+    current = await mountPanel(SWITCHED)
+    expect(current.find('[data-testid="judgment-in-person-scope-error"]').exists()).toBe(true)
+    getInPersonScopeMock.mockClear()
+    current = await mountPanel(SWITCHED, null)
+    expect(getInPersonScopeMock).not.toHaveBeenCalled()
+    expect(scopeOf().text()).toContain('所属営業所を確かめています')
+  })
+
+  it('切り替えた点呼でなければ出さず、照合も引かない', async () => {
+    current = await mountPanel({ ...SWITCHED, remote_escalation_reason: '血圧計の故障' })
+    expect(scopeOf().exists()).toBe(false)
+    expect(getInPersonScopeMock).not.toHaveBeenCalled()
   })
 })
