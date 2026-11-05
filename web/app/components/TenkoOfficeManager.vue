@@ -94,9 +94,9 @@ function otherOfficeName(item: { office_id: string | null }, row: Row): string {
   return rows.value.find(r => r.id === item.office_id)?.name ?? ''
 }
 
-/** 端末がいま別の営業所に所属していればその名前 */
-function deviceElsewhere(deviceId: string, row: Row): string {
-  return rows.value.find(r => r.id !== row.id && r.device_ids.includes(deviceId))?.name ?? ''
+/** 端末がほかにも所属している営業所の名前 (端末は複数の営業所に所属できる。選んでも移らない) */
+function deviceAlsoIn(deviceId: string, row: Row): string {
+  return rows.value.filter(r => r.id !== row.id && r.device_ids.includes(deviceId)).map(r => r.company_name ? `${r.company_name} ${r.name}` : r.name).join('、')
 }
 
 /** チェックボックスの値 (組の 2 項目だけ。v-model の配列と形をそろえる) */
@@ -229,14 +229,14 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       </fieldset>
 
       <fieldset class="space-y-1">
-        <legend class="text-sm text-gray-500">置いてある点呼端末 (車両番号の候補でこの営業所の車両を先に出す)</legend>
+        <legend class="text-sm text-gray-500">置いてある点呼端末 (車両番号の候補でこの営業所の車両を先に出す。1 台を複数の営業所で共用できる)</legend>
         <p v-if="!devices.length" class="text-xs text-gray-500">点呼端末がありません</p>
         <div class="flex flex-wrap gap-x-4 gap-y-1">
           <label v-for="d in devices" :key="d.device_id" class="flex items-center gap-1 text-sm text-gray-800">
             <input v-model="row.device_ids" type="checkbox" :value="d.device_id" data-testid="tenko-office-device">
             {{ deviceName(d) }}
             <span v-if="d.device_id === thisDeviceId" class="text-xs font-medium text-blue-700" data-testid="tenko-office-this-device">(この端末)</span>
-            <span v-if="deviceElsewhere(d.device_id, row)" class="text-xs text-gray-500" data-testid="tenko-office-device-elsewhere">— いまは {{ deviceElsewhere(d.device_id, row) }}</span>
+            <span v-if="deviceAlsoIn(d.device_id, row)" class="text-xs text-gray-500" data-testid="tenko-office-device-elsewhere">— ほかに {{ deviceAlsoIn(d.device_id, row) }}</span>
           </label>
         </div>
       </fieldset>
