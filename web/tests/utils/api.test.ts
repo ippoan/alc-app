@@ -93,6 +93,11 @@ import {
   updateBpNotifySetting,
   getTenkoFilingSettings,
   putTenkoFilingSettings,
+  getTenkoOffices,
+  createTenkoOffice,
+  updateTenkoOffice,
+  deleteTenkoOffice,
+  getInPersonScope,
   getLineworksUsers,
   linkBpNotifyByName,
   listCamClipsCameras,
@@ -3275,6 +3280,44 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
     expect(url).toMatch(/\/tenko\/filing-settings$/)
     expect(init.method).toBe('PUT')
     expect(JSON.parse(init.body)).toEqual(s)
+  })
+})
+
+// 点呼の営業所と、対面点呼の所属の照合。mock 専用
+describe.skipIf(isLive)('点呼の営業所', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch)
+    mockFetch.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('一覧を取り、作成・置き換え・削除を送る', async () => {
+    const office = { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: [], vehicle_ids: [] }
+    const { id: _id, ...body } = office
+    mockFetch.mockResolvedValueOnce(okJson({ offices: [office], vehicles: [] }))
+    await expect(getTenkoOffices()).resolves.toEqual({ offices: [office], vehicles: [] })
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/offices$/)
+    mockFetch.mockResolvedValueOnce(okJson(office))
+    await expect(createTenkoOffice(body)).resolves.toEqual(office)
+    expect(mockFetch.mock.calls[1][1].method).toBe('POST')
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual(body)
+    mockFetch.mockResolvedValueOnce(okJson(office))
+    await expect(updateTenkoOffice('o1', body)).resolves.toEqual(office)
+    expect(mockFetch.mock.calls[2][0]).toMatch(/\/tenko\/offices\/o1$/)
+    expect(mockFetch.mock.calls[2][1].method).toBe('PUT')
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await deleteTenkoOffice('o1')
+    expect(mockFetch.mock.calls[3][0]).toMatch(/\/tenko\/offices\/o1$/)
+    expect(mockFetch.mock.calls[3][1].method).toBe('DELETE')
+  })
+
+  it('対面点呼の所属の照合を、判定する人を付けて引く', async () => {
+    const scope = { scope: 'unknown', vehicle_number: null, vehicle_offices: [], judge_offices: [] }
+    mockFetch.mockResolvedValueOnce(okJson(scope))
+    await expect(getInPersonScope('s1', 'm1')).resolves.toEqual(scope)
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/sessions\/s1\/in-person-scope\?judge=m1$/)
   })
 })
 
