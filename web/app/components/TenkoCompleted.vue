@@ -2,7 +2,7 @@
 import type { TenkoSession } from '~/types'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 
-defineProps<{
+const props = defineProps<{
   session: TenkoSession
   employeeName: string
   /** 次の点呼へ自動で移るまでの残り秒数 (遠隔点呼が判定で閉じた後と、判定待ち)。数えていなければ null / 省略 */
@@ -12,6 +12,12 @@ defineProps<{
 const emit = defineEmits<{
   reset: []
 }>()
+
+/**
+ * 運行管理者が判定する理由。自動点呼から切り替えたときはその理由 (血圧計の故障・血圧の記録が足りない など)、
+ * 最初から遠隔点呼で始めたときは「遠隔点呼で受けた点呼」
+ */
+const judgmentReason = computed(() => props.session.remote_escalation_reason?.trim() || '遠隔点呼で受けた点呼')
 
 function formatTime(iso: string | null): string {
   if (!iso) return '-'
@@ -37,6 +43,7 @@ function formatTime(iso: string | null): string {
       data-testid="judgment-pending"
     >
       入力は終わりました。判定は運行管理者が行うので、このまま終わって大丈夫です
+      <span class="block mt-1" data-testid="judgment-reason">運行管理者が判定する理由: {{ judgmentReason }}</span>
     </p>
 
     <!-- 遠隔点呼の運行管理者の判定 (判定で閉じた後) -->

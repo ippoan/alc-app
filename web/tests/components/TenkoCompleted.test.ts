@@ -23,6 +23,18 @@ describe('TenkoCompleted — 遠隔点呼の判定待ち (Refs ippoan/rust-alc-a
     const w = await mountSuspended(TenkoCompleted, { props: { session: session('judgment_pending'), employeeName: '点呼 太郎' } })
     expect(w.find('h3').text()).toBe('入力完了')
     expect(w.find('[data-testid="judgment-pending"]').text()).toContain('判定は運行管理者が行うので、このまま終わって大丈夫です')
+    // 最初から遠隔点呼で始めた点呼
+    expect(w.find('[data-testid="judgment-reason"]').text()).toBe('運行管理者が判定する理由: 遠隔点呼で受けた点呼')
+  })
+
+  it('自動点呼から切り替えた点呼は、切り替えた理由を運行管理者が判定する理由として出す', async () => {
+    const w = await mountSuspended(TenkoCompleted, {
+      props: {
+        session: { ...session('judgment_pending'), remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 3 日分)' },
+        employeeName: '点呼 太郎',
+      },
+    })
+    expect(w.find('[data-testid="judgment-reason"]').text()).toBe('運行管理者が判定する理由: 血圧の記録が 10 日分に満たない (いま 3 日分)')
   })
 
   it('完了は今までどおり「点呼完了」で、判定待ちの表示は出ない', async () => {
