@@ -19,7 +19,7 @@ import type { ApiEmployee } from '~/types'
 import type { RequestTokenScope } from '~/utils/api'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import type { VeinMatch } from '~/utils/vein-module'
-import { identifyVeinModuleEmployee, matchVeinModuleEmployee, prepareVeinModuleRecord, retryOnVeinMiss, rotateVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
+import { identifyVeinModuleAnyone, identifyVeinModuleEmployee, matchVeinModuleEmployee, prepareVeinModuleRecord, rotateVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 export interface VeinEmployeeIdentifyOptions {
@@ -161,10 +161,10 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
       if (prompt) await vein.say('PLACE')
       // モジュール自身が照合して ID を返す (Refs ippoan/alc-app#436)
-      // モジュールの不一致は 1 回だけ自動でやり直す (retryOnVeinMiss)
+      // モジュールの不一致は 1 回だけ自動でやり直す。認証ログを送るテナントは撮影も送る (identifyVeinModuleAnyone)
       const onAgain = () => { again.value = true }
       read = viaModule
-        ? await retryOnVeinMiss(() => vein.identify(onAgain), id => id === null, sayAgain)
+        ? await identifyVeinModuleAnyone(vein, onAgain, sayAgain, opts.scope)
         : await vein.capture()
     }
     catch (e) {

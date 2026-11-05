@@ -35,10 +35,16 @@ const mod = vi.hoisted(() => ({
   rotateVeinModuleRecord: vi.fn(async (..._args: unknown[]) => {}),
 }))
 // 不一致のやり直し (retryOnVeinMiss) は本物を使う
-vi.mock('~/utils/vein-module', async importOriginal => ({
-  retryOnVeinMiss: (await importOriginal<typeof import('~/utils/vein-module')>()).retryOnVeinMiss,
-  ...mod,
-}))
+vi.mock('~/utils/vein-module', async (importOriginal) => {
+  const { retryOnVeinMiss } = await importOriginal<typeof import('~/utils/vein-module')>()
+  return {
+    retryOnVeinMiss,
+    // 1:N の照合は、認証ログを送らないテナントの形 (普通の照合を、不一致なら 1 回やり直す)。送る形は utils/vein-module.test.ts
+    identifyVeinModuleAnyone: (port: { identify: (onAgain?: () => void) => Promise<number | null> }, onAgain?: () => void, onRetry?: () => void | Promise<void>) =>
+      retryOnVeinMiss(() => port.identify(onAgain), id => id === null, onRetry),
+    ...mod,
+  }
+})
 const ident = vi.hoisted(() => ({
   identifyVeinEmployee: vi.fn(),
   syncVeinTemplates: vi.fn(async () => true),
