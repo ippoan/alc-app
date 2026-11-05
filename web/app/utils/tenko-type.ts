@@ -18,3 +18,30 @@ export function tenkoMethodLabel(
   if (method === 'IT点呼' && judgmentMethod === 'in_person') return '対面点呼'
   return method
 }
+
+/** 対面で受ける点呼の `tenko_method` (通常点呼 / 対面点呼。サーバの値の揺れを両方受ける) */
+const IN_PERSON_TENKO_METHODS: readonly string[] = ['通常点呼', '対面点呼']
+/** 血圧の記録不足で対面点呼にした理由の頭 (サーバが `remote_escalation_reason` に入れる) */
+const BP_IN_PERSON_REASON_PREFIX = '血圧の記録が 10 日分'
+
+/** 対面の `tenko_method` か */
+export function isInPersonTenkoMethod(method: string | null | undefined): boolean {
+  return !!method && IN_PERSON_TENKO_METHODS.includes(method)
+}
+
+/**
+ * 自動点呼を、血圧の記録が 10 日分に満たないため対面点呼へ切り替えたセッションか。
+ * 予定から始めた業務前で、方法が対面、理由が血圧の記録不足のものだけ。
+ * 最後に運行管理者に会って確認を受け、判定で閉じる
+ */
+export function isBpInPersonSession(s: {
+  schedule_id?: string | null
+  tenko_type?: string
+  tenko_method?: string | null
+  remote_escalation_reason?: string | null
+}): boolean {
+  return !!s.schedule_id
+    && s.tenko_type === 'pre_operation'
+    && isInPersonTenkoMethod(s.tenko_method)
+    && (s.remote_escalation_reason ?? '').startsWith(BP_IN_PERSON_REASON_PREFIX)
+}

@@ -17,6 +17,7 @@
  */
 import type { TenkoSession, SubmitManagerJudgment } from '~/types'
 import { submitManagerJudgment, type RequestTokenScope } from '~/utils/api'
+import { isBpInPersonSession } from '~/utils/tenko-type'
 import { MANAGER_JUDGMENT_METHOD, itTenkoRoomId, type ManagerJudgmentMethod } from '~/utils/it-tenko'
 
 const props = withDefaults(defineProps<{
@@ -61,6 +62,14 @@ const METHOD_OPTIONS: { value: ManagerJudgmentMethod, label: string }[] = [
 // `defaultMethod` が無ければ undefined のまま (欄を出さず、送信にも足さない)
 const method = ref(props.defaultMethod && (props.session.manager_judgment_method ?? props.defaultMethod))
 
+// 血圧の記録不足で対面点呼にした点呼だけ、会った運行管理者の所属を選ばせる (既定は同じ営業所)
+const isBpInPerson = computed(() => isBpInPersonSession(props.session))
+const IN_PERSON_SCOPE_OPTIONS: { value: 'same_office' | 'other_office', label: string }[] = [
+  { value: 'same_office', label: '同じ営業所の運行管理者 (対面点呼)' },
+  { value: 'other_office', label: '別の営業所・グループ企業の運行管理者 (遠隔点呼とみなす)' },
+]
+const inPersonScope = ref<'same_office' | 'other_office'>('same_office')
+
 // NG 理由の入力中と送信中は、リロードで入力や送信結果が消えるので新版への載せ替えを止める
 // (Refs #345)。待機中の TenkoRemoteAdminView が出している「安全」の申告より拒否が優先される。
 useKioskScreen().declareReloadBlocked(() => ngMode.value || submitting.value)
@@ -102,6 +111,7 @@ async function submit(judgment: 'ok' | 'ng') {
     const alt = alternativeMeasure.value.trim()
     if (judgment === 'ng' && alt) body.alternative_measure = alt
     if (method.value) body.method = method.value
+    if (isBpInPerson.value) body.in_person_scope = inPersonScope.value
     const updated = await submitManagerJudgment(props.session.id, body, props.scope)
     // 判定が付いた点呼の部屋は、相手が閉じて消えるまで着信として数えない (警告デバイスを
     // 鳴らさない)。部屋の id は遠隔点呼なら記録の id そのまま、IT点呼 なら `it-<id>` —
@@ -146,6 +156,17 @@ async function submit(judgment: 'ok' | 'ng') {
       <div class="flex gap-3">
         <label v-for="opt in METHOD_OPTIONS" :key="opt.value" class="flex items-center gap-1 text-sm text-gray-800">
           <input v-model="method" type="radio" name="judgment-method" :value="opt.value" :disabled="submitting">
+          {{ opt.label }}
+        </label>
+      </div>
+    </div>
+
+ <!-- 血圧の記録不足で対面点呼にした点呼: 会った運行管理者の所属 -->
+    <div v-if="isBpInPerson" class="mb-2" data-testid="judgment-in-person-scope">
+      <div class="text-xs text-gray-500 mb-1">会った運行管理者</div>
+      <div class="flex flex-col gap-1">
+        <label v-for="opt in IN_PERSON_SCOPE_OPTIONS" :key="opt.value" class="flex items-center gap-1 text-sm text-gray-800">
+          <input v-model="inPersonScope" type="radio" name="judgment-in-person-scope" :value="opt.value" :disabled="submitting">
           {{ opt.label }}
         </label>
       </div>

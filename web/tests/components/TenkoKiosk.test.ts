@@ -630,6 +630,41 @@ describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
     }
   })
 
+  it('★ 血圧の記録不足で対面点呼にした判定待ちは 30 秒で戻らず、判定の取り直しを続け、判定で閉じたら 30 秒数える', async () => {
+    vi.useFakeTimers()
+    const { getTenkoSession } = await import('~/utils/api')
+    const inPerson = {
+      id: 'sess-1', status: 'judgment_pending', schedule_id: 's-1', tenko_type: 'pre_operation', tenko_method: '通常点呼',
+      remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 3 日分) ため対面点呼',
+    }
+    session.value = inPerson
+    vi.mocked(getTenkoSession)
+      .mockResolvedValueOnce(inPerson as never)
+      .mockResolvedValue({ ...inPerson, status: 'completed' } as never)
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    const left = () => wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')
+    try {
+      await flushPromises()
+      expect(left()).toBeNull()
+      // 判定が入るまでは戻らない (取り直しは続く)
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(left()).toBeNull()
+      expect(resetMock).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(session.value?.status).toBe('judgment_pending')
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(session.value?.status).toBe('completed')
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(resetMock).not.toHaveBeenCalled()
+      expect(left()).toBe(15)
+    }
+    finally {
+      wrapper.unmount()
+      step.value = 'nfc'
+    }
+  })
+
   it('★ 判定で閉じたら完了の画面で 30 秒数え、次の点呼へ移る。最初の画面に戻ったら数えない', async () => {
     vi.useFakeTimers()
     // 通話中の判定待ちは数えない (判定が入ってから数え始めることを見る)

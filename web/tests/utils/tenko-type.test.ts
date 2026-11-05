@@ -40,3 +40,22 @@ describe('tenkoMethodLabel', () => {
     expect(tenkoMethodLabel('')).toBe('—')
   })
 })
+
+import { isBpInPersonSession, isInPersonTenkoMethod } from '~/utils/tenko-type'
+
+describe('isBpInPersonSession / isInPersonTenkoMethod', () => {
+  const base = { schedule_id: 's', tenko_type: 'pre_operation', tenko_method: '対面点呼', remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 2 日分) ため対面点呼' }
+  it('対面の区分は通常点呼と対面点呼', () => {
+    expect(isInPersonTenkoMethod('通常点呼')).toBe(true)
+    expect(isInPersonTenkoMethod('対面点呼')).toBe(true)
+    expect(isInPersonTenkoMethod('遠隔点呼')).toBe(false)
+    expect(isInPersonTenkoMethod(null)).toBe(false)
+  })
+  it('予定・業務前・対面・血圧の理由が揃ったものだけ true', () => {
+    expect(isBpInPersonSession(base)).toBe(true)
+    expect(isBpInPersonSession({ ...base, schedule_id: null })).toBe(false)
+    expect(isBpInPersonSession({ ...base, tenko_type: 'post_operation' })).toBe(false)
+    expect(isBpInPersonSession({ ...base, tenko_method: '遠隔点呼' })).toBe(false)
+    expect(isBpInPersonSession({ ...base, remote_escalation_reason: null })).toBe(false)
+  })
+})

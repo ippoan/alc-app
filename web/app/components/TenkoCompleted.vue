@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TenkoSession } from '~/types'
-import { tenkoTypeLabel } from '~/utils/tenko-type'
+import { tenkoTypeLabel, isBpInPersonSession } from '~/utils/tenko-type'
 
 const props = defineProps<{
   session: TenkoSession
@@ -18,6 +18,9 @@ const emit = defineEmits<{
  * 最初から遠隔点呼で始めたときは「遠隔点呼で受けた点呼」
  */
 const judgmentReason = computed(() => props.session.remote_escalation_reason?.trim() || '遠隔点呼で受けた点呼')
+
+/** 血圧の記録不足で対面点呼にした点呼。運行管理者に会って確認を受ける */
+const inPerson = computed(() => isBpInPersonSession(props.session))
 
 function formatTime(iso: string | null): string {
   if (!iso) return '-'
@@ -42,7 +45,12 @@ function formatTime(iso: string | null): string {
       class="w-full rounded-xl bg-amber-50 text-amber-800 text-sm text-center px-4 py-2"
       data-testid="judgment-pending"
     >
-      入力は終わりました。判定は運行管理者が行うので、このまま終わって大丈夫です
+      <template v-if="inPerson">
+        <span class="block font-bold" data-testid="in-person-instruction">運行管理者に会って、点呼の確認を受けてください。</span>
+      </template>
+      <template v-else>
+        入力は終わりました。判定は運行管理者が行うので、このまま終わって大丈夫です
+      </template>
       <span class="block mt-1" data-testid="judgment-reason">運行管理者が判定する理由: {{ judgmentReason }}</span>
     </p>
 

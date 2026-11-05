@@ -327,14 +327,14 @@ describe('useTenkoKiosk', () => {
       beforeEach(() => { noteDeviceToken('kiosk', null); vi.mocked(getMeasurements).mockReset() })
       afterEach(() => { noteDeviceToken('kiosk', null); vi.mocked(getMeasurements).mockReset() })
 
-      it('サーバが遠隔点呼で返しても通常の自動点呼の段のまま進み、案内だけ出す', async () => {
-        vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ tenko_method: '遠隔点呼' }))
+      it.each(['通常点呼', '対面点呼'])('サーバが %s (対面) で返しても通常の自動点呼の段のまま進み、案内だけ出す', async (method) => {
+        vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ tenko_method: method }))
         const k = setup()
         await k.onFaceAuthComplete({ verified: true, similarity: 0.9 })
         expect(k.escalatedToRemote.value).toBe(false)
         expect(k.isRemote.value).toBe(false)
         expect(k.step.value).toBe('alcohol')
-        expect(k.startNotice.value).toBe('血圧の記録が 10 日分そろっていないため、遠隔点呼として記録します。最後に運行管理者が承認します。')
+        expect(k.startNotice.value).toBe('血圧の記録が 10 日分そろっていないため、対面点呼になります。終わったら運行管理者に会って確認を受けてください。')
         expect(k.error.value).toBeNull()
         expect(getMeasurements).not.toHaveBeenCalled()
         k.reset()

@@ -611,6 +611,12 @@ export interface SubmitManagerJudgment {
   judged_by_employee_id: string
   /** IT点呼 の記録を確定するときの確認の方法。IT点呼 でない記録には送らない (400 になる) */
   method?: ManagerJudgmentMethod
+  /**
+   * 血圧の記録不足で対面点呼に切り替えた点呼を確定するときの、会った運行管理者の所属。
+   * `same_office` = 同じ営業所 (対面点呼) / `other_office` = 別の営業所・グループ企業 (遠隔点呼とみなす。告示 266 第四条2項)。
+   * 切り替えた点呼でなければ送らない
+   */
+  in_person_scope?: 'same_office' | 'other_office'
 }
 
 export interface InterruptSession {

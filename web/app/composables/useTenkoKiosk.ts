@@ -17,13 +17,12 @@ import {
 import { isDevDevice } from '~/utils/token-selection'
 import { reportApiFailure } from '~/utils/equipment-failure-report'
 import type { KioskFailureType } from '~/utils/equipment-failure-report'
+import { isInPersonTenkoMethod } from '~/utils/tenko-type'
 import { currentLocation } from '~/composables/useGpsFix'
 
 /** 自動点呼 (業務前) に要る血圧の記録の日数 */
 const BP_HISTORY_REQUIRED_DAYS = 10
-/** サーバが遠隔点呼へ切り替えたセッションの `tenko_method` */
-const REMOTE_TENKO_METHOD = '遠隔点呼'
-const BP_HISTORY_REMOTE_NOTICE = '血圧の記録が 10 日分そろっていないため、遠隔点呼として記録します。最後に運行管理者が承認します。'
+const BP_HISTORY_IN_PERSON_NOTICE = '血圧の記録が 10 日分そろっていないため、対面点呼になります。終わったら運行管理者に会って確認を受けてください。'
 
 /** UI ステップ (バックエンド status とは別) */
 export type TenkoStep =
@@ -127,7 +126,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
   const isRemote = computed(() => remoteMode || escalatedToRemote.value)
   /**
    * 開始のときに利用者へ知らせる、止めない案内 (赤い失敗ではない)。
-   * 血圧の記録が 10 日分に満たないとき: 開発用の端末は警告だけ、通常の端末は遠隔点呼への切り替えの知らせ。
+   * 血圧の記録が 10 日分に満たないとき: 開発用の端末は警告だけ、通常の端末は対面点呼への切り替えの知らせ。
    */
   const startNotice = ref<string | null>(null)
   /**
@@ -485,9 +484,9 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
       }
       const s = await startTenkoSession(body)
       _enterAfterStart(s, false)
-      // サーバが血圧の記録不足で遠隔点呼に切り替えて返しても、画面は通常の自動点呼の段のまま進める
-      // (通話はしない。最後に運行管理者が承認する)。知らせだけ出す
-      if (!remoteMode && s.tenko_method === REMOTE_TENKO_METHOD) startNotice.value = BP_HISTORY_REMOTE_NOTICE
+      // サーバが血圧の記録不足で対面点呼に切り替えて返しても、画面は通常の自動点呼の段のまま進める
+      // (通話はしない。最後に運行管理者に会って確認を受ける)。知らせだけ出す
+      if (!remoteMode && selectedSchedule.value && isInPersonTenkoMethod(s.tenko_method)) startNotice.value = BP_HISTORY_IN_PERSON_NOTICE
     } catch (e) {
       _fail(e, 'セッション開始に失敗しました', '点呼の開始')
     } finally {

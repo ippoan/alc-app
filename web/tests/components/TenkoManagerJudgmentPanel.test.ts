@@ -462,3 +462,37 @@ describe('TenkoManagerJudgmentPanel — 代替措置', () => {
     wrapper.unmount()
   })
 })
+
+describe('TenkoManagerJudgmentPanel — 血圧の記録不足で対面点呼にした点呼の所属の選択', () => {
+  const SWITCHED = {
+    ...SESSION_UNJUDGED, status: 'judgment_pending', schedule_id: 's-1', tenko_type: 'pre_operation',
+    tenko_method: '通常点呼', remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 3 日分) ため対面点呼',
+  }
+  beforeEach(() => { submitManagerJudgmentMock.mockClear() })
+
+  it('既定は同じ営業所で、in_person_scope: same_office を送る', async () => {
+    const wrapper = await mountPanel(SWITCHED)
+    expect(wrapper.find('[data-testid="judgment-in-person-scope"]').text()).toContain('同じ営業所の運行管理者 (対面点呼)')
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ok', in_person_scope: 'same_office' })
+  })
+
+  it('別の営業所・グループ企業を選ぶと other_office を送る', async () => {
+    const wrapper = await mountPanel(SWITCHED)
+    const radios = wrapper.findAll('[data-testid="judgment-in-person-scope"] input[type="radio"]')
+    expect(wrapper.find('[data-testid="judgment-in-person-scope"]').text()).toContain('別の営業所・グループ企業の運行管理者 (遠隔点呼とみなす)')
+    await radios[1]!.setValue(true)
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ in_person_scope: 'other_office' })
+  })
+
+  it('切り替えた点呼でなければ選択も送信も出さない', async () => {
+    const wrapper = await mountPanel({ ...SWITCHED, remote_escalation_reason: '血圧計の故障' })
+    expect(wrapper.find('[data-testid="judgment-in-person-scope"]').exists()).toBe(false)
+    await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
+    await flush()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).not.toHaveProperty('in_person_scope')
+  })
+})
