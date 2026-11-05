@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { TenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
+import type { TenkoSession, CancelTenkoSession, TenkoSessionFilter, TenkoRecordFilter, TenkoType, ApiEmployee, ApiMeasurement } from '~/types'
 import { tenkoStatusLabel } from '~/utils/tenko-status'
 import { listTenkoSessions, interruptTenkoSession, resumeTenkoSession, cancelTenkoSession, getEmployees, downloadTenkoRecordsCsv, getMeasurement } from '~/utils/api'
 import { tenkoMethodLabel, tenkoTypeLabel } from '~/utils/tenko-type'
@@ -7,6 +7,9 @@ import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
 import { expiryTone, EXPIRY_TONE_CLASS, checkLicenseExpiryFromString, type ExpiryTone } from '~/utils/license'
 
 const emit = defineEmits<{ changed: [] }>()
+
+// 再開の判断を行った運行管理者の氏名の初期値 (ログイン中の利用者名)。席の鍵だけのときは空
+const { user } = useAuth()
 
 const sessions = ref<TenkoSession[]>([])
 const total = ref(0)
@@ -101,14 +104,25 @@ async function handleInterrupt(id: string) {
 // 再開操作
 const resumingId = ref<string | null>(null)
 const resumeReason = ref('')
+const resumeByName = ref('')
+
+function startResume(id: string) {
+  resumingId.value = id
+  resumeReason.value = ''
+  resumeByName.value = user.value?.name ?? ''
+}
 
 async function handleResume(id: string) {
-  if (!resumeReason.value.trim()) return
+  if (!resumeReason.value.trim() || !resumeByName.value.trim()) return
   error.value = null
   try {
-    await resumeTenkoSession(id, { reason: resumeReason.value.trim() }, 'tenko-monitor')
+    await resumeTenkoSession(id, {
+      reason: resumeReason.value.trim(),
+      resumed_by_name: resumeByName.value.trim(),
+    }, 'tenko-monitor')
     resumingId.value = null
     resumeReason.value = ''
+    resumeByName.value = ''
     await fetchData()
     emit('changed')
   } catch (e) {
@@ -119,13 +133,24 @@ async function handleResume(id: string) {
 // キャンセル操作
 const cancellingId = ref<string | null>(null)
 const cancelReason = ref('')
+const cancelAlternative = ref('')
+
+function startCancel(id: string) {
+  cancellingId.value = id
+  cancelReason.value = ''
+  cancelAlternative.value = ''
+}
 
 async function handleCancel(id: string) {
   error.value = null
   try {
-    await cancelTenkoSession(id, { reason: cancelReason.value || '' }, 'tenko-monitor')
+    const body: CancelTenkoSession = { reason: cancelReason.value || '' }
+    const alt = cancelAlternative.value.trim()
+    if (alt) body.alternative_measure = alt
+    await cancelTenkoSession(id, body, 'tenko-monitor')
     cancellingId.value = null
     cancelReason.value = ''
+    cancelAlternative.value = ''
     await fetchData()
     emit('changed')
   } catch (e) {
@@ -259,6 +284,14 @@ function carinsMatchedByLabel(matched: string | null): string {
   return '-'
 }
 
+/** 車両番号の取得元の表示名 */
+function vehicleSourceLabel(src: string | null | undefined): string {
+  if (src === 'carins') return '車検証'
+  if (src === 'schedule') return '予定'
+  if (src === 'manual') return '入力'
+  return ''
+}
+
 function selfDeclarationLabel(key: string) {
   const map: Record<string, string> = { illness: '疾病', fatigue: '疲労', sleep_deprivation: '睡眠不足' }
   return map[key] || key
@@ -311,6 +344,7 @@ onMounted(() => { loadEmployees(); fetchData() })
           @click="handleCsvDownload"
         >{{ isDownloading ? 'ダウンロード中...' : 'CSV出力' }}</button>
       </div>
+      <p class="mt-2 text-xs text-gray-500" data-testid="retention-note">記録は 1 年間以上保存され、修正・削除できません。</p>
     </div>
 
     <!-- エラー -->
@@ -415,12 +449,13 @@ onMounted(() => { loadEmployees(); fetchData() })
                   </div>
                   <div v-else-if="cancellingId === s.id" class="flex items-center gap-1">
                     <input v-model="cancelReason" type="text" placeholder="理由 (任意)" class="px-2 py-1 border border-gray-300 rounded text-xs w-24">
+                    <textarea v-model="cancelAlternative" rows="1" placeholder="代替措置の内容 (任意)" data-testid="cancel-alternative" class="px-2 py-1 border border-gray-300 rounded text-xs w-36" />
                     <button class="px-2 py-1 bg-red-600 text-white rounded text-xs" @click="handleCancel(s.id)">確定</button>
                     <button class="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs" @click="cancellingId = null">取消</button>
                   </div>
                   <div v-else class="flex items-center gap-1">
                     <button class="px-2 py-1 text-orange-600 hover:bg-orange-50 rounded text-xs" @click="interruptingId = s.id">中断</button>
-                    <button class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs" @click="cancellingId = s.id; cancelReason = ''">キャンセル</button>
+                    <button class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs" @click="startCancel(s.id)">キャンセル</button>
                   </div>
                 </template>
 
@@ -428,17 +463,19 @@ onMounted(() => { loadEmployees(); fetchData() })
                 <template v-else-if="s.status === 'interrupted'">
                   <div v-if="resumingId === s.id" class="flex items-center gap-1">
                     <input v-model="resumeReason" type="text" placeholder="再開理由" class="px-2 py-1 border border-gray-300 rounded text-xs w-24">
-                    <button :disabled="!resumeReason.trim()" class="px-2 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50" @click="handleResume(s.id)">再開</button>
+                    <input v-model="resumeByName" type="text" placeholder="再開の判断を行った運行管理者の氏名" data-testid="resume-by-name" class="px-2 py-1 border border-gray-300 rounded text-xs w-40">
+                    <button :disabled="!resumeReason.trim() || !resumeByName.trim()" class="px-2 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50" @click="handleResume(s.id)">再開</button>
                     <button class="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs" @click="resumingId = null">取消</button>
                   </div>
                   <div v-else-if="cancellingId === s.id" class="flex items-center gap-1">
                     <input v-model="cancelReason" type="text" placeholder="理由 (任意)" class="px-2 py-1 border border-gray-300 rounded text-xs w-24">
+                    <textarea v-model="cancelAlternative" rows="1" placeholder="代替措置の内容 (任意)" data-testid="cancel-alternative" class="px-2 py-1 border border-gray-300 rounded text-xs w-36" />
                     <button class="px-2 py-1 bg-red-600 text-white rounded text-xs" @click="handleCancel(s.id)">確定</button>
                     <button class="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs" @click="cancellingId = null">取消</button>
                   </div>
                   <div v-else class="flex items-center gap-1">
-                    <button class="px-2 py-1 text-green-600 hover:bg-green-50 rounded text-xs" @click="resumingId = s.id">再開</button>
-                    <button class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs" @click="cancellingId = s.id; cancelReason = ''">キャンセル</button>
+                    <button class="px-2 py-1 text-green-600 hover:bg-green-50 rounded text-xs" @click="startResume(s.id)">再開</button>
+                    <button class="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-xs" @click="startCancel(s.id)">キャンセル</button>
                   </div>
                 </template>
 
@@ -486,6 +523,10 @@ onMounted(() => { loadEmployees(); fetchData() })
             <div><span class="text-gray-500">管理者:</span> {{ selectedSession.responsible_manager_name }}</div>
             <div><span class="text-gray-500">開始:</span> {{ formatDate(selectedSession.started_at) }}</div>
             <div><span class="text-gray-500">完了:</span> {{ formatDate(selectedSession.completed_at) }}</div>
+            <div v-if="selectedSession.vehicle_number" data-testid="detail-vehicle-number">
+              <span class="text-gray-500">車両番号:</span> {{ selectedSession.vehicle_number }}
+              <span v-if="vehicleSourceLabel(selectedSession.vehicle_number_source)" class="text-xs text-gray-500">({{ vehicleSourceLabel(selectedSession.vehicle_number_source) }})</span>
+            </div>
           </div>
 
           <!-- アルコール -->
@@ -588,6 +629,13 @@ onMounted(() => { loadEmployees(); fetchData() })
             <div v-if="selectedSession.cancel_reason"><span class="text-gray-500">理由:</span> {{ selectedSession.cancel_reason }}</div>
             <div v-if="selectedSession.resumed_at"><span class="text-gray-500">再開日時:</span> {{ formatDate(selectedSession.resumed_at) }}</div>
             <div v-if="selectedSession.resume_reason"><span class="text-gray-500">再開理由:</span> {{ selectedSession.resume_reason }}</div>
+            <div v-if="selectedSession.resumed_by_name" data-testid="detail-resumed-by"><span class="text-gray-500">再開の判断を行った運行管理者:</span> {{ selectedSession.resumed_by_name }}</div>
+          </div>
+
+          <!-- 代替措置 (従事できない・中止としたとき) -->
+          <div v-if="selectedSession.alternative_measure" class="bg-gray-50 rounded-lg p-3" data-testid="detail-alternative">
+            <h4 class="font-medium text-gray-700 mb-1">代替措置の内容</h4>
+            <div class="whitespace-pre-wrap">{{ selectedSession.alternative_measure }}</div>
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { EquipmentFailure, EquipmentFailureFilter, CreateEquipmentFailure } from '~/types'
-import { listFailures, createFailure, resolveFailure, downloadFailuresCsv } from '~/utils/api'
+import type { EquipmentFailure, EquipmentFailureHistory, EquipmentFailureFilter, CreateEquipmentFailure } from '~/types'
+import { listFailures, createFailure, resolveFailure, downloadFailuresCsv, getEquipmentFailureHistory } from '~/utils/api'
 
 const failures = ref<EquipmentFailure[]>([])
 const total = ref(0)
@@ -99,6 +99,42 @@ async function handleResolve(id: string) {
   }
 }
 
+// 変更履歴 (解決を記録するたびに変更前の行が残る)
+const historyId = ref<string | null>(null)
+const history = ref<EquipmentFailureHistory[]>([])
+const historyLoading = ref(false)
+const historyError = ref<string | null>(null)
+
+async function toggleHistory(id: string) {
+  if (historyId.value === id) {
+    historyId.value = null
+    return
+  }
+  historyId.value = id
+  history.value = []
+  historyError.value = null
+  historyLoading.value = true
+  try {
+    const res = await getEquipmentFailureHistory(id, 'tenko-monitor')
+    if (historyId.value === id) history.value = res
+  } catch (e) {
+    if (historyId.value === id) historyError.value = e instanceof Error ? e.message : '履歴の取得エラー'
+  } finally {
+    if (historyId.value === id) historyLoading.value = false
+  }
+}
+
+/** 変更前の行に残っていた解決メモ (なければ空) */
+function oldNotes(row: EquipmentFailureHistory): string {
+  const v = row.old_row?.resolution_notes
+  return typeof v === 'string' ? v : ''
+}
+
+function oldResolvedAt(row: EquipmentFailureHistory): string | null {
+  const v = row.old_row?.resolved_at
+  return typeof v === 'string' ? v : null
+}
+
 // CSV出力
 async function handleCsvDownload() {
   isDownloading.value = true
@@ -153,6 +189,8 @@ onMounted(() => fetchData())
       </div>
     </div>
 
+    <p class="text-xs text-gray-500 mb-4" data-testid="failure-retention-note">故障の記録は 1 年間以上保存され、削除できません。解決を記録すると、変更前の内容が履歴に残ります。</p>
+
     <!-- 新規作成フォーム -->
     <div v-if="showForm" class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <h3 class="text-sm font-medium text-gray-700 mb-3">故障報告</h3>
@@ -200,7 +238,8 @@ onMounted(() => fetchData())
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
-            <tr v-for="f in failures" :key="f.id" class="hover:bg-gray-50">
+            <template v-for="f in failures" :key="f.id">
+            <tr class="hover:bg-gray-50">
               <td class="px-4 py-3 text-gray-700">{{ formatDate(f.detected_at) }}</td>
               <td class="px-4 py-3 text-gray-700">{{ failureTypeLabel(f.failure_type) }}</td>
               <td class="px-4 py-3 text-gray-700 max-w-[300px] truncate">{{ f.description }}</td>
@@ -212,6 +251,9 @@ onMounted(() => fetchData())
                 </span>
               </td>
               <td class="px-4 py-3 text-center">
+                <button class="px-2 py-1 mb-1 text-gray-600 hover:bg-gray-100 rounded text-xs" data-testid="history-toggle" @click="toggleHistory(f.id)">
+                  {{ historyId === f.id ? '履歴を閉じる' : '履歴' }}
+                </button>
                 <template v-if="!f.resolved_at">
                   <div v-if="resolvingId === f.id" class="flex items-center gap-1">
                     <input v-model="resolveNotes" type="text" placeholder="解決メモ" class="px-2 py-1 border border-gray-300 rounded text-xs w-32">
@@ -226,6 +268,21 @@ onMounted(() => fetchData())
                 </div>
               </td>
             </tr>
+            <tr v-if="historyId === f.id" class="bg-gray-50" data-testid="history-row">
+              <td colspan="6" class="px-4 py-3 text-xs text-gray-600">
+                <p v-if="historyLoading">履歴を読み込み中...</p>
+                <p v-else-if="historyError" class="text-red-600">{{ historyError }}</p>
+                <p v-else-if="history.length === 0">変更履歴はありません</p>
+                <ul v-else class="space-y-1">
+                  <li v-for="(h, i) in history" :key="i" data-testid="history-item">
+                    {{ formatDate(h.changed_at) }} に変更 — 変更前:
+                    {{ oldResolvedAt(h) ? `解決済 (${formatDate(oldResolvedAt(h))})` : '未解決' }}
+                    <span v-if="oldNotes(h)">/ 解決メモ: {{ oldNotes(h) }}</span>
+                  </li>
+                </ul>
+              </td>
+            </tr>
+            </template>
           </tbody>
         </table>
       </div>

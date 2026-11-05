@@ -50,6 +50,7 @@ const { markHandled } = useActiveRooms()
 
 const ngMode = ref(false)
 const reason = ref('')
+const alternativeMeasure = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
 
@@ -81,6 +82,7 @@ function clickNg() {
 function cancelNg() {
   ngMode.value = false
   reason.value = ''
+  alternativeMeasure.value = ''
   error.value = null
 }
 
@@ -97,6 +99,8 @@ async function submit(judgment: 'ok' | 'ng') {
     const body: SubmitManagerJudgment = { judgment, judged_by_employee_id: props.managerId }
     const trimmed = reason.value.trim()
     if (judgment === 'ng' && trimmed) body.reason = trimmed
+    const alt = alternativeMeasure.value.trim()
+    if (judgment === 'ng' && alt) body.alternative_measure = alt
     if (method.value) body.method = method.value
     const updated = await submitManagerJudgment(props.session.id, body, props.scope)
     // 判定が付いた点呼の部屋は、相手が閉じて消えるまで着信として数えない (警告デバイスを
@@ -106,6 +110,7 @@ async function submit(judgment: 'ok' | 'ng') {
     emit('judged', updated)
     ngMode.value = false
     reason.value = ''
+    alternativeMeasure.value = ''
   } catch {
     error.value = '判定の送信に失敗しました'
   } finally {
@@ -125,6 +130,9 @@ async function submit(judgment: 'ok' | 'ng') {
       </span>
       <span v-if="session.manager_judgment_reason" class="ml-2 text-xs text-gray-600">
         理由: {{ session.manager_judgment_reason }}
+      </span>
+      <span v-if="session.alternative_measure" class="ml-2 text-xs text-gray-600" data-testid="judgment-alternative-shown">
+        代替措置: {{ session.alternative_measure }}
       </span>
     </div>
 
@@ -172,6 +180,13 @@ async function submit(judgment: 'ok' | 'ng') {
         rows="2"
         placeholder="理由 (任意)"
         class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400"
+      />
+      <textarea
+        v-model="alternativeMeasure"
+        rows="2"
+        placeholder="代替措置の内容 (任意)"
+        data-testid="judgment-alternative"
+        class="mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400"
       />
       <div class="mt-1 flex gap-2">
         <button
