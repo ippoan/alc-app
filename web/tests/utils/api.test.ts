@@ -98,6 +98,7 @@ import {
   updateTenkoOffice,
   deleteTenkoOffice,
   getInPersonScope,
+  getVehicleCandidates,
   getLineworksUsers,
   linkBpNotifyByName,
   listCamClipsCameras,
@@ -3318,6 +3319,13 @@ describe.skipIf(isLive)('点呼の営業所', () => {
     mockFetch.mockResolvedValueOnce(okJson(scope))
     await expect(getInPersonScope('s1', 'm1')).resolves.toEqual(scope)
     expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/sessions\/s1\/in-person-scope\?judge=m1$/)
+  })
+
+  it('キオスクの車両番号の候補を、打った数字を付けて引き、候補の配列を返す', async () => {
+    const c = { vehicle_number: '佐賀 100 あ 7601', carins_cert_no: null, office_name: null, company_name: null, linked: false, device_office: false }
+    mockFetch.mockResolvedValueOnce(okJson({ candidates: [c] }))
+    await expect(getVehicleCandidates('s1', '7601')).resolves.toEqual([c])
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/sessions\/s1\/vehicle-candidates\?q=7601$/)
   })
 })
 

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { ApiEmployee, TenkoOffice, TenkoOfficeCarinsBase, TenkoOfficeCarinsBaseKey, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
-import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, updateTenkoOffice } from '~/utils/api'
+import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listDeviceLabels, updateTenkoOffice } from '~/utils/api'
 
 /**
  * 点呼の営業所 (システム管理者)。営業所ごとに所属の運行管理者 (兼務あり) と車両を決める。車両の所属は基本を車検証の
  * 「使用の本拠の位置 + 使用者」の組で決め (組は 1 営業所)、手で選んだ車両 (1 台 1 営業所) はその上書きにする。
  * 血圧の記録が足りず対面点呼に切り替えた点呼は、判定のとき車両の営業所と判定した運行管理者の所属営業所を比べ、
  * 同じなら対面点呼、別の営業所・グループ企業なら遠隔点呼とみなして記録する (告示 266 号 第四条 2 項)。
- * 手で選ぶ車両の一覧は車両整備の車両マスタ。保存は営業所ごとに全部の欄と所属を置き換える。
+ * 手で選ぶ車両の一覧は車両整備の車両マスタ。点呼端末 (端末の鍵の登録簿) も営業所に所属させ、キオスクの車両番号の候補で
+ * その営業所の車両を先に出す。保存は営業所ごとに全部の欄と所属を置き換える。
  */
 
 const ERRORS: Record<string, string> = {
@@ -17,6 +18,7 @@ const ERRORS: Record<string, string> = {
   invalid_manager: '運行管理者を選び直してください',
   invalid_vehicle: '車両を選び直してください',
   invalid_carins_base: '車検証の使用の本拠・使用者を選び直してください',
+  invalid_device: '点呼端末を選び直してください',
   forbidden: 'システム管理者だけが変更できます',
 }
 
@@ -28,6 +30,8 @@ interface Row extends TenkoOfficeInput {
 const rows = ref<Row[]>([])
 const vehicles = ref<TenkoOfficeVehicle[]>([])
 const carinsBases = ref<TenkoOfficeCarinsBase[]>([])
+/** 点呼端末 (取り消した端末は除く)。読めなくても営業所の設定は止めない */
+const devices = ref<{ device_id: string, label: string | null }[]>([])
 const managers = ref<ApiEmployee[]>([])
 const loadError = ref('')
 const busy = ref(false)
@@ -52,6 +56,7 @@ async function load() {
     vehicles.value = res.vehicles
     carinsBases.value = res.carins_bases
     managers.value = employees.filter(e => e.role.includes('manager') || e.role.includes('admin'))
+    devices.value = await listDeviceLabels().then(r => r.devices.filter(d => !d.revoked), () => [])
   }
   catch (e) {
     loadError.value = messageOf(e, '営業所を取得できませんでした')
@@ -66,13 +71,18 @@ function keyOf(row: Row, i: number): string {
 }
 
 function addOffice() {
-  rows.value.push({ id: null, name: '', company_name: '', address: '', manager_ids: [], vehicle_ids: [], carins_bases: [] })
+  rows.value.push({ id: null, name: '', company_name: '', address: '', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] })
 }
 
 /** 車両・車検証の組がいま別の営業所に所属していればその名前 (選ぶと移ることを見せる) */
 function otherOfficeName(item: { office_id: string | null }, row: Row): string {
   if (!item.office_id || item.office_id === row.id) return ''
   return rows.value.find(r => r.id === item.office_id)?.name ?? ''
+}
+
+/** 端末がいま別の営業所に所属していればその名前 */
+function deviceElsewhere(deviceId: string, row: Row): string {
+  return rows.value.find(r => r.id !== row.id && r.device_ids.includes(deviceId))?.name ?? ''
 }
 
 /** チェックボックスの値 (組の 2 項目だけ。v-model の配列と形をそろえる) */
@@ -107,6 +117,7 @@ function save(row: Row, i: number) {
     manager_ids: row.manager_ids,
     vehicle_ids: row.vehicle_ids,
     carins_bases: row.carins_bases,
+    device_ids: row.device_ids,
   }
   const id = row.id
   return act(row, i, () => id ? updateTenkoOffice(id, body) : createTenkoOffice(body), '保存', '保存できませんでした')
@@ -199,6 +210,18 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
             <input v-model="row.vehicle_ids" type="checkbox" :value="v.id" data-testid="tenko-office-vehicle">
             {{ v.registration_number }}<template v-if="v.display_name"> ({{ v.display_name }})</template>
             <span v-if="otherOfficeName(v, row)" class="text-xs text-gray-500" data-testid="tenko-office-vehicle-elsewhere">— いまは {{ otherOfficeName(v, row) }}</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="space-y-1">
+        <legend class="text-sm text-gray-500">置いてある点呼端末 (車両番号の候補でこの営業所の車両を先に出す)</legend>
+        <p v-if="!devices.length" class="text-xs text-gray-500">点呼端末がありません</p>
+        <div class="flex flex-wrap gap-x-4 gap-y-1">
+          <label v-for="d in devices" :key="d.device_id" class="flex items-center gap-1 text-sm text-gray-800">
+            <input v-model="row.device_ids" type="checkbox" :value="d.device_id" data-testid="tenko-office-device">
+            {{ d.label || d.device_id }}
+            <span v-if="deviceElsewhere(d.device_id, row)" class="text-xs text-gray-500" data-testid="tenko-office-device-elsewhere">— いまは {{ deviceElsewhere(d.device_id, row) }}</span>
           </label>
         </div>
       </fieldset>

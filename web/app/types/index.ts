@@ -623,8 +623,23 @@ export interface TenkoOffice {
   manager_ids: string[]
   /** 手で選んだ所属の車両 (車両マスタの id。車両は 1 営業所。車検証の対応より優先する) */
   vehicle_ids: string[]
+  /** この営業所に所属する点呼端末 (端末の鍵の登録簿の ID。1 台 1 営業所。キオスクの車両の候補の並びに使う) */
+  device_ids: string[]
   /** この営業所に対応づけた車検証の「使用の本拠の位置 + 使用者」の組 (組は 1 営業所) */
   carins_bases: TenkoOfficeCarinsBaseKey[]
+}
+
+/**
+ * キオスクの車両番号の候補 (`GET …/vehicle-candidates`)。`linked` は点呼の営業所に紐づいているか、`device_office` は
+ * この端末の営業所の車両か。`carins_cert_no` は車検証から出た候補の管理番号 (選んだら `carins_cert_no` で登録する)
+ */
+export interface VehicleCandidate {
+  vehicle_number: string
+  carins_cert_no: string | null
+  office_name: string | null
+  company_name: string | null
+  linked: boolean
+  device_office: boolean
 }
 
 /** 車検証の「使用の本拠の位置 + 使用者の氏名又は名称」の組 */

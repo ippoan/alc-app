@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   createTenkoOffice: vi.fn(),
   updateTenkoOffice: vi.fn(),
   deleteTenkoOffice: vi.fn(),
+  listDeviceLabels: vi.fn(),
 }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -18,8 +19,8 @@ vi.mock('~/utils/api', async importOriginal => ({
 
 const OFFICES = {
   offices: [
-    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }] },
-    { id: 'o2', name: '帯広営業所', company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [], carins_bases: [] },
+    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['kiosk-1'] },
+    { id: 'o2', name: '帯広営業所', company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] },
   ],
   carins_bases: [
     { use_base: '長崎県長崎市', user_name: '一歩運輸', office_id: 'o1', vehicle_count: 3 },
@@ -49,6 +50,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.getTenkoOffices.mockResolvedValue(OFFICES)
   api.getEmployees.mockResolvedValue(EMPLOYEES)
+  api.listDeviceLabels.mockResolvedValue({ devices: [
+    { device_id: 'kiosk-1', label: '長崎の点呼端末' },
+    { device_id: 'kiosk-2', label: null },
+    { device_id: 'kiosk-old', label: '取り消し済み', revoked: true },
+  ] })
 })
 
 describe('TenkoOfficeManager', () => {
@@ -81,6 +87,22 @@ describe('TenkoOfficeManager', () => {
     expect(api.updateTenkoOffice.mock.calls[0][1].carins_bases).toEqual([{ use_base: '長崎県長崎市', user_name: '一歩運輸' }])
   })
 
+  it('点呼端末を選ぶ。取り消した端末は出さず、名前が無ければ ID、別の営業所の端末はその名前を出して、選ぶと移して送る', async () => {
+    api.updateTenkoOffice.mockResolvedValue(OFFICES.offices[1])
+    const w = await mountIt()
+    const devs = cards(w)[1]!.findAll('[data-testid="tenko-office-device"]')
+    expect(devs).toHaveLength(2)
+    expect(cards(w)[1]!.text()).toContain('長崎の点呼端末')
+    expect(cards(w)[1]!.text()).toContain('kiosk-2')
+    expect(cards(w)[1]!.text()).not.toContain('取り消し済み')
+    expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('いまは 本社営業所')
+    expect(cards(w)[0]!.find('[data-testid="tenko-office-device-elsewhere"]').exists()).toBe(false)
+    await devs[0]!.setValue(true)
+    await btn(w, 1, 'tenko-office-save').trigger('click')
+    await flushPromises()
+    expect(api.updateTenkoOffice.mock.calls[0][1].device_ids).toEqual(['kiosk-1'])
+  })
+
   it('既存の営業所を保存すると全部を置き換えて読み直す (空の会社名・所在地は null)', async () => {
     api.updateTenkoOffice.mockResolvedValue(OFFICES.offices[0])
     const w = await mountIt()
@@ -89,7 +111,7 @@ describe('TenkoOfficeManager', () => {
     await flushPromises()
     expect(api.updateTenkoOffice).toHaveBeenCalledWith('o1', {
       name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1', 'v2'],
-      carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }],
+      carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['kiosk-1'],
     })
     expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
     expect(w.find('[data-testid="tenko-offices-notice"]').text()).toBe('本社営業所 を保存しました')
@@ -111,7 +133,7 @@ describe('TenkoOfficeManager', () => {
     await btn(w, 2, 'tenko-office-save').trigger('click')
     await flushPromises()
     expect(api.createTenkoOffice).toHaveBeenCalledWith({
-      name: '釧路営業所', company_name: 'グループ運輸', address: '釧路市', manager_ids: ['m2'], vehicle_ids: [], carins_bases: [],
+      name: '釧路営業所', company_name: 'グループ運輸', address: '釧路市', manager_ids: ['m2'], vehicle_ids: [], carins_bases: [], device_ids: [],
     })
   })
 
@@ -146,10 +168,12 @@ describe('TenkoOfficeManager', () => {
     expect(w.find('[data-testid="tenko-offices-load-error"]').text()).toBe('システム管理者だけが変更できます')
     api.getTenkoOffices.mockResolvedValue({ offices: [], vehicles: [], carins_bases: [] })
     api.getEmployees.mockResolvedValue([])
+    api.listDeviceLabels.mockRejectedValue(new Error('ログインが必要です'))
     const empty = await mountIt()
     await empty.find('[data-testid="tenko-offices-add"]').trigger('click')
     expect(cards(empty)[0]!.text()).toContain('運行管理者がまだいません')
     expect(cards(empty)[0]!.text()).toContain('車両マスタに車両がありません')
     expect(cards(empty)[0]!.text()).toContain('車検証が取り込まれていません')
+    expect(cards(empty)[0]!.text()).toContain('点呼端末がありません')
   })
 })

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 import TenkoVehicleEntry from '~/components/TenkoVehicleEntry.vue'
 
 // 車両番号の段 (業務前 二十 ハ)。CoreS3 の NFC_CARINS を最優先に受け、無い・読めない・一致しないときは入力欄で登録する
@@ -16,7 +17,12 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
   },
 }))
 
-async function mountEntry(props: { modelValue?: string, manualRequired?: boolean } = {}) {
+const getVehicleCandidates = vi.fn()
+vi.mock('~/utils/api', () => ({
+  getVehicleCandidates: (...args: unknown[]) => getVehicleCandidates(...args),
+}))
+
+async function mountEntry(props: { modelValue?: string, manualRequired?: boolean, sessionId?: string } = {}) {
   return await mountSuspended(TenkoVehicleEntry, { props: { modelValue: '', ...props } })
 }
 
@@ -120,5 +126,89 @@ describe('TenkoVehicleEntry', () => {
     expect(offMock).not.toHaveBeenCalled()
     w.unmount()
     expect(offMock).toHaveBeenCalledTimes(1)
+  })
+
+  describe('テンキーと候補 (sessionId を渡したとき)', () => {
+    const SAGA = { vehicle_number: '佐賀 100 あ 7601', carins_cert_no: 'CERT-1', office_name: '佐賀営業所', company_name: null, linked: true, device_office: true }
+    const GROUP = { vehicle_number: '長崎 100 か 7601', carins_cert_no: null, office_name: '本社', company_name: 'グループ運輸', linked: true, device_office: false }
+    const LOOSE = { vehicle_number: '福岡 100 さ 1760', carins_cert_no: null, office_name: null, company_name: null, linked: false, device_office: false }
+    const press = async (w: Awaited<ReturnType<typeof mountEntry>>, keys: string) => {
+      for (const k of keys) await w.find(`[data-key="${k}"]`).trigger('click')
+      await flushPromises()
+    }
+    const cards = (w: Awaited<ReturnType<typeof mountEntry>>) => w.findAll('[data-testid="vehicle-candidate"]')
+
+    beforeEach(() => {
+      isConnected.value = false
+      getVehicleCandidates.mockReset()
+    })
+
+    it('★ 打った数字で候補を引き、紐づいていない車両は色を変えて「営業所が未設定」と出す。決定のキーは出さない', async () => {
+      getVehicleCandidates.mockResolvedValue([SAGA, GROUP, LOOSE])
+      const w = await mountEntry({ sessionId: 'sess-1' })
+      expect(w.find('[data-testid="vehicle-keypad"]').exists()).toBe(true)
+      expect(w.find('[data-key="submit"]').exists()).toBe(false)
+      await press(w, '76')
+      expect(getVehicleCandidates).toHaveBeenLastCalledWith('sess-1', '76')
+      expect(cards(w).map(c => c.text())).toEqual([
+        '佐賀 100 あ 7601佐賀営業所', '長崎 100 か 7601グループ運輸 本社', '福岡 100 さ 1760営業所が未設定',
+      ])
+      expect(cards(w)[2]!.classes()).toContain('bg-amber-50')
+      expect(cards(w)[0]!.classes()).not.toContain('bg-amber-50')
+      expect(w.text()).toContain('候補に無いときは車両番号を入力')
+      w.unmount()
+    })
+
+    it('★ 車検証から出た候補は管理番号で、ほかは車両番号で submit する', async () => {
+      getVehicleCandidates.mockResolvedValue([SAGA, LOOSE])
+      const w = await mountEntry({ sessionId: 'sess-1' })
+      await press(w, '7')
+      await cards(w)[0]!.trigger('click')
+      await cards(w)[1]!.trigger('click')
+      expect(w.emitted('submit')).toEqual([[{ carins_cert_no: 'CERT-1' }], [{ vehicle_number: '福岡 100 さ 1760' }]])
+      w.unmount()
+    })
+
+    it('当たらなければ空の案内、読めなければ失敗の案内。消すと候補も消える', async () => {
+      getVehicleCandidates.mockResolvedValueOnce([])
+      const w = await mountEntry({ sessionId: 'sess-1' })
+      await press(w, '9')
+      expect(w.find('[data-testid="vehicle-candidates-empty"]').exists()).toBe(true)
+      getVehicleCandidates.mockRejectedValueOnce(new Error('x'))
+      await press(w, '9')
+      expect(w.find('[data-testid="vehicle-candidates-error"]').exists()).toBe(true)
+      expect(w.find('[data-testid="vehicle-candidates-empty"]').exists()).toBe(false)
+      await w.find('[data-key="clear"]').trigger('click')
+      await flushPromises()
+      expect(cards(w)).toHaveLength(0)
+      expect(w.find('[data-testid="vehicle-candidates-error"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('古い応答は捨てる (後から打った数字の候補を出す)', async () => {
+      let resolveFirst: (v: unknown) => void = () => {}
+      getVehicleCandidates
+        .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r }))
+        .mockRejectedValueOnce(new Error('late'))
+        .mockResolvedValueOnce([LOOSE])
+      const w = await mountEntry({ sessionId: 'sess-1' })
+      await w.find('[data-key="1"]').trigger('click')
+      await w.find('[data-key="7"]').trigger('click')
+      await w.find('[data-key="6"]').trigger('click')
+      await flushPromises()
+      resolveFirst([SAGA])
+      await flushPromises()
+      expect(cards(w).map(c => c.text())).toEqual(['福岡 100 さ 1760営業所が未設定'])
+      expect(w.find('[data-testid="vehicle-candidates-error"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('sessionId が無ければテンキーを出さず、入力欄だけ', async () => {
+      const w = await mountEntry()
+      expect(w.find('[data-testid="vehicle-keypad"]').exists()).toBe(false)
+      expect(input(w).exists()).toBe(true)
+      expect(w.text()).toContain('車両番号')
+      w.unmount()
+    })
   })
 })
