@@ -43,7 +43,7 @@ const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVid
 const {
   step, employeeId, employeeName, pendingSchedules, resumableSessions, selectedSchedule, selectedTenkoType, session,
   error, isLoading, safetyJudgment, tenkoType, isPreOperation,
-  escalatedToRemote, escalationReason, isRemote, escalateToRemote,
+  escalatedToRemote, escalationReason, startNotice, isRemote, escalateToRemote,
   stepLabels, currentStepIndex,
   vehicleInput, vehicleManualRequired, onVehicleSubmit,
   identifyEmployee, selectSchedule, resumeSession, proceedWithoutSchedule, onFaceAuthComplete,
@@ -655,7 +655,7 @@ onUnmounted(() => {
           :class="['w-full bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 mb-2 text-center text-sm text-blue-700 font-medium', landscape ? '' : 'max-w-md']"
         >
           {{ escalatedToRemote
-            ? `遠隔点呼に切り替えました (${escalationReason}) — 運行管理者がビデオ通話で確認しています`
+            ? `遠隔点呼に切り替えました${escalationReason ? ` (${escalationReason})` : ''} — 運行管理者がビデオ通話で確認しています`
             : '遠隔点呼モード — 運行管理者がビデオ通話で確認しています' }}
         </div>
       </ClientOnly>
@@ -757,6 +757,9 @@ onUnmounted(() => {
     <!-- 右列 (横画面) / メインコンテンツ (縦画面) -->
     <main :class="['w-full flex-1', landscape ? 'min-h-0 overflow-y-auto' : 'max-w-md']">
       <!-- グローバルエラー -->
+      <div v-if="startNotice" data-testid="start-notice" class="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-sm text-amber-800">
+        {{ startNotice }}
+      </div>
       <div v-if="error" class="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-sm text-red-700">
         {{ error }}
       </div>
