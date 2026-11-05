@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { ApiEmployee, TenkoOffice, TenkoOfficeCarinsBase, TenkoOfficeCarinsBaseKey, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
-import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listDeviceLabels, updateTenkoOffice } from '~/utils/api'
+import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listCamHostKeys, updateTenkoOffice } from '~/utils/api'
 
 /**
  * 点呼の営業所 (システム管理者)。営業所ごとに所属の運行管理者 (兼務あり) と車両を決める。車両の所属は基本を車検証の
  * 「使用の本拠の位置 + 使用者」の組で決め (組は 1 営業所)、手で選んだ車両 (1 台 1 営業所) はその上書きにする。
  * 血圧の記録が足りず対面点呼に切り替えた点呼は、判定のとき車両の営業所と判定した運行管理者の所属営業所を比べ、
  * 同じなら対面点呼、別の営業所・グループ企業なら遠隔点呼とみなして記録する (告示 266 号 第四条 2 項)。
- * 手で選ぶ車両の一覧は車両整備の車両マスタ。点呼端末 (端末の鍵の登録簿) も営業所に所属させ、キオスクの車両番号の候補で
+ * 手で選ぶ車両の一覧は車両整備の車両マスタ。点呼端末 (点呼に使う機体 = CoreS3・Vein Station の、用途 kiosk の機体の鍵。
+ * 端末 ID はキオスクの鍵の `X-Device-Id` と同じ `alarm:<指紋>`) も営業所に所属させ、キオスクの車両番号の候補で
  * その営業所の車両を先に出す。保存は営業所ごとに全部の欄と所属を置き換える。
  */
 
@@ -30,8 +31,13 @@ interface Row extends TenkoOfficeInput {
 const rows = ref<Row[]>([])
 const vehicles = ref<TenkoOfficeVehicle[]>([])
 const carinsBases = ref<TenkoOfficeCarinsBase[]>([])
-/** 点呼端末 (取り消した端末は除く)。読めなくても営業所の設定は止めない */
+/** 点呼端末 (用途 kiosk の機体の鍵)。読めなくても営業所の設定は止めない */
 const devices = ref<{ device_id: string, label: string | null }[]>([])
+
+/** 点呼端末の表示名。名前の無い機体は鍵の指紋の頭で見分ける (`VeinFleetManager` と同じ) */
+function deviceName(d: { device_id: string, label: string | null }): string {
+  return d.label || `名前の無い機体 ${d.device_id.slice(6, 14)}`
+}
 const managers = ref<ApiEmployee[]>([])
 const loadError = ref('')
 const busy = ref(false)
@@ -56,7 +62,7 @@ async function load() {
     vehicles.value = res.vehicles
     carinsBases.value = res.carins_bases
     managers.value = employees.filter(e => e.role.includes('manager') || e.role.includes('admin'))
-    devices.value = await listDeviceLabels().then(r => r.devices.filter(d => !d.revoked), () => [])
+    devices.value = await listCamHostKeys().then(r => r.keys, () => [])
   }
   catch (e) {
     loadError.value = messageOf(e, '営業所を取得できませんでした')
@@ -220,7 +226,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         <div class="flex flex-wrap gap-x-4 gap-y-1">
           <label v-for="d in devices" :key="d.device_id" class="flex items-center gap-1 text-sm text-gray-800">
             <input v-model="row.device_ids" type="checkbox" :value="d.device_id" data-testid="tenko-office-device">
-            {{ d.label || d.device_id }}
+            {{ deviceName(d) }}
             <span v-if="deviceElsewhere(d.device_id, row)" class="text-xs text-gray-500" data-testid="tenko-office-device-elsewhere">— いまは {{ deviceElsewhere(d.device_id, row) }}</span>
           </label>
         </div>
