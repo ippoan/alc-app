@@ -4,16 +4,21 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import TenkoVehicleEntry from '~/components/TenkoVehicleEntry.vue'
 
-// 車両番号の段 (業務前 二十 ハ)。CoreS3 の NFC_CARINS を最優先に受け、無い・読めない・一致しないときは入力欄で登録する
+// 車両番号の段 (業務前 二十 ハ)。NFC を読める機体 (CoreS3・Vein Station) の NFC_CARINS を最優先に受け、無い・読めない・一致しないときは入力欄で登録する
 
+// NFC を読める機体の組 (useUsbHub().nfc)。CoreS3 でも Vein Station でも同じ NFC_CARINS が来る
 const isConnected = ref(true)
-let carinsHandler: ((name: string, args: string[]) => void) | null = null
+const label = ref<string | null>('CoreS3')
+let carinsHandler: ((name: string, args: string[], source: string) => void) | null = null
 const offMock = vi.fn()
-mockNuxtImport('useCoreS3Serial', () => () => ({
-  isConnected,
-  onEvent: (cb: (name: string, args: string[]) => void) => {
-    carinsHandler = cb
-    return offMock
+mockNuxtImport('useUsbHub', () => () => ({
+  nfc: {
+    isConnected,
+    label,
+    onEvent: (cb: (name: string, args: string[], source: string) => void) => {
+      carinsHandler = cb
+      return offMock
+    },
   },
 }))
 
@@ -32,6 +37,7 @@ describe('TenkoVehicleEntry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     isConnected.value = true
+    label.value = 'CoreS3'
     carinsHandler = null
   })
 
@@ -43,35 +49,44 @@ describe('TenkoVehicleEntry', () => {
     w.unmount()
   })
 
+  it('★ Vein Station がつながっていれば、Vein Station にかざす案内を出し、読めた管理番号で submit する', async () => {
+    label.value = 'Vein Station'
+    const w = await mountEntry()
+    expect(w.text()).toContain('電子車検証を Vein Station にかざしてください')
+    carinsHandler!('NFC_CARINS', ['mgno=CERT-V', 'carid=ID-V'], 'vein-station')
+    expect(w.emitted('submit')![0]).toEqual([{ carins_cert_no: 'CERT-V' }])
+    w.unmount()
+  })
+
   it('★ 車検証の管理番号が読めたら carins_cert_no で submit する', async () => {
     const w = await mountEntry()
-    carinsHandler!('NFC_CARINS', ['mgno=CERT-1', 'carid=ID-1'])
+    carinsHandler!('NFC_CARINS', ['mgno=CERT-1', 'carid=ID-1'], 'cores3')
     expect(w.emitted('submit')![0]).toEqual([{ carins_cert_no: 'CERT-1' }])
     w.unmount()
   })
 
   it('NFC_CARINS 以外のイベントは無視する', async () => {
     const w = await mountEntry()
-    carinsHandler!('NFC_LICENSE', ['mgno=CERT-1'])
+    carinsHandler!('NFC_LICENSE', ['mgno=CERT-1'], 'cores3')
     expect(w.emitted('submit')).toBeUndefined()
     w.unmount()
   })
 
   it('★ 読み取り失敗 (rc=) や管理番号の無い古いファームは、案内を出して入力欄を開く。submit しない', async () => {
     const w = await mountEntry()
-    carinsHandler!('NFC_CARINS', ['rc=12'])
+    carinsHandler!('NFC_CARINS', ['rc=12'], 'cores3')
     await w.vm.$nextTick()
     expect(w.find('[data-testid="carins-read-error"]').exists()).toBe(true)
     expect(input(w).exists()).toBe(true)
     expect(w.emitted('submit')).toBeUndefined()
 
     // もう一度かざして読めれば、案内は消える
-    carinsHandler!('NFC_CARINS', ['mgno=CERT-2'])
+    carinsHandler!('NFC_CARINS', ['mgno=CERT-2'], 'cores3')
     await w.vm.$nextTick()
     expect(w.find('[data-testid="carins-read-error"]').exists()).toBe(false)
     expect(w.emitted('submit')![0]).toEqual([{ carins_cert_no: 'CERT-2' }])
 
-    carinsHandler!('NFC_CARINS', [])
+    carinsHandler!('NFC_CARINS', [], 'cores3')
     await w.vm.$nextTick()
     expect(w.find('[data-testid="carins-read-error"]').exists()).toBe(true)
     w.unmount()
@@ -91,7 +106,7 @@ describe('TenkoVehicleEntry', () => {
     w.unmount()
   })
 
-  it('★ CoreS3 がつながっていなければ、車検証の案内なしで入力欄を最初から出す(初期値は親が持つ)', async () => {
+  it('★ NFC を読める機体がつながっていなければ、車検証の案内なしで入力欄を最初から出す(初期値は親が持つ)', async () => {
     isConnected.value = false
     const w = await mountEntry({ modelValue: '予定の車' })
     expect(w.text()).not.toContain('かざしてください')
