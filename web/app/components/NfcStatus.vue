@@ -2,6 +2,7 @@
 import type { NfcReadEvent, NfcLicenseReadEvent, NfcReadSource } from '~/types'
 import { parseLicenseExpiryDate, checkLicenseExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
 import { isWebSerialSupported } from '~/utils/webserial'
+import { nfcAliveState } from '~/utils/nfc-alive'
 
 const props = defineProps<{
   /** IC カード打刻のアルコールチェックへの案内ボタンが表示中か (Refs ippoan/rust-alc-api#644)。
@@ -112,11 +113,22 @@ onRead((event: NfcReadEvent) => {
   }, 1500)
 })
 
+// Vein Station の NFC の読み取りが回っているか (`EVT NFC_ALIVE` が途絶えたら止まった)。
+// 途絶えは時間で決まるので 5 秒ごとに見直す
+const veinSerial = useVeinSerial()
+const aliveNow = ref(Date.now())
+let aliveTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => { aliveTimer = setInterval(() => { aliveNow.value = Date.now() }, 5000) })
+onBeforeUnmount(() => { if (aliveTimer) clearInterval(aliveTimer) })
+const nfcStalled = computed(() =>
+  veinSerial.isConnected.value && nfcAliveState(veinSerial.nfcAliveAt?.value ?? null, aliveNow.value) === 'stale')
+
 const statusText = computed(() => {
   // 起動時の CoreS3 探索中 (上限 3 秒) は「未検出」と確定させない (Refs #238)
   if (isCheckingKioskAccess.value) return '確認中…'
   if (error.value) return error.value
   if (!isConnected.value) return 'NFC リーダー未接続'
+  if (nfcStalled.value) return 'NFC 応答なし (端末が自動で再起動します)'
   if ((readers.value?.length ?? 0) === 0) return 'NFC リーダー未検出'
   return 'NFC 待機中'
 })
@@ -138,9 +150,9 @@ const showNfcGuide = ref(false)
       <span
         class="w-3 h-3 rounded-full"
         :class="{
-          'bg-red-500': !isConnected,
-          'bg-yellow-500': isConnected && (readers?.length ?? 0) === 0,
-          'bg-green-500': isConnected && (readers?.length ?? 0) > 0,
+          'bg-red-500': !isConnected || nfcStalled,
+          'bg-yellow-500': isConnected && !nfcStalled && (readers?.length ?? 0) === 0,
+          'bg-green-500': isConnected && !nfcStalled && (readers?.length ?? 0) > 0,
         }"
       />
       <span class="text-gray-600">{{ statusText }}</span>

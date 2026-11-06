@@ -179,6 +179,8 @@ const deviceInfo = ref<DeviceLine | null>(null)
  * ここは設定の値なので 1 になる。
  */
 const omronBp = ref<boolean | null>(null)
+/** 最後に `EVT NFC_ALIVE` を受けた時刻 (ms)。一度も来ていなければ null (判定は `utils/nfc-alive`) */
+const nfcAliveAt = ref<number | null>(null)
 /** 直近の指静脈の照合結果 (成功は SCORE 等つき)。画面の挙動には使わない、記録用 */
 const lastMatch = ref<VeinMatchResult | null>(null)
 
@@ -351,6 +353,7 @@ export function useVeinSerial() {
     onLine(line) {
       // 全部の行を時刻付きで溜める (recorder へ上げる診断ログ。useVeinLogUpload、Refs ippoan/alc-app-s3#352)
       recordVeinLine(line)
+      if (line.startsWith('EVT NFC_ALIVE')) nfcAliveAt.value = Date.now()
       rawLineTap?.(line)
       tapTiming(line)
       tapDiag(line)
@@ -364,6 +367,7 @@ export function useVeinSerial() {
       connectionEpoch++
       omronBp.value = null
       deviceInfo.value = null
+      nfcAliveAt.value = null
       isConnected.value = false
       for (const cb of [...closeHandlers]) cb()
     },
@@ -864,6 +868,7 @@ export function useVeinSerial() {
     security,
     request,
     omronBp: readonly(omronBp),
+    nfcAliveAt: readonly(nfcAliveAt),
     noteOmronBp,
     setOmronBp,
     startPairing,
