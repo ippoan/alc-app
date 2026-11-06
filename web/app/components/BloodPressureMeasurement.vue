@@ -35,6 +35,9 @@ import { restartVeinAndReload } from '~/utils/vein-restart'
  *   カウントダウンで最初の画面へ戻る。「次の人へ」を押さなくても、次の人が指を置く・カードをかざすとそのまま進む
  */
 
+/** 選んだ人に承認済みの指静脈が無い。登録へ促す (その人で登録画面を開くボタンを出す) */
+const NO_RECORD_MESSAGE = 'この人の承認済みの指静脈の記録がありません。登録して運行管理者の承認を受けてください'
+
 type BpStep = 'nfc' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble' | 'vein_pending' | 'thermo_test'
 
 const { bpUiState } = useBpUiEnabled()
@@ -61,7 +64,7 @@ const vein = useVeinEmployeeIdentify({
   isIdle: () => (step.value === 'nfc' || doneSettled.value) && !vein.busy.value && employeeLookups.value === 0 && !refresh.adding.value,
   // カード・社員番号で人が決まっていれば、その人の記録だけをモジュールに用意して 1:1 で照合する
   expectedEmployeeId: () => expected.value?.id ?? null,
-  noRecordMessage: 'この人の承認済みの指静脈の記録がありません。下の「指静脈を登録する」から登録して運行管理者の承認を受けてください',
+  noRecordMessage: NO_RECORD_MESSAGE,
   onStart: () => {
     refresh.clear()
     leaveDone()
@@ -137,6 +140,18 @@ const code = ref('')
 
 function onCodeSubmit(c: string) {
   return lookupEmployee(() => getEmployeeByCode(c, 'bp-station'), employeeNotFoundByCode(c))
+}
+
+/** カード・社員番号で選んだ人に、承認済みの指静脈が無かった (登録へ促す) */
+const needsRegistration = computed(() => expected.value !== null && vein.error.value === NO_RECORD_MESSAGE)
+/** 登録画面を開く相手 (選んだ人。最初の段の入口から開くときは null = 登録画面で人を選ぶ) */
+const registrationEmployee = ref<{ id: string; name: string } | null>(null)
+
+/** 選んだ人で登録画面を開く (カード・社員番号を打ち直させない) */
+function openRegistrationForExpected() {
+  registrationEmployee.value = expected.value
+  clearExpected()
+  step.value = 'vein'
 }
 
 /** カード・社員番号で決めた人を取り消す (別の人が指だけで始める) */
@@ -293,7 +308,7 @@ function reset() {
 <template>
   <div class="w-full max-w-md mx-auto p-4 flex flex-col gap-4">
     <!-- 指静脈の登録 (入口は下のボタン) -->
-    <VeinRegistration v-if="step === 'vein'" @close="step = 'nfc'" />
+    <VeinRegistration v-if="step === 'vein'" :employee="registrationEmployee" @close="step = 'nfc'; registrationEmployee = null" />
 
     <!-- この端末の指静脈の一覧 (ID ↔ 乗務員、空き、モジュールの人数) -->
     <VeinModuleList v-else-if="step === 'vein_list'" @close="step = 'nfc'" />
@@ -343,6 +358,14 @@ function reset() {
             {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指を置いて照合' }}
           </button>
           <p v-if="vein.error.value" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
+          <button
+            v-if="needsRegistration"
+            data-testid="bp-register-expected"
+            class="mt-3 w-full px-4 py-3 bg-white border border-emerald-600 text-emerald-700 rounded-xl font-medium hover:bg-emerald-50 transition-colors"
+            @click="openRegistrationForExpected"
+          >
+            {{ expected!.name }}さんの指静脈を登録する
+          </button>
           <!-- 人を先に決める入口 (指を置くだけで特定できないとき。照合は指静脈の 1:1) -->
           <template v-if="!expected">
             <h3 class="mt-6 mb-2 text-sm font-medium text-gray-500">カード・社員番号で人を選んでから指を置く</h3>
