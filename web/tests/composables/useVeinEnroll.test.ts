@@ -138,7 +138,7 @@ describe('useVeinEnroll', () => {
       expect(seenNotice).toBe('もう一度置いてください (3/6)')
       expect(oldFirmwareNotice).toBe('もう一度置いてください (2 回目)')
       expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('emp-test-1')
-      expect(putVeinModuleRecordMock).toHaveBeenCalledWith('emp-test-1', RECORD)
+      expect(putVeinModuleRecordMock).toHaveBeenCalledWith('emp-test-1', RECORD, 'default')
       expect(db.putVeinModuleEntry).toHaveBeenCalledWith({
         employeeId: 'emp-test-1', moduleId: 11, updatedAt: '2026-10-21T00:00:00Z', approved: false,
       })

@@ -15,13 +15,17 @@ import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMes
  * 指静脈の記録が無かったときも、その人 (`employee`) でここを開く。
  */
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 本人が先に決まっているとき (血圧測定でカード・社員番号の後、指静脈の記録が無かった人)。特定の段を飛ばす */
   employee?: { id: string; name: string } | null
-}>()
+  /** 運行管理者の画面から開いたとき `'manager-device'` (送信を席の鍵で通す)。省略は今までどおり */
+  scope?: 'manager-device'
+  /** 閉じるボタンの文言 (開いた画面に戻る) */
+  closeLabel?: string
+}>(), { employee: null, scope: undefined, closeLabel: '血圧測定に戻る' })
 const emit = defineEmits<{ close: [] }>()
 
-const vein = useVeinEnroll()
+const vein = useVeinEnroll({ scope: props.scope })
 const employeeId = ref(props.employee?.id ?? '')
 const employeeName = ref(props.employee?.name ?? '')
 const lookupError = ref<string | null>(null)
@@ -38,7 +42,7 @@ async function lookup(find: () => Promise<{ id: string; name: string }>, notFoun
 }
 
 function onNfcRead(nfcId: string) {
-  return lookup(() => getEmployeeByNfcId(nfcId), employeeNotFoundByNfc(nfcId))
+  return lookup(() => getEmployeeByNfcId(nfcId, props.scope), employeeNotFoundByNfc(nfcId))
 }
 
 // 社員番号のキーパッド (`EmployeeCodeKeypad`) が打った番号
@@ -46,7 +50,7 @@ const code = ref('')
 
 function submitCode() {
   const c = code.value
-  return lookup(() => getEmployeeByCode(c, 'bp-station'), employeeNotFoundByCode(c))
+  return lookup(() => getEmployeeByCode(c, props.scope ?? 'bp-station'), employeeNotFoundByCode(c))
 }
 
 function next() {
@@ -114,7 +118,7 @@ function next() {
       class="w-full mt-4 px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-300 transition-colors"
       @click="emit('close')"
     >
-      血圧測定に戻る
+      {{ closeLabel }}
     </button>
   </div>
 </template>

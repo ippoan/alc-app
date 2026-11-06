@@ -610,11 +610,11 @@ export async function getEmployees(scope: RequestTokenScope = 'default'): Promis
  * **血圧測定台が最初に叩く口** (`scope: 'bp-station'`、Refs #353) — ここが素通りすると
  * 測定台は 1 本目から無認証経路に落ちる。
  */
-export async function getEmployeeByNfcId(nfcId: string): Promise<ApiEmployee> {
+export async function getEmployeeByNfcId(nfcId: string, scope: RequestTokenScope = 'bp-station'): Promise<ApiEmployee> {
   return request<ApiEmployee>('/api/employees/lookup', {
     method: 'POST',
     body: JSON.stringify({ nfc_id: nfcId }),
-  }, 'bp-station')
+  }, scope)
 }
 
 /**
@@ -740,11 +740,12 @@ export async function clearEmployeeLicense(id: string): Promise<ApiEmployee> {
 export async function putVeinTemplate(
   employeeId: string,
   charas: string[],
+  scope: RequestTokenScope = 'default',
 ): Promise<{ employee_id: string; updated_at: string }> {
   return request<{ employee_id: string; updated_at: string }>(`/api/vein/templates/${encodeURIComponent(employeeId)}`, {
     method: 'PUT',
     body: JSON.stringify({ charas }),
-  })
+  }, scope)
 }
 
 /**
@@ -796,9 +797,16 @@ function bytesToBase64(bytes: Uint8Array): string {
 export async function putVeinModuleRecord(
   employeeId: string,
   record: Uint8Array,
+  scope: RequestTokenScope = 'default',
 ): Promise<{ employee_id: string; updated_at: string }> {
   const path = `/api/vein/templates/${encodeURIComponent(employeeId)}/module`
   const options: RequestInit = { method: 'PUT', body: JSON.stringify({ record: bytesToBase64(record) }) }
+  // 運行管理者席 (Vein Base) は席の鍵だけで送る (キオスクの鍵も管理者ログインも無い。取れなければ投げる)
+  if (scope === 'manager-device') {
+    const seatJwt = await getManagerDeviceJwt?.()
+    if (!seatJwt) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+    return proxyRequest<{ employee_id: string; updated_at: string }>(path, seatJwt, options)
+  }
   // **端末の token を先に使う** — サーバーは token の端末を「登録した端末」として記録に残す
   // (`registered_device_id`)。管理者がログインしていても、管理者の token では端末が分からない。
   // 端末の token が取れなければ今までどおり (`request` の規則)

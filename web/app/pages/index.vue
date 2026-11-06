@@ -711,7 +711,7 @@ function onRoleTabClick(role: RoleTab) {
           <BloodPressureMeasurement v-if="driverSubTab === 'bp'" class="flex-1 min-h-0" />
           <!-- 指静脈の登録 (血圧測定の画面の入口と同じ画面)。閉じたら通常点呼へ -->
           <div v-if="driverSubTab === 'vein_register'" class="flex-1 min-h-0 w-full max-w-lg mx-auto px-4 py-4">
-            <VeinRegistration @close="driverSubTab = 'normal'" />
+            <VeinRegistration close-label="通常点呼に戻る" @close="driverSubTab = 'normal'" />
           </div>
           <!-- dev端末の記録 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る -->
           <DevDeviceRecords v-if="driverSubTab === 'dev_records'" class="flex-1 min-h-0" @cleared="onDevMarkCleared" />
@@ -798,7 +798,7 @@ function onRoleTabClick(role: RoleTab) {
     <DeviceSettings v-if="activeRole === 'manager' && !incomingCallMode && managerView === 'device'" manager-seat class="flex-1 min-h-0" />
     <!-- 指静脈の登録 (運行者の画面の ≡ と同じ画面)。閉じたら運行管理者の画面へ -->
     <div v-if="activeRole === 'manager' && !incomingCallMode && managerView === 'vein_register'" class="flex-1 min-h-0 w-full max-w-lg mx-auto px-4 py-4">
-      <VeinRegistration @close="managerView = 'dashboard'" />
+      <VeinRegistration scope="manager-device" close-label="運行管理者の画面に戻る" @close="managerView = 'dashboard'" />
     </div>
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
