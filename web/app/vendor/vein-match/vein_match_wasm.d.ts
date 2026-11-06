@@ -22,6 +22,7 @@ export class VeinLibrary {
     last_user(): number;
     mru(): Uint16Array;
     constructor(n: number);
+    rank_top(shot: Uint8Array, top: number): Uint32Array;
     saved(): number;
     search_user(chara: Uint8Array, level: number, t8?: number | null): SearchResult;
     search_user_hex(probe: string, level: number, t8?: number | null): SearchResult;
@@ -47,7 +48,13 @@ export function chara_verify_shot(enroll: Uint8Array, shot: Uint8Array): VerifyR
 
 export function create_template_b64(charas_hex: string[], group: number): string;
 
+export function enroll_planes(enroll: Uint8Array): Uint8Array | undefined;
+
 export function logic_version(): string;
+
+export function shot_plane(shot: Uint8Array): Uint8Array | undefined;
+
+export function shot_shifts(enroll: Uint8Array, shot: Uint8Array): Int32Array | undefined;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -60,12 +67,15 @@ export interface InitOutput {
     readonly chara_match_hex: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly chara_verify_shot: (a: number, b: number, c: number, d: number) => number;
     readonly create_template_b64: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly enroll_planes: (a: number, b: number) => [number, number];
     readonly logic_version: () => [number, number];
     readonly searchresult_info: (a: number) => [number, number];
     readonly searchresult_ret: (a: number) => number;
     readonly searchresult_score0: (a: number) => number;
     readonly searchresult_score1: (a: number) => number;
     readonly searchresult_score2: (a: number) => number;
+    readonly shot_plane: (a: number, b: number) => [number, number];
+    readonly shot_shifts: (a: number, b: number, c: number, d: number) => [number, number];
     readonly veinlibrary_counts: (a: number) => [number, number];
     readonly veinlibrary_get_enroll_template_b64: (a: number, b: number) => [number, number];
     readonly veinlibrary_import_temp_b64: (a: number, b: number, c: number, d: number) => number;
@@ -73,6 +83,7 @@ export interface InitOutput {
     readonly veinlibrary_last_user: (a: number) => number;
     readonly veinlibrary_mru: (a: number) => [number, number];
     readonly veinlibrary_new: (a: number) => [number, number, number];
+    readonly veinlibrary_rank_top: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly veinlibrary_saved: (a: number) => number;
     readonly veinlibrary_search_user: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly veinlibrary_search_user_hex: (a: number, b: number, c: number, d: number, e: number) => number;
