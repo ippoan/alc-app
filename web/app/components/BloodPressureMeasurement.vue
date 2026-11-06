@@ -38,7 +38,7 @@ import { restartVeinAndReload } from '~/utils/vein-restart'
 /** 選んだ人に承認済みの指静脈が無い。登録へ促す (その人で登録画面を開くボタンを出す) */
 const NO_RECORD_MESSAGE = 'この人の承認済みの指静脈の記録がありません。登録して運行管理者の承認を受けてください'
 
-type BpStep = 'nfc' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble' | 'vein_pending' | 'thermo_test'
+type BpStep = 'nfc' | 'measure' | 'done' | 'vein' | 'vein_list' | 'bp_ble' | 'vein_pending' | 'thermo_test' | 'vein_profile'
 
 const { bpUiState } = useBpUiEnabled()
 const { latestBloodPressure } = useBleGateway()
@@ -315,6 +315,7 @@ function reset() {
     <BpBluetoothSettings v-else-if="step === 'bp_ble'" @close="step = 'nfc'" />
     <ThermoTest v-else-if="step === 'thermo_test'" @close="step = 'nfc'" />
     <VeinPendingApproval v-else-if="step === 'vein_pending'" @close="step = 'nfc'" />
+    <VeinDeviceProfilePanel v-else-if="step === 'vein_profile'" scope="bp-station" close-label="血圧測定に戻る" @close="step = 'nfc'" />
 
     <!-- まだ署名を取りに行っている最中: 待つ (ここで「使わない」に倒すと起動直後に詰まる) -->
     <div v-else-if="bpUiState === 'checking'" class="bg-white rounded-2xl p-4 shadow-sm text-center">
@@ -455,6 +456,13 @@ function reset() {
         @click="step = 'vein_pending'"
       >
         未承認の指静脈 (運行管理者の指で承認)
+      </button>
+      <button
+        data-testid="vein-profile-open"
+        class="col-span-2 w-full px-4 py-3 bg-white border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+        @click="step = 'vein_profile'"
+      >
+        指静脈の個体値の計測 (この端末の癖)
       </button>
       <button
         data-testid="bp-ble-open"

@@ -82,6 +82,7 @@ import {
   getVeinModuleTemplates,
   getVeinAuthLogEnabled,
   postVeinAuthShot,
+  postVeinAuthShotJudged,
   getVeinModuleTemplate,
   identifyVein,
   getVeinTemplates,
@@ -1303,6 +1304,23 @@ describe.skipIf(isLive)('api', () => {
       expect(await postVeinAuthShot(body)).toEqual(shift)
       stubOk({ id: 's2', judgment: { candidates: [] } })
       expect(await postVeinAuthShot(body)).toBeNull()
+    })
+
+    it.skipIf(isLive)('postVeinAuthShotJudged は本人との判定 (結果・点数・規則・ずれ) を返す (判定が無ければ null)', async () => {
+      const body = {
+        employee_id: 'e1',
+        shot: new Uint8Array([0xDE]),
+        module: { result: 'IDENTIFIED' as const, slot: 10, hit: 'self' as const, score: 70, thresholds: [60, 67, 80] },
+        firmware: null,
+        captured_at: '2026-11-06T00:00:00.000Z',
+      }
+      const shift = { entry: 2, dx: -3, dy: 1, overlap: 700, overlap0: 600 }
+      stubOk({ id: 's1', judgment: { result: 'match', candidates: [{ employee_id: 'e1', matched: true, scores: [60, 61, 80], rule: 'A', shift }] } })
+      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'match', scores: [60, 61, 80], rule: 'A', shift })
+      stubOk({ id: 's2', judgment: { result: 'nomatch', candidates: [] } })
+      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'nomatch', scores: null, rule: null, shift: null })
+      stubOk({ id: 's3' })
+      expect(await postVeinAuthShotJudged(body)).toBeNull()
     })
 
     it.skipIf(isLive)('getVeinModuleTemplates は pick を query で渡す', async () => {

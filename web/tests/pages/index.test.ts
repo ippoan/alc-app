@@ -19,6 +19,7 @@ import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import VeinTestPanel from '~/components/VeinTestPanel.vue'
 import VeinRegistration from '~/components/VeinRegistration.vue'
+import VeinDeviceProfilePanel from '~/components/VeinDeviceProfilePanel.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import TenkoDeskView from '~/components/TenkoDeskView.vue'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
@@ -1243,6 +1244,24 @@ describe('pages/index — 指静脈の登録 (メニュー)', () => {
     wrapper = await mountIndex('/?role=driver&tab=vein_register')
     expect(wrapper.findComponent(VeinRegistration).exists()).toBe(true)
   })
+
+  it('★ 指静脈の個体値の計測もメニューに出て (dev の印が無い端末でも)、閉じると通常点呼へ戻る', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    await toggleMenu(wrapper)
+    expect(menuLabels(wrapper)).toContain('指静脈の個体値の計測')
+    await wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === '指静脈の個体値の計測')!.trigger('click')
+    await nextTick()
+    expect(wrapper.findComponent(VeinDeviceProfilePanel).exists()).toBe(true)
+    wrapper.findComponent(VeinDeviceProfilePanel).vm.$emit('close')
+    await nextTick()
+    expect(wrapper.findComponent(VeinDeviceProfilePanel).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
+  it('?tab=vein_profile で開ける', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=vein_profile')
+    expect(wrapper.findComponent(VeinDeviceProfilePanel).exists()).toBe(true)
+  })
 })
 
 describe('pages/index — IT点呼タブ (Refs ippoan/alc-app#387)', () => {
@@ -1591,6 +1610,22 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       wrapper.findComponent(VeinRegistration).vm.$emit('close')
       await nextTick()
       expect(wrapper.findComponent(VeinRegistration).exists()).toBe(false)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
+    })
+
+    it('★ 運行管理者タブのハンバーガーから指静脈の個体値の計測を開け (運行管理者席の鍵)、閉じると RoleAuthGate に戻る', async () => {
+      wrapper = await mountIndex('/?role=manager')
+      await wrapper.find('[data-testid="manager-menu-button"]').trigger('click')
+      expect(wrapper.find('[data-testid="manager-menu-vein-profile"]').text()).toBe('指静脈の個体値の計測')
+      await wrapper.find('[data-testid="manager-menu-vein-profile"]').trigger('click')
+      await nextTick()
+      const panel = wrapper.findComponent(VeinDeviceProfilePanel)
+      expect(panel.exists()).toBe(true)
+      expect(panel.props('scope')).toBe('manager-device')
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      panel.vm.$emit('close')
+      await nextTick()
+      expect(wrapper.findComponent(VeinDeviceProfilePanel).exists()).toBe(false)
       expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
     })
   })
