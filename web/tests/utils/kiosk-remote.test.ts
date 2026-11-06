@@ -9,6 +9,8 @@ vi.mock('~/utils/vein-module', () => ({
 }))
 const db = vi.hoisted(() => ({ load: vi.fn(), remove: vi.fn(async (_employeeId: string) => {}) }))
 vi.mock('~/utils/vein-db', () => ({ loadVeinModuleEntries: db.load, deleteVeinModuleEntry: db.remove }))
+const add = vi.hoisted(() => ({ fn: vi.fn() }))
+vi.mock('~/composables/useVeinAddDevice', () => ({ addThisDeviceFinger: add.fn }))
 const lines = vi.hoisted(() => ({ snapshot: vi.fn(() => '') }))
 vi.mock('~/utils/vein-line-log', () => ({
   redactVeinLine: (l: string) => l.replace(/[0-9A-F]{32,}/g, '<hex>'),
@@ -44,6 +46,7 @@ function makePort(over: Partial<KioskRemotePort> = {}) {
     syncWrite: vi.fn(async () => {}),
     syncClear: vi.fn(async () => {}),
     say: vi.fn(async () => {}),
+    enroll: vi.fn(async () => new Uint8Array()),
     verify: vi.fn(async () => true),
     identify: vi.fn(async () => 12),
     syncInfo: vi.fn(async () => ({ users: 1, max: 100 })),
@@ -270,6 +273,26 @@ describe('runKioskCommand', () => {
     expect((await runKioskCommand(cmd('log_upload'), deps)).result).toEqual({ uploaded: false })
     expect(await runKioskCommand(cmd('log_upload'), { port: makePort().port, deviceId: 'k', progress: vi.fn() }))
       .toMatchObject({ ok: false, error: 'この画面ではログを上げられません' })
+  })
+
+  it('vein_add_finger は「この端末の指を足す」と同じ手順を呼び、置き直しを途中経過で返す。失敗は FAILED を鳴らして ok: false', async () => {
+    const p = makePort()
+    const progress = vi.fn(async () => {})
+    add.fn.mockReset().mockImplementation(async (_port, _emp, _scope, onPlace: (n: number, total?: number) => void) => {
+      onPlace(2, 6)
+    })
+    expect(await runKioskCommand(cmd('vein_add_finger', { employee_id: EMP }), { port: p.port, deviceId: 'k', progress, scope: 'manager-device' }))
+      .toEqual({ done: true, ok: true, op: 'vein_add_finger', result: { added: true } })
+    expect(add.fn).toHaveBeenCalledWith(p.port, EMP, 'manager-device', expect.any(Function))
+    expect(progress).toHaveBeenCalledWith({ done: false, stage: 'waiting_finger' })
+    expect(progress).toHaveBeenCalledWith({ done: false, stage: 'place_again', n: 2, total: 6 })
+    expect(p.port.say).toHaveBeenLastCalledWith('ENROLLED')
+    add.fn.mockRejectedValueOnce(new Error('RETAKE'))
+    expect(await runKioskCommand(cmd('vein_add_finger', { employee_id: EMP }), { port: p.port, deviceId: 'k', progress: vi.fn(async () => { throw new Error('net') }) }))
+      .toMatchObject({ ok: false, error: 'RETAKE' })
+    expect(p.port.say).toHaveBeenLastCalledWith('FAILED')
+    expect(await runKioskCommand(cmd('vein_add_finger'), { port: p.port, deviceId: 'k', progress }))
+      .toMatchObject({ ok: false, error: 'employee_id (UUID) が要ります' })
   })
 
   it('知らない op は ok: false', async () => {

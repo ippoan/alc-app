@@ -14,6 +14,7 @@ import type { DeepReadonly, Ref } from 'vue'
 import type { RequestTokenScope } from '~/utils/api'
 import { isDevDeviceToken } from '~/utils/token-selection'
 import { identifyVeinModuleEmployee, prepareVeinModuleRecord } from '~/utils/vein-module'
+import { addThisDeviceFinger } from '~/composables/useVeinAddDevice'
 import type { VeinModulePort } from '~/utils/vein-module'
 import { deleteVeinModuleEntry, loadVeinModuleEntries } from '~/utils/vein-db'
 import { redactVeinLine, snapshotVeinLines } from '~/utils/vein-line-log'
@@ -90,7 +91,8 @@ export function parseKioskCommand(data: unknown): KioskCommand | null {
 
 /** 遠隔操作に使う Vein Station の口 (`useVeinSerial` の一部) */
 export interface KioskRemotePort extends VeinModulePort {
-  say: (x: 'PLACE') => Promise<void>
+  say: (x: 'PLACE' | 'FAILED' | 'ENROLLED') => Promise<void>
+  enroll: (id: number, onPlace?: (n: number, total?: number) => void) => Promise<Uint8Array>
   verify: (id: number) => Promise<boolean>
   identify: () => Promise<number | null>
   syncInfo: () => Promise<{ users: number, max: number }>
@@ -175,6 +177,7 @@ function matchOf(port: KioskRemotePort): Record<string, unknown> | null {
  * | `serial` | `line`, `prefix`, `timeout_ms?` | 1 行送って応答 1 行 (伏せて返す) |
  * | `lines` | `n?` | 直近のシリアルの行 (伏せた写し) |
  * | `firmware_update` | | 指静脈の端末のファームを最新にする (数分かかる。書き終えると画面を読み込み直す) |
+ * | `vein_add_finger` | `employee_id` | 「この端末の指を足す」と同じ手順で、その人の指をこの端末で撮り直して預け、モジュールに置く (置くたびに途中経過) |
  * | `log_upload` | | 溜めた行を今すぐ R2 の device-log へ上げる (10 分ごと・不一致のときを待たずに読むため) |
  */
 export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps): Promise<Record<string, unknown>> {
@@ -260,6 +263,22 @@ export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps):
         if (!deps.firmwareUpdate) throw new Error('この画面ではファームを更新できません')
         await deps.progress({ done: false, stage: 'updating' }).catch(() => {})
         result = { outcome: await deps.firmwareUpdate() }
+        break
+      }
+      case 'vein_add_finger': {
+        const emp = employeeId(a.employee_id)
+        await deps.progress({ done: false, stage: 'waiting_finger' }).catch(() => {})
+        try {
+          await addThisDeviceFinger(port, emp, scope, (n, total) => {
+            void deps.progress({ done: false, stage: 'place_again', n, total }).catch(() => {})
+          })
+        }
+        catch (e) {
+          await port.say('FAILED').catch(() => {})
+          throw e
+        }
+        await port.say('ENROLLED').catch(() => {})
+        result = { added: true }
         break
       }
       case 'log_upload': {

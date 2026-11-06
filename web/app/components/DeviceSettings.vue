@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { readVeinRotateEnabled, writeVeinRotateEnabled } from '~/utils/vein-rotate-setting'
 import type { DeviceSettingsResponse } from '~/types'
 import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
 import { alcoholResultLabel } from '~/utils/alcohol'
@@ -21,6 +22,12 @@ const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJ
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 const alarmDevice = useAlarmDevice()
 const { mode: veinAddedFingerMode, setMode: setVeinAddedFingerMode } = useVeinAddedFingerSetting()
+// 照合が通ったら記録の一番古い 1 本を入れ替えるか (Refs ippoan/alc-app-s3#352)。既定は入れ替える
+const veinRotate = ref(readVeinRotateEnabled())
+function setVeinRotate(on: boolean): void {
+  veinRotate.value = on
+  writeVeinRotateEnabled(on)
+}
 const { setting: veinSecuritySetting, moduleLevel: veinModuleLevel, setSetting: setVeinSecuritySetting } = useVeinSecurityLevel()
 
 // 開発用の遠隔操作 (MCP から Vein Station を操る。既定オフ、Refs ippoan/alc-app-s3#352)。
@@ -719,6 +726,21 @@ async function syncFc1200Date() {
           >
             <option value="native">その場で撮った記録を使う (既定)</option>
             <option value="mixed">混ぜた記録を使う</option>
+          </select>
+        </label>
+
+        <!-- 照合が通ったとき、置いた 1 本で記録の一番古い 1 本を入れ替えるか (Refs ippoan/alc-app-s3#352)。
+             止めると、登録で撮った記録のまま照合する -->
+        <label class="flex flex-col gap-1 text-xs text-gray-700">
+          <span>照合が通ったときの記録の入れ替え</span>
+          <select
+            data-testid="vein-rotate"
+            class="rounded-lg border border-gray-300 px-2 py-1.5 text-xs"
+            :value="veinRotate ? 'on' : 'off'"
+            @change="setVeinRotate(($event.target as HTMLSelectElement).value !== 'off')"
+          >
+            <option value="on">一番古い 1 本を入れ替える (既定)</option>
+            <option value="off">入れ替えない (登録のまま)</option>
           </select>
         </label>
 

@@ -20,6 +20,8 @@ import type { RequestTokenScope } from '~/utils/api'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import type { VeinMatch } from '~/utils/vein-module'
 import { identifyVeinModuleAnyone, identifyVeinModuleEmployee, matchVeinModuleEmployee, prepareVeinModuleRecord, rotateVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
+import { readVeinRotateEnabled } from '~/utils/vein-rotate-setting'
+import { recordVeinLine } from '~/utils/vein-line-log'
 import { identifyVeinEmployee, syncVeinTemplates, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 export interface VeinEmployeeIdentifyOptions {
@@ -149,8 +151,12 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     if (match === null) return opts.missMessage
     const outcome = await identifyVeinModuleEmployee(match.id, opts.scope)
     const failure = await deliver(outcome, true)
-    // 通った: 同じ置き方で撮った 1 本で一番古い 1 本を入れ替える (先へ進めた後に裏で。失敗しても照合の結果は変えない)
-    if (outcome.kind === 'hit') void rotateVeinModuleRecord(vein, match, employeeId, opts.scope)
+    // 通った: 同じ置き方で撮った 1 本で一番古い 1 本を入れ替える (先へ進めた後に裏で。失敗しても照合の結果は変えない)。
+    // 端末設定で止めていれば入れ替えない (vein-rotate-setting)
+    if (outcome.kind === 'hit') {
+      if (readVeinRotateEnabled()) void rotateVeinModuleRecord(vein, match, employeeId, opts.scope)
+      else recordVeinLine(`PC VEIN ROTATE OFF ${match.id}`)
+    }
     return failure
   }
 
