@@ -1276,6 +1276,21 @@ describe.skipIf(isLive)('api', () => {
       })
     })
 
+    it.skipIf(isLive)('postVeinAuthShot は本人との判定に付いた位置のずれを返す (無ければ null)', async () => {
+      const body = {
+        employee_id: 'e1',
+        shot: new Uint8Array([0xDE]),
+        module: { result: 'NOMATCH' as const, slot: null, hit: 'none' as const, score: null, thresholds: null },
+        firmware: null,
+        captured_at: '2026-11-04T00:00:00.000Z',
+      }
+      const shift = { entry: 6, dx: 4, dy: -2, overlap: 900, overlap0: 500 }
+      stubOk({ id: 's1', judgment: { candidates: [{ shift }] } })
+      expect(await postVeinAuthShot(body)).toEqual(shift)
+      stubOk({ id: 's2', judgment: { candidates: [] } })
+      expect(await postVeinAuthShot(body)).toBeNull()
+    })
+
     it.skipIf(isLive)('getVeinModuleTemplates は pick を query で渡す', async () => {
       stubOk({ templates: [] })
       await callApi(() => getVeinModuleTemplates('default', 'own'))

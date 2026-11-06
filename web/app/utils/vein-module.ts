@@ -191,7 +191,7 @@ async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepR
   try {
     if (!await isAuthLogEnabled(scope)) return
     const started = performance.now()
-    await postVeinAuthShot({
+    const shift = await postVeinAuthShot({
       employee_id: employeeId,
       shot,
       module: {
@@ -205,7 +205,9 @@ async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepR
       captured_at: capturedAt,
       pick: recordPick(),
     }, scope)
-    recordVeinLine(`PC VEIN AUTHLOG OK ${Math.round(performance.now() - started)}`)
+    // 位置のずれ (置き方の診断): 件・dx・dy・重なり・ずらさない重なり (千分率)
+    const where = shift ? ` SHIFT ${shift.entry} ${shift.dx} ${shift.dy} ${shift.overlap} ${shift.overlap0}` : ''
+    recordVeinLine(`PC VEIN AUTHLOG OK ${Math.round(performance.now() - started)}${where}`)
   }
   catch (e) {
     recordVeinLine(`PC VEIN AUTHLOG FAILED ${messageOf(e)}`)
