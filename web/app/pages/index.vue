@@ -132,7 +132,7 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'vein_test' | 'it' | 'vein_register'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'vein_test' | 'it' | 'vein_register' | 'vein_profile'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
@@ -149,6 +149,8 @@ const driverSubTab = ref<DriverSubTab>(
   : route.query.tab === 'it' ? 'it'
   // 指静脈の登録 (Vein Station がつながっていなければ画面がそう案内する)
   : route.query.tab === 'vein_register' ? 'vein_register'
+  // 指静脈の個体値の計測 (開発用・本番用どちらの端末でも開く)
+  : route.query.tab === 'vein_profile' ? 'vein_profile'
   : 'normal',
 )
 
@@ -175,6 +177,8 @@ const IT_TENKO_TAB: SubTabDef = { key: 'it', label: 'IT点呼' }
 // 指静脈の登録。血圧計を使わない端末では血圧測定がハンバーガーの奥にあり、その画面の下の入口を
 // 見つけにくいので、ハンバーガーに直接出す (Vein Station がつながっていなければ登録の画面がそう案内する)
 const VEIN_REGISTER_TAB: SubTabDef = { key: 'vein_register', label: '指静脈の登録' }
+// 指静脈の個体値の計測 (端末ごとの癖を測る。Refs ippoan/alc-app-s3#352)。登録と同じく、どの端末にも出す
+const VEIN_PROFILE_TAB: SubTabDef = { key: 'vein_profile', label: '指静脈の個体値の計測' }
 
 // dev端末 (開発用の鍵。本番環境でのテスト用) の記録を見る項目 (Refs ippoan/alc-app#387)。
 // **キオスクの鍵に dev の印がある端末にだけ**ハンバーガーへ足す。選んでもハンバーガーに
@@ -224,6 +228,7 @@ const menuTabs = computed(() => [
   ...(bpInVisible.value ? [] : [BP_TAB]),
   IT_TENKO_TAB,
   VEIN_REGISTER_TAB,
+  VEIN_PROFILE_TAB,
   ...(devKioskMark.value ? [DEV_RECORDS_TAB, VEIN_TEST_TAB] : []),
 ])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
@@ -298,7 +303,7 @@ const menuRef = ref<HTMLElement | null>(null)
 
 // 運行管理者の画面のハンバーガーメニュー (デバイス設定・指静脈の登録を開く。Refs ippoan/alc-app-s3#352)。
 // 開いている間は運行管理者の画面 (認証ゲート) の代わりにそれを出す
-type ManagerView = 'dashboard' | 'device' | 'vein_register'
+type ManagerView = 'dashboard' | 'device' | 'vein_register' | 'vein_profile'
 const managerMenuOpen = ref(false)
 const managerMenuRef = ref<HTMLElement | null>(null)
 const managerView = ref<ManagerView>('dashboard')
@@ -713,6 +718,10 @@ function onRoleTabClick(role: RoleTab) {
           <div v-if="driverSubTab === 'vein_register'" class="flex-1 min-h-0 w-full max-w-lg mx-auto px-4 py-4">
             <VeinRegistration close-label="通常点呼に戻る" @close="driverSubTab = 'normal'" />
           </div>
+          <!-- 指静脈の個体値の計測 (端末の癖)。閉じたら通常点呼へ -->
+          <div v-if="driverSubTab === 'vein_profile'" class="flex-1 min-h-0 w-full max-w-2xl mx-auto px-4 py-4 overflow-y-auto">
+            <VeinDeviceProfilePanel close-label="通常点呼に戻る" @close="driverSubTab = 'normal'" />
+          </div>
           <!-- dev端末の記録 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る -->
           <DevDeviceRecords v-if="driverSubTab === 'dev_records'" class="flex-1 min-h-0" @cleared="onDevMarkCleared" />
           <!-- 指静脈の確認 (Refs ippoan/alc-app#436)。自動照合の画面を置かない専用タブ。dev の印がある端末だけ -->
@@ -792,6 +801,14 @@ function onRoleTabClick(role: RoleTab) {
           >
             指静脈の登録
           </button>
+          <button
+            class="w-full text-left px-4 py-2 text-sm transition-colors"
+            :class="managerView === 'vein_profile' ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
+            data-testid="manager-menu-vein-profile"
+            @click="onManagerMenuSelect('vein_profile')"
+          >
+            指静脈の個体値の計測
+          </button>
         </div>
       </div>
     </div>
@@ -799,6 +816,10 @@ function onRoleTabClick(role: RoleTab) {
     <!-- 指静脈の登録 (運行者の画面の ≡ と同じ画面)。閉じたら運行管理者の画面へ -->
     <div v-if="activeRole === 'manager' && !incomingCallMode && managerView === 'vein_register'" class="flex-1 min-h-0 w-full max-w-lg mx-auto px-4 py-4">
       <VeinRegistration scope="manager-device" close-label="運行管理者の画面に戻る" @close="managerView = 'dashboard'" />
+    </div>
+    <!-- 指静脈の個体値の計測 (運行者の画面の ≡ と同じ画面)。閉じたら運行管理者の画面へ -->
+    <div v-if="activeRole === 'manager' && !incomingCallMode && managerView === 'vein_profile'" class="flex-1 min-h-0 w-full max-w-2xl mx-auto px-4 py-4 overflow-y-auto">
+      <VeinDeviceProfilePanel scope="manager-device" close-label="運行管理者の画面に戻る" @close="managerView = 'dashboard'" />
     </div>
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard

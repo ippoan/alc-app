@@ -126,11 +126,12 @@ const VeinModuleListStub = { name: 'VeinModuleList', template: '<div class="vein
 const BpBluetoothSettingsStub = { name: 'BpBluetoothSettings', template: '<div class="bp-ble-stub" />', emits: ['close'] }
 const VeinPendingApprovalStub = { name: 'VeinPendingApproval', template: '<div class="vein-pending-stub" />', emits: ['close'] }
 const ThermoTestStub = { name: 'ThermoTest', template: '<div class="thermo-test-stub" />', emits: ['close'] }
+const VeinDeviceProfileStub = { name: 'VeinDeviceProfilePanel', template: '<div class="vein-profile-stub" />', props: ['scope', 'closeLabel'], emits: ['close'] }
 
 function mountBp() {
   return mountSuspended(BloodPressureMeasurement, {
     shallow: true,
-    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, ThermoTest: ThermoTestStub, EmployeeCodeKeypad: false, VeinRefreshSuggest: false } },
+    global: { stubs: { NfcStatus: NfcStatusStub, FaceAuth: FaceAuthStub, BleStatus: BleStatusStub, VeinRegistration: VeinRegistrationStub, VeinModuleList: VeinModuleListStub, BpBluetoothSettings: BpBluetoothSettingsStub, VeinPendingApproval: VeinPendingApprovalStub, ThermoTest: ThermoTestStub, VeinDeviceProfilePanel: VeinDeviceProfileStub, EmployeeCodeKeypad: false, VeinRefreshSuggest: false } },
   })
 }
 
@@ -1191,6 +1192,25 @@ describe('BloodPressureMeasurement — 未承認の指静脈 (Refs ippoan/alc-ap
     await w.findComponent(VeinPendingApprovalStub).vm.$emit('close')
     await flush(w)
     expect(w.findComponent(VeinPendingApprovalStub).exists()).toBe(false)
+    expect(w.find('[data-testid="bp-entry"]').exists()).toBe(true)
+    w.unmount()
+    veinIsConnected.value = false
+  })
+})
+
+describe('BloodPressureMeasurement — 指静脈の個体値の計測', () => {
+  it('Vein Station がつながっているときに入口を出し、測定台の鍵で開いて、閉じると入口へ戻る', async () => {
+    bpUiState.value = 'show'
+    veinIsConnected.value = true
+    const w = await mountBp()
+    await w.find('[data-testid="vein-profile-open"]').trigger('click')
+    await flush(w)
+    const panel = w.findComponent(VeinDeviceProfileStub)
+    expect(panel.exists()).toBe(true)
+    expect(panel.props('scope')).toBe('bp-station')
+    await panel.vm.$emit('close')
+    await flush(w)
+    expect(w.findComponent(VeinDeviceProfileStub).exists()).toBe(false)
     expect(w.find('[data-testid="bp-entry"]').exists()).toBe(true)
     w.unmount()
     veinIsConnected.value = false

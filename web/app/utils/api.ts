@@ -918,6 +918,30 @@ export async function postVeinAuthShot(shot: VeinAuthShot, scope: RequestTokenSc
   return res?.judgment?.candidates?.[0]?.shift ?? null
 }
 
+/** 認証ログを送ったときにサーバーが返す本人との判定 (先頭の候補の点数・規則・位置のずれ) */
+export interface VeinAuthJudgment {
+  /** `match` / `again` / `nomatch` / `error` */
+  result: string
+  /** `chara_verify` の s0, s1, s2 (候補が無ければ null) */
+  scores: [number, number, number] | null
+  /** 通した規則 (`A` / `B` / `C`。古いサーバー・不一致は null) */
+  rule: string | null
+  shift: VeinShotShift | null
+}
+
+/**
+ * 認証ログを 1 件送り、本人との判定を返す (指静脈の個体値の計測が使う)。対象外のテナントの 204・判定の無い
+ * 古いサーバーは null
+ */
+export async function postVeinAuthShotJudged(shot: VeinAuthShot, scope: RequestTokenScope = 'default'): Promise<VeinAuthJudgment | null> {
+  type Candidate = { scores?: [number, number, number]; rule?: string; shift?: VeinShotShift }
+  const res = await request<{ judgment?: { result?: string; candidates?: Candidate[] } } | undefined>('/api/vein/auth-shots', { method: 'POST', body: JSON.stringify({ ...shot, shot: bytesToBase64(shot.shot) }) }, scope)
+  const j = res?.judgment
+  if (!j?.result) return null
+  const c = j.candidates?.[0]
+  return { result: j.result, scores: c?.scores ?? null, rule: c?.rule ?? null, shift: c?.shift ?? null }
+}
+
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
 export interface ApiVeinModuleRecord {
   employee_id: string
