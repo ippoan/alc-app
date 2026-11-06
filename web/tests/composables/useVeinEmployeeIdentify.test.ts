@@ -343,6 +343,22 @@ describe('useVeinEmployeeIdentify', () => {
       app.unmount()
     })
 
+    it('端末設定で入れ替えを止めていれば、通っても入れ替えずに診断ログに残す', async () => {
+      localStorage.setItem('alc-vein-rotate', '0')
+      try {
+        const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+        const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1', scope: 'manager-device' })
+        await api.identify()
+        expect(opts.onEmployee).toHaveBeenCalled()
+        expect(mod.rotateVeinModuleRecord).not.toHaveBeenCalled()
+        expect(snapshotVeinLines()).toContain('PC VEIN ROTATE OFF 12')
+        app.unmount()
+      }
+      finally {
+        localStorage.removeItem('alc-vein-rotate')
+      }
+    })
+
     it('★ 通ったら人を渡してから、同じ置き方で撮った記録で入れ替える (画面は待たない)', async () => {
       const order: string[] = []
       let finish: () => void = () => {}
