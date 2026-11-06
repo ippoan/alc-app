@@ -111,7 +111,15 @@ export interface KioskRemoteDeps {
    * 渡さない画面では `firmware_update` を断る
    */
   firmwareUpdate?: () => Promise<string>
+  /**
+   * 溜めた Vein Station の行を今すぐ recorder の `/device-log` (R2) へ上げる
+   * (`useVeinLogUpload().upload`)。送れたら true。渡さない画面では `log_upload` を断る
+   */
+  logUpload?: (reason: string) => Promise<boolean>
 }
+
+/** `log_upload` で上げるときの理由 (R2 の記録の `reason`) */
+export const KIOSK_REMOTE_LOG_REASON = 'on_demand'
 
 function moduleId(v: unknown): number {
   const n = Number(v)
@@ -167,6 +175,7 @@ function matchOf(port: KioskRemotePort): Record<string, unknown> | null {
  * | `serial` | `line`, `prefix`, `timeout_ms?` | 1 行送って応答 1 行 (伏せて返す) |
  * | `lines` | `n?` | 直近のシリアルの行 (伏せた写し) |
  * | `firmware_update` | | 指静脈の端末のファームを最新にする (数分かかる。書き終えると画面を読み込み直す) |
+ * | `log_upload` | | 溜めた行を今すぐ R2 の device-log へ上げる (10 分ごと・不一致のときを待たずに読むため) |
  */
 export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps): Promise<Record<string, unknown>> {
   const { port, scope = 'default' } = deps
@@ -253,6 +262,11 @@ export async function runKioskCommand(cmd: KioskCommand, deps: KioskRemoteDeps):
         result = { outcome: await deps.firmwareUpdate() }
         break
       }
+      case 'log_upload': {
+        if (!deps.logUpload) throw new Error('この画面ではログを上げられません')
+        result = { uploaded: await deps.logUpload(KIOSK_REMOTE_LOG_REASON) }
+        break
+      }
       default:
         throw new Error(`知らない op です: ${cmd.op}`)
     }
@@ -277,6 +291,8 @@ export async function respondToKioskCommand(data: unknown, deps: {
   report: (id: string, payload: Record<string, unknown>) => Promise<void>
   /** 指静脈の端末のファームを最新にする ({@link KioskRemoteDeps.firmwareUpdate}) */
   firmwareUpdate?: () => Promise<string>
+  /** 溜めた行を今すぐ上げる ({@link KioskRemoteDeps.logUpload}) */
+  logUpload?: (reason: string) => Promise<boolean>
 }): Promise<void> {
   const cmd = parseKioskCommand(data)
   if (!cmd || !readKioskRemoteEnabled()) return
@@ -293,6 +309,7 @@ export async function respondToKioskCommand(data: unknown, deps: {
       progress: send,
       scope: deps.scope,
       firmwareUpdate: deps.firmwareUpdate,
+      logUpload: deps.logUpload,
     }))
   }
   catch (e) {

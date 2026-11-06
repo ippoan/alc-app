@@ -260,6 +260,18 @@ describe('runKioskCommand', () => {
       .toMatchObject({ ok: false, error: 'この画面ではファームを更新できません' })
   })
 
+  it('log_upload は理由 on_demand で上げて結果を返す。渡されていない画面では断る', async () => {
+    const logUpload = vi.fn(async () => true)
+    const deps = { port: makePort().port, deviceId: 'k', progress: vi.fn(), logUpload }
+    expect(await runKioskCommand(cmd('log_upload'), deps))
+      .toEqual({ done: true, ok: true, op: 'log_upload', result: { uploaded: true } })
+    expect(logUpload).toHaveBeenCalledWith('on_demand')
+    logUpload.mockResolvedValueOnce(false)
+    expect((await runKioskCommand(cmd('log_upload'), deps)).result).toEqual({ uploaded: false })
+    expect(await runKioskCommand(cmd('log_upload'), { port: makePort().port, deviceId: 'k', progress: vi.fn() }))
+      .toMatchObject({ ok: false, error: 'この画面ではログを上げられません' })
+  })
+
   it('知らない op は ok: false', async () => {
     expect(await runKioskCommand(cmd('nope'), { port: makePort().port, deviceId: 'k', progress: vi.fn() }))
       .toEqual({ done: true, ok: false, op: 'nope', error: '知らない op です: nope' })
@@ -318,6 +330,14 @@ describe('respondToKioskCommand', () => {
     const d = deps({ firmwareUpdate })
     await respondToKioskCommand(frame('*', 'firmware_update'), d)
     expect(d.report).toHaveBeenLastCalledWith('c1', { done: true, ok: true, op: 'firmware_update', result: { outcome: 'up_to_date' } })
+  })
+
+  it('ログを上げる口を runKioskCommand へ渡す', async () => {
+    writeKioskRemoteEnabled(true)
+    const logUpload = vi.fn(async () => true)
+    const d = deps({ logUpload })
+    await respondToKioskCommand(frame('*', 'log_upload'), d)
+    expect(d.report).toHaveBeenLastCalledWith('c1', { done: true, ok: true, op: 'log_upload', result: { uploaded: true } })
   })
 
   it('返事の失敗は握る', async () => {
