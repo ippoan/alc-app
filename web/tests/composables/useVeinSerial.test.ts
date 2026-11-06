@@ -382,11 +382,13 @@ describe('useVeinSerial', () => {
       const dev = createMockPort()
       await connectDevice(dev)
       expect(vein.nfcAliveAt.value).toBeNull()
-      dev.emit('EVT NFC_ALIVE tick=42\n')
+      dev.emit('EVT NFC_ALIVE tick=42\nEVT NFC_INIT_NG rc=-1\n')
       await vi.advanceTimersByTimeAsync(0)
       expect(vein.nfcAliveAt.value).toBe(Date.now())
+      expect(vein.nfcInitNgAt.value).toBe(Date.now())
       await vein.disconnect()
       expect(vein.nfcAliveAt.value).toBeNull()
+      expect(vein.nfcInitNgAt.value).toBeNull()
     })
 
     it('時間計測: EVT OMRON / EVT BP / EVT THERMO の行と、血圧・体温の JSON の type だけを devTiming へ渡す', async () => {
