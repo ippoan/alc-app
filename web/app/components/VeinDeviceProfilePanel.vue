@@ -27,14 +27,19 @@ onUnmounted(() => measure.stop())
 
 const entries = ref<VeinModuleEntry[]>([])
 const names = ref(new Map<string, string>())
+/** モジュールに入っていない乗務員 (サーバーに記録があれば計れる。モジュールの判定は「別の人」か「不一致」になる) */
+const others = ref<ApiEmployee[]>([])
 const employeeId = ref('')
 const count = ref(VEIN_PROFILE_DEFAULT_COUNT)
 
 onMounted(async () => {
-  entries.value = (await loadVeinModuleEntries()).filter(e => e.approved).sort((a, b) => a.moduleId - b.moduleId)
+  // 承認待ちの人も出す (計測はサーバーの本人の記録と比べるだけで、承認は関係しない)
+  entries.value = (await loadVeinModuleEntries()).sort((a, b) => a.moduleId - b.moduleId)
   try {
     const emps: ApiEmployee[] = await getEmployees(props.scope)
     names.value = new Map(emps.map(e => [e.id, e.name]))
+    const inModule = new Set(entries.value.map(e => e.employeeId))
+    others.value = emps.filter(e => !inModule.has(e.id)).sort((a, b) => a.name.localeCompare(b.name, 'ja'))
   }
   catch {
     // 名前が引けなくても ID で選べる
@@ -42,7 +47,8 @@ onMounted(async () => {
 })
 
 function nameOf(entry: VeinModuleEntry): string {
-  return names.value.get(entry.employeeId) ?? `(名前不明 ${entry.employeeId.slice(0, 8)})`
+  const name = names.value.get(entry.employeeId) ?? `(名前不明 ${entry.employeeId.slice(0, 8)})`
+  return entry.approved ? name : `${name} (承認待ち)`
 }
 
 const disabledReason = computed<string | null>(() => {
@@ -83,10 +89,15 @@ const p = computed(() => measure.profile.value)
 
     <div class="grid grid-cols-3 gap-3 items-end">
       <label class="col-span-2 text-sm text-gray-700">
-        乗務員 (この端末のモジュールにいる人)
+        乗務員
         <select v-model="employeeId" class="mt-1 w-full rounded-md border border-gray-300 px-2 py-2" :disabled="measure.busy.value" data-testid="vein-profile-employee">
           <option value="" disabled>選んでください</option>
-          <option v-for="e in entries" :key="e.employeeId" :value="e.employeeId">{{ e.moduleId }}: {{ nameOf(e) }}</option>
+          <optgroup v-if="entries.length > 0" label="この端末のモジュールにいる人">
+            <option v-for="e in entries" :key="e.employeeId" :value="e.employeeId">{{ e.moduleId }}: {{ nameOf(e) }}</option>
+          </optgroup>
+          <optgroup v-if="others.length > 0" label="モジュールにいない人">
+            <option v-for="e in others" :key="e.id" :value="e.id">{{ e.name }}</option>
+          </optgroup>
         </select>
       </label>
       <label class="text-sm text-gray-700">
@@ -94,7 +105,9 @@ const p = computed(() => measure.profile.value)
         <input v-model.number="count" type="number" min="1" max="30" class="mt-1 w-full rounded-md border border-gray-300 px-2 py-2" :disabled="measure.busy.value" data-testid="vein-profile-count">
       </label>
     </div>
-    <p v-if="entries.length === 0" class="text-sm text-gray-500" data-testid="vein-profile-empty">この端末のモジュールに、承認済みの乗務員がいません</p>
+    <p v-if="entries.length === 0" class="text-sm text-gray-500" data-testid="vein-profile-empty">
+      この端末のモジュールに乗務員がいません (モジュールにいない人も選べます。指静脈を登録した人ならサーバーで判定されます)
+    </p>
 
     <div class="grid grid-cols-2 gap-3">
       <button class="px-4 py-3 rounded-md text-sm font-medium bg-blue-600 text-white disabled:opacity-40" :disabled="!canStart" data-testid="vein-profile-start" @click="start">計測を始める</button>
