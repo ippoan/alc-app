@@ -18,6 +18,7 @@ import VeinStationFirmwareNotice from '~/components/VeinStationFirmwareNotice.vu
 import MeasurementLog from '~/components/MeasurementLog.vue'
 import DevDeviceRecords from '~/components/DevDeviceRecords.vue'
 import VeinTestPanel from '~/components/VeinTestPanel.vue'
+import VeinRegistration from '~/components/VeinRegistration.vue'
 import TenkoItAdminView from '~/components/TenkoItAdminView.vue'
 import TenkoDeskView from '~/components/TenkoDeskView.vue'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
@@ -1194,6 +1195,53 @@ describe('pages/index — 指静脈の確認タブ (Refs ippoan/alc-app#436)', (
     noteDeviceToken('kiosk', null)
     await nextTick()
     expect(wrapper.find('.normal-measurement-stub[it-mode]').exists()).toBe(true)
+  })
+})
+
+describe('pages/index — 指静脈の登録 (メニュー)', () => {
+  // 血圧計を使わない端末では血圧測定がハンバーガーの奥にあり、その下の登録の入口が見つけにくい。
+  // ハンバーガーに直接出す (Vein Station がつながっていなければ登録の画面がそう案内する)
+  let wrapper: VueWrapper | null = null
+  const HAMBURGER = 'M4 6h16M4 12h16M4 18h16'
+  const LABEL = '指静脈の登録'
+
+  beforeEach(() => {
+    bpUi.state.value = 'unused'
+    landscape.on.value = false
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  async function toggleMenu(w: VueWrapper) {
+    const b = w.findAll('button').find(x => x.html().includes(HAMBURGER))
+    if (!b) throw new Error('hamburger not found')
+    await b.trigger('click')
+    await nextTick()
+  }
+
+  function menuLabels(w: VueWrapper) {
+    return w.find('.absolute.right-0').findAll('button').map(b => b.text())
+  }
+
+  it('★ メニューに出て、選ぶと登録の画面が開き、閉じると通常点呼へ戻る', async () => {
+    wrapper = await mountIndex('/?role=driver')
+    await toggleMenu(wrapper)
+    await wrapper.find('.absolute.right-0').findAll('button').find(b => b.text() === LABEL)!.trigger('click')
+    await nextTick()
+    expect(wrapper.findComponent(VeinRegistration).exists()).toBe(true)
+    expect(wrapper.findComponent(BloodPressureMeasurement).exists()).toBe(false)
+    wrapper.findComponent(VeinRegistration).vm.$emit('close')
+    await nextTick()
+    expect(wrapper.findComponent(VeinRegistration).exists()).toBe(false)
+    expect(wrapper.find('.normal-measurement-stub').exists()).toBe(true)
+  })
+
+  it('?tab=vein_register で開ける', async () => {
+    wrapper = await mountIndex('/?role=driver&tab=vein_register')
+    expect(wrapper.findComponent(VeinRegistration).exists()).toBe(true)
   })
 })
 

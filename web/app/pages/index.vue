@@ -132,7 +132,7 @@ onMounted(() => {
 })
 
 // --- 運行者サブタブ ---
-type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'vein_test' | 'it'
+type DriverSubTab = 'normal' | 'tenko' | 'remote' | 'demo' | 'remote_demo' | 'device' | 'bp' | 'dev_records' | 'vein_test' | 'it' | 'vein_register'
 const driverSubTab = ref<DriverSubTab>(
   route.query.tab === 'tenko' ? 'tenko'
   : route.query.tab === 'demo' ? 'demo'
@@ -147,6 +147,8 @@ const driverSubTab = ref<DriverSubTab>(
   : route.query.tab === 'vein_test' && isDevDevice('kiosk') ? 'vein_test'
   // IT点呼 は印に関係なくどの端末でも開ける
   : route.query.tab === 'it' ? 'it'
+  // 指静脈の登録 (Vein Station がつながっていなければ画面がそう案内する)
+  : route.query.tab === 'vein_register' ? 'vein_register'
   : 'normal',
 )
 
@@ -169,6 +171,10 @@ const MENU_TABS: readonly SubTabDef[] = [
 // IT点呼 (通常点呼の最後に運行管理者と通話し、判定が付いたら完了)。**どの端末にも**ハンバーガーへ
 // 出す (開発用の印は見ない。Refs ippoan/alc-app#387)
 const IT_TENKO_TAB: SubTabDef = { key: 'it', label: 'IT点呼' }
+
+// 指静脈の登録。血圧計を使わない端末では血圧測定がハンバーガーの奥にあり、その画面の下の入口を
+// 見つけにくいので、ハンバーガーに直接出す (Vein Station がつながっていなければ登録の画面がそう案内する)
+const VEIN_REGISTER_TAB: SubTabDef = { key: 'vein_register', label: '指静脈の登録' }
 
 // dev端末 (開発用の鍵。本番環境でのテスト用) の記録を見る項目 (Refs ippoan/alc-app#387)。
 // **キオスクの鍵に dev の印がある端末にだけ**ハンバーガーへ足す。選んでもハンバーガーに
@@ -217,6 +223,7 @@ const menuTabs = computed(() => [
   ...MENU_TABS,
   ...(bpInVisible.value ? [] : [BP_TAB]),
   IT_TENKO_TAB,
+  VEIN_REGISTER_TAB,
   ...(devKioskMark.value ? [DEV_RECORDS_TAB, VEIN_TEST_TAB] : []),
 ])
 // ハンバーガーのアイコンを点灯するか (= 今選んでいるタブがメニュー側にあるか)。
@@ -701,6 +708,10 @@ function onRoleTabClick(role: RoleTab) {
           <!-- 血圧測定タブ。血圧だけを測る端末はこのタブを start_url に持つ manifest で
                インストールする (Refs ippoan/alc-app-s3#135) -->
           <BloodPressureMeasurement v-if="driverSubTab === 'bp'" class="flex-1 min-h-0" />
+          <!-- 指静脈の登録 (血圧測定の画面の入口と同じ画面)。閉じたら通常点呼へ -->
+          <div v-if="driverSubTab === 'vein_register'" class="flex-1 min-h-0 w-full max-w-lg mx-auto px-4 py-4">
+            <VeinRegistration @close="driverSubTab = 'normal'" />
+          </div>
           <!-- dev端末の記録 (Refs ippoan/alc-app#387)。dev の印がある端末のハンバーガーからだけ入る -->
           <DevDeviceRecords v-if="driverSubTab === 'dev_records'" class="flex-1 min-h-0" @cleared="onDevMarkCleared" />
           <!-- 指静脈の確認 (Refs ippoan/alc-app#436)。自動照合の画面を置かない専用タブ。dev の印がある端末だけ -->
