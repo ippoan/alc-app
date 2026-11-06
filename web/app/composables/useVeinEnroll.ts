@@ -17,7 +17,7 @@
  * 「承認待ち」で入れる → 案内 ENROLLED。
  */
 
-import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage } from '~/utils/api'
+import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage, type RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import { allocateOrEvictVeinModuleId, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
@@ -49,7 +49,9 @@ export function veinErrorMessage(e: unknown): string {
   return rc && VEIN_RC_MESSAGES[rc] ? `${VEIN_RC_MESSAGES[rc]} (RC=${rc})` : raw
 }
 
-export function useVeinEnroll() {
+/** `scope`: 送る鍵 (運行管理者席の画面は `'manager-device'`。省略は今までどおり) */
+export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
+  const scope = opts.scope ?? 'default'
   const veinSerial = useVeinSerial()
   const registering = ref(false)
   const error = ref<string | null>(null)
@@ -95,7 +97,7 @@ export function useVeinEnroll() {
     const first = await veinSerial.capture()
     await veinSerial.say('AGAIN')
     const second = await veinSerial.capture()
-    await putVeinTemplate(employeeId, [first, second])
+    await putVeinTemplate(employeeId, [first, second], scope)
   }
 
   /** モジュールの経路: モジュールに登録し、記録をサーバーへ預け、対応表に承認待ちで入れる */
@@ -127,7 +129,7 @@ export function useVeinEnroll() {
     }
     let saved: { updated_at: string }
     try {
-      saved = await putVeinModuleRecord(employeeId, record)
+      saved = await putVeinModuleRecord(employeeId, record, scope)
     }
     catch (e) {
       // サーバーが預からなかった記録はモジュールに残さない (消せなくても照合は対応表で外れる)

@@ -1161,6 +1161,20 @@ describe.skipIf(isLive)('api', () => {
       expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
     })
 
+    it.skipIf(isLive)('★ putVeinModuleRecord の manager-device は運行管理者席の鍵だけで送り、取れなければ投げる', async () => {
+      initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt', async () => 'seat-jwt')
+      mockFetch.mockResolvedValueOnce(okJson({ employee_id: TEST_EMPLOYEE_ID, updated_at: 'v1' }))
+      await putVeinModuleRecord(TEST_EMPLOYEE_ID, new Uint8Array([0xDE, 0xED]), 'manager-device')
+      const [url, init] = mockFetch.mock.calls.at(-1)!
+      expect(url).toContain(`/vein/templates/${TEST_EMPLOYEE_ID}/module`)
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer seat-jwt')
+
+      initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt', async () => null)
+      const calls = mockFetch.mock.calls.length
+      await expect(putVeinModuleRecord(TEST_EMPLOYEE_ID, new Uint8Array([1]), 'manager-device')).rejects.toThrow(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+      expect(mockFetch.mock.calls.length).toBe(calls)
+    })
+
     // この端末の指を足す (Refs ippoan/alc-app#558)。端末の token でしか送らない。live では書き込まない
     it.skipIf(isLive)('putVeinModuleDeviceRecord は端末の token で PUT …/module/devices へ base64 の記録を送る (管理者のログインがあっても)', async () => {
       initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt')

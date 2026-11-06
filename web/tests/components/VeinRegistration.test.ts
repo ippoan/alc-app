@@ -123,7 +123,7 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
     expect(wrapper.text()).toContain('テスト太郎さん')
     await button(wrapper, '指静脈を登録').trigger('click')
     await flushPromises()
-    expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-1', ['HEX-FIRST', 'HEX-SECOND'])
+    expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-1', ['HEX-FIRST', 'HEX-SECOND'], 'default')
     expect(veinSay.mock.calls.map(c => c[0])).toEqual(['PLACE', 'AGAIN', 'ENROLLED'])
     expect(wrapper.text()).toContain('指静脈を登録しました')
     expect(wrapper.text()).toContain('管理者の承認後に使えます')
@@ -204,7 +204,19 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
       expect(wrapper.text()).toContain('テスト花子さん')
       await button(wrapper, '指静脈を登録').trigger('click')
       await flushPromises()
-      expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-2', ['AABBCC', 'AABBCC'])
+      expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-2', ['AABBCC', 'AABBCC'], 'default')
+    })
+
+    it('運行管理者の画面から開いたとき (scope) は、社員番号と保存を席の鍵の口で送り、閉じる文言を替えられる', async () => {
+      const wrapper = await mountVein({ scope: 'manager-device', closeLabel: '運行管理者の画面に戻る' })
+      expect(wrapper.text()).toContain('運行管理者の画面に戻る')
+      expect(wrapper.text()).not.toContain('血圧測定に戻る')
+      await press(wrapper, '0', '4', '2', 'submit')
+      await flushPromises()
+      expect(getEmployeeByCodeMock).toHaveBeenCalledWith('042', 'manager-device')
+      await button(wrapper, '指静脈を登録').trigger('click')
+      await flushPromises()
+      expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-test-2', ['AABBCC', 'AABBCC'], 'manager-device')
     })
 
     it('見つからない (404) ときは番号の未登録を出し、入力は残す', async () => {
