@@ -1228,6 +1228,8 @@ describe('BloodPressureMeasurement — カード・社員番号で人を選ん�
     await flush(wrapper)
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
     expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('テスト太郎さんの指静脈と一致しません。本人の指を置いてください')
+    // 記録が無いのではないので、登録へは促さない
+    expect(wrapper.find('[data-testid="bp-register-expected"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="bp-expected"]').text()).toContain('テスト太郎さん: 指を置いてください')
     // 選んでいる間はカード・社員番号の入口を隠す
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
@@ -1302,8 +1304,20 @@ describe('BloodPressureMeasurement — カード・社員番号で人を選ん�
       const wrapper = await mountBp()
       await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-6')
       await flush(wrapper)
-      expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('この人の承認済みの指静脈の記録がありません。下の「指静脈を登録する」から登録して運行管理者の承認を受けてください')
+      expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('この人の承認済みの指静脈の記録がありません。登録して運行管理者の承認を受けてください')
       expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+
+      // その人で登録画面を開く (カード・社員番号を打ち直させない)。閉じると最初の段へ戻り、選んだ人は残らない
+      const register = wrapper.find('[data-testid="bp-register-expected"]')
+      expect(register.text()).toBe('テスト花子さんの指静脈を登録する')
+      await register.trigger('click')
+      expect(wrapper.findComponent(VeinRegistrationStub).props('employee')).toEqual(HANAKO)
+      await wrapper.findComponent(VeinRegistrationStub).vm.$emit('close')
+      expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="bp-expected"]').exists()).toBe(false)
+      // 最初の段の入口から開くときは人を決めない
+      await wrapper.findAll('button').find(b => b.text() === '指静脈を登録する')!.trigger('click')
+      expect(wrapper.findComponent(VeinRegistrationStub).props('employee')).toBeNull()
       wrapper.unmount()
     })
   })
