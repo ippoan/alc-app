@@ -41,9 +41,11 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
 // Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)
 const veinConnected = ref(false)
 const veinNfcAliveAt = ref<number | null>(null)
+const veinNfcInitNgAt = ref<number | null>(null)
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: readonly(veinConnected),
   nfcAliveAt: readonly(veinNfcAliveAt),
+  nfcInitNgAt: readonly(veinNfcInitNgAt),
 }))
 
 const deviceModelForFingerprint = ref<string | null>(null)
@@ -363,7 +365,16 @@ describe('NfcStatus — Vein Station の NFC の生存 (EVT NFC_ALIVE、Refs ipp
     isConnected.value = true
     veinConnected.value = true
     veinNfcAliveAt.value = null
+    veinNfcInitNgAt.value = null
     isCheckingKioskAccess.value = false
+  })
+
+  it('NFC_INIT_NG が直近に来ていれば「NFC 未検出」(赤)', async () => {
+    veinNfcInitNgAt.value = Date.now()
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).toContain('NFC 未検出')
+    expect(wrapper.find('.bg-red-500').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('NFC_ALIVE が途絶えたら「NFC 応答なし」、来ていれば・一度も来ていなければ今までどおり', async () => {

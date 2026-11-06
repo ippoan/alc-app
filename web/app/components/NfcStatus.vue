@@ -120,15 +120,19 @@ const aliveNow = ref(Date.now())
 let aliveTimer: ReturnType<typeof setInterval> | null = null
 onMounted(() => { aliveTimer = setInterval(() => { aliveNow.value = Date.now() }, 5000) })
 onBeforeUnmount(() => { if (aliveTimer) clearInterval(aliveTimer) })
-const nfcStalled = computed(() =>
-  veinSerial.isConnected.value && nfcAliveState(veinSerial.nfcAliveAt?.value ?? null, aliveNow.value) === 'stale')
+const nfcAlive = computed(() => veinSerial.isConnected.value
+  ? nfcAliveState(veinSerial.nfcAliveAt?.value ?? null, aliveNow.value, veinSerial.nfcInitNgAt?.value ?? null)
+  : 'unknown')
+// 赤にする (NFC が止まった・ユニットが見つからない)
+const nfcStalled = computed(() => nfcAlive.value === 'stale' || nfcAlive.value === 'missing')
 
 const statusText = computed(() => {
   // 起動時の CoreS3 探索中 (上限 3 秒) は「未検出」と確定させない (Refs #238)
   if (isCheckingKioskAccess.value) return '確認中…'
   if (error.value) return error.value
   if (!isConnected.value) return 'NFC リーダー未接続'
-  if (nfcStalled.value) return 'NFC 応答なし (端末が自動で再起動します)'
+  if (nfcAlive.value === 'missing') return 'NFC 未検出 (NFC ユニットの配線・電源を確認してください)'
+  if (nfcAlive.value === 'stale') return 'NFC 応答なし (端末が自動で再起動します)'
   if ((readers.value?.length ?? 0) === 0) return 'NFC リーダー未検出'
   return 'NFC 待機中'
 })
