@@ -25,6 +25,7 @@
  */
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
+import { noteVeinShotView } from '~/utils/vein-shot-view'
 import { getEmployeeById, getEmployees, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
 import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
@@ -207,6 +208,8 @@ async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepR
     }, scope)
     // 位置のずれ (置き方の診断): 件・dx・dy・重なり・ずらさない重なり (千分率)
     const where = shift ? ` SHIFT ${shift.entry} ${shift.dx} ${shift.dy} ${shift.overlap} ${shift.overlap0}` : ''
+    // 開発用の端末だけ、置いた指と登録の平面を画面の隅に描く (components/VeinShiftView.vue)
+    if (shift) noteVeinShotView({ shift, shot, employeeId, scope, pick: recordPick(), at: Date.now() })
     recordVeinLine(`PC VEIN AUTHLOG OK ${Math.round(performance.now() - started)}${where}`)
   }
   catch (e) {

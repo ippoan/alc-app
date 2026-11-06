@@ -154,6 +154,8 @@ useHead({
       <div class="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
     <NuxtPage v-else />
+    <!-- 開発用の端末だけ: 指静脈の置いた指と登録の平面 (Refs ippoan/alc-app-s3#352) -->
+    <ClientOnly><VeinShiftView /></ClientOnly>
     <StagingFooter :api-base="apiBase" :tenant-id="stagingTenantId" :staging-api-key="stagingApiKey" />
     <VersionBadge :api-base="apiBase" :frontend-version="appVersion">
       <span v-if="fwWatch" data-testid="dev-firmware-watch-badge">
