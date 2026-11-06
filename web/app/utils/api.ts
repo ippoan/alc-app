@@ -889,9 +889,25 @@ export interface VeinAuthShot {
   pick?: 'own'
 }
 
-/** 認証ログを 1 件送る。対象外のテナントは 204 (保存しない) */
-export async function postVeinAuthShot(shot: VeinAuthShot, scope: RequestTokenScope = 'default'): Promise<void> {
-  await request<void>('/api/vein/auth-shots', { method: 'POST', body: JSON.stringify({ ...shot, shot: bytesToBase64(shot.shot) }) }, scope)
+/**
+ * サーバーの本人との判定に付く、撮影と記録の件のうちいちばん重なった件との位置のずれ
+ * (置き方の診断。撮影が記録より右・下なら正。重なりは千分率)
+ */
+export interface VeinShotShift {
+  entry: number
+  dx: number
+  dy: number
+  overlap: number
+  overlap0: number
+}
+
+/**
+ * 認証ログを 1 件送る。対象外のテナントは 204 (保存しない)。返すのは本人との判定に付いた位置のずれ
+ * (無い・古いサーバー・204 は null)
+ */
+export async function postVeinAuthShot(shot: VeinAuthShot, scope: RequestTokenScope = 'default'): Promise<VeinShotShift | null> {
+  const res = await request<{ judgment?: { candidates?: { shift?: VeinShotShift }[] } } | undefined>('/api/vein/auth-shots', { method: 'POST', body: JSON.stringify({ ...shot, shot: bytesToBase64(shot.shot) }) }, scope)
+  return res?.judgment?.candidates?.[0]?.shift ?? null
 }
 
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */

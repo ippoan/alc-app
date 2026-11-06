@@ -665,6 +665,12 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
     await vi.waitFor(async () => expect((await lines()).some(l => /^PC VEIN AUTHLOG OK \d+$/.test(l))).toBe(true))
   })
 
+  it('サーバーが返した位置のずれを AUTHLOG の行に付ける', async () => {
+    api.postVeinAuthShot.mockResolvedValue({ entry: 7, dx: -6, dy: 3, overlap: 812, overlap0: 344 })
+    await mod.matchVeinModuleEmployee(keep(12), 'emp-1')
+    await vi.waitFor(async () => expect((await lines()).some(l => /^PC VEIN AUTHLOG OK \d+ SHIFT 7 -6 3 812 344$/.test(l))).toBe(true))
+  })
+
   it('★ 他人の枠: hit=other、本番は不一致のまま。不一致: result=NOMATCH・slot=null・hit=none。点数・閾値・ファームが無ければ null', async () => {
     expect(await mod.matchVeinModuleEmployee(keep(13), 'emp-1', undefined, () => {}, 'manager-device')).toBeNull()
     await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(2)) // 1 回やり直すので 2 回
