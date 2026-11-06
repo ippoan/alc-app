@@ -118,7 +118,7 @@ describe('pages/register — 指静脈登録', () => {
     await flushPromises()
 
     expect(veinCapture).toHaveBeenCalledTimes(2)
-    expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-1', ['HEX-FIRST', 'HEX-SECOND'])
+    expect(putVeinTemplateMock).toHaveBeenCalledWith('emp-1', ['HEX-FIRST', 'HEX-SECOND'], 'default')
     expect(veinSay.mock.calls.map(c => c[0])).toEqual(['PLACE', 'AGAIN', 'ENROLLED'])
     expect(wrapper.text()).toContain('指静脈を登録しました')
   })
