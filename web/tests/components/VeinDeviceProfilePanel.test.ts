@@ -42,14 +42,17 @@ describe('VeinDeviceProfilePanel', () => {
       { employeeId: 'emp-b', moduleId: 12, updatedAt: 't', approved: false },
       { employeeId: 'emp-a', moduleId: 10, updatedAt: 't', approved: true },
     ])
-    getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }])
+    getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }, { id: 'emp-b', name: '試験 二郎' }, { id: 'emp-c', name: '試験 三郎' }])
     judgedMock.mockReset().mockResolvedValue({ result: 'match', scores: [60, 61, 80], rule: 'A', shift: { entry: 1, dx: -3, dy: 1, overlap: 700, overlap0: 600 } })
   })
 
-  it('承認済みの乗務員だけを選べ、選ぶまで始められない。名前は渡した鍵で引く', async () => {
+  it('モジュールにいる人 (承認待ちは印付き) と、いない人を分けて選べ、選ぶまで始められない。名前は渡した鍵で引く', async () => {
     const w = await mountPanel({ scope: 'manager-device' })
-    const options = w.find('[data-testid="vein-profile-employee"]').findAll('option').map(o => o.text())
-    expect(options).toEqual(['選んでください', '10: 試験 一郎'])
+    const select = w.find('[data-testid="vein-profile-employee"]')
+    expect(select.findAll('optgroup').map(g => g.attributes('label'))).toEqual(['この端末のモジュールにいる人', 'モジュールにいない人'])
+    const options = select.findAll('option').map(o => o.text())
+    expect(options).toEqual(['選んでください', '10: 試験 一郎', '12: 試験 二郎 (承認待ち)', '試験 三郎'])
+    expect(w.find('[data-testid="vein-profile-empty"]').exists()).toBe(false)
     expect(getEmployeesMock).toHaveBeenCalledWith('manager-device')
     expect(w.find('[data-testid="vein-profile-start"]').attributes('disabled')).toBeDefined()
   })
@@ -80,5 +83,18 @@ describe('VeinDeviceProfilePanel', () => {
     await w.find('[data-testid="vein-profile-close"]').trigger('click')
     expect(w.find('[data-testid="vein-profile-close"]').text()).toBe('通常点呼に戻る')
     expect(w.emitted('close')).toHaveLength(1)
+  })
+})
+
+describe('VeinDeviceProfilePanel — モジュールが空の端末', () => {
+  it('モジュールに誰もいなくても、乗務員の一覧から選んで計れる', async () => {
+    vein.isConnected.value = true
+    loadEntriesMock.mockReset().mockResolvedValue([])
+    getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }])
+    const w = await mountPanel()
+    expect(w.find('[data-testid="vein-profile-empty"]').text()).toContain('モジュールにいない人も選べます')
+    expect(w.find('[data-testid="vein-profile-employee"]').findAll('option').map(o => o.text())).toEqual(['選んでください', '試験 一郎'])
+    await w.find('[data-testid="vein-profile-employee"]').setValue('emp-a')
+    expect(w.find('[data-testid="vein-profile-start"]').attributes('disabled')).toBeUndefined()
   })
 })

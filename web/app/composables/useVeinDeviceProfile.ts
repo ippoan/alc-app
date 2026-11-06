@@ -58,7 +58,8 @@ export function useVeinDeviceProfile(opts: {
       const got = await opts.port.identifyKeep(() => { guide.value = 'again' })
       if (got.id !== null) {
         const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
-        shot.module = entry?.employeeId === employeeId && entry.approved ? 'self' : 'other'
+        // 計測なので承認は見ない (承認待ちの本人の枠に当たっても本人)
+        shot.module = entry?.employeeId === employeeId ? 'self' : 'other'
       }
       if (!got.record) {
         shot.error = '撮った記録が届きませんでした (古いファーム)'
