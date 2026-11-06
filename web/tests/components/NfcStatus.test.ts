@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ref, readonly } from 'vue'
+import { ref, readonly, nextTick } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NfcStatus from '~/components/NfcStatus.vue'
 
@@ -40,8 +40,10 @@ mockNuxtImport('useAtomS3Serial', () => () => ({
 
 // Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)
 const veinConnected = ref(false)
+const veinNfcAliveAt = ref<number | null>(null)
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: readonly(veinConnected),
+  nfcAliveAt: readonly(veinNfcAliveAt),
 }))
 
 const deviceModelForFingerprint = ref<string | null>(null)
@@ -353,5 +355,33 @@ describe('NfcStatus — Vein Station の直結 (Refs ippoan/alc-app#436)', () =>
     expect(wrapper.text()).not.toContain('NFC ブリッジの新しいバージョン')
     wrapper.unmount()
     veinConnected.value = false
+  })
+})
+
+describe('NfcStatus — Vein Station の NFC の生存 (EVT NFC_ALIVE、Refs ippoan/alc-app-s3#352)', () => {
+  beforeEach(() => {
+    isConnected.value = true
+    veinConnected.value = true
+    veinNfcAliveAt.value = null
+    isCheckingKioskAccess.value = false
+  })
+
+  it('NFC_ALIVE が途絶えたら「NFC 応答なし」、来ていれば・一度も来ていなければ今までどおり', async () => {
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(wrapper.text()).not.toContain('NFC 応答なし')
+
+    veinNfcAliveAt.value = Date.now()
+    await nextTick()
+    expect(wrapper.text()).not.toContain('NFC 応答なし')
+
+    veinNfcAliveAt.value = Date.now() - 60_000
+    await nextTick()
+    expect(wrapper.text()).toContain('NFC 応答なし')
+    expect(wrapper.find('.bg-red-500').exists()).toBe(true)
+
+    veinConnected.value = false
+    await nextTick()
+    expect(wrapper.text()).not.toContain('NFC 応答なし')
+    wrapper.unmount()
   })
 })

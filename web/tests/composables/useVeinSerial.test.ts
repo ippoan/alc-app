@@ -378,6 +378,17 @@ describe('useVeinSerial', () => {
       expect(jsons).toEqual([{ type: 'alcohol', value: 0.1, result: 'normal' }])
     })
 
+    it('EVT NFC_ALIVE を受けた時刻を nfcAliveAt に残し、切断で消す (Refs ippoan/alc-app-s3#352)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      expect(vein.nfcAliveAt.value).toBeNull()
+      dev.emit('EVT NFC_ALIVE tick=42\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vein.nfcAliveAt.value).toBe(Date.now())
+      await vein.disconnect()
+      expect(vein.nfcAliveAt.value).toBeNull()
+    })
+
     it('時間計測: EVT OMRON / EVT BP / EVT THERMO の行と、血圧・体温の JSON の type だけを devTiming へ渡す', async () => {
       const dev = createMockPort()
       await connectDevice(dev)
