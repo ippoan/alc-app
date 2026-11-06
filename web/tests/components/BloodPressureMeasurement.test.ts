@@ -10,13 +10,16 @@ import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 // 血圧だけを測る端末の画面 (Refs ippoan/alc-app-s3#135)。
 // 指を置く (指静脈だけで本人確認) → 血圧を測る → 完了 だけを行い、**点呼の記録は作らない**。
-// カード・社員番号・顔認証の入口は無い (点呼が測定台の血圧を引き当てるので、本人確認は指静脈に限る)。
+// 顔認証は無い (点呼が測定台の血圧を引き当てるので、本人確認は指静脈に限る)。カード・社員番号は人を選ぶだけで、
+// その人の指静脈を 1:1 で照合する (一致しなければ測らない)。
 // 従業員はすべて合成値 (実在の乗務員名・カード番号は書かない)
 
 // vi.mock はファイル先頭へ巻き上がるので、factory から触る mock は vi.hoisted で作る。
 // 他の export (useAuth が使う rePairDevice 等) は本物のまま残す
-const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock }
+const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock }
   = vi.hoisted(() => ({
+    getEmployeeByNfcIdMock: vi.fn(),
+    getEmployeeByCodeMock: vi.fn(),
     startMeasurementMock: vi.fn(),
     updateMeasurementMock: vi.fn(),
     saveMeasurementMock: vi.fn(),
@@ -29,6 +32,8 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   updateMeasurement: updateMeasurementMock,
   saveMeasurement: saveMeasurementMock,
   startTenkoSession: startTenkoSessionMock,
+  getEmployeeByNfcId: getEmployeeByNfcIdMock,
+  getEmployeeByCode: getEmployeeByCodeMock,
 }))
 
 // 「この端末で血圧を使うか」の判定は **`useBpUiEnabled` の 1 か所** (Refs ippoan/alc-app#353)。
@@ -102,6 +107,9 @@ vi.mock('~/utils/vein-identify', async importOriginal => ({
 const veinModule = vi.hoisted(() => ({
   usesVeinModule: vi.fn(() => false),
   identifyVeinModuleEmployee: vi.fn(),
+  // カード・社員番号で決めた人の 1:1 (記録の用意と照合)。中身は vein-module.test.ts
+  prepareVeinModuleRecord: vi.fn(),
+  matchVeinModuleEmployee: vi.fn(),
   // 通った後の記録の入れ替えは裏で走る。中身は vein-module.test.ts
   rotateVeinModuleRecord: vi.fn(async (..._args: unknown[]) => {}),
 }))
@@ -190,16 +198,14 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     wrapper.unmount()
   })
 
-  it('★ 最初の画面は指の照合だけ。カード・社員番号の入口は無い', async () => {
+  it('★ 最初の画面は指の照合が主。その下にカード・社員番号で人を選ぶ入口', async () => {
     const wrapper = await mountBp()
     expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="vein-identify"]').text()).toBe('指を置いて照合')
-    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
-    expect(wrapper.findComponent({ name: 'NfcStatus' }).exists()).toBe(false)
-    expect(wrapper.findComponent({ name: 'EmployeeCodeKeypad' }).exists()).toBe(false)
-    expect(wrapper.find('[data-testid="code-display"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('社員番号')
-    expect(wrapper.text()).not.toContain('カード')
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EmployeeCodeKeypad' }).exists()).toBe(true)
+    expect(wrapper.text()).toContain('カード・社員番号で人を選んでから指を置く')
+    expect(wrapper.html().indexOf('vein-identify')).toBeLessThan(wrapper.html().indexOf('nfc-stub'))
     expect(wrapper.find('[data-testid="vein-unavailable"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -218,7 +224,7 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     wrapper.unmount()
   })
 
-  it('★ 顔認証の段は無い。ソースにも顔認証の部品・判定が残っていない', () => {
+  it('★ 顔認証の段は無い。ソースにも顔認証の部品・判定が残っていない (カードは人を選ぶだけで本人確認にしない)', () => {
     const src = readFileSync(
       resolve(import.meta.dirname!, '../../app/components/BloodPressureMeasurement.vue'),
       'utf-8',
@@ -227,9 +233,8 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
     expect(src).not.toMatch(/<FaceAuth\b/)
     expect(src).not.toMatch(/checkFaceApproval\s*\(/)
     expect(src).not.toContain("'face_auth'")
-    expect(src).not.toMatch(/<NfcStatus\b/)
-    expect(src).not.toMatch(/<EmployeeCodeKeypad\b/)
-    expect(src).not.toMatch(/getEmployeeBy(Code|NfcId)\s*\(/)
+    // カード・社員番号で決めた人を、指静脈を通さずに測定へ進める道 (旧: 不一致でも測る) を残さない
+    expect(src).not.toContain('このまま測定します')
   })
 
   it('血圧が来る前に「次へ」が押されたら、進めずに測るよう促す。次の人へ戻すと消える', async () => {
@@ -676,11 +681,10 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     latestBloodPressure.value = null
   })
 
-  it('つながっていれば指のボタンだけを出す。カードの枠も社員番号も無く、登録の入口・一覧は 2 列', async () => {
+  it('つながっていれば指のボタンを先頭に出し、登録の入口・一覧は 2 列', async () => {
     const wrapper = await mountBp()
     const html = wrapper.html()
     expect(veinButton(wrapper).text()).toBe('指を置いて照合')
-    expect(html).not.toContain('nfc-stub')
     expect(html.indexOf('vein-identify')).toBeLessThan(html.indexOf('指静脈を登録する'))
     expect(wrapper.find('[data-testid="vein-module-list-open"]').element.parentElement!.classList.contains('grid-cols-2')).toBe(true)
     wrapper.unmount()
@@ -715,15 +719,14 @@ describe('BloodPressureMeasurement — 指静脈で乗務員を特定する (Ref
     wrapper.unmount()
   })
 
-  it('外れたら「もう一度指を置いてください」と出し、最初の段に残る (カード・社員番号へは誘導しない)', async () => {
+  it('外れたら「もう一度指を置いてください」と出し、最初の段に残る (カード・社員番号で人を選ぶ入口はそのまま)', async () => {
     veinIdentify.identifyVeinEmployee.mockResolvedValue({ kind: 'miss' })
     const wrapper = await mountBp()
     await veinButton(wrapper).trigger('click')
     await flush(wrapper)
 
     expect(veinErrorText(wrapper)).toBe('照合できませんでした。もう一度指を置いてください')
-    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
-    expect(wrapper.find('[data-testid="code-display"]').exists()).toBe(false)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
     expect(vein.say).toHaveBeenCalledWith('FAILED')
     expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(true)
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
@@ -1191,5 +1194,117 @@ describe('BloodPressureMeasurement — 未承認の指静脈 (Refs ippoan/alc-ap
     expect(w.find('[data-testid="bp-entry"]').exists()).toBe(true)
     w.unmount()
     veinIsConnected.value = false
+  })
+})
+
+describe('BloodPressureMeasurement — カード・社員番号で人を選んでから指静脈を 1:1 で照合する', () => {
+  const HANAKO = { id: 'emp-vein-1', name: 'テスト花子' }
+  const TARO = { id: 'emp-card-2', name: 'テスト太郎' }
+
+  beforeEach(() => {
+    arrangeVein()
+    bpUiState.value = 'show'
+    latestBloodPressure.value = null
+    veinModule.usesVeinModule.mockReset().mockReturnValue(false)
+    getEmployeeByNfcIdMock.mockReset().mockResolvedValue(HANAKO)
+    getEmployeeByCodeMock.mockReset().mockResolvedValue(HANAKO)
+  })
+
+  it('カードで選んだ人と指静脈が一致したら測定へ進む', async () => {
+    const wrapper = await mountBp()
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-1')
+    await flush(wrapper)
+    expect(getEmployeeByNfcIdMock).toHaveBeenCalledWith('nfc-test-1')
+    expect(vein.say).toHaveBeenCalledWith('PLACE')
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    expect(wrapper.text()).toContain('テスト花子')
+    wrapper.unmount()
+  })
+
+  it('★ 指静脈が別の人なら測らず、選んだ人の名前で置き直させる。「別の人」で選び直せる', async () => {
+    getEmployeeByNfcIdMock.mockResolvedValue(TARO)
+    const wrapper = await mountBp()
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-2')
+    await flush(wrapper)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('テスト太郎さんの指静脈と一致しません。本人の指を置いてください')
+    expect(wrapper.find('[data-testid="bp-expected"]').text()).toContain('テスト太郎さん: 指を置いてください')
+    // 選んでいる間はカード・社員番号の入口を隠す
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+
+    await wrapper.find('[data-testid="bp-expected-clear"]').trigger('click')
+    expect(wrapper.find('[data-testid="bp-expected"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vein-error"]').exists()).toBe(false)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('社員番号でも同じ (測定台の口で引く)', async () => {
+    const wrapper = await mountBp()
+    const keypad = wrapper.findComponent({ name: 'EmployeeCodeKeypad' })
+    await keypad.vm.$emit('update:modelValue', '1234')
+    expect(keypad.props('modelValue')).toBe('1234')
+    await keypad.vm.$emit('submit', '1234')
+    await flush(wrapper)
+    expect(getEmployeeByCodeMock).toHaveBeenCalledWith('1234', 'bp-station')
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('人が引けなければ理由を出し、指静脈は読まない。次の人へ戻すと消える', async () => {
+    getEmployeeByNfcIdMock.mockRejectedValue(new Error('404'))
+    const wrapper = await mountBp()
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-3')
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="bp-lookup-error"]').exists()).toBe(true)
+    expect(vein.capture).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="bp-expected"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 照会の応答待ちの間は、指の合図で照合を始めず、リロードもさせない', async () => {
+    let resolveLookup: (v: typeof HANAKO) => void = () => {}
+    getEmployeeByNfcIdMock.mockReturnValue(new Promise((r) => { resolveLookup = r }))
+    const wrapper = await mountBp()
+    expect(readReloadContext().safe).toBe(1)
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-4')
+    expect(readReloadContext().safe).toBe(0)
+    finger.cb?.()
+    await flush(wrapper)
+    expect(vein.capture).not.toHaveBeenCalled()
+    resolveLookup(HANAKO)
+    await flush(wrapper)
+    expect(vein.capture).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  describe('モジュール経路: その人の記録を用意して 1:1', () => {
+    beforeEach(() => {
+      veinModule.usesVeinModule.mockReturnValue(true)
+      veinModule.prepareVeinModuleRecord.mockReset().mockResolvedValue(12)
+      veinModule.matchVeinModuleEmployee.mockReset().mockResolvedValue({ id: 12, record: null })
+      veinModule.identifyVeinModuleEmployee.mockReset().mockResolvedValue({ kind: 'hit', employee: { ...HANAKO, face_approval_status: 'approved' } })
+    })
+
+    it('選んだ人の記録をモジュールに用意し、その人で照合して測定へ', async () => {
+      const wrapper = await mountBp()
+      await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-5')
+      await flush(wrapper)
+      expect(veinModule.prepareVeinModuleRecord).toHaveBeenCalledWith(expect.anything(), 'emp-vein-1', undefined)
+      expect(veinModule.matchVeinModuleEmployee.mock.calls[0]![1]).toBe('emp-vein-1')
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('承認済みの指静脈の記録が無ければ、登録して承認を受けるよう出し、測らない', async () => {
+      veinModule.prepareVeinModuleRecord.mockResolvedValue(null)
+      const wrapper = await mountBp()
+      await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-6')
+      await flush(wrapper)
+      expect(wrapper.find('[data-testid="vein-error"]').text()).toBe('この人の承認済みの指静脈の記録がありません。下の「指静脈を登録する」から登録して運行管理者の承認を受けてください')
+      expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+      wrapper.unmount()
+    })
   })
 })
