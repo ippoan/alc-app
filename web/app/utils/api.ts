@@ -1037,8 +1037,8 @@ export interface ApiVeinPendingModule {
  * 承認待ちのモジュールの記録の一覧 (端末の画面で運行管理者が承認する元、Refs ippoan/alc-app#436)。
  * 端末の token でも呼べる (管理画面の `getPendingVeinTemplates` は管理者だけ)
  */
-export async function getPendingVeinModuleTemplates(): Promise<ApiVeinPendingModule[]> {
-  return (await request<{ templates: ApiVeinPendingModule[] }>('/api/vein/module-templates/pending')).templates
+export async function getPendingVeinModuleTemplates(scope: RequestTokenScope = 'default'): Promise<ApiVeinPendingModule[]> {
+  return (await request<{ templates: ApiVeinPendingModule[] }>('/api/vein/module-templates/pending', {}, scope)).templates
 }
 
 /**

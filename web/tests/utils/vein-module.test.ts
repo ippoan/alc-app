@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   getEmployees: vi.fn(),
   getVeinModuleTemplate: vi.fn(),
   getVeinModuleTemplates: vi.fn(),
+  getPendingVeinModuleTemplates: vi.fn(),
   rotateVeinModuleDeviceRecord: vi.fn(),
   getVeinAuthLogEnabled: vi.fn(),
   postVeinAuthShot: vi.fn(),
@@ -49,6 +50,8 @@ beforeEach(async () => {
   db.loadVeinModuleEntries.mockResolvedValue([])
   db.putVeinModuleEntry.mockResolvedValue(undefined)
   db.deleteVeinModuleEntry.mockResolvedValue(undefined)
+  // 承認待ちは既定で誰もいない (native の人を消すかの確認に使う)
+  api.getPendingVeinModuleTemplates.mockReset().mockResolvedValue([])
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
@@ -457,6 +460,30 @@ describe('その場で撮った記録 (native) の扱い', () => {
     await mod.syncVeinModule(p)
     expect(p.syncClear).toHaveBeenCalledWith(10)
     expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('added')
+  })
+
+  it('★ native の人が別の端末で登録し直して承認待ちになっただけなら、モジュールから消さない (指紋互換の部分が消えるため)', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { native: true }), entry('gone', 11)])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
+    api.getPendingVeinModuleTemplates.mockResolvedValue([{ employee_id: 'added', name: 'x', updated_at: 'v2' }])
+    const p = port()
+    await mod.syncVeinModule(p, { scope: 'bp-station' })
+    expect(api.getPendingVeinModuleTemplates).toHaveBeenCalledWith('bp-station')
+    // native でない人は今までどおり消す
+    expect(p.syncClear.mock.calls).toEqual([[11]])
+    expect(db.deleteVeinModuleEntry).not.toHaveBeenCalledWith('added')
+  })
+
+  it('★ 承認待ちかを確かめられないときも、native の人は消さずに残す', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { native: true })])
+    api.getVeinModuleTemplates.mockResolvedValue({ templates: [] })
+    api.getPendingVeinModuleTemplates.mockRejectedValue(new Error('403'))
+    const p = port()
+    await mod.syncVeinModule(p)
+    expect(p.syncClear).not.toHaveBeenCalled()
+    expect(db.deleteVeinModuleEntry).not.toHaveBeenCalled()
   })
 
   it('★ mixed の設定: native の記録は版が同じでも、サーバーが組んだ記録で同じ ID に書き直す (native の印は外れる)', async () => {
