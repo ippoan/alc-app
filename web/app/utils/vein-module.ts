@@ -26,7 +26,7 @@
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
 import { noteVeinShotView } from '~/utils/vein-shot-view'
-import { getEmployeeById, getEmployees, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
+import { getEmployeeById, getEmployees, getPendingVeinModuleTemplates, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
 import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
@@ -475,8 +475,24 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
 
     // 一覧から消えた (承認の取り消し・削除・退職) 乗務員をモジュールから消す。承認待ちは一覧に
     // 載らないので残す (この端末で登録して承認を待っている人)
+    //
+    // その場で撮った記録 (native) の人は、別の端末で登録し直して承認待ちになっただけなら消さない
+    // (Refs ippoan/alc-app-s3#352)。その場の記録はモジュールの中で登録したので、静脈 (FV) と指紋互換 (FP) の
+    // 両方を持つが、外へ読み出して書き戻せるのは FV だけ。一度消すと FP が戻らず、同じ記録を書き直しても
+    // 通りにくくなる (2026-11-06、開発端末で 10 回中 7 回落ちた)。承認待ちかを確かめられないときも残す
+    let pending: Promise<Set<string> | null> | null = null
+    const pendingIds = () => (pending ??= getPendingVeinModuleTemplates(opts.scope)
+      .then(list => new Set(list.map(p => p.employee_id)))
+      .catch(() => null))
     for (const entry of [...entries.values()]) {
       if (!entry.approved || listed.has(entry.employeeId)) continue
+      if (keepsOnSpotRecord(entry)) {
+        const ids = await pendingIds()
+        if (ids === null || ids.has(entry.employeeId)) {
+          stat.unchanged += 1
+          continue
+        }
+      }
       try {
         await port.syncClear(entry.moduleId)
         await deleteVeinModuleEntry(entry.employeeId)
