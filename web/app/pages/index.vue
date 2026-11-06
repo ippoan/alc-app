@@ -296,13 +296,14 @@ const menuRoleTabs: readonly RoleTab[] = ['manager', 'admin', 'general', 'it_ten
 const menuOpen = ref(false)
 const menuRef = ref<HTMLElement | null>(null)
 
-// 運行管理者の画面のハンバーガーメニュー (デバイス設定を開く。Refs ippoan/alc-app-s3#352)。
-// 開いている間は運行管理者の画面 (認証ゲート) の代わりにデバイス設定を出す
+// 運行管理者の画面のハンバーガーメニュー (デバイス設定・指静脈の登録を開く。Refs ippoan/alc-app-s3#352)。
+// 開いている間は運行管理者の画面 (認証ゲート) の代わりにそれを出す
+type ManagerView = 'dashboard' | 'device' | 'vein_register'
 const managerMenuOpen = ref(false)
 const managerMenuRef = ref<HTMLElement | null>(null)
-const managerShowsDevice = ref(false)
-function onManagerMenuSelect(device: boolean) {
-  managerShowsDevice.value = device
+const managerView = ref<ManagerView>('dashboard')
+function onManagerMenuSelect(view: ManagerView) {
+  managerView.value = view
   managerMenuOpen.value = false
 }
 
@@ -758,7 +759,7 @@ function onRoleTabClick(role: RoleTab) {
       <div ref="managerMenuRef" class="relative">
         <button
           class="p-2 rounded-md transition-colors"
-          :class="managerShowsDevice ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
+          :class="managerView !== 'dashboard' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'"
           data-testid="manager-menu-button"
           @click.stop="managerMenuOpen = !managerMenuOpen"
         >
@@ -769,24 +770,36 @@ function onRoleTabClick(role: RoleTab) {
         <div v-if="managerMenuOpen" class="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border py-1 z-50">
           <button
             class="w-full text-left px-4 py-2 text-sm transition-colors"
-            :class="!managerShowsDevice ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
+            :class="managerView === 'dashboard' ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
             data-testid="manager-menu-dashboard"
-            @click="onManagerMenuSelect(false)"
+            @click="onManagerMenuSelect('dashboard')"
           >
             運行管理者の画面
           </button>
           <button
             class="w-full text-left px-4 py-2 text-sm transition-colors"
-            :class="managerShowsDevice ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
+            :class="managerView === 'device' ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
             data-testid="manager-menu-device"
-            @click="onManagerMenuSelect(true)"
+            @click="onManagerMenuSelect('device')"
           >
             デバイス設定
+          </button>
+          <button
+            class="w-full text-left px-4 py-2 text-sm transition-colors"
+            :class="managerView === 'vein_register' ? 'bg-blue-50 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'"
+            data-testid="manager-menu-vein-register"
+            @click="onManagerMenuSelect('vein_register')"
+          >
+            指静脈の登録
           </button>
         </div>
       </div>
     </div>
-    <DeviceSettings v-if="activeRole === 'manager' && !incomingCallMode && managerShowsDevice" manager-seat class="flex-1 min-h-0" />
+    <DeviceSettings v-if="activeRole === 'manager' && !incomingCallMode && managerView === 'device'" manager-seat class="flex-1 min-h-0" />
+    <!-- 指静脈の登録 (運行者の画面の ≡ と同じ画面)。閉じたら運行管理者の画面へ -->
+    <div v-if="activeRole === 'manager' && !incomingCallMode && managerView === 'vein_register'" class="flex-1 min-h-0 w-full max-w-lg mx-auto px-4 py-4">
+      <VeinRegistration @close="managerView = 'dashboard'" />
+    </div>
     <!-- 着信通知モード: RoleAuthGate スキップ → 直接 ManagerDashboard 表示 -->
     <ManagerDashboard
       v-if="activeRole === 'manager' && incomingCallMode"
@@ -794,7 +807,7 @@ function onRoleTabClick(role: RoleTab) {
       :initial-room-id="incomingCallRoom"
       class="flex-1 min-h-0"
     />
-    <RoleAuthGate v-else-if="activeRole === 'manager' && !managerShowsDevice" :key="managerAuthKey" required-role="manager" class="flex-1 min-h-0">
+    <RoleAuthGate v-else-if="activeRole === 'manager' && managerView === 'dashboard'" :key="managerAuthKey" required-role="manager" class="flex-1 min-h-0">
       <ManagerDashboard />
     </RoleAuthGate>
 

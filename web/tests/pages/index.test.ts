@@ -1577,6 +1577,22 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
       expect(wrapper.findComponent(DeviceSettings).exists()).toBe(false)
       expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
     })
+
+    it('★ 運行管理者タブのハンバーガーから指静脈の登録を開け、閉じると RoleAuthGate に戻る', async () => {
+      wrapper = await mountIndex('/?role=manager')
+      await wrapper.find('[data-testid="manager-menu-button"]').trigger('click')
+      expect(wrapper.find('[data-testid="manager-menu-vein-register"]').text()).toBe('指静脈の登録')
+      await wrapper.find('[data-testid="manager-menu-vein-register"]').trigger('click')
+      await nextTick()
+      expect(wrapper.findComponent(VeinRegistration).exists()).toBe(true)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(false)
+      expect(wrapper.findComponent(DeviceSettings).exists()).toBe(false)
+
+      wrapper.findComponent(VeinRegistration).vm.$emit('close')
+      await nextTick()
+      expect(wrapper.findComponent(VeinRegistration).exists()).toBe(false)
+      expect(wrapper.findComponent(RoleAuthGate).exists()).toBe(true)
+    })
   })
 
   describe('(c) Android 横画面のハンバーガーの「ロール切替」', () => {
