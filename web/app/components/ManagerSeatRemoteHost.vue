@@ -23,6 +23,7 @@ const seatWatch = useTimecardWatch({
       port: veinSerial,
       scope: 'manager-device',
       firmwareUpdate: () => serialOta.run(VEIN_FIRMWARE_TARGET),
+      logUpload: reason => useVeinLogUpload().upload(reason),
       report: (id, payload) => reportKioskCommandResult(id, payload, 'manager-device'),
     })
   },

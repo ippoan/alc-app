@@ -58,6 +58,7 @@ function onKioskCommand(data: unknown): void {
     port: veinSerial,
     scope: 'default',
     firmwareUpdate: () => serialOta.run(VEIN_FIRMWARE_TARGET),
+    logUpload: reason => useVeinLogUpload().upload(reason),
     report: (id, payload) => reportKioskCommandResult(id, payload),
   })
 }
