@@ -42,6 +42,7 @@ const DRIVER_TABS: Record<string, Row> = {
   dev_records: { components: ['DevDeviceRecords'], declares: null, reason: '閲覧' },
   vein_test: { components: ['VeinTestPanel'], declares: null, reason: '照合の回数' },
   vein_register: { components: ['VeinRegistration'], declares: null, reason: '登録' },
+  vein_profile: { components: ['VeinDeviceProfilePanel'], declares: null, reason: '個体値の計測の途中の回' },
 }
 
 /** 運行者以外の役割 (`pages/index.vue` の `RoleTab`)。運行管理者はタブごと (下の表) */
