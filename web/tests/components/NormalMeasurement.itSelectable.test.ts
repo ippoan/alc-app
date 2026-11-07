@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, onTestFinished, beforeEach, afterEach } from 'vitest'
 import { ref, readonly, defineComponent } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import NormalMeasurement from '~/components/NormalMeasurement.vue'
@@ -857,6 +857,61 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
     wrapper.unmount()
+  })
+
+  it('★ 判定が付いたら 30 秒で最初の画面へ戻る (残り秒数を出す)。29 秒では戻らない', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="it-judged-countdown"]').exists()).toBe(false)
+
+    itCall.state.value = 'judged'
+    itCall.judgment.value = { judgment: 'ok', reason: null }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-judged-countdown"]').text()).toBe('あと 30 秒で最初の画面に戻ります')
+
+    vi.advanceTimersByTime(29_000)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-judged-countdown"]').text()).toBe('あと 1 秒で最初の画面に戻ります')
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+
+    vi.advanceTimersByTime(1_000)
+    await wrapper.vm.$nextTick()
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="it-judged-countdown"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('判定の後に「次の測定へ」を押せば待たずに戻り、数えるのもやめる。unmount でも止める', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    itCall.state.value = 'judged'
+    await wrapper.vm.$nextTick()
+    await nextButton(wrapper)!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-judged-countdown"]').exists()).toBe(false)
+    vi.advanceTimersByTime(30_000)
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+
+    const again = await mountNm({ itSelectable: true })
+    await runToResult(again)
+    await itButton(again).trigger('click')
+    await flush(again)
+    itCall.state.value = 'calling'
+    await again.vm.$nextTick()
+    itCall.state.value = 'judged'
+    await again.vm.$nextTick()
+    again.unmount()
+    vi.advanceTimersByTime(30_000)
   })
 
   it('★ reset で state が戻る — IT点呼 を選んだ次の回が免許証でないカードなら、確定待ちにせず通話もしない', async () => {
