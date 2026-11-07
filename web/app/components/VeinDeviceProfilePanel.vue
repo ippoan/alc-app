@@ -7,10 +7,10 @@
  * 照合の結果で画面は進まず、登録の記録にも触らない。撮った回はサーバーの認証ログにも残る
  */
 import type { ApiEmployee } from '~/types'
-import { getEmployees, type RequestTokenScope } from '~/utils/api'
+import { getEmployees, getPendingVeinModuleTemplates, type RequestTokenScope } from '~/utils/api'
 import { loadVeinModuleEntries, type VeinModuleEntry } from '~/utils/vein-db'
 import { formatVeinStat } from '~/utils/vein-device-profile'
-import { VEIN_PROFILE_DEFAULT_COUNT, useVeinDeviceProfile } from '~/composables/useVeinDeviceProfile'
+import { VEIN_PROFILE_DEFAULT_COUNT, VEIN_PROFILE_NO_APPROVED, useVeinDeviceProfile } from '~/composables/useVeinDeviceProfile'
 
 const props = withDefaults(defineProps<{
   /** 乗務員の一覧と認証ログを送る鍵 (運行管理者の席 = `manager-device`、測定台 = `bp-station`) */
@@ -30,6 +30,8 @@ const names = ref(new Map<string, string>())
 /** モジュールに入っていない乗務員 (サーバーに記録があれば計れる。モジュールの判定は「別の人」か「不一致」になる) */
 const others = ref<ApiEmployee[]>([])
 const employeeId = ref('')
+/** 承認待ちの乗務員 (サーバーに承認済みの記録が無く、サーバーでは比べられない) */
+const pendingIds = ref(new Set<string>())
 const count = ref(VEIN_PROFILE_DEFAULT_COUNT)
 
 onMounted(async () => {
@@ -44,7 +46,19 @@ onMounted(async () => {
   catch {
     // 名前が引けなくても ID で選べる
   }
+  try {
+    pendingIds.value = new Set((await getPendingVeinModuleTemplates(props.scope)).map(p => p.employee_id))
+  }
+  catch {
+    // 承認待ちが引けなくても計れる (計った回に理由が出る)
+  }
 })
+
+/** 選んだ人の記録が承認待ち、または計った回にサーバーが「承認済みの記録が無い」と返した */
+const noApprovedWarning = computed(() =>
+  (employeeId.value !== '' && pendingIds.value.has(employeeId.value))
+  || measure.shots.value.some(s => s.error === VEIN_PROFILE_NO_APPROVED),
+)
 
 function nameOf(entry: VeinModuleEntry): string {
   const name = names.value.get(entry.employeeId) ?? `(名前不明 ${entry.employeeId.slice(0, 8)})`
@@ -105,6 +119,10 @@ const p = computed(() => measure.profile.value)
         <input v-model.number="count" type="number" min="1" max="30" class="mt-1 w-full rounded-md border border-gray-300 px-2 py-2" :disabled="measure.busy.value" data-testid="vein-profile-count">
       </label>
     </div>
+    <p v-if="noApprovedWarning" class="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" data-testid="vein-profile-pending-warning">
+      この人の指静脈の記録は承認待ちです (どこかの端末で登録し直した直後など)。サーバーに比べる相手が無いので、
+      サーバーの判定・点数・位置のずれは出ません (モジュールの判定だけ出ます)。承認してから計ってください
+    </p>
     <p v-if="entries.length === 0" class="text-sm text-gray-500" data-testid="vein-profile-empty">
       この端末のモジュールに乗務員がいません (モジュールにいない人も選べます。指静脈を登録した人ならサーバーで判定されます)
     </p>

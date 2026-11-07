@@ -927,6 +927,8 @@ export interface VeinAuthJudgment {
   /** 通した規則 (`A` / `B` / `C`。古いサーバー・不一致は null) */
   rule: string | null
   shift: VeinShotShift | null
+  /** 判定できなかった理由 (`result` が `error` のとき。例 `no_approved_record` = 本人の承認済みの記録が無い) */
+  error: string | null
 }
 
 /**
@@ -935,11 +937,11 @@ export interface VeinAuthJudgment {
  */
 export async function postVeinAuthShotJudged(shot: VeinAuthShot, scope: RequestTokenScope = 'default'): Promise<VeinAuthJudgment | null> {
   type Candidate = { scores?: [number, number, number]; rule?: string; shift?: VeinShotShift }
-  const res = await request<{ judgment?: { result?: string; candidates?: Candidate[] } } | undefined>('/api/vein/auth-shots', { method: 'POST', body: JSON.stringify({ ...shot, shot: bytesToBase64(shot.shot) }) }, scope)
+  const res = await request<{ judgment?: { result?: string; candidates?: Candidate[]; error?: string | null } } | undefined>('/api/vein/auth-shots', { method: 'POST', body: JSON.stringify({ ...shot, shot: bytesToBase64(shot.shot) }) }, scope)
   const j = res?.judgment
   if (!j?.result) return null
   const c = j.candidates?.[0]
-  return { result: j.result, scores: c?.scores ?? null, rule: c?.rule ?? null, shift: c?.shift ?? null }
+  return { result: j.result, scores: c?.scores ?? null, rule: c?.rule ?? null, shift: c?.shift ?? null, error: j.error ?? null }
 }
 
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
