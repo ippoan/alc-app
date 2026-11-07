@@ -139,14 +139,31 @@ describe('useVeinEnroll', () => {
       expect(oldFirmwareNotice).toBe('もう一度置いてください (2 回目)')
       expect(db.deleteVeinModuleEntry).toHaveBeenCalledWith('emp-test-1')
       expect(putVeinModuleRecordMock).toHaveBeenCalledWith('emp-test-1', RECORD, 'default')
+      // モジュールの中で登録した記録なので native (同期が書き直して指紋互換の部分を消さないため)
       expect(db.putVeinModuleEntry).toHaveBeenCalledWith({
-        employeeId: 'emp-test-1', moduleId: 11, updatedAt: '2026-10-21T00:00:00Z', approved: false,
+        employeeId: 'emp-test-1', moduleId: 11, updatedAt: '2026-10-21T00:00:00Z', approved: false, native: true,
       })
+      expect(vein.outcome.value).toBe('pending')
       expect(veinSay.mock.calls.map(c => c[0])).toEqual(['PLACE', 'ENROLLED'])
       expect(veinCapture).not.toHaveBeenCalled()
       expect(putVeinTemplateMock).not.toHaveBeenCalled()
       expect(vein.registered.value).toBe(true)
       expect(vein.notice.value).toBeNull()
+    })
+
+    it('★ 承認済みの記録が在る人を登録すると、合えば自動承認 (すぐ使える)、合わなければこの端末の分だけ承認待ち', async () => {
+      putVeinModuleRecordMock.mockResolvedValueOnce({ employee_id: 'emp-test-1', updated_at: 'v-dev', device_record: true, approved: true, auto_approved: true, matched: 6, entries: 6 })
+      const vein = await setup()
+      await vein.enroll('emp-test-1')
+      expect(db.putVeinModuleEntry).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'emp-test-1', updatedAt: 'v-dev', approved: true, native: true }))
+      expect(vein.outcome.value).toBe('auto_approved')
+
+      putVeinModuleRecordMock.mockResolvedValueOnce({ employee_id: 'emp-test-1', updated_at: 'v-dev2', device_record: true, approved: false, auto_approved: false, matched: 2, entries: 6 })
+      await vein.enroll('emp-test-1')
+      expect(db.putVeinModuleEntry).toHaveBeenLastCalledWith(expect.objectContaining({ updatedAt: 'v-dev2', approved: false, native: true }))
+      expect(vein.outcome.value).toBe('device_pending')
+      vein.reset()
+      expect(vein.outcome.value).toBeNull()
     })
 
     it('★ 10〜100 が埋まっていたら、一番長く使っていない承認済みの人の枠を譲らせる (その人は対応表から外す)', async () => {

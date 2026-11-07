@@ -17,7 +17,7 @@
  * 「承認待ち」で入れる → 案内 ENROLLED。
  */
 
-import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage, type RequestTokenScope } from '~/utils/api'
+import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage, type RequestTokenScope, type VeinModuleRegistered } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import { allocateOrEvictVeinModuleId, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
@@ -56,6 +56,12 @@ export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
   const registering = ref(false)
   const error = ref<string | null>(null)
   const registered = ref(false)
+  /**
+   * 登録の扱い (モジュールに登録したとき。Refs ippoan/alc-app-s3#352)。`pending` = 乗務員の記録として承認待ち /
+   * `auto_approved` = 承認済みの記録と合い、この端末の記録として自動で承認 / `device_pending` = この端末の分だけ承認待ち
+   * (ほかの端末では今までの承認済みの記録のまま使える)。chara の登録・まだ登録していないときは null
+   */
+  const outcome = ref<'pending' | 'auto_approved' | 'device_pending' | null>(null)
   /** 登録の途中の案内 (置き直し)。終わったら null */
   const notice = ref<string | null>(null)
 
@@ -72,6 +78,7 @@ export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
     if (disabledReason.value || registering.value) return
     registering.value = true
     error.value = null
+    outcome.value = null
     try {
       if (usesVeinModule()) await enrollToModule(employeeId)
       else await enrollChara(employeeId)
@@ -127,7 +134,7 @@ export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
       }
       throw e
     }
-    let saved: { updated_at: string }
+    let saved: VeinModuleRegistered
     try {
       saved = await putVeinModuleRecord(employeeId, record, scope)
     }
@@ -137,13 +144,18 @@ export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
       if (apiErrorCode(e) === 'too_many_module_records') throw new Error(VEIN_ENROLL_FULL_MESSAGE)
       throw e
     }
-    await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved: false })
+    // 自動承認ならすぐ本人確認に使える。モジュールの中で登録した記録 (静脈と指紋互換の両方) なので native
+    // (同期が書き直すと指紋互換の部分が消えるため、残す印。Refs ippoan/alc-app-s3#352)
+    const approved = saved.approved === true
+    await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved, native: true })
     noteVeinModuleRecord(id, 'native')
+    outcome.value = !saved.device_record ? 'pending' : approved ? 'auto_approved' : 'device_pending'
   }
 
   function reset(): void {
     error.value = null
     registered.value = false
+    outcome.value = null
   }
 
   return {
@@ -151,6 +163,7 @@ export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
     registering: readonly(registering),
     error: readonly(error),
     registered: readonly(registered),
+    outcome: readonly(outcome),
     notice: readonly(notice),
     disabledReason,
     enroll,
