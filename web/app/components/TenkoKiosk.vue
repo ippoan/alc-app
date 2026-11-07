@@ -770,7 +770,7 @@ onUnmounted(() => {
           <h2 class="text-lg font-semibold text-gray-700 mb-4">乗務員ID</h2>
 
           <div v-if="!useManualInput && !isDemoMode">
-            <NfcStatus @read="onNfcRead" />
+            <NfcStatus license-only @read="onNfcRead" />
             <button
               class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
               @click="useManualInput = true"

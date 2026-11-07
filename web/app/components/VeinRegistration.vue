@@ -68,7 +68,7 @@ function next() {
 
     <!-- 1: カードをかざす / 社員番号を打つ -->
     <template v-if="!employeeId">
-      <NfcStatus @read="onNfcRead" />
+      <NfcStatus license-only @read="onNfcRead" />
       <div class="mt-4">
         <p class="text-sm text-gray-500 mb-2">カードが無いときは社員番号を入力</p>
         <EmployeeCodeKeypad v-model="code" @submit="submitCode" />
