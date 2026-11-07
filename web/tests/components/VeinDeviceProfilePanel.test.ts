@@ -6,8 +6,9 @@ import VeinDeviceProfilePanel from '~/components/VeinDeviceProfilePanel.vue'
 
 // 指静脈の個体値の計測の画面。乗務員はすべて合成値
 
-const { getEmployeesMock, loadEntriesMock, judgedMock } = vi.hoisted(() => ({
+const { getEmployeesMock, loadEntriesMock, judgedMock, pendingMock } = vi.hoisted(() => ({
   getEmployeesMock: vi.fn(),
+  pendingMock: vi.fn(),
   loadEntriesMock: vi.fn(),
   judgedMock: vi.fn(),
 }))
@@ -15,6 +16,7 @@ vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   getEmployees: getEmployeesMock,
   postVeinAuthShotJudged: judgedMock,
+  getPendingVeinModuleTemplates: pendingMock,
 }))
 vi.mock('~/utils/vein-db', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/vein-db')>()),
@@ -43,7 +45,29 @@ describe('VeinDeviceProfilePanel', () => {
       { employeeId: 'emp-a', moduleId: 10, updatedAt: 't', approved: true },
     ])
     getEmployeesMock.mockReset().mockResolvedValue([{ id: 'emp-a', name: '試験 一郎' }, { id: 'emp-b', name: '試験 二郎' }, { id: 'emp-c', name: '試験 三郎' }])
-    judgedMock.mockReset().mockResolvedValue({ result: 'match', scores: [60, 61, 80], rule: 'A', shift: { entry: 1, dx: -3, dy: 1, overlap: 700, overlap0: 600 } })
+    judgedMock.mockReset().mockResolvedValue({ result: 'match', scores: [60, 61, 80], rule: 'A', shift: { entry: 1, dx: -3, dy: 1, overlap: 700, overlap0: 600 }, error: null })
+    pendingMock.mockReset().mockResolvedValue([])
+  })
+
+  it('★ 選んだ人が承認待ちなら、計る前に警告を出す (計ることはできる)。承認待ちは渡した鍵で引く', async () => {
+    pendingMock.mockResolvedValue([{ employee_id: 'emp-a', name: '試験 一郎', updated_at: 'v2' }])
+    const w = await mountPanel({ scope: 'bp-station' })
+    expect(pendingMock).toHaveBeenCalledWith('bp-station')
+    expect(w.find('[data-testid="vein-profile-pending-warning"]').exists()).toBe(false)
+    await w.find('[data-testid="vein-profile-employee"]').setValue('emp-a')
+    expect(w.find('[data-testid="vein-profile-pending-warning"]').text()).toContain('承認待ち')
+    expect(w.find('[data-testid="vein-profile-start"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('★ 計った回にサーバーが承認済みの記録が無いと返したら、警告と、その回の理由を出す', async () => {
+    judgedMock.mockResolvedValue({ result: 'error', scores: null, rule: null, shift: null, error: 'no_approved_record' })
+    const w = await mountPanel()
+    await w.find('[data-testid="vein-profile-employee"]').setValue('emp-a')
+    await w.find('[data-testid="vein-profile-count"]').setValue('1')
+    await w.find('[data-testid="vein-profile-start"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="vein-profile-pending-warning"]').exists()).toBe(true)
+    expect(w.find('[data-testid="vein-profile-table"]').text()).toContain('サーバーに承認済みの記録がありません')
   })
 
   it('モジュールにいる人 (承認待ちは印付き) と、いない人を分けて選べ、選ぶまで始められない。名前は渡した鍵で引く', async () => {

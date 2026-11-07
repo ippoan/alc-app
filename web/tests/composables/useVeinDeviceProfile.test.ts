@@ -85,6 +85,18 @@ describe('useVeinDeviceProfile', () => {
     expect(m.shots.value[0]!.cap?.matchGray).toBe(97)
   })
 
+  it('サーバーが判定できなかった回は理由を出す (承認済みの記録が無い = 承認待ち)', async () => {
+    judged
+      .mockResolvedValueOnce({ result: 'error', scores: null, rule: null, shift: null, error: 'no_approved_record' })
+      .mockResolvedValueOnce({ result: 'error', scores: null, rule: null, shift: null, error: 'decrypt_failed' })
+    const p = port([{ id: 10, record: RECORD }, { id: 10, record: RECORD }])
+    const { VEIN_PROFILE_NO_APPROVED } = await import('~/composables/useVeinDeviceProfile')
+    const m = useVeinDeviceProfile({ port: p, sleep: async () => {} })
+    await m.run('emp-a', 2)
+    expect(m.shots.value.map(s => s.error)).toEqual([VEIN_PROFILE_NO_APPROVED, 'サーバーの判定がエラーでした (decrypt_failed)'])
+    expect(m.shots.value[0]!.server).toBe('error')
+  })
+
   it('止めると、今の回が終わったところで終わる', async () => {
     judged.mockResolvedValue({ result: 'match', scores: [60, 60, 80], rule: 'A', shift: null })
     const p = port([{ id: 10, record: RECORD }, { id: 10, record: RECORD }, { id: 10, record: RECORD }])

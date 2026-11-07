@@ -28,6 +28,13 @@ export interface VeinProfilePort {
 
 export type VeinProfileGuide = 'place' | 'again' | 'release' | null
 
+/** サーバーが判定できなかった理由の言い換え。`no_approved_record` は承認待ち (別の端末で登録し直した直後など) */
+export const VEIN_PROFILE_NO_APPROVED = 'サーバーに承認済みの記録がありません (承認待ち)。承認してから計ってください'
+
+function judgmentError(code: string | null): string {
+  return code === 'no_approved_record' ? VEIN_PROFILE_NO_APPROVED : `サーバーの判定がエラーでした (${code ?? '理由不明'})`
+}
+
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
@@ -83,6 +90,7 @@ export function useVeinDeviceProfile(opts: {
         return shot
       }
       shot.server = j.result
+      if (j.result === 'error') shot.error = judgmentError(j.error)
       shot.scores = j.scores
       shot.rule = j.rule
       shot.dx = j.shift?.dx ?? null

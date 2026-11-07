@@ -1316,9 +1316,11 @@ describe.skipIf(isLive)('api', () => {
       }
       const shift = { entry: 2, dx: -3, dy: 1, overlap: 700, overlap0: 600 }
       stubOk({ id: 's1', judgment: { result: 'match', candidates: [{ employee_id: 'e1', matched: true, scores: [60, 61, 80], rule: 'A', shift }] } })
-      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'match', scores: [60, 61, 80], rule: 'A', shift })
+      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'match', scores: [60, 61, 80], rule: 'A', shift, error: null })
       stubOk({ id: 's2', judgment: { result: 'nomatch', candidates: [] } })
-      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'nomatch', scores: null, rule: null, shift: null })
+      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'nomatch', scores: null, rule: null, shift: null, error: null })
+      stubOk({ id: 's4', judgment: { result: 'error', candidates: [], error: 'no_approved_record' } })
+      expect(await postVeinAuthShotJudged(body)).toEqual({ result: 'error', scores: null, rule: null, shift: null, error: 'no_approved_record' })
       stubOk({ id: 's3' })
       expect(await postVeinAuthShotJudged(body)).toBeNull()
     })
