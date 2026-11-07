@@ -6,7 +6,7 @@ import TenkoManagerJudgmentPanel from '~/components/TenkoManagerJudgmentPanel.vu
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
 import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import { devDeviceJwt } from '../helpers/dummy-jwt'
-import { DEV_DEVICE_MARK_EVENT, noteDeviceToken } from '~/utils/token-selection'
+import { noteDeviceToken } from '~/utils/token-selection'
 import { readReloadContext, resetReloadContext } from '~/composables/useKioskScreen'
 
 // 運行管理者側の IT点呼 の受け画面 (Refs ippoan/alc-app#387)。
@@ -116,6 +116,14 @@ mockNuxtImport('useVeinEmployeeIdentify', () => (opts: VeinOpts) => {
   return { ...veinState, identify: veinIdentifyMock, sync: veinSyncMock }
 })
 
+// USB でつないだ機体 (席の Vein Base) の行。画面が登録した受け口を控え、行はテストが流す
+type HubEventHandler = (name: string, args: string[], source: string) => void
+let hubCardHandler: HubEventHandler | null = null
+const hubOffMock = vi.fn(() => { hubCardHandler = null })
+mockNuxtImport('useUsbHub', () => () => ({
+  nfc: { onEvent: (cb: HubEventHandler) => { hubCardHandler = cb; return hubOffMock } },
+}))
+
 // 席の運行管理者 (useItTenkoManager) と共有の ID (useManagerAuth) は実物を使う
 
 const MANAGER_KEY = 'alc_it_tenko_manager_id'
@@ -190,7 +198,8 @@ async function registerOnCard(w: Wrapper, code: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   veinInstances.length = 0
-  veinState.ready.value = true
+  // 既定: 指静脈の機体はつながっていない (入口は描かれない)。指静脈の節で true にする
+  veinState.ready.value = false
   veinState.busy.value = false
   veinState.again.value = false
   veinState.error.value = null
@@ -1017,6 +1026,46 @@ describe('TenkoItAdminView — 警告デバイス本体のボタン', () => {
     buttonPressCountRef.value += 1
     await flush()
     expect(connectMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('TenkoItAdminView — 席の Vein Base (USB) へのカードのタッチ', () => {
+  const CARD = '0123456789abcdef'
+
+  async function hubLine(w: Wrapper, name: string, args: string[]) {
+    hubCardHandler!(name, args, 'vein-station')
+    await flush()
+    await w.vm.$nextTick()
+  }
+
+  it('★ IC カード (`EVT TIMECARD`) → 席の鍵の口で引いて登録する (打刻の行でも登録だけ)', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+    const w = await mountView()
+    await hubLine(w, 'TIMECARD', [`card_id=${CARD}`, 'card_kind=felica_idm'])
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledWith(CARD, 'manager-device')
+    expect(card(w).find('[data-testid="it-manager-name"]').text()).toBe('運行 管理')
+    w.unmount()
+  })
+
+  it('★ 運転免許証 (`EVT NFC_LICENSE`) → 交付日と有効期限をつないだ id で引く', async () => {
+    localStorage.removeItem(MANAGER_KEY)
+    lookupEmployeeByCardMock.mockResolvedValue(MANAGER)
+    const w = await mountView()
+    await hubLine(w, 'NFC_LICENSE', ['issue=20230609', 'expiry=20280513'])
+    expect(lookupEmployeeByCardMock).toHaveBeenCalledWith('2023060920280513', 'manager-device')
+    w.unmount()
+  })
+
+  it('カードでない行・免許証の TIMECARD (NFC_LICENSE と同じタッチ)・形の合わない id は無視し、unmount で受け口を外す', async () => {
+    const w = await mountView()
+    await hubLine(w, 'FC1200', ['state=ready'])
+    await hubLine(w, 'TIMECARD', ['card_id=2023060920280513', 'card_kind=license'])
+    await hubLine(w, 'TIMECARD', ['card_id=xyz', 'card_kind=felica_idm'])
+    await hubLine(w, 'NFC_LICENSE', ['issue=2023', 'expiry=20280513'])
+    expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+    w.unmount()
+    expect(hubOffMock).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -1985,32 +2034,24 @@ describe('TenkoItAdminView — 「機体を使用中」の申告', () => {
 })
 
 
-describe('TenkoItAdminView — 指静脈での登録 (開発用の運行管理者席だけ)', () => {
+describe('TenkoItAdminView — 指静脈での登録', () => {
   const veinButtons = (w: Wrapper) => w.findAll('[data-testid="it-vein-register-button"]')
   const lastOpts = () => veinInstances[veinInstances.length - 1]!
   const MGR = { id: 'mgr-9', name: '指 管理', role: ['driver', 'manager'] }
 
   beforeEach(() => {
     localStorage.clear()
+    veinState.ready.value = true
   })
   afterEach(() => {
     noteDeviceToken('manager-device', null)
   })
 
-  it('★ 本番の席 (印なし): 入口を出さず、照合も同期も作らない。社員番号の登録はそのまま', async () => {
-    getEmployeeByCodeMock.mockResolvedValue({ id: 'mgr-2', name: '点呼 次郎', role: ['manager'] })
-    activeRoomsRef.value = ['it-session-1']
+  it('★ 本番の席 (開発用の印なし) でも、機体がつながっていれば上部の枠に入口を出す', async () => {
     const w = await mountView()
-    expect(veinButtons(w)).toHaveLength(0)
-    expect(w.find('[data-testid="it-vein-register"]').exists()).toBe(false)
-    await click(incoming(w).find('button'), w)
-    expect(idModal(w).exists()).toBe(true)
-    expect(veinButtons(w)).toHaveLength(0)
-    expect(veinInstances).toHaveLength(0)
-    expect(veinSyncMock).not.toHaveBeenCalled()
-    expect(veinIdentifyMock).not.toHaveBeenCalled()
-    await submitManagerCode(w, '001')
-    expect(connectMock).toHaveBeenCalledTimes(1)
+    expect(veinButtons(w)).toHaveLength(1)
+    expect(veinInstances.length).toBeGreaterThan(0)
+    expect(lastOpts().scope).toBe('manager-device')
     w.unmount()
   })
 
@@ -2174,17 +2215,4 @@ describe('TenkoItAdminView — 指静脈での登録 (開発用の運行管理�
     w.unmount()
   })
 
-  it('印の変化に追随する: 印が付くと出て、外れると消える (部品ごと外れる)', async () => {
-    const w = await mountView()
-    expect(veinButtons(w)).toHaveLength(0)
-    noteDeviceToken('manager-device', devDeviceJwt())
-    await flush()
-    expect(veinButtons(w)).toHaveLength(1)
-    noteDeviceToken('manager-device', null)
-    await flush()
-    expect(veinButtons(w)).toHaveLength(0)
-    w.unmount()
-    // unmount 後のイベントでは何も起きない (listener は外れている)
-    window.dispatchEvent(new Event(DEV_DEVICE_MARK_EVENT))
-  })
 })

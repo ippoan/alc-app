@@ -3,9 +3,9 @@
  * IT点呼 の受け画面で、この席の運行管理者を指静脈で登録する入口。
  * 遠隔点呼の受け画面 (`TenkoRemoteAdminView`) の通話前の確認でも使う (文言だけ渡して変える)。
  *
- * **開発用の運行管理者席 (`isDevDevice('manager-device')`) だけ** `TenkoItAdminView` が出す。
- * 本番の席ではこの部品ごと描画しない — 照合データの同期 (`useVeinEmployeeIdentify` の onMounted) も
- * 指の合図での自動照合も、部品を作らなければ走らない。
+ * `TenkoItAdminView` は**どの席にも**置く (運行管理者タブの `RoleAuthGate` と同じ)。指静脈の機体が
+ * つながっていない席では何も描かない (`vein.ready`)。置くと機体のポートを掴むので、席の Vein Base の
+ * NFC の行も IT点呼 の画面に届く。
  *
  * 照合の手順は `RoleAuthGate` と共通の `useVeinEmployeeIdentify` (運行管理者席の鍵)。
  * 特定した人の権限の確認と登録は親の `onEmployee` が行い、失敗の理由はここに出す。

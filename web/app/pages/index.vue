@@ -762,7 +762,7 @@ function onRoleTabClick(role: RoleTab) {
     <ManagerSeatRemoteHost v-if="activeRole === 'manager'" />
     <!-- 運行管理者の画面の間は席の Vein Base に体温計へつながせない (キオスクに体温を譲る)。
          それ以外の画面ではつながるたびに体温計を探させる (再読み込みで OFF が残らないように)。描くものは無い -->
-    <ManagerSeatThermoPause :pause="activeRole === 'manager' || activeRole === 'tenko_desk'" />
+    <ManagerSeatThermoPause :pause="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
     <!-- ハンバーガーメニュー (デバイス設定。運行者の画面と同じ置き方) -->
     <div v-if="activeRole === 'manager' && !incomingCallMode" class="w-full max-w-lg mx-auto px-4 mt-2 flex justify-end">
       <div ref="managerMenuRef" class="relative">
