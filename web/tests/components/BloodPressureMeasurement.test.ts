@@ -582,6 +582,16 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
 // 本番 flip 後の新版への載せ替え (Refs ippoan/alc-app#387)。測定台は指を待って開いた
 // ままになるので、指を待つ間は「いまリロードして失うものが無い」と申告する。
 // 読むのは plugin と同じ口 (`readReloadContext`)
+describe('BloodPressureMeasurement — 画面の高さに収まらないとき', () => {
+  it('自分の枠の中でスクロールし、下に固定された測定ログの帯のぶん空ける', async () => {
+    const wrapper = await mountBp()
+    const root = wrapper.find('[data-testid="bp-root"]')
+    expect(root.classes()).toContain('overflow-y-auto')
+    expect(root.classes()).toContain('pb-16')
+    wrapper.unmount()
+  })
+})
+
 describe('BloodPressureMeasurement — 新版への載せ替えの申告 (Refs ippoan/alc-app#387)', () => {
   const safe = () => readReloadContext().safe
 
