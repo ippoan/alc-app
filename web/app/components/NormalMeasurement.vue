@@ -164,6 +164,30 @@ async function chooseIt() {
 // 確定待ちのまま画面を離れたら、残り秒数は数えない (確定はサーバーの見回りが済ませる)
 onUnmounted(stopItOfferTimer)
 
+/**
+ * IT点呼 で運行管理者の判定が入った後、最初の画面へ自動で戻るまでの秒数。遠隔点呼の完了画面
+ * (`TenkoKiosk` の `REMOTE_COMPLETED_RESET_S`) と同じ 30 秒。押せば待たずに戻る (「次の測定へ」)
+ */
+const IT_JUDGED_RESET_S = 30
+/** 判定の後、最初の画面へ戻るまでの残り秒数 (数えていなければ null) */
+const itJudgedResetLeft = ref<number | null>(null)
+let itJudgedResetTimer: ReturnType<typeof setInterval> | null = null
+function stopItJudgedReset() {
+  if (itJudgedResetTimer !== null) clearInterval(itJudgedResetTimer)
+  itJudgedResetTimer = null
+  itJudgedResetLeft.value = null
+}
+watch(() => itCall?.state.value === 'judged', (judged) => {
+  stopItJudgedReset()
+  if (!judged) return
+  itJudgedResetLeft.value = IT_JUDGED_RESET_S
+  itJudgedResetTimer = setInterval(() => {
+    itJudgedResetLeft.value = (itJudgedResetLeft.value ?? 1) - 1
+    if (itJudgedResetLeft.value <= 0) reset()
+  }, 1000)
+})
+onUnmounted(stopItJudgedReset)
+
 const step = ref<NormalMeasurementStep>('nfc')
 const employeeId = ref('')
 const measurementResult = ref<MeasurementResult | null>(null)
@@ -857,6 +881,7 @@ const showCancel = computed(() => step.value !== 'nfc' && step.value !== 'result
 
 // リセット
 function reset() {
+  stopItJudgedReset()
   itCall?.stop()
   itCallNotStarted.value = false
   stopItOfferTimer()
@@ -1347,6 +1372,9 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
         >
           運行管理者の判定: {{ itJudgment.judgment === 'ok' ? 'OK' : 'NG' }}<template v-if="itJudgment.reason"> ({{ itJudgment.reason }})</template>
         </div>
+        <p v-if="itJudgedResetLeft !== null" data-testid="it-judged-countdown" class="text-sm text-gray-500 text-center">
+          あと {{ itJudgedResetLeft }} 秒で最初の画面に戻ります
+        </p>
         <!-- IT点呼: 通話に進めなかった (記録の id が無い / オフライン / 保存失敗 / 通話を開けない) -->
         <div
           v-if="itCallNotStarted || itCallState === 'unavailable'"
