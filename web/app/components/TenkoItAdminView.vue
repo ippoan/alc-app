@@ -35,7 +35,6 @@ import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployees, getTenkoSession, list
 import { alcoholResultLabel } from '~/utils/alcohol'
 import { IT_TENKO_METHOD, defaultJudgmentMethod, identityMethodLabel, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
-import { cardEventLookupId } from '~/composables/useAlarmDevice'
 import type { ApiEmployee } from '~/types'
 
 const props = defineProps<{
@@ -466,7 +465,7 @@ watch(alarmDevice.buttonPressCount, () => {
   if (roomId) requestCall(roomId)
 })
 
-// 警告デバイスか、USB でつないだ機体 (席の Vein Base の NFC) へのカードのタッチ (社員証の IC カード /
+// 席でかざしたカード (`useSeatCardRead`。警告デバイスか、USB でつないだ機体。社員証の IC カード /
 // 運転免許証) = その人をこの席の運行管理者に登録する。**打刻はしない。** この画面が開いているときだけ効く
 // (mount より前のタッチは拾わない)。入力欄が出ていなくても (登録済みで着信待ちでも) 受け、登録済みなら
 // 確認なしで切り替える。点呼を開いている / 繋いでいる途中は受けない (判定者が途中で替わる)
@@ -494,18 +493,10 @@ async function onCardTouch(lookupId: string): Promise<void> {
   idInput.value = ''
   if (waiting.value) await open(waiting.value)
 }
-watch(alarmDevice.cardRead, (read) => {
-  if (read) void onCardTouch(read.lookupId)
-})
-// 席の Vein Base は警告デバイスを通らず、USB の行 (`EVT NFC_LICENSE` / `EVT TIMECARD`) で届く
-const offHubCard = useUsbHub().nfc.onEvent((name, args) => {
-  const lookupId = cardEventLookupId(name, args)
-  if (lookupId) void onCardTouch(lookupId)
-})
+useSeatCardRead(lookupId => void onCardTouch(lookupId))
 
 onUnmounted(() => {
   unmounted = true
-  offHubCard()
   close()
   stopWatchingRooms()
 })
