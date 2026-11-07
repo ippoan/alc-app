@@ -80,7 +80,13 @@ function next() {
     <div v-else-if="vein.registered.value" class="text-center">
       <p class="text-sm text-gray-500 mb-2">{{ employeeName }}さん</p>
       <p class="text-green-700 font-medium">指静脈を登録しました</p>
-      <p class="mt-1 text-sm text-gray-500">管理者の承認後に使えます</p>
+      <p v-if="vein.outcome.value === 'auto_approved'" data-testid="vein-registered-auto" class="mt-1 text-sm text-green-700">
+        登録済みの指と合ったので、この端末の分は自動で承認しました。すぐに使えます
+      </p>
+      <p v-else-if="vein.outcome.value === 'device_pending'" data-testid="vein-registered-device-pending" class="mt-1 text-sm text-amber-700">
+        登録済みの指と合わなかったので、この端末の分だけ承認待ちです。ほかの端末では今までどおり使えます
+      </p>
+      <p v-else class="mt-1 text-sm text-gray-500">管理者の承認後に使えます</p>
       <button
         class="w-full mt-6 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
         @click="next"

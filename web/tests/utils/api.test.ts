@@ -1258,6 +1258,14 @@ describe.skipIf(isLive)('api', () => {
       })
     })
 
+    it.skipIf(isLive)('approveVeinByEmployee は端末ごとの承認待ちならその端末 (device_id) も送る', async () => {
+      stub204()
+      await callApi(() => approveVeinByEmployee(TEST_EMPLOYEE_ID, 'emp-mgr', 'v1', 'alarm:bp'))
+      assertMock(() => {
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ approver_employee_id: 'emp-mgr', updated_at: 'v1', device_id: 'alarm:bp' })
+      })
+    })
+
     it.skipIf(isLive)('getVeinModuleTemplates は GET /api/vein/module-templates', async () => {
       stubOk({ templates: [] })
       await callApi(() => getVeinModuleTemplates())

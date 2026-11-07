@@ -79,7 +79,7 @@ async function approve() {
       await veinSerial.say('FAILED').catch(() => {})
       return
     }
-    await approveVeinByEmployee(target.employee_id, approver.employeeId, target.updated_at)
+    await approveVeinByEmployee(target.employee_id, approver.employeeId, target.updated_at, target.device_id)
     message.value = `${target.name}さんの指静脈を承認しました`
     selected.value = null
     // 承認した人をこの端末の対応表でも承認済みにする (次の照合から本人確認に使える)
@@ -113,15 +113,17 @@ function versionOf(p: ApiVeinPendingModule): string {
     <template v-else>
       <p v-if="!pending.length" data-testid="vein-pending-empty" class="text-sm text-gray-500">未承認の登録はありません</p>
       <ul v-else class="divide-y border rounded-xl">
-        <li v-for="p in pending" :key="p.employee_id">
+        <li v-for="p in pending" :key="`${p.employee_id}:${p.device_id ?? ''}`">
           <button
             data-testid="vein-pending-row"
             class="w-full text-left px-3 py-2 text-sm"
-            :class="selected?.employee_id === p.employee_id ? 'bg-blue-50' : 'hover:bg-gray-50'"
+            :class="selected?.employee_id === p.employee_id && selected?.device_id === p.device_id ? 'bg-blue-50' : 'hover:bg-gray-50'"
             @click="select(p)"
           >
             <span class="font-medium">{{ p.name }}</span>
             <span class="ml-2 text-gray-500">{{ versionOf(p) }} 登録 / {{ veinDeviceLabel(p.registered_device_id, keyLabelOf(p.registered_device_id)) }}</span>
+            <!-- 端末ごとの記録の承認待ち: 承認済みの記録はほかの端末で使えている。承認するとこの端末でも使える -->
+            <span v-if="p.device_id" data-testid="vein-pending-device" class="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">その端末の分だけ</span>
           </button>
         </li>
       </ul>

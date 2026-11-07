@@ -452,6 +452,26 @@ describe('その場で撮った記録 (native) の扱い', () => {
     expect(db.putVeinModuleEntry).not.toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'added' }))
   })
 
+  it('★ native の設定: この端末で登録した記録 (承認待ち) は、サーバーが同じ版を配ったら承認済みにする。版が違えば承認待ちのまま', async () => {
+    localStorage.setItem(MODE_KEY, 'native')
+    db.loadVeinModuleEntries.mockResolvedValue([
+      entry('mine', 10, { updatedAt: 'v-dev', approved: false, native: true }),
+      entry('waiting', 11, { updatedAt: 'v-dev', approved: false, native: true }),
+    ])
+    api.getVeinModuleTemplates.mockResolvedValue({
+      templates: [
+        { employee_id: 'mine', record: B64, updated_at: 'v-dev', registered_device_id: 'alarm:bp' },
+        // この端末の分は承認待ち: サーバーは別の承認済みの記録を配っている
+        { employee_id: 'waiting', record: B64, updated_at: 'v-other' },
+      ],
+    })
+    const p = port()
+    await mod.syncVeinModule(p)
+    expect(p.syncWrite).not.toHaveBeenCalled()
+    expect(db.putVeinModuleEntry).toHaveBeenCalledTimes(1)
+    expect(db.putVeinModuleEntry).toHaveBeenCalledWith(entry('mine', 10, { updatedAt: 'v-dev', approved: true, native: true, registeredDeviceId: 'alarm:bp' }))
+  })
+
   it('★ native の設定でも、一覧から消えた (承認の取り消し・退職) native の人はモジュールから消す', async () => {
     localStorage.setItem(MODE_KEY, 'native')
     db.loadVeinModuleEntries.mockResolvedValue([entry('added', 10, { native: true })])

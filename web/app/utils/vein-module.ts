@@ -508,7 +508,12 @@ export async function syncVeinModule(port: VeinModulePort, opts: { ifOlderThanMs
     for (const t of templates) {
       const current = entries.get(t.employee_id)
       // この端末で足した指を「その場で撮った記録」のまま使う設定: サーバーの版が変わっても書き換えない
-      if (keepsOnSpotRecord(current)) {
+      if (current && keepsOnSpotRecord(current)) {
+        // この端末で登録した記録が承認された (サーバーが配る版が、この端末で登録した版と同じ): 対応表も承認済みにする。
+        // 版が違う (この端末の分は承認待ちで、サーバーは別の承認済みの記録を配っている) なら承認待ちのまま
+        if (!current.approved && current.updatedAt === t.updated_at) {
+          await putVeinModuleEntry({ ...current, approved: true, registeredDeviceId: t.registered_device_id ?? null })
+        }
         stat.unchanged += 1
         continue
       }

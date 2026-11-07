@@ -96,11 +96,25 @@ describe('VeinPendingApproval', () => {
     expect(find(await mountPanel(), 'vein-pending-list-error').text()).toContain('(x)')
   })
 
+  it('★ 端末ごとの承認待ちは「その端末の分だけ」と出し、承認ではその端末を送る (同じ人の行が別にあっても取り違えない)', async () => {
+    api.getPendingVeinModuleTemplates.mockResolvedValue([
+      { employee_id: 'emp-new', name: '試験 新人', updated_at: 'v-dev', registered_device_id: 'alarm:bp', device_id: 'alarm:bp' },
+      { employee_id: 'emp-new', name: '試験 新人', updated_at: 'v-base', registered_device_id: null },
+    ])
+    const w = await mountPanel()
+    const rows = w.findAll('[data-testid="vein-pending-row"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.find('[data-testid="vein-pending-device"]').text()).toBe('その端末の分だけ')
+    expect(rows[1]!.find('[data-testid="vein-pending-device"]').exists()).toBe(false)
+    await selectFirstAndApprove(w)
+    expect(api.approveVeinByEmployee).toHaveBeenCalledWith('emp-new', 'emp-mgr', 'v-dev', 'alarm:bp')
+  })
+
   it('★ 選んで運行管理者が指を置くと、照合で決まった承認者で承認を頼み、一覧を読み直して同期する', async () => {
     const w = await mountPanel()
     await selectFirstAndApprove(w)
     expect(vein.say).toHaveBeenCalledWith('PLACE')
-    expect(api.approveVeinByEmployee).toHaveBeenCalledWith('emp-new', 'emp-mgr', '2026-10-23T00:00:00Z')
+    expect(api.approveVeinByEmployee).toHaveBeenCalledWith('emp-new', 'emp-mgr', '2026-10-23T00:00:00Z', undefined)
     expect(find(w, 'vein-pending-message').text()).toBe('試験 新人さんの指静脈を承認しました')
     expect(sync.syncVeinModule).toHaveBeenCalledTimes(1)
     expect(api.getPendingVeinModuleTemplates).toHaveBeenCalledTimes(2)

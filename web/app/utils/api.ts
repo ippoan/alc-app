@@ -794,25 +794,40 @@ function bytesToBase64(bytes: Uint8Array): string {
  * 上限 (モジュールの記録が 91 人) を超える新規の登録は 409 (`too_many_module_records`)。
  * 呼び出し側が {@link apiErrorCode} で読める
  */
+/**
+ * モジュールの記録の登録の返事。承認済みの記録が在る乗務員を端末で登録すると、サーバーは乗務員の記録を上書きせず
+ * その端末の記録として預かり (`device_record`)、承認済みの記録と 4 件以上合えば自動で承認する (`approved`・`auto_approved`。
+ * 合わなければその端末の分だけ承認待ち)。`matched` / `entries` は合った件数と件の総数 (Refs ippoan/alc-app-s3#352)
+ */
+export interface VeinModuleRegistered {
+  employee_id: string
+  updated_at: string
+  device_record?: boolean
+  approved?: boolean
+  auto_approved?: boolean
+  matched?: number
+  entries?: number
+}
+
 export async function putVeinModuleRecord(
   employeeId: string,
   record: Uint8Array,
   scope: RequestTokenScope = 'default',
-): Promise<{ employee_id: string; updated_at: string }> {
+): Promise<VeinModuleRegistered> {
   const path = `/api/vein/templates/${encodeURIComponent(employeeId)}/module`
   const options: RequestInit = { method: 'PUT', body: JSON.stringify({ record: bytesToBase64(record) }) }
   // 運行管理者席 (Vein Base) は席の鍵だけで送る (キオスクの鍵も管理者ログインも無い。取れなければ投げる)
   if (scope === 'manager-device') {
     const seatJwt = await getManagerDeviceJwt?.()
     if (!seatJwt) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
-    return proxyRequest<{ employee_id: string; updated_at: string }>(path, seatJwt, options)
+    return proxyRequest<VeinModuleRegistered>(path, seatJwt, options)
   }
   // **端末の token を先に使う** — サーバーは token の端末を「登録した端末」として記録に残す
   // (`registered_device_id`)。管理者がログインしていても、管理者の token では端末が分からない。
   // 端末の token が取れなければ今までどおり (`request` の規則)
   const deviceJwt = await getKioskDeviceJwt?.()
-  if (deviceJwt) return proxyRequest<{ employee_id: string; updated_at: string }>(path, deviceJwt, options)
-  return request<{ employee_id: string; updated_at: string }>(path, options)
+  if (deviceJwt) return proxyRequest<VeinModuleRegistered>(path, deviceJwt, options)
+  return request<VeinModuleRegistered>(path, options)
 }
 
 /**
@@ -1033,6 +1048,8 @@ export interface ApiVeinPendingModule {
   name: string
   updated_at: string
   registered_device_id?: string | null
+  /** 端末ごとの記録の承認待ちなら、その端末 (承認の body に返す)。乗務員の記録の承認待ちは無し */
+  device_id?: string
 }
 
 /**
@@ -1048,10 +1065,10 @@ export async function getPendingVeinModuleTemplates(scope: RequestTokenScope = '
  * サーバーは承認者が運行管理者 (役割 manager / admin) で、自分の記録が承認済みで、自分自身でないことを確かめる。
  * `updatedAt` は一覧で見た版 (登録し直されていたら 409)
  */
-export async function approveVeinByEmployee(employeeId: string, approverEmployeeId: string, updatedAt: string): Promise<void> {
+export async function approveVeinByEmployee(employeeId: string, approverEmployeeId: string, updatedAt: string, deviceId?: string): Promise<void> {
   await request<void>(`/api/vein/templates/${encodeURIComponent(employeeId)}/approve-by-employee`, {
     method: 'POST',
-    body: JSON.stringify({ approver_employee_id: approverEmployeeId, updated_at: updatedAt }),
+    body: JSON.stringify({ approver_employee_id: approverEmployeeId, updated_at: updatedAt, ...(deviceId ? { device_id: deviceId } : {}) }),
   })
 }
 
