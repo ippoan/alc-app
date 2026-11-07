@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { getEmployeeByCode, getEmployeeByNfcId } from '~/utils/api'
+import { getEmployeeByCode, getEmployeeByNfcId, lookupEmployeeByCard } from '~/utils/api'
+import { cardEventLookupId } from '~/composables/useAlarmDevice'
 import { devTiming } from '~/utils/dev-timing'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
 import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
@@ -134,6 +135,22 @@ async function lookupEmployee(find: () => Promise<{ id: string; name: string }>,
 function onNfcRead(nfcId: string) {
   return lookupEmployee(() => getEmployeeByNfcId(nfcId), employeeNotFoundByNfc(nfcId))
 }
+
+/** USB の機体で読んだ社員証が、打刻のカードの台帳に無かったとき */
+const IC_CARD_NOT_REGISTERED = 'この社員証は登録されていません。管理者画面で社員証を登録してください'
+
+// USB でつないだ機体 (Vein Base / Vein Station) で読んだ社員証の IC カード (`EVT TIMECARD`)。
+// `NfcStatus` が受けるのは免許証の行だけなので、社員証はここで受け、打刻と同じカードの台帳で引く
+// (キオスクの `useHubTimecardPunch` と同じ口)。免許証の行 (`NFC_LICENSE`) は `NfcStatus` に任せて二重にしない。
+// 受けるのはカードの入口が出ている間 (`NfcStatus` と同じ。人を選んでいる間は出ない) で、照会中・照合中は受けない
+const offHubCard = useUsbHub().nfc.onEvent((name, args) => {
+  if (name !== 'TIMECARD') return
+  const cardId = cardEventLookupId(name, args)
+  if (!cardId) return
+  if (!(step.value === 'nfc' || doneSettled.value) || expected.value !== null || employeeLookups.value > 0 || vein.busy.value) return
+  void lookupEmployee(() => lookupEmployeeByCard(cardId, 'bp-station'), IC_CARD_NOT_REGISTERED)
+})
+onUnmounted(offHubCard)
 
 // 社員番号のキーパッド (`EmployeeCodeKeypad`) が打った番号。カードを持っていないときの入口
 const code = ref('')
