@@ -24,12 +24,25 @@ const employee = ref<{ id: string, name: string, role: string[], face_approval_s
 const getEmployeeByCodeMock = vi.fn(async () => employee.value)
 const getEmployeeByNfcIdMock = vi.fn(async () => employee.value)
 const updateDeviceLastLoginMock = vi.fn(async () => {})
+const lookupEmployeeByCardMock = vi.fn(async (..._args: unknown[]) => employee.value)
 
 vi.mock('~/utils/api', () => ({
   getEmployeeByNfcId: (...args: unknown[]) => getEmployeeByNfcIdMock(...args as []),
   getEmployeeByCode: (...args: unknown[]) => getEmployeeByCodeMock(...args as []),
   getEmployeeById: vi.fn(async () => { throw new Error('not registered') }),
   updateDeviceLastLogin: (...args: unknown[]) => updateDeviceLastLoginMock(...args as []),
+  lookupEmployeeByCard: (...args: unknown[]) => lookupEmployeeByCardMock(...args),
+}))
+
+// 運行管理者席のカード: 警告デバイスの合図 (連番 + 照会に送る id) と、USB の機体の行の受け口
+// テストごとに新しい ref を渡す (unmount しない他のテストの部品が、前の ref を見たまま残っているため)
+const alarm = { cardRead: ref<{ seq: number, lookupId: string } | null>(null) }
+mockNuxtImport('useAlarmDevice', () => () => ({ cardRead: alarm.cardRead }))
+type HubEventHandler = (name: string, args: string[], source: string) => void
+let hubCardHandler: HubEventHandler | null = null
+const hubOffMock = vi.fn()
+mockNuxtImport('useUsbHub', () => () => ({
+  nfc: { onEvent: (cb: HubEventHandler) => { hubCardHandler = cb; return hubOffMock } },
 }))
 
 const faceSyncMock = vi.fn(async () => {})
@@ -499,6 +512,71 @@ describe('RoleAuthGate — NFC ではログインせず、この端末の指を�
     await wrapper.findAll('button').find(b => b.text() === 'ログアウト')!.trigger('click')
     expect(addDevice.reset).toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  describe('席で読んだカード (警告デバイス / USB の機体の社員証)', () => {
+    const touch = async (w: Awaited<ReturnType<typeof mountGate>>, lookupId: string) => {
+      alarm.cardRead.value = { seq: (alarm.cardRead.value?.seq ?? 0) + 1, lookupId }
+      await settle(w)
+    }
+    beforeEach(() => {
+      alarm.cardRead = ref(null)
+      lookupEmployeeByCardMock.mockClear()
+      lookupEmployeeByCardMock.mockImplementation(async () => employee.value)
+      hubOffMock.mockClear()
+    })
+
+    it('★ 警告デバイスのカード → カードの台帳を運行管理者席の鍵で引き、NFC と同じく足すボタンを出す', async () => {
+      const wrapper = await mountGate('manager')
+      await touch(wrapper, '0123456789abcdef')
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledWith('0123456789abcdef', 'manager-device')
+      expect(getEmployeeByNfcIdMock).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="vein-add-device-card"]').text()).toContain('テスト五郎さん')
+      wrapper.unmount()
+      expect(hubOffMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('★ USB の機体の社員証 (`TIMECARD`) も受け、免許証の行 (`NFC_LICENSE`) と知らない行は NfcStatus に任せて引かない', async () => {
+      const wrapper = await mountGate('manager')
+      hubCardHandler!('NFC_LICENSE', ['issue=20230609', 'expiry=20280513'], 'vein-station')
+      hubCardHandler!('FC1200', ['state=ready'], 'vein-station')
+      await settle(wrapper)
+      expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+      hubCardHandler!('TIMECARD', ['card_id=04a1b2c3', 'card_kind=nfca_uid'], 'vein-station')
+      await settle(wrapper)
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledWith('04a1b2c3', 'manager-device')
+      expect(wrapper.find('[data-testid="vein-add-device-card"]').exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('登録されていないカードは理由を出し、照会の失敗はその文言を出す', async () => {
+      const wrapper = await mountGate('manager')
+      lookupEmployeeByCardMock.mockRejectedValueOnce(Object.assign(new Error('not found'), { status: 404 }))
+      await touch(wrapper, '04a1b2c3')
+      expect(wrapper.text()).toContain('このカードは登録されていません')
+      lookupEmployeeByCardMock.mockRejectedValueOnce(new Error('通信できませんでした'))
+      await touch(wrapper, '04a1b2c3')
+      expect(wrapper.text()).toContain('通信できませんでした')
+      wrapper.unmount()
+    })
+
+    it('照会中の 2 枚目・システム管理者の入口・顔認証の段では引かない', async () => {
+      const resolvers: Array<(v: unknown) => void> = []
+      lookupEmployeeByCardMock.mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve as (v: unknown) => void) }))
+      const wrapper = await mountGate('manager')
+      await touch(wrapper, '04a1b2c3')
+      await touch(wrapper, '04a1b2c4')
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+      resolvers[0]!(employee.value)
+      await settle(wrapper)
+      wrapper.unmount()
+
+      lookupEmployeeByCardMock.mockClear()
+      const admin = await mountGate('admin')
+      await touch(admin, '04a1b2c3')
+      expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+      admin.unmount()
+    })
   })
 
   it('システム管理者の入口は今までどおり (社員番号 + 顔認証)', async () => {
