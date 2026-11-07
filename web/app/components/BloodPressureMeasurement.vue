@@ -323,7 +323,9 @@ function reset() {
 </script>
 
 <template>
-  <div class="w-full max-w-md mx-auto p-4 flex flex-col gap-4">
+  <!-- 自分の枠の中でスクロールする (通常点呼・点呼キオスクと同じ `overflow-y-auto`)。下は画面の下に固定された
+       測定ログの帯 (`MeasurementLog`) の高さぶん空ける — 空けないと最後の段 (ボタン) が帯の下に隠れる -->
+  <div data-testid="bp-root" class="w-full max-w-md mx-auto overflow-y-auto px-4 pt-4 pb-16 flex flex-col gap-4">
     <!-- 指静脈の登録 (入口は下のボタン) -->
     <VeinRegistration v-if="step === 'vein'" :employee="registrationEmployee" @close="step = 'nfc'; registrationEmployee = null" />
 
