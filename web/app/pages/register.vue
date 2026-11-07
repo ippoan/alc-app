@@ -102,7 +102,7 @@ const veinDisabledReason = vein.disabledReason
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <!-- NFC タッチ -->
           <label class="block text-sm font-medium text-gray-700 mb-2">NFC カードをタッチ</label>
-          <NfcStatus @read="onNfcRead" />
+          <NfcStatus license-only @read="onNfcRead" />
 
           <!-- ドロップダウン -->
           <div class="border-t border-gray-200 pt-3 mt-4">

@@ -3,6 +3,7 @@ import type { NfcReadEvent, NfcLicenseReadEvent, NfcReadSource } from '~/types'
 import { parseLicenseExpiryDate, checkLicenseExpiry, formatExpiryDate, expiryTone, EXPIRY_TONE_CLASS, type LicenseExpiryStatus } from '~/utils/license'
 import { isWebSerialSupported } from '~/utils/webserial'
 import { nfcAliveState } from '~/utils/nfc-alive'
+import { cardEventLookupId } from '~/composables/useAlarmDevice'
 
 const props = defineProps<{
   /** IC カード打刻のアルコールチェックへの案内ボタンが表示中か (Refs ippoan/rust-alc-api#644)。
@@ -10,6 +11,13 @@ const props = defineProps<{
   promptActive?: boolean
   /** 縦を詰めた表示 (血圧測定で指静脈のボタンと横に並べるとき。Refs ippoan/alc-app#436) */
   compact?: boolean
+  /**
+   * 運転免許証だけを受ける画面か。true のとき、USB の機体で読んだ社員証などの IC カード
+   * (`EVT TIMECARD` の FeliCa / NFC-A) には「受け付けていません」と出す (機体は読めた音を鳴らすので、
+   * 黙っていると画面が壊れたように見える)。IC カードを自分で受ける画面 (通常点呼・血圧測定・
+   * 運行管理者の入口) は付けない
+   */
+  licenseOnly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -103,7 +111,33 @@ onLicenseRead((event: NfcLicenseReadEvent) => {
   }
 })
 
+/** 免許証だけを受ける画面で、免許証以外の IC カードをかざしたときの案内 */
+const IC_NOT_ACCEPTED_MESSAGE = '免許証以外の IC カードは受け付けていません。運転免許証をタッチしてください'
+/** 案内を出しておく時間 (ms)。次に免許証を読めばその時点で消す */
+const IC_NOT_ACCEPTED_SHOW_MS = 8000
+const icNotAccepted = ref(false)
+let icNotAcceptedTimer: ReturnType<typeof setTimeout> | null = null
+function clearIcNotAccepted() {
+  if (icNotAcceptedTimer !== null) clearTimeout(icNotAcceptedTimer)
+  icNotAcceptedTimer = null
+  icNotAccepted.value = false
+}
+// 受け口は免許証だけの画面でだけ張る (この値は画面ごとに決まっていて途中で変わらない)
+const offIcCard = props.licenseOnly
+  ? nfcHub.onEvent((name, args) => {
+    if (name !== 'TIMECARD' || !cardEventLookupId(name, args)) return
+    clearIcNotAccepted()
+    icNotAccepted.value = true
+    icNotAcceptedTimer = setTimeout(clearIcNotAccepted, IC_NOT_ACCEPTED_SHOW_MS)
+  })
+  : null
+onUnmounted(() => {
+  offIcCard?.()
+  clearIcNotAccepted()
+})
+
 onRead((event: NfcReadEvent) => {
+  clearIcNotAccepted()
   lastReadId.value = event.employee_id
   readAnimation.value = true
   emit('read', event.employee_id, licenseExpiryDate.value ?? undefined, event.source, event.card_type)
@@ -193,6 +227,9 @@ const showNfcGuide = ref(false)
         NFC 位置ガイド
       </button>
       <NfcPositionGuide v-model:visible="showNfcGuide" />
+      <p v-if="icNotAccepted" data-testid="nfc-ic-not-accepted" class="mt-2 text-sm font-medium text-center text-red-600">
+        {{ IC_NOT_ACCEPTED_MESSAGE }}
+      </p>
       <p v-if="lastReadId" class="mt-2 text-green-600 font-mono text-sm">
         読み取り: {{ lastReadId }}
       </p>

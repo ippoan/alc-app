@@ -6,13 +6,15 @@ import NfcStatus from '~/components/NfcStatus.vue'
 // --- composable のモック (serial ブロックの表示条件だけを動かす、Refs #234) ---
 
 const isConnected = ref(false)
+/** 画面が登録した読み取りの cb (免許証を読んだことにするテストが呼ぶ) */
+let readCallback: ((event: { employee_id: string }) => void) | null = null
 mockNuxtImport('useNfcReader', () => () => ({
   isConnected: readonly(isConnected),
   error: ref<string | null>(null),
   readers: ref<string[]>([]),
   bridgeVersion: ref<string | null>(null),
   connect: vi.fn(),
-  onRead: vi.fn(),
+  onRead: vi.fn((cb: (event: { employee_id: string }) => void) => { readCallback = cb }),
   onLicenseRead: vi.fn(),
 }))
 
@@ -27,6 +29,7 @@ const coreS3Connected = ref(false)
 const requestPortMock = vi.fn(async () => true)
 mockNuxtImport('useCoreS3Serial', () => () => ({
   isConnected: readonly(coreS3Connected),
+  onEvent: () => () => {},
   requestPort: requestPortMock,
   startupProbe: vi.fn(async () => false),
   isStartupProbing: ref(false),
@@ -36,14 +39,20 @@ mockNuxtImport('useCoreS3Serial', () => () => ({
 const atomS3Connected = ref(false)
 mockNuxtImport('useAtomS3Serial', () => () => ({
   isConnected: readonly(atomS3Connected),
+  onEvent: () => () => {},
 }))
 
 // Vein Station の Port A の NFC ユニット (Refs ippoan/alc-app#436)
 const veinConnected = ref(false)
 const veinNfcAliveAt = ref<number | null>(null)
 const veinNfcInitNgAt = ref<number | null>(null)
+// USB の機体の `EVT` 行の受け口 (免許証だけの画面の案内)。登録された cb を控え、行はテストが流す
+type VeinEventHandler = (name: string, args: string[]) => void
+let veinEventHandler: VeinEventHandler | null = null
+const veinOffEvent = vi.fn()
 mockNuxtImport('useVeinSerial', () => () => ({
   isConnected: readonly(veinConnected),
+  onEvent: (cb: VeinEventHandler) => { veinEventHandler = cb; return veinOffEvent },
   nfcAliveAt: readonly(veinNfcAliveAt),
   nfcInitNgAt: readonly(veinNfcInitNgAt),
 }))
@@ -394,5 +403,62 @@ describe('NfcStatus — Vein Station の NFC の生存 (EVT NFC_ALIVE、Refs ipp
     await nextTick()
     expect(wrapper.text()).not.toContain('NFC 応答なし')
     wrapper.unmount()
+  })
+})
+
+describe('NfcStatus — 免許証だけの画面で免許証以外の IC カードをかざしたとき', () => {
+  const notice = (w: Awaited<ReturnType<typeof mountSuspended>>) => w.find('[data-testid="nfc-ic-not-accepted"]')
+
+  beforeEach(() => {
+    veinEventHandler = null
+    veinOffEvent.mockClear()
+  })
+
+  it('★ license-only なら社員証 (`EVT TIMECARD` の FeliCa / NFC-A) に「受け付けていません」を出し、8 秒で消す', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const wrapper = await mountSuspended(NfcStatus, { props: { licenseOnly: true } })
+      expect(notice(wrapper).exists()).toBe(false)
+      veinEventHandler!('TIMECARD', ['card_id=04a1b2c3', 'card_kind=nfca_uid'])
+      await nextTick()
+      expect(notice(wrapper).text()).toBe('免許証以外の IC カードは受け付けていません。運転免許証をタッチしてください')
+      // 続けてかざすと数え直す
+      vi.advanceTimersByTime(7_000)
+      veinEventHandler!('TIMECARD', ['card_id=0123456789abcdef', 'card_kind=felica_idm'])
+      vi.advanceTimersByTime(7_000)
+      await nextTick()
+      expect(notice(wrapper).exists()).toBe(true)
+      vi.advanceTimersByTime(1_000)
+      await nextTick()
+      expect(notice(wrapper).exists()).toBe(false)
+      wrapper.unmount()
+      expect(veinOffEvent).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('免許証の行・免許証の TIMECARD・知らない行には出さない。免許証を読めば消す', async () => {
+    const wrapper = await mountSuspended(NfcStatus, { props: { licenseOnly: true } })
+    veinEventHandler!('NFC_LICENSE', ['issue=20230609', 'expiry=20280513'])
+    veinEventHandler!('TIMECARD', ['card_id=2023060920280513', 'card_kind=license'])
+    veinEventHandler!('FC1200', ['state=ready'])
+    await nextTick()
+    expect(notice(wrapper).exists()).toBe(false)
+    veinEventHandler!('TIMECARD', ['card_id=04a1b2c3', 'card_kind=nfca_uid'])
+    await nextTick()
+    expect(notice(wrapper).exists()).toBe(true)
+    readCallback!({ employee_id: 'nfc-1' } as never)
+    await nextTick()
+    expect(notice(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('license-only でない画面 (IC カードを自分で受ける画面) は受け口を張らない', async () => {
+    const wrapper = await mountSuspended(NfcStatus)
+    expect(veinEventHandler).toBeNull()
+    wrapper.unmount()
+    expect(veinOffEvent).not.toHaveBeenCalled()
   })
 })
