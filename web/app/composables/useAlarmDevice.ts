@@ -44,6 +44,8 @@
  * muted に移して `EVT ALARM state=muted cause=<押した瞬間の理由>` を即出すので、
  * **着信で鳴っていた (`alarming`/`call`) → 黙った (`muted`/`call`)** の遷移を押下として数える
  * (`buttonPressCount`。alarming → muted を作るのは本体のボタンだけ、Refs ippoan/alc-app#387)。
+ * 警告デバイスを兼ねる Vein Base は `EVT ALARM` を出さない代わりに、着信で鳴っていたのをボタンで止めた
+ * 瞬間に `EVT CALL_BUTTON` を 1 行出す。これも同じく 1 回の押下に数える (Refs ippoan/alc-app-s3#352)。
  * 5 秒ごとの再送・`STATUS` の応答・接続直後の最初の行・ほかの遷移では数えない。
  *
  * NFC を持つ機体は、カードを読むと上の 2 種類の行を出す (機体は打刻しない)。ここは行を検査して
@@ -171,6 +173,10 @@ let held: WritableStreamDefaultWriter<Uint8Array> | null = null
 let ngSince: number | null = null
 /** 購読の監視を張ったか (アプリ全体で 1 本) */
 let ngWatchInstalled = false
+/** 警告デバイスを兼ねる Vein Base のボタンの合図を受けているか (アプリ全体で 1 本) */
+let veinCallButtonInstalled = false
+/** 警告デバイスを兼ねる Vein Base が「着信で鳴っていたのをボタンで止めた」ときに出す行の名前 (`EVT CALL_BUTTON`) */
+const VEIN_CALL_BUTTON_EVENT = 'CALL_BUTTON'
 /** 直前に送った heartbeat の中身。変化したときだけログに出す */
 let lastLine: string | null = null
 /**
@@ -192,6 +198,7 @@ export function useAlarmDevice() {
   const rooms = useActiveRooms()
 
   const isSupported = arbiter.isSupported
+
 
   // --- 行の解釈 ---
 
@@ -255,6 +262,22 @@ export function useAlarmDevice() {
       watch(rooms.isWatching, (watching) => {
         ngSince = watching ? null : Date.now()
       }, { immediate: true, flush: 'sync' })
+    })
+  }
+
+  /**
+   * 警告デバイスを兼ねる Vein Base は `EVT ALARM` を出さない (機種の見分けに使う行のため)。代わりに
+   * 着信で鳴っていたのをボタンで止めた瞬間に `EVT CALL_BUTTON` を 1 行出すので、VoiceS3R の
+   * alarming/call → muted/call と同じく buttonPressCount を進める (Refs ippoan/alc-app-s3#352)。
+   * 見張りを始めるとき (`connect`) に 1 回だけ張る (Vein Base に heartbeat を送るのも見張りの間だけ)
+   */
+  function installVeinCallButton(): void {
+    if (veinCallButtonInstalled) return
+    veinCallButtonInstalled = true
+    useVeinSerial().onEvent((name) => {
+      if (name !== VEIN_CALL_BUTTON_EVENT) return
+      buttonPressCount.value += 1
+      log('vein button pressed while calling')
     })
   }
 
@@ -354,6 +377,7 @@ export function useAlarmDevice() {
   function connect(delay = INITIAL_SCAN_DELAY): void {
     if (!isSupported) return
     installNgWatch()
+    installVeinCallButton()
     const resumed = sessionStorage.getItem(RECONNECT_MARK_KEY) === '1'
     sessionStorage.removeItem(RECONNECT_MARK_KEY)
     const scanDelay = resumed ? 0 : delay

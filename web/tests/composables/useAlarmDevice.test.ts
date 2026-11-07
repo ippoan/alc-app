@@ -502,6 +502,36 @@ describe('useAlarmDevice', () => {
       expect(alarm.buttonPressCount.value).toBe(2)
     })
 
+    it('★ 警告デバイスを兼ねる Vein Base の `EVT CALL_BUTTON` でも 1 回ずつ増える (ほかの行では増えない)', async () => {
+      vi.resetModules()
+      let veinHandler: ((name: string, args: string[]) => void) | null = null
+      vi.doMock('~/composables/useVeinSerial', () => ({
+        useVeinSerial: () => ({ onEvent: (cb: typeof veinHandler) => { veinHandler = cb; return () => {} } }),
+      }))
+      try {
+        installSerialMock({ getPorts: vi.fn(async () => []) })
+        mod = await import('~/composables/useAlarmDevice')
+        setRooms()
+        alarm = mod.useAlarmDevice()
+        // 見張りを始めるまでは張らない
+        expect(veinHandler).toBeNull()
+        alarm.connect(0)
+        const handler = veinHandler!
+        // 2 回目の connect で受け口を重ねない (アプリ全体で 1 本)
+        alarm.connect(0)
+        expect(veinHandler).toBe(handler)
+        handler('NFC_LICENSE', ['issue=20230609', 'expiry=20280513'])
+        expect(alarm.buttonPressCount.value).toBe(0)
+        handler('CALL_BUTTON', [])
+        expect(alarm.buttonPressCount.value).toBe(1)
+        expect(alarmLogs()).toContain('vein button pressed while calling')
+        handler('CALL_BUTTON', [])
+        expect(alarm.buttonPressCount.value).toBe(2)
+      } finally {
+        vi.doUnmock('~/composables/useVeinSerial')
+      }
+    })
+
     it('5 秒ごとの再送 (同じ state) では増えない', async () => {
       const dev = await connectDevice()
       await feed(dev,
