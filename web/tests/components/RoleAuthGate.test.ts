@@ -536,9 +536,8 @@ describe('RoleAuthGate — NFC ではログインせず、この端末の指を�
       expect(hubOffMock).toHaveBeenCalledTimes(1)
     })
 
-    it('★ USB の機体の社員証 (`TIMECARD`) も受け、免許証の行 (`NFC_LICENSE`) と知らない行は NfcStatus に任せて引かない', async () => {
+    it('★ USB の機体のカードの行 (社員証の `TIMECARD`・免許証の `NFC_LICENSE`) も同じく受け、知らない行は引かない', async () => {
       const wrapper = await mountGate('manager')
-      hubCardHandler!('NFC_LICENSE', ['issue=20230609', 'expiry=20280513'], 'vein-station')
       hubCardHandler!('FC1200', ['state=ready'], 'vein-station')
       await settle(wrapper)
       expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
@@ -546,6 +545,24 @@ describe('RoleAuthGate — NFC ではログインせず、この端末の指を�
       await settle(wrapper)
       expect(lookupEmployeeByCardMock).toHaveBeenCalledWith('04a1b2c3', 'manager-device')
       expect(wrapper.find('[data-testid="vein-add-device-card"]').exists()).toBe(true)
+      wrapper.unmount()
+
+      lookupEmployeeByCardMock.mockClear()
+      const again = await mountGate('manager')
+      hubCardHandler!('NFC_LICENSE', ['issue=20230609', 'expiry=20280513'], 'vein-station')
+      await settle(again)
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledWith('2023060920280513', 'manager-device')
+      again.unmount()
+    })
+
+    it('免許証の NFC (NfcStatus) の照会中に同じタッチの行が届いても、引くのは 1 回だけ', async () => {
+      const wrapper = await mountGate('manager')
+      getEmployeeByNfcIdMock.mockImplementationOnce(() => new Promise(() => {}))
+      wrapper.findComponent(NfcStatusStub).vm.$emit('read', '2023060920280513')
+      hubCardHandler!('NFC_LICENSE', ['issue=20230609', 'expiry=20280513'], 'vein-station')
+      await settle(wrapper)
+      expect(getEmployeeByNfcIdMock).toHaveBeenCalledTimes(1)
+      expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
       wrapper.unmount()
     })
 

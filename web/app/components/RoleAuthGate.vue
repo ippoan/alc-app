@@ -18,7 +18,6 @@
  */
 import type { FaceAuthResult } from '~/types'
 import { getEmployeeByNfcId, getEmployeeByCode, getEmployeeById, lookupEmployeeByCard, updateDeviceLastLogin } from '~/utils/api'
-import { cardEventLookupId } from '~/composables/useAlarmDevice'
 import { MANAGER_NFC_FACE_AUTH } from '~/utils/manager-nfc-face-auth'
 import { checkFaceApproval } from '~/utils/face-approval'
 import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
@@ -134,19 +133,18 @@ async function onNfcRead(nfcId: string) {
   }
 }
 
-/** 席で読んだカード (警告デバイス / USB の機体の IC カード) が登録されていないとき */
+/** 席で読んだカードが登録されていないとき */
 const CARD_NOT_REGISTERED = 'このカードは登録されていません。管理者画面で社員証か免許証を登録してください'
 
 /**
- * 運行管理者席で読んだカード (警告デバイスの社員証・免許証、USB の機体の社員証) で本人を決める。
+ * 運行管理者席で読んだカード (`useSeatCardRead`。IT点呼 の画面と同じ合図) で本人を決める。
  * 免許証の NFC (`NfcStatus`) と同じく `beginFaceAuth` に渡す (運行管理者の入口は「この端末の指を足す」まで)。
  * 引くのは IT点呼 の登録と同じカードの台帳 (`lookupEmployeeByCard`、運行管理者席の鍵)。
- * 運行管理者の入口で、NFC の段にいるあいだだけ受ける
+ * 運行管理者の入口で、NFC の段にいるあいだだけ受ける。USB の機体の免許証は `NfcStatus` にも届くが、
+ * 先に始まった方が `isSubmitting` を立てるので、引くのは 1 回だけ
  */
-let unmounted = false
 async function onSeatCard(lookupId: string) {
-  if (unmounted || props.requiredRole !== 'manager' || isGranted.value || step.value !== 'nfc') return
-  if (isSubmitting.value) return
+  if (props.requiredRole !== 'manager' || isGranted.value || step.value !== 'nfc' || isSubmitting.value) return
   isSubmitting.value = true
   errorMessage.value = null
   try {
@@ -157,21 +155,7 @@ async function onSeatCard(lookupId: string) {
     isSubmitting.value = false
   }
 }
-// 警告デバイスのカード (この画面が開いた後のタッチだけ)
-const alarmDevice = useAlarmDevice()
-watch(alarmDevice.cardRead, (read) => {
-  if (read) void onSeatCard(read.lookupId)
-})
-// USB の機体 (席の Vein Base) の社員証。免許証 (`NFC_LICENSE`) は `NfcStatus` が受けるので二重にしない
-const offHubCard = useUsbHub().nfc.onEvent((name, args) => {
-  if (name === 'NFC_LICENSE') return
-  const lookupId = cardEventLookupId(name, args)
-  if (lookupId) void onSeatCard(lookupId)
-})
-onUnmounted(() => {
-  unmounted = true
-  offHubCard()
-})
+useSeatCardRead(lookupId => void onSeatCard(lookupId))
 
 /**
  * 指静脈で特定できた人を通す。指静脈が本人確認そのものなので顔認証は挟まない (顔の登録も見ない)。
