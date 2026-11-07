@@ -35,7 +35,7 @@ import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, getEmployees, getTenkoSession, list
 import { alcoholResultLabel } from '~/utils/alcohol'
 import { IT_TENKO_METHOD, defaultJudgmentMethod, identityMethodLabel, itTenkoRoomOf, itTenkoSessionId, splitRooms } from '~/utils/it-tenko'
 import { IT_TENKO_POLL_INTERVAL_MS } from '~/composables/useItTenkoCall'
-import { DEV_DEVICE_MARK_EVENT, isDevDevice } from '~/utils/token-selection'
+import { cardEventLookupId } from '~/composables/useAlarmDevice'
 import type { ApiEmployee } from '~/types'
 
 const props = defineProps<{
@@ -257,17 +257,7 @@ async function onIdSubmit() {
   if (waiting.value) await open(waiting.value)
 }
 
-// --- 指静脈での登録 (開発用の運行管理者席だけ) ---
-// 本番の席は IT点呼 を使っている体なので、画面も動きも変えない: 印が無い席では部品ごと出さず、
-// 照合データの同期も指の合図での自動照合も走らない。印 (`isDevDevice`) は reactive ではないので、
-// 写しを持って印が変わったときのイベントで読み直す (`useActiveRooms` と同じ)
-const devSeat = ref(isDevDevice('manager-device'))
-function refreshDevSeat() {
-  devSeat.value = isDevDevice('manager-device')
-}
-onMounted(() => window.addEventListener(DEV_DEVICE_MARK_EVENT, refreshDevSeat))
-onUnmounted(() => window.removeEventListener(DEV_DEVICE_MARK_EVENT, refreshDevSeat))
-
+// --- 指静脈での登録 (指静脈の機体がつながっている席。出し分けは部品の `vein.ready`) ---
 /** 指の合図で照合を始めてよいか (点呼を開いている・繋いでいる途中・登録の照会中・画面共有を見ている間は始めない) */
 const veinIdle = computed(() => opened.value === null
   && !props.blocked
@@ -476,22 +466,23 @@ watch(alarmDevice.buttonPressCount, () => {
   if (roomId) requestCall(roomId)
 })
 
-// 警告デバイスへのカードのタッチ (社員証の IC カード / 運転免許証) = その人をこの席の運行管理者に
-// 登録する。**打刻はしない。** この画面が開いているときだけ効く (mount より前のタッチは拾わない)。
-// 入力欄が出ていなくても (登録済みで着信待ちでも) 受け、登録済みなら確認なしで切り替える。
-// 点呼を開いている / 繋いでいる途中は受けない (判定者が途中で替わる)
+// 警告デバイスか、USB でつないだ機体 (席の Vein Base の NFC) へのカードのタッチ (社員証の IC カード /
+// 運転免許証) = その人をこの席の運行管理者に登録する。**打刻はしない。** この画面が開いているときだけ効く
+// (mount より前のタッチは拾わない)。入力欄が出ていなくても (登録済みで着信待ちでも) 受け、登録済みなら
+// 確認なしで切り替える。点呼を開いている / 繋いでいる途中は受けない (判定者が途中で替わる)
 let unmounted = false
-watch(alarmDevice.cardRead, async (read) => {
-  if (!read) return
+/** 受けたタッチの連番 (どちらの機体から来たかを問わず、新しいタッチが来たら前の照会の結果を捨てる) */
+let cardSeq = 0
+async function onCardTouch(lookupId: string): Promise<void> {
+  const seq = ++cardSeq
   // 受けてよいのは「画面が開いていて、点呼を開いておらず、繋いでいる途中でもなく、これより新しい
   // タッチが無い」あいだ。照会の応答が返った時点でもう一度確かめ、外れていたら結果ごと捨てる
-  const wanted = () => !unmounted && !opened.value && !connecting.value
-    && alarmDevice.cardRead.value?.seq === read.seq
+  const wanted = () => !unmounted && !opened.value && !connecting.value && cardSeq === seq
   if (!wanted()) return
   cardError.value = null
   idError.value = null
   registering.value += 1
-  const res = await registerByCardId(read.lookupId, wanted).finally(() => { registering.value -= 1 })
+  const res = await registerByCardId(lookupId, wanted).finally(() => { registering.value -= 1 })
   if (!wanted()) return
   if (!res.ok) {
     // モーダルが出ていればモーダルに、無ければ上部の枠に出す
@@ -502,10 +493,19 @@ watch(alarmDevice.cardRead, async (read) => {
   cardInput.value = ''
   idInput.value = ''
   if (waiting.value) await open(waiting.value)
+}
+watch(alarmDevice.cardRead, (read) => {
+  if (read) void onCardTouch(read.lookupId)
+})
+// 席の Vein Base は警告デバイスを通らず、USB の行 (`EVT NFC_LICENSE` / `EVT TIMECARD`) で届く
+const offHubCard = useUsbHub().nfc.onEvent((name, args) => {
+  const lookupId = cardEventLookupId(name, args)
+  if (lookupId) void onCardTouch(lookupId)
 })
 
 onUnmounted(() => {
   unmounted = true
+  offHubCard()
   close()
   stopWatchingRooms()
 })
@@ -558,7 +558,7 @@ onUnmounted(() => {
             登録
           </button>
         </div>
-        <ItTenkoVeinRegister v-if="devSeat" :on-employee="onVeinEmployee" :idle="veinIdle && waiting === null" />
+        <ItTenkoVeinRegister :on-employee="onVeinEmployee" :idle="veinIdle && waiting === null" />
       </div>
       <!-- 登録の失敗。カードのタッチは登録済みのときも受けるので、どちらの表示でも出す -->
       <p v-if="cardError" class="mt-2 text-sm text-red-700" data-testid="it-manager-card-error">{{ cardError }}</p>
@@ -788,7 +788,7 @@ onUnmounted(() => {
       >
         次へ
       </button>
-      <ItTenkoVeinRegister v-if="devSeat" :on-employee="onVeinEmployee" :idle="veinIdle" />
+      <ItTenkoVeinRegister :on-employee="onVeinEmployee" :idle="veinIdle" />
       <button
         class="w-full mt-4 text-sm text-gray-500 hover:text-gray-700 underline"
         @click="cancelIdInput"

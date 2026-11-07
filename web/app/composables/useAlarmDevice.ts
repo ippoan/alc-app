@@ -151,6 +151,19 @@ const CARD_KINDS = ['felica_idm', 'nfca_uid']
 /** `EVT NFC_LOGIN` の `card_id` の形 (16 進の 8〜20 桁) */
 const CARD_ID = /^[0-9a-f]{8,20}$/i
 
+/**
+ * カードの行 (`EVT` を除いた名前と引数) から、社員の照会に送る id を取り出す。採れない行は null:
+ * IC カード (`NFC_LOGIN` / USB ハブの `TIMECARD`) は種類が知っている語で id が 16 進の 8〜20 桁のときだけ、
+ * 免許証 (`NFC_LICENSE`) は交付日と有効期限の桁が合うときだけ (種類は行の末尾に在るので、途中で切れた行はここで落ちる)。
+ * `TIMECARD` の免許証 (`card_kind=license`) は `NFC_LICENSE` の行と同じタッチなので採らない
+ */
+export function cardEventLookupId(name: string, args: string[]): string | null {
+  if (name === 'NFC_LICENSE') return licenseNfcId(evtArg(args, 'issue'), evtArg(args, 'expiry'))
+  if (name !== 'NFC_LOGIN' && name !== 'TIMECARD') return null
+  const cardId = evtArg(args, 'card_id')
+  return CARD_KINDS.includes(evtArg(args, 'card_kind')) && CARD_ID.test(cardId) ? cardId : null
+}
+
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 /** 預かっているポートの writer (未接続なら null)。grace の送り先 */
 let held: WritableStreamDefaultWriter<Uint8Array> | null = null
@@ -211,18 +224,11 @@ export function useAlarmDevice() {
     if (at >= 0) applyLine(line.slice(at))
   }
 
-  /**
-   * カードの行から、社員の照会に送る id を取り出す。採れない行は null:
-   * IC カードは種類が知っている語で id が 16 進の 8〜20 桁のときだけ、免許証は交付日と
-   * 有効期限の桁が合うときだけ (種類は行の末尾に在るので、途中で切れた行はここで落ちる)
-   */
+  /** カードの行から、社員の照会に送る id を取り出す (`cardEventLookupId`)。カードの行でなければ null */
   function cardLookupId(line: string): string | null {
     const hit = CARD_LINE.exec(line)
     if (!hit) return null
-    const args = line.slice(hit.index).split(' ')
-    if (hit[1] === 'LICENSE') return licenseNfcId(evtArg(args, 'issue'), evtArg(args, 'expiry'))
-    const cardId = evtArg(args, 'card_id')
-    return CARD_KINDS.includes(evtArg(args, 'card_kind')) && CARD_ID.test(cardId) ? cardId : null
+    return cardEventLookupId(`NFC_${hit[1]}`, line.slice(hit.index).split(' '))
   }
 
   /** 接続後に届いた 1 行。状態行を畳み、カードの行なら合図を出す (id はログに出さない) */
