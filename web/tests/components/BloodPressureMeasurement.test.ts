@@ -16,10 +16,11 @@ import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 // vi.mock はファイル先頭へ巻き上がるので、factory から触る mock は vi.hoisted で作る。
 // 他の export (useAuth が使う rePairDevice 等) は本物のまま残す
-const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock }
+const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock, lookupEmployeeByCardMock }
   = vi.hoisted(() => ({
     getEmployeeByNfcIdMock: vi.fn(),
     getEmployeeByCodeMock: vi.fn(),
+    lookupEmployeeByCardMock: vi.fn(),
     startMeasurementMock: vi.fn(),
     updateMeasurementMock: vi.fn(),
     saveMeasurementMock: vi.fn(),
@@ -34,6 +35,15 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   startTenkoSession: startTenkoSessionMock,
   getEmployeeByNfcId: getEmployeeByNfcIdMock,
   getEmployeeByCode: getEmployeeByCodeMock,
+  lookupEmployeeByCard: lookupEmployeeByCardMock,
+}))
+
+// USB の機体 (Vein Base) の行の受け口。画面が登録した cb を控え、行はテストが流す
+type HubEventHandler = (name: string, args: string[], source: string) => void
+let hubCardHandler: HubEventHandler | null = null
+const hubOffMock = vi.fn()
+mockNuxtImport('useUsbHub', () => () => ({
+  nfc: { onEvent: (cb: HubEventHandler) => { hubCardHandler = cb; return hubOffMock } },
 }))
 
 // 「この端末で血圧を使うか」の判定は **`useBpUiEnabled` の 1 か所** (Refs ippoan/alc-app#353)。
@@ -1239,6 +1249,50 @@ describe('BloodPressureMeasurement — カード・社員番号で人を選ん�
     expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
     expect(wrapper.text()).toContain('テスト花子')
     wrapper.unmount()
+  })
+
+  describe('Vein Base で読んだ社員証 (`EVT TIMECARD`)', () => {
+    const tap = async (wrapper: Awaited<ReturnType<typeof mountBp>>, name: string, args: string[]) => {
+      hubCardHandler!(name, args, 'vein-station')
+      await flush(wrapper)
+    }
+    beforeEach(() => {
+      lookupEmployeeByCardMock.mockReset().mockResolvedValue(TARO)
+      hubOffMock.mockClear()
+    })
+
+    it('★ 打刻と同じカードの台帳で引き、その人で 1:1 の照合へ進む', async () => {
+      const wrapper = await mountBp()
+      await tap(wrapper, 'TIMECARD', ['card_id=04a1b2c3', 'card_kind=nfca_uid'])
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledWith('04a1b2c3', 'bp-station')
+      expect(wrapper.find('[data-testid="bp-expected"]').text()).toContain('テスト太郎さん')
+      // 人を選んでいる間の 2 枚目は受けない
+      await tap(wrapper, 'TIMECARD', ['card_id=04a1b2c4', 'card_kind=nfca_uid'])
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+      expect(hubOffMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('免許証の行 (NfcStatus が受ける)・免許証の TIMECARD・知らない行は引かない。未登録は理由を出す', async () => {
+      const wrapper = await mountBp()
+      await tap(wrapper, 'NFC_LICENSE', ['issue=20230609', 'expiry=20280513'])
+      await tap(wrapper, 'TIMECARD', ['card_id=2023060920280513', 'card_kind=license'])
+      await tap(wrapper, 'FC1200', ['state=ready'])
+      expect(lookupEmployeeByCardMock).not.toHaveBeenCalled()
+      lookupEmployeeByCardMock.mockRejectedValueOnce(Object.assign(new Error('not found'), { status: 404 }))
+      await tap(wrapper, 'TIMECARD', ['card_id=04a1b2c3', 'card_kind=felica_idm'])
+      expect(wrapper.text()).toContain('この社員証は登録されていません')
+      wrapper.unmount()
+    })
+
+    it('照会中・照合中・カードの入口が出ていない段では受けない', async () => {
+      const wrapper = await mountBp()
+      lookupEmployeeByCardMock.mockImplementationOnce(() => new Promise(() => {}))
+      await tap(wrapper, 'TIMECARD', ['card_id=04a1b2c3', 'card_kind=nfca_uid'])
+      await tap(wrapper, 'TIMECARD', ['card_id=04a1b2c4', 'card_kind=nfca_uid'])
+      expect(lookupEmployeeByCardMock).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+    })
   })
 
   it('★ 指静脈が別の人なら測らず、選んだ人の名前で置き直させる。「別の人」で選び直せる', async () => {
