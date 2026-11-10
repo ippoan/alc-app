@@ -807,6 +807,16 @@ export interface VeinModuleRegistered {
   auto_approved?: boolean
   matched?: number
   entries?: number
+  /** 他の人の承認済みの記録で、今の記録に合格した人 (近い順、最大 3 件)。警告をログに出すだけで、承認は変えない。古いサーバーは無い */
+  near?: VeinEnrollNear[]
+}
+
+/** 登録した記録に合格した他の人 1 人 (`near`)。`coarse` は小さいほど近い */
+export interface VeinEnrollNear {
+  employee_id: string
+  rule: string | null
+  scores: number[] | null
+  coarse: number | null
 }
 
 export async function putVeinModuleRecord(
@@ -846,7 +856,7 @@ export async function putVeinModuleDeviceRecord(
   employeeId: string,
   record: Uint8Array,
   scope: RequestTokenScope = 'default',
-): Promise<{ employee_id: string; updated_at: string }> {
+): Promise<{ employee_id: string; updated_at: string; near?: VeinEnrollNear[] }> {
   const [getter, failed] = scope === 'manager-device'
     ? [getManagerDeviceJwt, MANAGER_DEVICE_AUTH_FAILED_MESSAGE] as const
     : scope === 'bp-station'
@@ -854,7 +864,7 @@ export async function putVeinModuleDeviceRecord(
       : [getKioskDeviceJwt, KIOSK_DEVICE_AUTH_FAILED_MESSAGE] as const
   const jwt = await getter?.()
   if (!jwt) throw new Error(failed)
-  return proxyRequest<{ employee_id: string; updated_at: string }>(
+  return proxyRequest<{ employee_id: string; updated_at: string; near?: VeinEnrollNear[] }>(
     `/api/vein/templates/${encodeURIComponent(employeeId)}/module/devices`,
     jwt,
     { method: 'PUT', body: JSON.stringify({ record: bytesToBase64(record) }) },
@@ -905,6 +915,12 @@ export interface VeinAuthShot {
     hit: 'self' | 'other' | 'none'
     score: number | null
     thresholds: number[] | null
+    /** どの層で当たったか・静脈の行の規則・各層が当てた枠・違う枠の静脈の点数 (ファームの `VIA= RULE= FV= FP= FVSCORE=`。古いファームは null) */
+    via?: 'FV' | 'FP' | null
+    rule?: string | null
+    fv_slot?: number | null
+    fp_slot?: number | null
+    fv_score?: number | null
   }
   firmware: string | null
   captured_at: string

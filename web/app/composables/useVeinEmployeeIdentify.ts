@@ -60,6 +60,14 @@ export interface VeinEmployeeIdentifyOptions {
   label?: string
 }
 
+/**
+ * 照合 1 回の区間ごとの時間を診断ログに残す (`PC VEIN T <経路> <区間>=<ms> …`)。遅い回にどこで待っているかを後から見るため。
+ * 区間は `prep` (本人の記録を用意) / `read` (モジュールの照合) / `lookup` (乗務員を引く) / `next` (画面が先へ進む処理)
+ */
+function noteVeinTimes(path: 'anyone' | 'expected', spans: ReadonlyArray<readonly [string, number, number]>): void {
+  recordVeinLine(`PC VEIN T ${path} ${spans.map(([name, from, to]) => `${name}=${Math.round(to - from)}`).join(' ')}`)
+}
+
 export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
   const vein = useVeinSerial()
   /** 読み取りと特定の途中 */
@@ -124,6 +132,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
 
   /** 本人が決まっている人を 1:1 で照合し、当たれば `onEmployee` へ渡す。先へ進めなかった理由を返す */
   async function verifyExpected(employeeId: string, prompt: boolean): Promise<string | null> {
+    const t0 = performance.now()
     let moduleId: number | null
     try {
       moduleId = await prepare(employeeId)
@@ -137,6 +146,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       prepared = null
     }
     if (moduleId === null) return opts.noRecordMessage ?? opts.missMessage
+    const t1 = performance.now()
     let match: VeinMatch | null
     try {
       if (prompt) await vein.say('PLACE')
@@ -148,9 +158,15 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       deviceError((e as Error).message)
       return `指静脈を読み取れませんでした (${(e as Error).message})`
     }
-    if (match === null) return opts.missMessage
+    const t2 = performance.now()
+    if (match === null) {
+      noteVeinTimes('expected', [['prep', t0, t1], ['read', t1, t2]])
+      return opts.missMessage
+    }
     const outcome = await identifyVeinModuleEmployee(match.id, opts.scope)
+    const t3 = performance.now()
     const failure = await deliver(outcome, true)
+    noteVeinTimes('expected', [['prep', t0, t1], ['read', t1, t2], ['lookup', t2, t3], ['next', t3, performance.now()]])
     // 通った: 同じ置き方で撮った 1 本で一番古い 1 本を入れ替える (先へ進めた後に裏で。失敗しても照合の結果は変えない)。
     // 端末設定で止めていれば入れ替えない (vein-rotate-setting)
     if (outcome.kind === 'hit') {
@@ -175,6 +191,7 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
     const viaModule = usesVeinModule()
     const expected = viaModule ? opts.expectedEmployeeId?.() ?? null : null
     if (expected) return await verifyExpected(expected, prompt)
+    const t0 = performance.now()
     let read: string | number | null
     try {
       // 指の合図から始めたときは、もう置かれているので「指を置いて」は鳴らさない
@@ -190,10 +207,14 @@ export function useVeinEmployeeIdentify(opts: VeinEmployeeIdentifyOptions) {
       deviceError((e as Error).message)
       return `指静脈を読み取れませんでした (${(e as Error).message})`
     }
+    const t1 = performance.now()
     const outcome = viaModule
       ? await identifyVeinModuleEmployee(read as number | null, opts.scope)
       : await identifyVeinEmployee(read as string)
-    return await deliver(outcome, viaModule)
+    const t2 = performance.now()
+    const failure = await deliver(outcome, viaModule)
+    noteVeinTimes('anyone', [['read', t0, t1], ['lookup', t1, t2], ['next', t2, performance.now()]])
+    return failure
   }
 
   /** 照合を 1 回走らせる。繋がっていない・読み取り中なら何もしない */
