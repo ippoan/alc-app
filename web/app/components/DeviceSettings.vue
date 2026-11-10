@@ -22,7 +22,7 @@ const isRunningViaCoreS3 = computed(() => coreS3.isConnected.value || hasDeviceJ
 const { enabled: alarmDeviceEnabled, setEnabled: setAlarmDeviceEnabled } = useAlarmDeviceSetting()
 const alarmDevice = useAlarmDevice()
 const { mode: veinAddedFingerMode, setMode: setVeinAddedFingerMode } = useVeinAddedFingerSetting()
-// 照合が通ったら記録の一番古い 1 本を入れ替えるか (Refs ippoan/alc-app-s3#352)。既定は入れ替える
+// 照合が通ったら記録の一番古い 1 本を入れ替えるか (Refs ippoan/alc-app-s3#352)。既定は入れ替えない
 const veinRotate = ref(readVeinRotateEnabled())
 function setVeinRotate(on: boolean): void {
   veinRotate.value = on
@@ -739,8 +739,8 @@ async function syncFc1200Date() {
             :value="veinRotate ? 'on' : 'off'"
             @change="setVeinRotate(($event.target as HTMLSelectElement).value !== 'off')"
           >
-            <option value="on">一番古い 1 本を入れ替える (既定)</option>
-            <option value="off">入れ替えない (登録のまま)</option>
+            <option value="on">一番古い 1 本を入れ替える</option>
+            <option value="off">入れ替えない (登録のまま、既定)</option>
           </select>
         </label>
 

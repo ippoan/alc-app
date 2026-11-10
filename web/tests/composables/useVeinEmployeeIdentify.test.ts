@@ -354,24 +354,19 @@ describe('useVeinEmployeeIdentify', () => {
       app.unmount()
     })
 
-    it('端末設定で入れ替えを止めていれば、通っても入れ替えずに診断ログに残す', async () => {
-      localStorage.setItem('alc-vein-rotate', '0')
-      try {
-        const { snapshotVeinLines } = await import('~/utils/vein-line-log')
-        const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1', scope: 'manager-device' })
-        await api.identify()
-        expect(opts.onEmployee).toHaveBeenCalled()
-        expect(mod.rotateVeinModuleRecord).not.toHaveBeenCalled()
-        expect(snapshotVeinLines()).toContain('PC VEIN ROTATE OFF 12')
-        expect(snapshotVeinLines()).toMatch(/PC VEIN T expected prep=\d+ read=\d+ lookup=\d+ next=\d+/)
-        app.unmount()
-      }
-      finally {
-        localStorage.removeItem('alc-vein-rotate')
-      }
+    it('既定 (端末設定で入れ替えを選んでいない) は、通っても入れ替えずに診断ログに残す', async () => {
+      const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+      const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1', scope: 'manager-device' })
+      await api.identify()
+      expect(opts.onEmployee).toHaveBeenCalled()
+      expect(mod.rotateVeinModuleRecord).not.toHaveBeenCalled()
+      expect(snapshotVeinLines()).toContain('PC VEIN ROTATE OFF 12')
+      expect(snapshotVeinLines()).toMatch(/PC VEIN T expected prep=\d+ read=\d+ lookup=\d+ next=\d+/)
+      app.unmount()
     })
 
-    it('★ 通ったら人を渡してから、同じ置き方で撮った記録で入れ替える (画面は待たない)', async () => {
+    it('★ 端末設定で入れ替えを選んでいれば、通ったら人を渡してから、同じ置き方で撮った記録で入れ替える (画面は待たない)', async () => {
+      localStorage.setItem('alc-vein-rotate', '1')
       const order: string[] = []
       let finish: () => void = () => {}
       mod.rotateVeinModuleRecord.mockImplementationOnce(() => new Promise<void>((resolve) => {
@@ -390,6 +385,7 @@ describe('useVeinEmployeeIdentify', () => {
       expect(api.error.value).toBeNull()
       finish()
       app.unmount()
+      localStorage.removeItem('alc-vein-rotate')
     })
 
     it('用意・照合の失敗は理由を出す。本人の枠に当たっても乗務員を引けなければ、その理由を出して入れ替えない', async () => {
