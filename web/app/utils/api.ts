@@ -809,6 +809,14 @@ export interface VeinModuleRegistered {
   entries?: number
   /** 他の人の承認済みの記録で、今の記録に合格した人 (近い順、最大 3 件)。警告をログに出すだけで、承認は変えない。古いサーバーは無い */
   near?: VeinEnrollNear[]
+  /**
+   * 端末ごとの記録を自動で承認しなかった理由 (ippoan/alc-vein-worker#36)。`too_few_matches` = 本人の記録と合った件が足りない /
+   * `near_other` = 他の人の承認済みの記録に合った / `others_check_failed` = 他の人との見比べができなかった。自動承認なら無い
+   */
+  auto_approve_blocked?: string
+  /** `near_other` のとき、合った他の人の数と、最多の人の合った件数 */
+  others_people?: number
+  others_matched?: number
 }
 
 /** 登録した記録に合格した他の人 1 人 (`near`)。`coarse` は小さいほど近い */

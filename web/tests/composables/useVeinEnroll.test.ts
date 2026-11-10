@@ -158,8 +158,11 @@ describe('useVeinEnroll', () => {
       expect(db.putVeinModuleEntry).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 'emp-test-1', updatedAt: 'v-dev', approved: true, native: true }))
       expect(vein.outcome.value).toBe('auto_approved')
 
-      putVeinModuleRecordMock.mockResolvedValueOnce({ employee_id: 'emp-test-1', updated_at: 'v-dev2', device_record: true, approved: false, auto_approved: false, matched: 2, entries: 6 })
+      putVeinModuleRecordMock.mockResolvedValueOnce({ employee_id: 'emp-test-1', updated_at: 'v-dev2', device_record: true, approved: false, auto_approved: false, matched: 5, entries: 6, auto_approve_blocked: 'near_other', others_people: 1, others_matched: 2 })
       await vein.enroll('emp-test-1')
+      const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+      expect(snapshotVeinLines()).toMatch(/PC VEIN ENROLL APPROVAL \d+ AUTO=1 MATCHED=6\/6 BLOCKED=- OTHERS=-/)
+      expect(snapshotVeinLines()).toMatch(/PC VEIN ENROLL APPROVAL \d+ AUTO=0 MATCHED=5\/6 BLOCKED=near_other OTHERS=1\/2/)
       expect(db.putVeinModuleEntry).toHaveBeenLastCalledWith(expect.objectContaining({ updatedAt: 'v-dev2', approved: false, native: true }))
       expect(vein.outcome.value).toBe('device_pending')
       vein.reset()
