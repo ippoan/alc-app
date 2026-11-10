@@ -12,8 +12,9 @@ import { wakeUpStaging } from './helpers/staging'
 //   GET /api/employees    → ALC_PEOPLE       → ippoan/alc-people-worker
 // CI の compat 報告 (.github/workflows/test.yml の staging-e2e job) の backend_repos はこの 2 つと揃える。
 //
-// 認証は staging の browser JWT (STAGING_E2E_TOKEN。dev-login の read-only token で足りる)。
-// 無ければ skip する (CI はそのとき compat を報告しない)。Refs ippoan/alc-app#668、ippoan/ci-dashboard#520
+// 認証は staging の read-only の dev token (env STAGING_E2E_TOKEN)。CI は GitHub OIDC で auth-worker の
+// `POST /api/ci/staging-token` から取って渡す (Refs ippoan/auth-worker#752)。手元では dev-login の token を渡す。
+// 無ければ skip する (CI は token が取れないとき e2e も compat の報告もしない)。Refs ippoan/alc-app#668、ippoan/ci-dashboard#520
 const token = stagingE2eToken()
 
 test.describe('Staging の分割 worker (読み取り)', () => {

@@ -110,6 +110,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # staging の token を auth-worker の CI 用の口から取るための GitHub OIDC (Refs ippoan/auth-worker#752)
+      id-token: write
     defaults:
       run:
         working-directory: web
@@ -117,8 +119,6 @@ jobs:
       # 接続先は repo variable から渡す (repo にホスト名を書かない。tests/e2e/helpers/env.ts)
       STAGING_APP_URL: ${{ vars.STAGING_APP_URL }}
       STAGING_API_URL: ${{ vars.STAGING_API_URL }}
-      # staging の browser JWT (dev-login の read-only token で足りる)。無ければ worker テストは skip
-      STAGING_E2E_TOKEN: ${{ secrets.STAGING_E2E_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -126,7 +126,7 @@ jobs:
         id: inputs
         run: |
           missing=""
-          for name in STAGING_APP_URL STAGING_API_URL STAGING_E2E_TOKEN; do
+          for name in STAGING_APP_URL STAGING_API_URL; do
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
@@ -152,14 +152,48 @@ jobs:
           ln -s "$RUNNER_TEMP/pw/node_modules" node_modules
           npx playwright install --with-deps chromium
 
-      - name: Run staging e2e (worker routes, read-only)
+      # GitHub OIDC の ID token (aud = auth-worker-staging-ci) を auth-worker の staging 専用の口
+      # `POST /api/ci/staging-token` に送り、read-only の dev token (15 分) を受け取る
+      # (Refs ippoan/auth-worker#752)。token の有効期限があるので、install の後・テストの直前に取る。
+      # id-token が出ない (fork からの PR 等) / 口が 200 以外を返したときは、e2e も報告もしない
+      # (試していない組み合わせを緑にしないため)。
+      - name: Get staging token (GitHub OIDC)
+        id: token
         if: steps.inputs.outputs.ready == 'true'
+        run: |
+          set -uo pipefail
+          skip() {
+            echo "::warning::staging e2e skipped ($1); compatibility is not reported."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            skip "no GitHub OIDC id-token for this run"
+          fi
+          oidc=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=auth-worker-staging-ci" | jq -r '.value // empty') || oidc=""
+          [ -n "$oidc" ] || skip "failed to get GitHub OIDC id-token"
+          echo "::add-mask::$oidc"
+
+          resp=$(curl -sS -w '\n%{http_code}' -X POST -H "Authorization: Bearer $oidc" \
+            "${STAGING_API_URL%/}/api/ci/staging-token" || printf '\n000')
+          code=$(printf '%s' "$resp" | tail -1)
+          [ "$code" = "200" ] || skip "staging-token endpoint returned HTTP $code"
+          token=$(printf '%s' "$resp" | sed '$d' | jq -r '.token // empty' 2>/dev/null) || token=""
+          [ -n "$token" ] || skip "staging-token response had no token"
+          echo "::add-mask::$token"
+          # tests/e2e/helpers/env.ts の stagingE2eToken() が読む env 名
+          echo "STAGING_E2E_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run staging e2e (worker routes, read-only)
+        if: steps.token.outputs.ready == 'true'
         run: npx playwright test tests/e2e/staging-worker-routes.spec.ts --reporter=list
 
       # backend_repos は staging-worker-routes.spec.ts が叩く worker だけ (staging に binding の無い
       # vein・tenko・devices は並べない)
       - uses: ippoan/ci-workflows/.github/actions/report-frontend-compat@main
-        if: steps.inputs.outputs.ready == 'true'
+        if: steps.token.outputs.ready == 'true'
         with:
           staging: 'true'
           backend_repos: 'ippoan/alc-measurements-worker,ippoan/alc-people-worker'
