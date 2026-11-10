@@ -191,11 +191,11 @@ jobs:
         run: npx playwright test tests/e2e/staging-worker-routes.spec.ts --reporter=list
 
       # backend_repos は staging-worker-routes.spec.ts が叩く worker だけ (staging に binding の無い
-      # vein・tenko・devices は並べない)
+      # vein は並べない)
       - uses: ippoan/ci-workflows/.github/actions/report-frontend-compat@main
         if: steps.token.outputs.ready == 'true'
         with:
           staging: 'true'
-          backend_repos: 'ippoan/alc-measurements-worker,ippoan/alc-people-worker'
+          backend_repos: 'ippoan/alc-measurements-worker,ippoan/alc-people-worker,ippoan/alc-devices-worker,ippoan/alc-tenko-worker'
           prod_version: ${{ github.ref_name }}
           webhook_secret: ${{ secrets.RELEASE_WAVE_WEBHOOK_SECRET }}
