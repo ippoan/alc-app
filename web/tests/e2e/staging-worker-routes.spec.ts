@@ -10,7 +10,9 @@ import { wakeUpStaging } from './helpers/staging'
 // [[env.staging.services]] で staging にも binding が在るものだけ):
 //   GET /api/measurements → ALC_MEASUREMENTS → ippoan/alc-measurements-worker
 //   GET /api/employees    → ALC_PEOPLE       → ippoan/alc-people-worker
-// CI の compat 報告 (.github/workflows/test.yml の staging-e2e job) の backend_repos はこの 2 つと揃える。
+//   GET /api/devices      → ALC_DEVICES      → ippoan/alc-devices-worker
+//   GET /api/tenko/daily-health-status → ALC_TENKO → ippoan/alc-tenko-worker
+// CI の compat 報告 (.github/workflows/test.yml の staging-e2e job) の backend_repos はこの 4 つと揃える。
 //
 // 認証は staging の read-only の dev token (env STAGING_E2E_TOKEN)。CI は GitHub OIDC で auth-worker の
 // `POST /api/ci/staging-token` から取って渡す (Refs ippoan/auth-worker#752)。手元では dev-login の token を渡す。
@@ -38,5 +40,20 @@ test.describe('Staging の分割 worker (読み取り)', () => {
     const res = await request.get('/api/proxy/employees', { headers: auth() })
     expect(res.status(), await res.text()).toBe(200)
     expect(Array.isArray(await res.json())).toBe(true)
+  })
+
+  // devices の一覧はテナントの端末情報なので、失敗時に本文は出さない (status だけ)
+  test('GET /api/devices が alc-devices-worker から返る', async ({ request }) => {
+    const res = await request.get('/api/proxy/devices', { headers: auth() })
+    expect(res.status(), `status=${res.status()}`).toBe(200)
+    expect(Array.isArray(await res.json())).toBe(true)
+  })
+
+  // 型は DailyHealthResponse (web/app/types)。最上位のキーが 1 つ在ることだけ見る
+  test('GET /api/tenko/daily-health-status が alc-tenko-worker から返る', async ({ request }) => {
+    const res = await request.get('/api/proxy/tenko/daily-health-status', { headers: auth() })
+    expect(res.status(), `status=${res.status()}`).toBe(200)
+    const body = await res.json()
+    expect(Array.isArray(body.employees)).toBe(true)
   })
 })
