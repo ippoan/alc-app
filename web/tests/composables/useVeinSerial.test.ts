@@ -978,6 +978,8 @@ describe('useVeinSerial', () => {
       await expect(identifyWith(dev, 'VEIN IDENTIFIED 11 RULE=ab FV=x FP=3\n')).resolves.toBe(11)
       expect(vein.lastMatch.value).toMatchObject({ rule: null, fvSlot: null, fpSlot: 3 })
       expect(info).toHaveBeenLastCalledWith('[vein] 照合 IDENTIFIED id=11 fv=- fp=3')
+      await expect(identifyWith(dev, 'VEIN IDENTIFIED 11 FV=7\n')).resolves.toBe(11)
+      expect(info).toHaveBeenLastCalledWith('[vein] 照合 IDENTIFIED id=11 fv=7 fp=-')
     })
 
     it('identify: 古い応答 (項目なし) も同じ ID。壊れた項目は null で、成否には響かない', async () => {
