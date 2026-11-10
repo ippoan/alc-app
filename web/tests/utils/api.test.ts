@@ -83,6 +83,7 @@ import {
   getVeinAuthLogEnabled,
   postVeinAuthShot,
   postVeinAuthShotJudged,
+  postVeinVerifyShot,
   getVeinModuleTemplate,
   identifyVein,
   getVeinTemplates,
@@ -1279,6 +1280,19 @@ describe.skipIf(isLive)('api', () => {
       await callApi(() => getVeinAuthLogEnabled())
       assertMock(() => {
         expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/auth-log/enabled')
+      })
+    })
+
+    it.skipIf(isLive)('postVeinVerifyShot は POST /api/vein/verify-shot で、本人と撮影 (base64) を送り結果を返す', async () => {
+      stubOk({ matched: true, rule: 'A', scores: [60, 62, 77] })
+      let got: unknown
+      await callApi(async () => { got = await postVeinVerifyShot('e1', new Uint8Array([0xDE, 0xAD])) })
+      assertMock(() => {
+        expect(got).toEqual({ matched: true, rule: 'A', scores: [60, 62, 77] })
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.example.com/api/vein/verify-shot')
+        const init = mockFetch.mock.calls[0][1] as RequestInit
+        expect(init.method).toBe('POST')
+        expect(JSON.parse(init.body as string)).toEqual({ employee_id: 'e1', shot: '3q0=' })
       })
     })
 

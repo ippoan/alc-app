@@ -145,6 +145,11 @@ describe('identifyVeinModuleEmployee', () => {
     await vi.waitFor(async () => expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed }))
     api.getEmployeeById.mockRejectedValue(new Error('500'))
     expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed })
+    // 引き直しが空 (居なくなった) でも記憶は消さない
+    api.getEmployeeById.mockResolvedValue(undefined)
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed })
+    await vi.waitFor(() => expect(api.getEmployeeById).toHaveBeenCalledTimes(5))
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed })
   })
 
   it('ほかの失敗は理由を返す (Error でないものも)', async () => {
