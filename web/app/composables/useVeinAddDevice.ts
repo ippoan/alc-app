@@ -12,9 +12,9 @@
  * サーバーの記録を書き直す。
  */
 import { apiErrorCode, putVeinModuleDeviceRecord } from '~/utils/api'
-import type { RequestTokenScope } from '~/utils/api'
+import type { RequestTokenScope, VeinEnrollNear } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
-import { allocateOrEvictVeinModuleId, noteVeinModuleRecord, syncVeinModule } from '~/utils/vein-module'
+import { allocateOrEvictVeinModuleId, noteVeinEnrollNear, noteVeinModuleRecord, syncVeinModule } from '~/utils/vein-module'
 import type { VeinModulePort } from '~/utils/vein-module'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
@@ -66,7 +66,7 @@ export async function addThisDeviceFinger(
     // 重複 (RC=0A) などはファームの理由のまま (veinErrorMessage が文言にする)
     throw e
   }
-  let saved: { updated_at: string }
+  let saved: { updated_at: string; near?: VeinEnrollNear[] }
   try {
     saved = await putVeinModuleDeviceRecord(employeeId, record, scope)
   }
@@ -79,6 +79,7 @@ export async function addThisDeviceFinger(
   // この人を (native の記録は版が同じでも) 書き直す。書き直せなくても次の同期が直す
   await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved: true, native: true })
   noteVeinModuleRecord(id, 'native')
+  void noteVeinEnrollNear(id, saved.near)
   if (readVeinAddedFingerMode() === 'mixed') await syncVeinModule(port, { scope })
 }
 

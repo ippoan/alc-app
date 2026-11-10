@@ -722,6 +722,13 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
     await vi.waitFor(async () => expect((await lines()).some(l => /^PC VEIN AUTHLOG OK \d+ SHIFT 7 -6 3 812 344$/.test(l))).toBe(true))
   })
 
+  it('各層が当てた枠 (via / rule / fv_slot / fp_slot / fv_score) も送る (取り違えを後から見分けるため)', async () => {
+    const layers = { via: 'FP', rule: null, fvSlot: 10, fpSlot: 12, fvScore: 77 }
+    await mod.matchVeinModuleEmployee(keep(12, SHOT, layers), 'emp-1')
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalled())
+    expect(api.postVeinAuthShot.mock.calls[0]![0].module).toMatchObject({ via: 'FP', rule: null, fv_slot: 10, fp_slot: 12, fv_score: 77 })
+  })
+
   it('★ 他人の枠: hit=other、本番は不一致のまま。不一致: result=NOMATCH・slot=null・hit=none。点数・閾値・ファームが無ければ null', async () => {
     expect(await mod.matchVeinModuleEmployee(keep(13), 'emp-1', undefined, () => {}, 'manager-device')).toBeNull()
     await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(2)) // 1 回やり直すので 2 回
@@ -733,7 +740,7 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
     expect(await mod.matchVeinModuleEmployee(miss, 'emp-1', undefined, () => {})).toBeNull()
     await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(2))
     const body = api.postVeinAuthShot.mock.calls[0]![0]
-    expect(body.module).toEqual({ result: 'NOMATCH', slot: null, hit: 'none', score: null, thresholds: null })
+    expect(body.module).toEqual({ result: 'NOMATCH', slot: null, hit: 'none', score: null, thresholds: null, via: null, rule: null, fv_slot: null, fp_slot: null, fv_score: null })
     expect(body.firmware).toBeNull()
   })
 
@@ -796,5 +803,32 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
     expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })
     await vi.waitFor(async () => expect((await lines()).some(l => l === 'PC VEIN AUTHLOG FAILED API エラー (500)')).toBe(true))
     expect((await lines()).join('\n')).not.toContain(btoa(String.fromCharCode(...SHOT)))
+  })
+})
+
+describe('noteVeinEnrollNear', () => {
+  it('★ 登録した記録に合格した他の人を、枠に置き換えて PC VEIN ENROLL NEAR で残す (乗務員の ID は出さない)', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-honda', 10)])
+    await mod.noteVeinEnrollNear(12, [
+      { employee_id: 'emp-honda', rule: 'A', scores: [60, 62, 80], coarse: 42 },
+      { employee_id: 'emp-elsewhere', rule: null, scores: null, coarse: null },
+    ])
+    const lines = snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
+    expect(lines).toEqual([
+      'PC VEIN ENROLL NEAR 12 OTHER=10 RULE=A SCORES=60,62,80 COARSE=42',
+      'PC VEIN ENROLL NEAR 12 OTHER=? RULE=- SCORES=- COARSE=-',
+    ])
+    expect(snapshotVeinLines()).not.toContain('emp-')
+  })
+
+  it('無い・空なら何も残さない。対応表が読めなくても相手は ? で残す', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    await mod.noteVeinEnrollNear(12, undefined)
+    await mod.noteVeinEnrollNear(12, [])
+    expect(snapshotVeinLines()).toBe('')
+    db.loadVeinModuleEntries.mockRejectedValue(new Error('idb'))
+    await mod.noteVeinEnrollNear(12, [{ employee_id: 'emp-x', rule: 'C', scores: [1, 2, 3], coarse: 9 }])
+    expect(snapshotVeinLines()).toContain('PC VEIN ENROLL NEAR 12 OTHER=? RULE=C SCORES=1,2,3 COARSE=9')
   })
 })

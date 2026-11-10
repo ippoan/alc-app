@@ -27,7 +27,7 @@ import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
 import { noteVeinShotView } from '~/utils/vein-shot-view'
 import { getEmployeeById, getEmployees, getPendingVeinModuleTemplates, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
-import type { ApiVeinModuleRecord, RequestTokenScope } from '~/utils/api'
+import type { ApiVeinModuleRecord, RequestTokenScope, VeinEnrollNear } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
@@ -116,6 +116,20 @@ export function noteVeinModuleRecord(id: number, kind: 'composed' | 'server' | '
   recordVeinLine(`PC VEIN RECORD ${id} KIND=${kind} MODE=${readVeinAddedFingerMode()}`)
 }
 
+/**
+ * 登録した記録 (`id` の枠) に、他の人の承認済みの記録が合格した (サーバーの `near`) ことを診断ログに残す
+ * (`PC VEIN ENROLL NEAR <id> OTHER=<相手の枠|?> RULE=<c> SCORES=<a,b,c> COARSE=<n>`)。どの登録を直すかを後から見るため。
+ * 画面には出さず、承認も変えない。相手はこの端末の対応表で枠に置き換え、無ければ `?` (乗務員の ID は載せない)
+ */
+export async function noteVeinEnrollNear(id: number, near: readonly VeinEnrollNear[] | undefined): Promise<void> {
+  if (!near?.length) return
+  const entries = await loadVeinModuleEntries().catch(() => [])
+  for (const n of near) {
+    const other = entries.find(e => e.employeeId === n.employee_id)?.moduleId ?? '?'
+    recordVeinLine(`PC VEIN ENROLL NEAR ${id} OTHER=${other} RULE=${n.rule ?? '-'} SCORES=${n.scores?.join(',') ?? '-'} COARSE=${n.coarse ?? '-'}`)
+  }
+}
+
 /** 不一致のとき、自動でもう一度照合する回数 (置き方のぶれ・閾値の揺れで落ちた回を拾う) */
 export const VEIN_NOMATCH_RETRIES = 1
 
@@ -201,6 +215,11 @@ async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepR
         hit,
         score: got.score ?? null,
         thresholds: got.thresholds ?? null,
+        via: got.via ?? null,
+        rule: got.rule ?? null,
+        fv_slot: got.fvSlot ?? null,
+        fp_slot: got.fpSlot ?? null,
+        fv_score: got.fvScore ?? null,
       },
       firmware: got.firmware ?? null,
       captured_at: capturedAt,
@@ -231,6 +250,12 @@ export interface KeepResult {
   score?: number | null
   /** モジュールの閾値 (`THS=`、無ければ null) */
   thresholds?: number[] | null
+  /** どの層で当たったか (`VIA=`)・静脈の行の規則 (`RULE=`)・各層が当てた枠 (`FV=` / `FP=`)・違う枠の静脈の点数 (`FVSCORE=`)。古いファームは null */
+  via?: 'FV' | 'FP' | null
+  rule?: string | null
+  fvSlot?: number | null
+  fpSlot?: number | null
+  fvScore?: number | null
   /** ファームの版 (`DEVICE … VER=`、分からなければ null) */
   firmware?: string | null
 }

@@ -89,6 +89,13 @@ export interface VeinMatchResult {
   threshold: number | null
   via: 'FV' | 'FP' | null
   thresholds: number[] | null
+  /** 静脈の行の規則の文字 (`RULE=`、A・C・E など) */
+  rule: string | null
+  /** 静脈の層・指紋互換の層が当てた枠 (`FV=` / `FP=`、0 = その層は当てていない)。2 つが違えば取り違えの手がかり */
+  fvSlot: number | null
+  fpSlot: number | null
+  /** 静脈の層が返した枠と違う枠を当てたときの、その枠の静脈の点数 (`FVSCORE=`) */
+  fvScore: number | null
 }
 
 function toInt(v: string | undefined): number | null {
@@ -96,19 +103,24 @@ function toInt(v: string | undefined): number | null {
 }
 
 /** 結果の ID の後ろの `KEY=VALUE` を読む。知らない項目・壊れた値は null のまま */
-export function parseVeinMatchFields(tokens: readonly string[]): Pick<VeinMatchResult, 'score' | 'threshold' | 'via' | 'thresholds'> {
+export function parseVeinMatchFields(tokens: readonly string[]): Pick<VeinMatchResult, 'score' | 'threshold' | 'via' | 'thresholds' | 'rule' | 'fvSlot' | 'fpSlot' | 'fvScore'> {
   const kv = new Map<string, string>()
   for (const t of tokens) {
     const i = t.indexOf('=')
     if (i > 0) kv.set(t.slice(0, i), t.slice(i + 1))
   }
   const via = kv.get('VIA')
+  const rule = kv.get('RULE')
   const ths = kv.get('THS')?.split(',').map(toInt)
   return {
     score: toInt(kv.get('SCORE')),
     threshold: toInt(kv.get('TH')),
     via: via === 'FV' || via === 'FP' ? via : null,
     thresholds: ths && ths.every(n => n !== null) ? (ths as number[]) : null,
+    rule: /^[A-Z]$/.test(rule ?? '') ? rule! : null,
+    fvSlot: toInt(kv.get('FV')),
+    fpSlot: toInt(kv.get('FP')),
+    fvScore: toInt(kv.get('FVSCORE')),
   }
 }
 
@@ -120,6 +132,9 @@ export function formatVeinMatch(r: VeinMatchResult): string {
   if (r.threshold !== null) parts.push(`th=${r.threshold}`)
   if (r.via !== null) parts.push(`via=${r.via}`)
   if (r.thresholds !== null) parts.push(`ths=${r.thresholds.join(',')}`)
+  if (r.rule !== null) parts.push(`rule=${r.rule}`)
+  if (r.fvSlot !== null || r.fpSlot !== null) parts.push(`fv=${r.fvSlot ?? '-'} fp=${r.fpSlot ?? '-'}`)
+  if (r.fvScore !== null) parts.push(`fvscore=${r.fvScore}`)
   return `[vein] 照合 ${r.kind} ${parts.join(' ')}`
 }
 
@@ -649,7 +664,7 @@ export function useVeinSerial() {
    * 不一致は `record: null`)。`score`・`thresholds` はモジュールの点数・閾値、`firmware` はファームの版 (無ければ null)。途中の「離して」はファームが鳴らさず、当たったときだけ最後に鳴らす。
    * 古いファーム (`KEEP` を知らない) は {@link VEIN_IDENTIFY_KEEP_UNSUPPORTED} の Error。ほかの失敗は reason の Error
    */
-  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null; score: number | null; thresholds: number[] | null; firmware: string | null }> {
+  async function identifyKeep(onAgain?: () => void): Promise<{ id: number | null; record: Uint8Array | null; score: number | null; thresholds: number[] | null; via: 'FV' | 'FP' | null; rule: string | null; fvSlot: number | null; fpSlot: number | null; fvScore: number | null; firmware: string | null }> {
     const prefix = 'VEIN RECORD 1 '
     const endPrefix = `${prefix}END `
     const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
@@ -693,7 +708,19 @@ export function useVeinSerial() {
     const id = identifiedId(line)
     // 記録が壊れていても照合の結果は使う (入れ替えだけ見送る)。KEEP ALL は外れても記録を出す (影の照合用)
     const record = broken || !Number.isInteger(total) || total < 0 ? null : assembleRecordOrNull(chunks, total)
-    return { id, record, score: lastMatch.value?.score ?? null, thresholds: lastMatch.value?.thresholds ?? null, firmware: deviceInfo.value?.ver ?? null }
+    const m = lastMatch.value
+    return {
+      id,
+      record,
+      score: m?.score ?? null,
+      thresholds: m?.thresholds ?? null,
+      via: m?.via ?? null,
+      rule: m?.rule ?? null,
+      fvSlot: m?.fvSlot ?? null,
+      fpSlot: m?.fpSlot ?? null,
+      fvScore: m?.fvScore ?? null,
+      firmware: deviceInfo.value?.ver ?? null,
+    }
   }
 
   /** {@link assembleRecord} の、壊れていれば null を返す版 */

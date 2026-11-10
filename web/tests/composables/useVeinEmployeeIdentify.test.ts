@@ -155,6 +155,15 @@ describe('useVeinEmployeeIdentify', () => {
     app.unmount()
   })
 
+  it('照合の区間ごとの時間を PC VEIN T で残す (1:N は read / lookup / next)', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    vein.identify.mockResolvedValueOnce(12)
+    const { api, app } = setup()
+    await api.identify()
+    expect(snapshotVeinLines()).toMatch(/PC VEIN T anyone read=\d+ lookup=\d+ next=\d+/)
+    app.unmount()
+  })
+
   it('モジュールの照合がどの層で当たったか (via) を onEmployee の第 2 引数に渡す。古い構成では前の照合の値を渡さない', async () => {
     vein.identify.mockImplementationOnce(async () => { lastMatch.value = { via: 'FP' }; return 12 })
     const a = setup()
@@ -333,9 +342,11 @@ describe('useVeinEmployeeIdentify', () => {
     })
 
     it('★ 本人の枠に当たらなければ (他人・不一致) 不一致。入れ替えない', async () => {
+      const { snapshotVeinLines } = await import('~/utils/vein-line-log')
       mod.matchVeinModuleEmployee.mockResolvedValueOnce(null)
       const { api, app, opts } = setup({ expectedEmployeeId: () => 'emp-test-1' })
       await api.identify()
+      expect(snapshotVeinLines()).toMatch(/PC VEIN T expected prep=\d+ read=\d+$/m)
       expect(api.error.value).toBe('一致しません')
       expect(opts.onEmployee).not.toHaveBeenCalled()
       expect(mod.rotateVeinModuleRecord).not.toHaveBeenCalled()
@@ -352,6 +363,7 @@ describe('useVeinEmployeeIdentify', () => {
         expect(opts.onEmployee).toHaveBeenCalled()
         expect(mod.rotateVeinModuleRecord).not.toHaveBeenCalled()
         expect(snapshotVeinLines()).toContain('PC VEIN ROTATE OFF 12')
+        expect(snapshotVeinLines()).toMatch(/PC VEIN T expected prep=\d+ read=\d+ lookup=\d+ next=\d+/)
         app.unmount()
       }
       finally {
