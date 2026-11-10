@@ -17,8 +17,9 @@ export function requireStagingEnv(name: StagingEnvName): string {
 }
 
 /**
- * staging の browser JWT (任意)。worker を通るテスト (staging-worker-routes.spec.ts) が
- * `/api/proxy/*` へ Bearer で送る。未設定なら空文字で、そのテストは skip する。
+ * staging の read-only の dev token (任意)。worker を通るテスト (staging-worker-routes.spec.ts) が
+ * `/api/proxy/*` へ Bearer で送る。CI は GitHub OIDC で auth-worker から取って env に入れる
+ * (.github/workflows/test.yml の staging-e2e job)。未設定なら空文字で、そのテストは skip する。
  */
 export function stagingE2eToken(): string {
   return process.env.STAGING_E2E_TOKEN?.trim() ?? ''
