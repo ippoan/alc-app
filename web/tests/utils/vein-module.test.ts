@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   rotateVeinModuleDeviceRecord: vi.fn(),
   getVeinAuthLogEnabled: vi.fn(),
   postVeinAuthShot: vi.fn(),
+  postVeinVerifyShot: vi.fn(),
 }))
 vi.mock('~/utils/api', () => api)
 
@@ -52,6 +53,8 @@ beforeEach(async () => {
   db.deleteVeinModuleEntry.mockResolvedValue(undefined)
   // 承認待ちは既定で誰もいない (native の人を消すかの確認に使う)
   api.getPendingVeinModuleTemplates.mockReset().mockResolvedValue([])
+  // サーバーの 1:1 は既定で外れ (前の試験の実装を持ち越さない)
+  api.postVeinVerifyShot.mockReset().mockResolvedValue({ matched: false, rule: null, scores: null })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
@@ -92,6 +95,7 @@ describe('identifyVeinModuleEmployee', () => {
     db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 10, { approved: false })])
     api.getEmployeeById.mockResolvedValue(EMP)
     expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'pending', employeeId: 'emp-1', name: EMP.name })
+    mod.resetVeinEmployeeCache()
     api.getEmployeeById.mockRejectedValue(new Error('500'))
     expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'pending', employeeId: 'emp-1', name: null })
   })
@@ -109,6 +113,7 @@ describe('identifyVeinModuleEmployee', () => {
     expect(await mod.identifyVeinModuleEmployee(10, 'manager-device')).toEqual({ kind: 'hit', employee: EMP })
     expect(api.getEmployeeById).toHaveBeenLastCalledWith('emp-1', 'manager-device')
 
+    mod.resetVeinEmployeeCache()
     api.getEmployeeById.mockRejectedValue(new TypeError('Failed to fetch'))
     api.getEmployees.mockResolvedValue([EMP])
     expect(await mod.identifyVeinModuleEmployee(10, 'manager-device')).toEqual({ kind: 'hit', employee: EMP })
@@ -121,9 +126,30 @@ describe('identifyVeinModuleEmployee', () => {
     api.getEmployees.mockResolvedValue([EMP])
     expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: EMP })
 
+    mod.resetVeinEmployeeCache()
     api.getEmployees.mockResolvedValue([])
     const outcome = await mod.identifyVeinModuleEmployee(10)
     expect(outcome).toMatchObject({ kind: 'error', message: expect.stringContaining('乗務員の情報が手元にありません') })
+  })
+
+  it('★ 一度引いた人は待たずに返し、裏で引き直して記憶を新しくする (引き直しの失敗は無視)', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 10)])
+    api.getEmployeeById.mockResolvedValueOnce(EMP)
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: EMP })
+    const renamed = { ...EMP, name: '改名後' }
+    let release!: (e: ApiEmployee) => void
+    api.getEmployeeById.mockReturnValueOnce(new Promise<ApiEmployee>((r) => { release = r }))
+    // 2 回目: サーバーの応答を待たずに前の記憶で返す
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: EMP })
+    release(renamed)
+    await vi.waitFor(async () => expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed }))
+    api.getEmployeeById.mockRejectedValue(new Error('500'))
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed })
+    // 引き直しが空 (居なくなった) でも記憶は消さない
+    api.getEmployeeById.mockResolvedValue(undefined)
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed })
+    await vi.waitFor(() => expect(api.getEmployeeById).toHaveBeenCalledTimes(5))
+    expect(await mod.identifyVeinModuleEmployee(10)).toEqual({ kind: 'hit', employee: renamed })
   })
 
   it('ほかの失敗は理由を返す (Error でないものも)', async () => {
@@ -609,6 +635,50 @@ describe('matchVeinModuleEmployee', () => {
 })
 
 // 通ったら、同じ置き方で撮った 1 本で一番古い 1 本を入れ替え、その枠に書き戻す
+describe('matchVeinModuleEmployee のサーバーの 1:1 (モジュールが誰にも当てなかったとき)', () => {
+  const MISS = new Uint8Array([1, 2, 3])
+  function missPort(...hits: Array<number | null>) {
+    const identifyKeep = vi.fn(async () => ({ id: null as number | null, record: MISS as Uint8Array | null }))
+    for (const h of hits) identifyKeep.mockResolvedValueOnce({ id: h, record: MISS })
+    return { identify: vi.fn(async () => null as number | null), identifyKeep }
+  }
+  async function lines(): Promise<string[]> {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    return snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
+  }
+  beforeEach(() => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12)])
+    api.getVeinAuthLogEnabled.mockResolvedValue({ enabled: false })
+  })
+
+  it('★ 2 回とも不一致で、サーバーの 1:1 が通れば本人の枠で通す (撮影は入れ替えに使わない)', async () => {
+    api.postVeinVerifyShot.mockResolvedValue({ matched: true, rule: 'A', scores: [60, 62, 77] })
+    expect(await mod.matchVeinModuleEmployee(missPort(null, null), 'emp-1')).toEqual({ id: 12, record: null })
+    expect(api.postVeinVerifyShot).toHaveBeenCalledWith('emp-1', MISS, 'default')
+    expect(await lines()).toContain('PC VEIN SERVER11 OK 12 RULE=A SCORES=60,62,77')
+  })
+
+  it('サーバーの 1:1 も外れ・失敗なら不一致。理由を残す', async () => {
+    api.postVeinVerifyShot.mockResolvedValueOnce({ matched: false, rule: null, scores: null })
+    expect(await mod.matchVeinModuleEmployee(missPort(null, null), 'emp-1')).toBeNull()
+    api.postVeinVerifyShot.mockRejectedValueOnce(new Error('API エラー (404)'))
+    expect(await mod.matchVeinModuleEmployee(missPort(null, null), 'emp-1')).toBeNull()
+    const got = await lines()
+    expect(got).toContain('PC VEIN SERVER11 NG 12 RULE=- SCORES=-')
+    expect(got).toContain('PC VEIN SERVER11 FAILED 12 API エラー (404)')
+  })
+
+  it('★ 最後の回が他人の枠に当たったとき・撮影が無いとき・本人の承認済みの枠が無いときはサーバーに聞かない', async () => {
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12), entry('emp-2', 13)])
+    expect(await mod.matchVeinModuleEmployee(missPort(null, 13), 'emp-1')).toBeNull()
+    const noShot = { identify: vi.fn(async () => null), identifyKeep: vi.fn(async () => ({ id: null, record: null })) }
+    expect(await mod.matchVeinModuleEmployee(noShot, 'emp-1')).toBeNull()
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-1', 12, { approved: false })])
+    expect(await mod.matchVeinModuleEmployee(missPort(null, null), 'emp-1')).toBeNull()
+    expect(api.postVeinVerifyShot).not.toHaveBeenCalled()
+  })
+})
+
 describe('rotateVeinModuleRecord', () => {
   const REC = new Uint8Array([7, 7])
   const ROTATED = btoa(String.fromCharCode(0xDE, 0xED, 0x01))

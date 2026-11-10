@@ -26,7 +26,7 @@
 import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
 import { noteVeinShotView } from '~/utils/vein-shot-view'
-import { getEmployeeById, getEmployees, getPendingVeinModuleTemplates, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
+import { getEmployeeById, getEmployees, getPendingVeinModuleTemplates, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, postVeinVerifyShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
 import type { ApiVeinModuleRecord, RequestTokenScope, VeinEnrollNear } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
@@ -288,10 +288,14 @@ export async function matchVeinModuleEmployee(
   onRetry: () => void | Promise<void> = () => {},
   scope: RequestTokenScope = 'default',
 ): Promise<VeinMatch | null> {
+  // 最後の回が「誰にも当たらなかった」ときの撮影 (他人の枠に当たった回はサーバーで確かめない)
+  let lastMissShot: Uint8Array | null = null
   const read = async (): Promise<VeinMatch | null> => {
     const got = await readKeeping(port, onAgain)
+    lastMissShot = null
     if (got.id === null) {
       scheduleVeinAuthShot(employeeId, got, 'none', scope)
+      lastMissShot = got.record
       return null
     }
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
@@ -302,7 +306,28 @@ export async function matchVeinModuleEmployee(
     recordVeinLine(`PC VEIN OTHER ${got.id}`)
     return null
   }
-  return await retryOnVeinMiss(read, hit => hit === null, onRetry)
+  const hit = await retryOnVeinMiss(read, hit => hit === null, onRetry)
+  if (hit !== null || lastMissShot === null) return hit
+  return await verifyOnServer(employeeId, lastMissShot, scope)
+}
+
+/**
+ * モジュールが誰にも当てなかった撮影を、本人の承認済みの記録とだけサーバーで比べる (1:1、`POST /api/vein/verify-shot`)。
+ * 通ればその人の枠で通す (撮った記録はモジュールが外したものなので入れ替えに使わない = record は null)。
+ * 結果は `PC VEIN SERVER11 OK|NG|FAILED …` で診断ログに残す。サーバーに届かない・古いサーバーは不一致のまま
+ */
+async function verifyOnServer(employeeId: string, shot: Uint8Array, scope: RequestTokenScope): Promise<VeinMatch | null> {
+  const entry = (await loadVeinModuleEntries()).find(e => e.employeeId === employeeId && e.approved)
+  if (!entry) return null
+  try {
+    const v = await postVeinVerifyShot(employeeId, shot, scope)
+    recordVeinLine(`PC VEIN SERVER11 ${v.matched ? 'OK' : 'NG'} ${entry.moduleId} RULE=${v.rule ?? '-'} SCORES=${v.scores?.join(',') ?? '-'}`)
+    return v.matched ? { id: entry.moduleId, record: null } : null
+  }
+  catch (e) {
+    recordVeinLine(`PC VEIN SERVER11 FAILED ${entry.moduleId} ${messageOf(e)}`)
+    return null
+  }
 }
 
 /**
@@ -418,8 +443,31 @@ export async function identifyVeinModuleEmployee(moduleId: number | null, scope:
   }
 }
 
-/** 社員を引く。オンラインは `GET /api/employees/{id}`、ネットワークの失敗は `getEmployees()` (キャッシュ) から */
+/** このページの間に引いた社員 (照合で当たった人)。2 回目からはサーバーを待たずに使い、裏で引き直す */
+const employeeCache = new Map<string, ApiEmployee>()
+
+/** @internal テスト用: 引いた社員の記憶を捨てる */
+export function resetVeinEmployeeCache(): void {
+  employeeCache.clear()
+}
+
+/**
+ * 社員を引く。このページで一度引いた人は待たずに返し、裏で `GET /api/employees/{id}` を引き直して記憶を新しくする
+ * (照合の後にサーバーを待たないため)。初めての人はオンラインは `GET /api/employees/{id}`、
+ * ネットワークの失敗は `getEmployees()` (キャッシュ) から
+ */
 async function findEmployee(employeeId: string, scope: RequestTokenScope): Promise<ApiEmployee | undefined> {
+  const cached = employeeCache.get(employeeId)
+  if (cached) {
+    void getEmployeeById(employeeId, scope).then((e) => { if (e) employeeCache.set(employeeId, e) }, () => {})
+    return cached
+  }
+  const found = await fetchEmployee(employeeId, scope)
+  if (found) employeeCache.set(employeeId, found)
+  return found
+}
+
+async function fetchEmployee(employeeId: string, scope: RequestTokenScope): Promise<ApiEmployee | undefined> {
   try {
     return await getEmployeeById(employeeId, scope)
   }

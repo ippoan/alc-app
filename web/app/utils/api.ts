@@ -975,6 +975,21 @@ export async function postVeinAuthShotJudged(shot: VeinAuthShot, scope: RequestT
   return { result: j.result, scores: c?.scores ?? null, rule: c?.rule ?? null, shift: c?.shift ?? null, error: j.error ?? null }
 }
 
+/** 本人の記録とだけ比べた 1:1 の結果 (`POST /api/vein/verify-shot`)。記録が無い人は matched=false・rule/scores は null */
+export interface VeinVerifyShotResult {
+  matched: boolean
+  rule: string | null
+  scores: [number, number, number] | null
+}
+
+/**
+ * 撮った 1 本 (`VEIN IDENTIFY KEEP ALL` の記録) を、その人の承認済みの記録とだけサーバーで比べる (1:1。保存しない)。
+ * 免許証などで本人が決まった照合でモジュールが外れたときの確かめに使う
+ */
+export async function postVeinVerifyShot(employeeId: string, shot: Uint8Array, scope: RequestTokenScope = 'default'): Promise<VeinVerifyShotResult> {
+  return request<VeinVerifyShotResult>('/api/vein/verify-shot', { method: 'POST', body: JSON.stringify({ employee_id: employeeId, shot: bytesToBase64(shot) }) }, scope)
+}
+
 /** 指静脈のモジュールの記録 (1 件分)。`record` は base64 */
 export interface ApiVeinModuleRecord {
   employee_id: string
