@@ -19,7 +19,7 @@
 
 import { putVeinModuleRecord, putVeinTemplate, apiErrorCode, apiErrorMessage, type RequestTokenScope, type VeinModuleRegistered } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
-import { allocateOrEvictVeinModuleId, noteVeinEnrollNear, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
+import { allocateOrEvictVeinModuleId, noteVeinEnrollApproval, noteVeinEnrollNear, noteVeinModuleRecord, usesVeinModule } from '~/utils/vein-module'
 import { VEIN_RECORD_BROKEN } from '~/composables/useVeinSerial'
 import { appendDiag } from '~/utils/serialDiagLog'
 
@@ -150,6 +150,7 @@ export function useVeinEnroll(opts: { scope?: RequestTokenScope } = {}) {
     await putVeinModuleEntry({ employeeId, moduleId: id, updatedAt: saved.updated_at, approved, native: true })
     noteVeinModuleRecord(id, 'native')
     void noteVeinEnrollNear(id, saved.near)
+    noteVeinEnrollApproval(id, saved)
     outcome.value = !saved.device_record ? 'pending' : approved ? 'auto_approved' : 'device_pending'
   }
 

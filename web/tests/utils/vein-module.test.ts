@@ -876,6 +876,33 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
   })
 })
 
+describe('noteVeinEnrollApproval', () => {
+  const base = { employee_id: 'emp-honda', updated_at: 'v1', device_record: true }
+
+  it('★ 自動で承認した・しなかった理由を PC VEIN ENROLL APPROVAL で残す (乗務員の ID は出さない)', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    mod.noteVeinEnrollApproval(12, { ...base, approved: true, auto_approved: true, matched: 6, entries: 6 })
+    mod.noteVeinEnrollApproval(13, { ...base, approved: false, matched: 5, entries: 6, auto_approve_blocked: 'near_other', others_people: 1, others_matched: 2 })
+    mod.noteVeinEnrollApproval(14, { ...base, approved: false, matched: 2, entries: 6, auto_approve_blocked: 'too_few_matches' })
+    mod.noteVeinEnrollApproval(15, { ...base, approved: false, auto_approve_blocked: 'others_check_failed', others_people: 0 })
+    const lines = snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
+    expect(lines).toEqual([
+      'PC VEIN ENROLL APPROVAL 12 AUTO=1 MATCHED=6/6 BLOCKED=- OTHERS=-',
+      'PC VEIN ENROLL APPROVAL 13 AUTO=0 MATCHED=5/6 BLOCKED=near_other OTHERS=1/2',
+      'PC VEIN ENROLL APPROVAL 14 AUTO=0 MATCHED=2/6 BLOCKED=too_few_matches OTHERS=-',
+      'PC VEIN ENROLL APPROVAL 15 AUTO=0 MATCHED=-/- BLOCKED=others_check_failed OTHERS=0/-',
+    ])
+    expect(snapshotVeinLines()).not.toContain('emp-')
+  })
+
+  it('端末ごとの記録でない (初回の登録) なら何も残さない', async () => {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    mod.noteVeinEnrollApproval(12, { employee_id: 'emp-x', updated_at: 'v1' })
+    mod.noteVeinEnrollApproval(12, { employee_id: 'emp-x', updated_at: 'v1', device_record: false })
+    expect(snapshotVeinLines()).toBe('')
+  })
+})
+
 describe('noteVeinEnrollNear', () => {
   it('★ 登録した記録に合格した他の人を、枠に置き換えて PC VEIN ENROLL NEAR で残す (乗務員の ID は出さない)', async () => {
     const { snapshotVeinLines } = await import('~/utils/vein-line-log')

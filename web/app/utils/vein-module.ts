@@ -27,7 +27,7 @@ import type { Ref } from 'vue'
 import type { ApiEmployee } from '~/types'
 import { noteVeinShotView } from '~/utils/vein-shot-view'
 import { getEmployeeById, getEmployees, getPendingVeinModuleTemplates, getVeinAuthLogEnabled, getVeinModuleTemplate, getVeinModuleTemplates, postVeinAuthShot, postVeinVerifyShot, rotateVeinModuleDeviceRecord } from '~/utils/api'
-import type { ApiVeinModuleRecord, RequestTokenScope, VeinEnrollNear } from '~/utils/api'
+import type { ApiVeinModuleRecord, RequestTokenScope, VeinEnrollNear, VeinModuleRegistered } from '~/utils/api'
 import { deleteVeinModuleEntry, loadVeinModuleEntries, putVeinModuleEntry } from '~/utils/vein-db'
 import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
@@ -128,6 +128,19 @@ export async function noteVeinEnrollNear(id: number, near: readonly VeinEnrollNe
     const other = entries.find(e => e.employeeId === n.employee_id)?.moduleId ?? '?'
     recordVeinLine(`PC VEIN ENROLL NEAR ${id} OTHER=${other} RULE=${n.rule ?? '-'} SCORES=${n.scores?.join(',') ?? '-'} COARSE=${n.coarse ?? '-'}`)
   }
+}
+
+/**
+ * 端末ごとの記録の登録で、自動で承認したか・しなかった理由を診断ログに残す
+ * (`PC VEIN ENROLL APPROVAL <id> AUTO=<1|0> MATCHED=<m>/<n> BLOCKED=<理由|-> OTHERS=<人数>/<件数>`)。
+ * 承認待ちの記録は後で登録し直されると消えるので、止めた登録を後から数えて線を直すためにここに残す
+ * (ippoan/alc-vein-worker#36)。端末ごとの記録でない (初回の登録) なら何も残さない。乗務員の ID は載せない
+ */
+export function noteVeinEnrollApproval(id: number, saved: VeinModuleRegistered): void {
+  if (!saved.device_record) return
+  const matched = `${saved.matched ?? '-'}/${saved.entries ?? '-'}`
+  const others = saved.others_people !== undefined ? `${saved.others_people}/${saved.others_matched ?? '-'}` : '-'
+  recordVeinLine(`PC VEIN ENROLL APPROVAL ${id} AUTO=${saved.approved ? 1 : 0} MATCHED=${matched} BLOCKED=${saved.auto_approve_blocked ?? '-'} OTHERS=${others}`)
 }
 
 /** 不一致のとき、自動でもう一度照合する回数 (置き方のぶれ・閾値の揺れで落ちた回を拾う) */
