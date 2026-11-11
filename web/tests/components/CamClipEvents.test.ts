@@ -37,9 +37,9 @@ const EVENTS: CamClipsEvent[] = [
 ]
 const t = (id: string) => `[data-testid="cam-clips-events-${id}"]`
 
-async function mountIt(cameras = [cam('c1', '正門')]) {
+async function mountIt(cameras = [cam('c1', '正門')], props: { readonly?: boolean } = {}) {
   api.listCamClipsCameras.mockResolvedValue({ can_edit_destination: false, cameras })
-  const w = await mountSuspended(CamClipEvents)
+  const w = await mountSuspended(CamClipEvents, { props })
   await flushPromises()
   return w
 }
@@ -53,6 +53,13 @@ beforeEach(() => {
 })
 
 describe('CamClipEvents', () => {
+  it('readonly (運行管理者の画面) では「今すぐ切り出す」を出さず、一覧と再生はそのまま', async () => {
+    const w = await mountIt([cam('c1', '正門')], { readonly: true })
+    expect(w.find(t('run')).exists()).toBe(false)
+    expect(w.findAll(t('row'))).toHaveLength(EVENTS.length)
+    expect(w.findAll(t('play')).length).toBeGreaterThan(0)
+  })
+
   it('カメラが 1 台なら最初から選び、今日の日付で取得する', async () => {
     const w = await mountIt()
     expect((w.find(t('camera')).element as HTMLSelectElement).value).toBe('c1')

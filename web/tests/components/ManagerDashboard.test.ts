@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { computed } from 'vue'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import ManagerDashboard from '~/components/ManagerDashboard.vue'
 import { noteDeviceToken } from '~/utils/token-selection'
 import { devDeviceJwt } from '../helpers/dummy-jwt'
@@ -18,6 +19,13 @@ vi.mock('~/utils/api', () => ({
   interruptTenkoSession: vi.fn(),
   resumeTenkoSession: vi.fn(),
   cancelTenkoSession: vi.fn(),
+}))
+
+// 拠点カメラの録画タブは管理者ログインの有無で中身を変える。ほかは本物の useAuth のまま
+const loggedIn = vi.hoisted(() => ({ v: false }))
+mockNuxtImport<typeof useAuth>('useAuth', original => () => ({
+  ...original(),
+  isAuthenticated: computed(() => loggedIn.v),
 }))
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -94,6 +102,7 @@ describe('ManagerDashboard — IT点呼 の手順タブ (常に最後)', () => {
   const TABS_BEFORE = [
     '乗務員', '免許証', '点呼', '遠隔点呼', '画面共有', '予定管理',
     '健康基準', '故障記録', '携行品', '労働時間', 'タイムカード', 'デバイス管理',
+    'カメラ一覧', '拠点カメラの録画',
   ]
   const GUIDE_LABEL = 'IT点呼 の手順'
   const GuideStub = { name: 'ItTenkoGuide', template: '<div data-testid="it-guide" />' }
@@ -124,7 +133,7 @@ describe('ManagerDashboard — IT点呼 の手順タブ (常に最後)', () => {
   it.each([
     ['印なし', false],
     ['印あり', true],
-  ])('★ %s: 全部のタブは既存の 12 個のあとに「IT点呼 の手順」が 1 つ (計 13、IT点呼 は無い)', async (_name, marked) => {
+  ])('★ %s: 全部のタブは既存の 14 個のあとに「IT点呼 の手順」が 1 つ (計 15、IT点呼 は無い)', async (_name, marked) => {
     if (marked) noteDeviceToken('manager-device', devDeviceJwt('dev-manager'))
     const wrapper = await mountDashboard()
     expect(allTabLabels(wrapper)).toEqual([...TABS_BEFORE, GUIDE_LABEL])
@@ -153,5 +162,41 @@ describe('ManagerDashboard — IT点呼 の手順タブ (常に最後)', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="it-guide"]').exists()).toBe(false)
     wrapper.unmount()
+  })
+})
+
+describe('ManagerDashboard — 拠点カメラのタブ (管理者の画面と同じ 2 つ)', () => {
+  const stubs = {
+    CamLiveGrid: { name: 'CamLiveGrid', props: { seat: Boolean }, template: '<div data-testid="grid" :data-seat="String(seat)" />' },
+    CamClipEvents: { name: 'CamClipEvents', props: { readonly: Boolean }, template: '<div data-testid="events" :data-readonly="String(readonly)" />' },
+  }
+  const clickTab = async (wrapper: Awaited<ReturnType<typeof mountSuspended>>, label: string) => {
+    await wrapper.findAll('div.bg-blue-100 > button').find(b => b.text() === label)!.trigger('click')
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    loggedIn.v = false
+  })
+
+  it('「カメラ一覧」は運行管理者席の口で全カメラを映す', async () => {
+    const wrapper = await mountSuspended(ManagerDashboard, { global: { stubs } })
+    await clickTab(wrapper, 'カメラ一覧')
+    expect(wrapper.find('[data-testid="grid"]').attributes('data-seat')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('「拠点カメラの録画」は管理者ログインが無ければ案内だけ、あれば見るだけの一覧', async () => {
+    const wrapper = await mountSuspended(ManagerDashboard, { global: { stubs } })
+    await clickTab(wrapper, '拠点カメラの録画')
+    expect(wrapper.find('[data-testid="events"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="manager-cam-clips-login-required"]').text()).toBe('録画を見るには、管理者のアカウントでログインしてください。')
+    wrapper.unmount()
+
+    loggedIn.v = true
+    const admin = await mountSuspended(ManagerDashboard, { props: { initialTab: 'cam_clips' }, global: { stubs } })
+    expect(admin.find('[data-testid="events"]').attributes('data-readonly')).toBe('true')
+    expect(admin.find('[data-testid="manager-cam-clips-login-required"]').exists()).toBe(false)
+    admin.unmount()
   })
 })

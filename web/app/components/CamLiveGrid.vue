@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { listCamClipsCameras } from '~/utils/api'
-import type { CamClipsCamera } from '~/utils/cam-clips'
+import { listCamClipsCameras, listCamClipsCamerasForTenko, MANAGER_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
+import type { CamClipsCameraSummary } from '~/utils/cam-clips'
 import { errorText } from '~/utils/cam-clips'
+import { selectSendToken } from '~/utils/token-selection'
 
 /**
  * 拠点カメラの一覧 (グリッド)。登録済みのカメラ全部を `CamLiveTile` (roomId = camera.id) で同時に映す。
@@ -10,7 +11,25 @@ import { errorText } from '~/utils/cam-clips'
  * 「一斉に更新を確認」: 繋がっていて自己更新の確認に対応している (alc-cam の host 0.4.5〜) 拠点 PC 全部に、
  * タイルの「更新を確認」と同じ合図を送る。結果は各タイルに出る。繋がっていない・古い拠点 PC は対象にならない。
  */
-const cameras = ref<CamClipsCamera[]>([])
+const props = defineProps<{
+  /**
+   * 運行管理者の画面に置くとき。一覧とカメラへの入室は運行管理者席の鍵の口 (管理者ログインがあればその JWT。
+   * `TenkoSiteCameras` と同じ規則) で取り、拠点 PC の保守 (一斉に更新を確認) は出さない
+   */
+  seat?: boolean
+}>()
+
+const { accessToken } = useAuth()
+const { getManagerJwt } = useManagerDeviceToken()
+
+/** 運行管理者の画面のカメラへの入室に付けるトークン */
+async function getSeatToken(): Promise<string> {
+  const token = await selectSendToken(accessToken.value, 'manager-device', getManagerJwt)
+  if (!token) throw new Error(MANAGER_DEVICE_AUTH_FAILED_MESSAGE)
+  return token
+}
+
+const cameras = ref<CamClipsCameraSummary[]>([])
 const loading = ref(true)
 const error = ref('')
 
@@ -36,7 +55,7 @@ function updateAll() {
 
 onMounted(async () => {
   try {
-    cameras.value = (await listCamClipsCameras()).cameras
+    cameras.value = (await (props.seat ? listCamClipsCamerasForTenko() : listCamClipsCameras())).cameras
   }
   catch (e) {
     error.value = errorText(e, 'カメラの一覧を取得できませんでした')
@@ -54,10 +73,10 @@ onMounted(async () => {
       {{ error }}
     </div>
     <p v-else-if="cameras.length === 0" class="text-sm text-gray-500" data-testid="cam-grid-empty">
-      カメラが登録されていません (「拠点カメラの録画」タブで追加できます)。
+      カメラが登録されていません<template v-if="!seat"> (「拠点カメラの録画」タブで追加できます)</template>。
     </p>
     <template v-else>
-      <div class="flex flex-wrap items-center gap-2 text-sm">
+      <div v-if="!seat" class="flex flex-wrap items-center gap-2 text-sm">
         <button
           class="px-3 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50"
           :disabled="updatable.size === 0"
@@ -76,6 +95,7 @@ onMounted(async () => {
           :room-id="c.id"
           :label="c.name"
           auto-connect
+          :get-token="seat ? getSeatToken : undefined"
           :update-all-count="updateAllCount"
           @update:updatable="setUpdatable(c.id, $event)"
         />

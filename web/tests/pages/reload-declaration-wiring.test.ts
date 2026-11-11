@@ -70,6 +70,8 @@ const MANAGER_TABS: Record<string, Row> = {
   work_hours: { components: ['WorkHoursViewer'], declares: null, reason: '閲覧' },
   timecard: { components: ['TimecardManager'], declares: null, reason: '編集' },
   devices: { components: ['DeviceRegistrationManager'], declares: null, reason: '設定' },
+  cam_live: { components: ['CamLiveGrid'], declares: null, reason: '視聴' },
+  cam_clips: { components: ['CamClipEvents'], declares: null, reason: '視聴' },
   it_guide: { components: ['ItTenkoGuide'], declares: null, reason: '印刷' },
 }
 
