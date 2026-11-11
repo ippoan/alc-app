@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>会社概要 合同会社一歩庵</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+@page { size: A4 portrait; margin: 0; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans JP', 'Noto Sans CJK JP', sans-serif; color: #1f2933; font-size: 9.5pt; line-height: 1.6; }
+.page { width: 210mm; height: 297mm; padding: 15mm 17mm 18mm; position: relative; page-break-after: always; overflow: hidden; }
+.page:last-child { page-break-after: auto; }
+.band { position: absolute; left: 0; top: 0; width: 100%; height: 8mm; background: #1e5f74; }
+.eyebrow { color: #1e5f74; font-weight: 700; letter-spacing: .2em; font-size: 9pt; margin-top: 4mm; }
+h1 { font-size: 24pt; margin: 2mm 0 1mm; letter-spacing: .05em; }
+.kana { color: #52606d; font-size: 9pt; letter-spacing: .15em; }
+.lead { margin: 5mm 0 3mm; font-size: 10.5pt; line-height: 1.8; border-left: 3px solid #1e5f74; padding-left: 5mm; }
+h2 { font-size: 13pt; color: #1e5f74; border-bottom: 1.5px solid #1e5f74; padding-bottom: 1mm; margin: 5mm 0 2.5mm; }
+table.info { width: 100%; border-collapse: collapse; }
+table.info th, table.info td { border-bottom: 1px solid #d9e2ec; padding: 1.6mm 2mm; vertical-align: top; text-align: left; }
+table.info th { width: 32mm; color: #52606d; font-weight: 500; white-space: nowrap; }
+ul { margin: 0; padding-left: 5mm; }
+li { margin: 1mm 0; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+.cols3 { grid-template-columns: 1fr 1fr 1fr; }
+.card { border: 1px solid #d9e2ec; border-radius: 2mm; padding: 2.5mm 4mm; }
+.card h3 { margin: 0 0 .8mm; font-size: 10pt; color: #1e5f74; }
+.card p { margin: 0; font-size: 8.8pt; line-height: 1.55; }
+.photos { display: grid; grid-template-columns: 1.3fr 1fr 0.8fr; gap: 3mm; align-items: end; }
+.photos figure { margin: 0; }
+.photos img { width: 100%; height: 40mm; object-fit: cover; border-radius: 1.5mm; border: 1px solid #d9e2ec; }
+.photos figcaption { font-size: 8pt; color: #52606d; margin-top: 1mm; }
+.flow { display: flex; flex-wrap: wrap; gap: 1.5mm; font-size: 8.8pt; margin-top: 2mm; }
+.flow span { background: #e6f0f3; border-radius: 1mm; padding: .6mm 2mm; }
+.flow span.arrow { background: none; padding: .6mm 0; color: #829ab1; }
+.foot { position: absolute; bottom: 10mm; left: 18mm; right: 18mm; border-top: 1px solid #d9e2ec; padding-top: 2mm; font-size: 8pt; color: #829ab1; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<section class="page">
+  <div class="band"></div>
+  <div class="eyebrow">COMPANY PROFILE</div>
+  <h1>合同会社一歩庵</h1>
+  <div class="kana">ゴウドウガイシャイッポアン</div>
+
+  <p class="lead">運送事業者の点呼と運行管理を、機器とソフトウェアの両面から支えます。<br>
+  アルコール検知器・生体認証・健康状態の測定をひとつの流れにまとめ、点呼の確実さと記録の正しさを、毎日の業務の中で保ちます。</p>
+
+  <h2>会社概要</h2>
+  <table class="info">
+    <tr><th>商号</th><td>合同会社一歩庵</td></tr>
+    <tr><th>所在地</th><td>〒812-0011<br>福岡県福岡市博多区博多駅前1丁目23番2号<br>ParkFront博多駅前1丁目5F-B</td></tr>
+    <tr><th>代表</th><td>代表社員</td></tr>
+    <tr><th>お問い合わせ</th><td>導入時にお渡しする連絡先</td></tr>
+    <tr><th>事業内容</th><td>
+      <ul>
+        <li>自動点呼・遠隔点呼システム「一歩庵点呼」の開発・提供・保守</li>
+        <li>運送事業者向け業務システム (運行管理・勤怠・車両管理など) の開発・提供</li>
+        <li>点呼機器 (指静脈認証装置・測定台など) の製作・導入支援</li>
+      </ul>
+    </td></tr>
+  </table>
+
+  <h2>私たちの取り組み</h2>
+  <div class="cols cols3">
+    <div class="card"><h3>現場で使い続けられる仕組み</h3><p>点呼台・測定台・運行管理者席を実際の営業所に置き、運転者と運行管理者の毎日の点呼で動かしながら改良しています。</p></div>
+    <div class="card"><h3>記録を守る設計</h3><p>点呼記録は作成後に修正・削除できない形で保存し、1 年以上残します。必要な事項は CSV で取り出せます。</p></div>
+    <div class="card"><h3>確かめてから届ける</h3><p>ソフトウェアは変更ごとに自動テストを通し、検証環境で確かめてから段階的に公開します。問題があれば前の版へ戻せます。</p></div>
+  </div>
+
+  <h2>サポート体制</h2>
+  <table class="info">
+    <tr><th>窓口</th><td>合同会社一歩庵 (導入時にお渡しする連絡先)</td></tr>
+    <tr><th>修理</th><td>受付 → 遠隔での診断 (診断ログ・故障記録) → ソフトウェア・ファームウェアの遠隔更新 → 必要に応じて機器の交換</td></tr>
+    <tr><th>不具合の改善</th><td>故障記録と事業者からの連絡を改善の課題として記録し、修正版を配布して事業者へお知らせします</td></tr>
+    <tr><th>取扱説明書</th><td>https://ippoan.github.io/alc-app/</td></tr>
+  </table>
+
+  <div class="foot"><span>合同会社一歩庵 会社概要</span><span>1 / 2</span></div>
+</section>
+
+<section class="page">
+  <div class="band"></div>
+  <div class="eyebrow">PRODUCT</div>
+  <h1 style="font-size:22pt">一歩庵点呼</h1>
+  <div class="kana">自動点呼・遠隔点呼システム</div>
+
+  <p class="lead" style="margin-top:6mm">業務前・業務後の点呼を、生体認証による本人確認からアルコール測定・健康状態の確認・指示事項の伝達まで、一連の流れで行います。結果は点呼記録として自動で残り、運行管理者が画面で確認できます。</p>
+
+  <div class="photos">
+    <figure><img src="https://raw.githubusercontent.com/ippoan/tenko-forms/main/product/photos/2026-11-07-kiosk.jpg" alt=""><figcaption>点呼台 (点呼端末・アルコール検知器・体温計・指静脈認証装置と NFC リーダー)</figcaption></figure>
+    <figure><img src="https://raw.githubusercontent.com/ippoan/tenko-forms/main/product/photos/2026-11-07-bp-station.jpg" alt=""><figcaption>測定台 (血圧計・指静脈認証装置)</figcaption></figure>
+    <figure><img src="https://raw.githubusercontent.com/ippoan/tenko-forms/main/product/photos/2026-11-11-camera.jpg" alt=""><figcaption>監視カメラ</figcaption></figure>
+  </div>
+
+  <h2>業務前の自動点呼の流れ</h2>
+  <div class="flow">
+    <span>免許証 (NFC)・社員番号</span><span class="arrow">→</span><span>指静脈で本人確認</span><span class="arrow">→</span><span>車両番号</span><span class="arrow">→</span><span>体温・血圧</span><span class="arrow">→</span><span>自己申告・安全運転判定</span><span class="arrow">→</span><span>日常点検</span><span class="arrow">→</span><span>携行品</span><span class="arrow">→</span><span>アルコール測定</span><span class="arrow">→</span><span>指示事項の確認</span><span class="arrow">→</span><span>完了</span>
+  </div>
+
+  <h2>主な機能</h2>
+  <div class="cols">
+    <div class="card"><h3>本人確認</h3><p>指静脈による 1 対 1 の照合で、本人と確認できたときだけ点呼を始めます。</p></div>
+    <div class="card"><h3>アルコール測定</h3><p>測定結果と吹き込み中の動画を自動で保存し、検知すれば点呼を中止して運行管理者へ通知します。</p></div>
+    <div class="card"><h3>健康状態の確認</h3><p>体温・血圧を運転者ごとの平時の値と比べ、自己申告とあわせて安全な運転ができないおそれを自動で判定します。</p></div>
+    <div class="card"><h3>異常の通知と再開</h3><p>中断・日常点検の異常・予定時刻の超過をメールで知らせ、運行管理者が内容を確かめてから再開できます。</p></div>
+    <div class="card"><h3>点呼記録</h3><p>運行管理者・運転者・車両・日時・測定結果・指示事項などを修正・削除できない形で 1 年以上保存し、CSV で出力できます。</p></div>
+    <div class="card"><h3>遠隔点呼・届出の支援</h3><p>映像と音声による遠隔点呼に対応し、実施の届出の様式を記入済みで作成できます。</p></div>
+  </div>
+
+
+  <div class="foot"><span>合同会社一歩庵 会社概要</span><span>2 / 2</span></div>
+</section>
+
+</body>
+</html>
