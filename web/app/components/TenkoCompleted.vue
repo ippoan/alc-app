@@ -7,6 +7,11 @@ const props = defineProps<{
   employeeName: string
   /** 次の点呼へ自動で移るまでの残り秒数 (遠隔点呼が判定で閉じた後と、判定待ち)。数えていなければ null / 省略 */
   autoResetSeconds?: number | null
+  /**
+   * 遠隔点呼の判定待ち。運行管理者が通話に出るまで立ち去らせないため「このまま終わって大丈夫です」は出さない
+   * (Refs ippoan/alc-app#676)
+   */
+  awaitingManager?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -47,6 +52,9 @@ function formatTime(iso: string | null): string {
     >
       <template v-if="inPerson">
         <span class="block font-bold" data-testid="in-person-instruction">運行管理者に会って、点呼の確認を受けてください。</span>
+      </template>
+      <template v-else-if="awaitingManager">
+        入力は終わりました。運行管理者の判定を待ってください
       </template>
       <template v-else>
         入力は終わりました。判定は運行管理者が行うので、このまま終わって大丈夫です

@@ -27,6 +27,15 @@ describe('TenkoCompleted — 遠隔点呼の判定待ち (Refs ippoan/rust-alc-a
     expect(w.find('[data-testid="judgment-reason"]').exists()).toBe(false)
   })
 
+  it('★ 遠隔点呼の判定待ち (awaitingManager) は「このまま終わって大丈夫です」を出さず、判定を待つ案内にする (Refs #676)', async () => {
+    const w = await mountSuspended(TenkoCompleted, {
+      props: { session: session('judgment_pending'), employeeName: '点呼 太郎', awaitingManager: true },
+    })
+    const text = w.find('[data-testid="judgment-pending"]').text()
+    expect(text).not.toContain('このまま終わって大丈夫です')
+    expect(text).toContain('運行管理者の判定を待ってください')
+  })
+
   it('自動点呼から切り替えた点呼は、切り替えた理由を運行管理者が判定する理由として出す', async () => {
     const w = await mountSuspended(TenkoCompleted, {
       props: {

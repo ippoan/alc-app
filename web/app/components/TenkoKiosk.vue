@@ -1017,6 +1017,7 @@ onUnmounted(() => {
             :session="session"
             :employee-name="employeeName"
             :auto-reset-seconds="autoResetLeft"
+            :awaiting-manager="isRemote"
             @reset="handleReset"
           />
           <!-- 運行管理者を呼んでいる間 (遠隔点呼の判定待ち)。出ないときは乗務員がやめられる -->

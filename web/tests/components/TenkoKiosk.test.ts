@@ -623,6 +623,8 @@ describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
       expect(wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')).toBeNull()
       // 待てないときは「運行管理者が出ないので点呼をやめる」で抜けられる
       expect(wrapper.find('[data-testid="cancel-no-manager"]').exists()).toBe(true)
+      // 「このまま終わって大丈夫です」は出さない (運行管理者を待つ案内のまま)
+      expect(wrapper.findComponent({ name: 'TenkoCompleted' }).props('awaitingManager')).toBe(true)
       expect(webRtcDisconnectMock).not.toHaveBeenCalled()
     }
     finally {
