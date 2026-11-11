@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
+      - 'scripts/docs-pdf/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -28,6 +29,9 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements-docs.txt
       - run: mkdocs build --strict
+      # 認定申請の資料 (操作マニュアル・根拠資料・会社概要) を PDF にして site/downloads/ に置く
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk poppler-utils
+      - run: scripts/docs-pdf/build.sh site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/
