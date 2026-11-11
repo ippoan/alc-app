@@ -71,8 +71,15 @@ extra_css:
 nav:
   - ホーム: index.md
   - 運行者向け: operator/index.md
-  - 運行管理者: admin/index.md
+  - 運行管理者:
+      - 運行管理者ガイド: admin/index.md
+      - 予定管理: admin/tenko-schedule.md
+      - 健康基準: admin/health-baseline.md
+      - 点呼・点呼記録: admin/tenko-record.md
+      - 故障記録: admin/equipment-failure.md
+      - 通知（メール・Webhook）: admin/webhook.md
   - システム管理者: admin/sysadmin.md
   - 遠隔点呼: admin/remote-tenko.md
   - 遠隔点呼 要件チェックリスト: admin/remote-tenko-checklist.md
+  - サポート: support/index.md
   - ダウンロード: downloads.md
