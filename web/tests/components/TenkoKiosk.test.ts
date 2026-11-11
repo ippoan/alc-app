@@ -609,8 +609,31 @@ describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
     wrapper.unmount()
   })
 
-  it('★ 判定待ちでも 30 秒で次の点呼へ移る (乗務員は判定を待たない)。運行管理者が通話に出ている間は数えない', async () => {
+  it('★ 遠隔点呼の判定待ちは、運行管理者が通話に出るまで 30 秒を過ぎても最初の画面に戻らない (Refs #676)', async () => {
     vi.useFakeTimers()
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession).mockResolvedValue({ id: 'sess-1', status: 'judgment_pending' } as never)
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    try {
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')).toBeNull()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(resetMock).not.toHaveBeenCalled()
+      expect(wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')).toBeNull()
+      // 待てないときは「運行管理者が出ないので点呼をやめる」で抜けられる
+      expect(wrapper.find('[data-testid="cancel-no-manager"]').exists()).toBe(true)
+      expect(webRtcDisconnectMock).not.toHaveBeenCalled()
+    }
+    finally {
+      wrapper.unmount()
+      step.value = 'nfc'
+    }
+  })
+
+  it('★ 遠隔点呼でない判定待ちは今までどおり 30 秒で次の点呼へ移る。運行管理者が通話に出ている間は数えない', async () => {
+    vi.useFakeTimers()
+    isRemote.value = false
     const { getTenkoSession } = await import('~/utils/api')
     vi.mocked(getTenkoSession).mockResolvedValue({ id: 'sess-1', status: 'judgment_pending' } as never)
     step.value = 'completed'
@@ -668,6 +691,30 @@ describe('TenkoKiosk — 遠隔点呼の判定待ち', () => {
       await vi.advanceTimersByTimeAsync(15_000)
       expect(resetMock).not.toHaveBeenCalled()
       expect(left()).toBe(15)
+    }
+    finally {
+      wrapper.unmount()
+      step.value = 'nfc'
+    }
+  })
+
+  it('遠隔点呼でない判定待ちでも、血圧の記録不足で対面点呼にした点呼は 30 秒で戻らない', async () => {
+    vi.useFakeTimers()
+    isRemote.value = false
+    const inPerson = {
+      id: 'sess-1', status: 'judgment_pending', schedule_id: 's-1', tenko_type: 'pre_operation', tenko_method: '通常点呼',
+      remote_escalation_reason: '血圧の記録が 10 日分に満たない (いま 3 日分) ため対面点呼',
+    }
+    session.value = inPerson
+    const { getTenkoSession } = await import('~/utils/api')
+    vi.mocked(getTenkoSession).mockResolvedValue(inPerson as never)
+    step.value = 'completed'
+    const wrapper = await mountKiosk()
+    try {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(wrapper.findComponent({ name: 'TenkoCompleted' }).props('autoResetSeconds')).toBeNull()
+      expect(resetMock).not.toHaveBeenCalled()
     }
     finally {
       wrapper.unmount()
