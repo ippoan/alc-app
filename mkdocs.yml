@@ -1,8 +1,8 @@
 site_name: ALC アプリ 操作マニュアル
-site_url: https://yhonda-ohishi-alc.github.io/alc-app/
+site_url: https://ippoan.github.io/alc-app/
 site_description: アルコールチェッカーシステム 操作マニュアル
-repo_url: https://github.com/yhonda-ohishi-alc/alc-app
-repo_name: yhonda-ohishi-alc/alc-app
+repo_url: https://github.com/ippoan/alc-app
+repo_name: ippoan/alc-app
 
 theme:
   name: material
