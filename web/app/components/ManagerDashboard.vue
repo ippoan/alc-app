@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices' | 'it_guide'
+type TabKey = 'employees' | 'license' | 'tenko' | 'remote_tenko' | 'screen_share' | 'schedules' | 'baselines' | 'failures' | 'carrying_items' | 'work_hours' | 'timecard' | 'devices' | 'cam_live' | 'cam_clips' | 'it_guide'
 
 const props = defineProps<{
   initialTab?: string
@@ -7,6 +7,7 @@ const props = defineProps<{
 }>()
 
 const activeTab = ref<TabKey>((props.initialTab as TabKey) ?? 'tenko')
+const { isAuthenticated } = useAuth()
 const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
 
 const tabs: { key: TabKey, label: string }[] = [
@@ -22,6 +23,9 @@ const tabs: { key: TabKey, label: string }[] = [
   { key: 'work_hours', label: '労働時間' },
   { key: 'timecard', label: 'タイムカード' },
   { key: 'devices', label: 'デバイス管理' },
+  // 拠点カメラ (管理者の画面と同じ 2 タブ)。カメラの登録・切り出しは管理者の画面だけ
+  { key: 'cam_live', label: 'カメラ一覧' },
+  { key: 'cam_clips', label: '拠点カメラの録画' },
   // IT点呼 の手順書 (印刷用)。常に出す
   { key: 'it_guide', label: 'IT点呼 の手順' },
 ]
@@ -93,6 +97,16 @@ const tabs: { key: TabKey, label: string }[] = [
       <div v-if="activeTab === 'devices'" class="space-y-4">
         <DeviceRegistrationManager />
       </div>
+
+      <CamLiveGrid v-if="activeTab === 'cam_live'" seat />
+
+      <!-- 録画の一覧・再生は管理者ログインだけに開いている (運行管理者席の鍵ではカメラの一覧しか取れない) -->
+      <template v-if="activeTab === 'cam_clips'">
+        <CamClipEvents v-if="isAuthenticated" readonly />
+        <p v-else class="text-sm text-gray-600" data-testid="manager-cam-clips-login-required">
+          録画を見るには、管理者のアカウントでログインしてください。
+        </p>
+      </template>
 
       <ItTenkoGuide v-if="activeTab === 'it_guide'" />
     </div>

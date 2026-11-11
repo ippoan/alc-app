@@ -7,7 +7,7 @@ import CamLiveTile from '~/components/CamLiveTile.vue'
 import CamLiveGrid from '~/components/CamLiveGrid.vue'
 import TenkoCameraView from '~/components/TenkoCameraView.vue'
 
-const api = vi.hoisted(() => ({ listCamClipsCameras: vi.fn() }))
+const api = vi.hoisted(() => ({ listCamClipsCameras: vi.fn(), listCamClipsCamerasForTenko: vi.fn() }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   ...api,
@@ -16,6 +16,8 @@ vi.mock('~/utils/api', async (importOriginal) => ({
 const rtc = vi.hoisted(() => ({ instances: [] as Array<Record<string, any>> }))
 const tokenRef = vi.hoisted(() => ({ v: 'jwt' as string | null }))
 mockNuxtImport('useAuth', () => () => ({ accessToken: ref(tokenRef.v) }))
+const seat = vi.hoisted(() => ({ getManagerJwt: vi.fn() }))
+mockNuxtImport('useManagerDeviceToken', () => () => ({ getManagerJwt: seat.getManagerJwt }))
 mockNuxtImport('useWebRtc', () => () => {
   const inst = {
     isConnected: ref(false),
@@ -560,6 +562,38 @@ describe('CamLiveGrid', () => {
     w = await mountSuspended(CamLiveGrid)
     await flushPromises()
     expect(w.find('[data-testid="cam-grid-error"]').exists()).toBe(true)
+  })
+})
+
+describe('CamLiveGrid (運行管理者の画面: seat)', () => {
+  beforeEach(() => {
+    api.listCamClipsCamerasForTenko.mockResolvedValue({ cameras: [{ id: 'cam-1', name: '正門', device_ids: [] }] })
+  })
+
+  it('一覧は運行管理者席の口で取り、管理者ログインが無ければ席の鍵で入室する。一斉更新は出さない', async () => {
+    tokenRef.v = null
+    seat.getManagerJwt.mockResolvedValue('seat-jwt')
+    const w = await mountSuspended(CamLiveGrid, { props: { seat: true } })
+    await flushPromises()
+    expect(api.listCamClipsCamerasForTenko).toHaveBeenCalledTimes(1)
+    expect(api.listCamClipsCameras).not.toHaveBeenCalled()
+    expect(w.findAll(t('label')).map(l => l.text())).toEqual(['正門'])
+    expect(rtc.instances[0]!.connect.mock.calls[0][3]).toBe('seat-jwt')
+    expect(w.find('[data-testid="cam-grid-update-all"]').exists()).toBe(false)
+  })
+
+  it('席の鍵が取れなければ繋がず、0 件の文言に追加の案内を出さない', async () => {
+    tokenRef.v = null
+    seat.getManagerJwt.mockResolvedValue(null)
+    const w = await mountSuspended(CamLiveGrid, { props: { seat: true } })
+    await flushPromises()
+    expect(rtc.instances[0]!.connect).not.toHaveBeenCalled()
+
+    api.listCamClipsCamerasForTenko.mockResolvedValueOnce({ cameras: [] })
+    const empty = await mountSuspended(CamLiveGrid, { props: { seat: true } })
+    await flushPromises()
+    expect(empty.find('[data-testid="cam-grid-empty"]').text()).toBe('カメラが登録されていません。')
+    w.unmount()
   })
 })
 

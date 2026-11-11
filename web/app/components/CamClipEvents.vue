@@ -12,6 +12,11 @@ import { jstTodayDate } from '~/utils/jst'
  * 閉じるのは閉じるボタン・背景クリック・Esc。閉じると video は DOM から外れ、再生が止まる。
  */
 
+const props = defineProps<{
+  /** 運行管理者の画面に置くとき。見るだけにして「今すぐ切り出す」を出さない */
+  readonly?: boolean
+}>()
+
 const cameras = ref<CamClipsCamera[]>([])
 const cameraId = ref('')
 const date = ref(jstTodayDate())
@@ -108,6 +113,7 @@ onUnmounted(() => {
         </select>
       </label>
       <button
+        v-if="!props.readonly"
         class="px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
         :disabled="!cameraId || running"
         data-testid="cam-clips-events-run"
