@@ -1392,11 +1392,11 @@ export async function reportKioskCommandResult(
 }
 
 /** 認証付きプロキシ経由でバイナリを取得し、object URL にする (顔写真・録画動画で共用)。 */
-async function fetchObjectUrl(path: string, scope: RequestTokenScope): Promise<string | null> {
+async function fetchObjectUrl(path: string, scope: RequestTokenScope, timeoutMs?: number): Promise<string | null> {
   if (!apiBase) return null
 
   try {
-    const res = await proxyRawFetch(path, { cache: 'no-store' }, undefined, scope)
+    const res = await proxyRawFetch(path, { cache: 'no-store' }, timeoutMs, scope)
     if (!res.ok) return null
     const blob = await res.blob()
     return URL.createObjectURL(blob)
@@ -2450,11 +2450,27 @@ export async function listCamHostKeys(): Promise<{ keys: CamHostKey[], names?: K
   return bearerRequest<{ keys: CamHostKey[], names?: KnownDeviceName[] }>('/api/cam-host-keys', jwt, { method: 'GET' })
 }
 
-/** カメラ 1 台の、JST の暦日 (`YYYY-MM-DD`) 1 日ぶんのイベントと自動切り出しの結果 (時刻順) */
-export async function listCamClipsEvents(cameraId: string, date: string): Promise<CamClipsEvent[]> {
+/**
+ * カメラ 1 台の、JST の暦日 (`YYYY-MM-DD`) 1 日ぶんのイベントと自動切り出しの結果 (時刻順)。
+ * 運行管理者の画面は `'manager-device'` で送る (管理者ログインが無い席は席の鍵。ingest は席の鍵に一覧と再生だけを許す)
+ */
+export async function listCamClipsEvents(
+  cameraId: string,
+  date: string,
+  scope: 'admin' | 'manager-device' = 'admin',
+): Promise<CamClipsEvent[]> {
   return request<CamClipsEvent[]>(
-    `/api/cam-clips/events?camera_id=${encodeURIComponent(cameraId)}&date=${encodeURIComponent(date)}`, {}, 'admin',
+    `/api/cam-clips/events?camera_id=${encodeURIComponent(cameraId)}&date=${encodeURIComponent(date)}`, {}, scope,
   )
+}
+
+/**
+ * 切り出し 1 本 (`key` = `clips/<tenant>/<camera_id>/<開始>_<終了>.mp4`) を席の鍵で取り、object URL にする。
+ * `<video src>` は Bearer を付けられないので、管理者ログインの無い運行管理者席はこちらで再生する。
+ * 取り終えるまで再生できないので上限は UPLOAD と同じ 120 秒。取れなければ null。使い終えたら revokeObjectURL する
+ */
+export async function fetchCamClip(key: string): Promise<string | null> {
+  return fetchObjectUrl(`/api/cam-clips/${key}`, 'manager-device', UPLOAD_FETCH_TIMEOUT_MS)
 }
 
 /** 手動の切り出し。カメラから元ファイルを取り込むので、通常の 30 秒では足りない (上限は UPLOAD と同じ 120 秒) */

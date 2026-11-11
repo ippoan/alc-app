@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { listCamClipsCameras, listCamClipsEvents, runCamClipsAuto } from '~/utils/api'
-import type { CamClipsCamera, CamClipsEvent } from '~/utils/cam-clips'
+import { fetchCamClip, listCamClipsCameras, listCamClipsCamerasForTenko, listCamClipsEvents, runCamClipsAuto } from '~/utils/api'
+import type { CamClipsCameraSummary, CamClipsEvent } from '~/utils/cam-clips'
 import { clipSrc, errorText, eventKindLabel, eventSourceLabel, formatJst, summarizeAutoRun } from '~/utils/cam-clips'
 import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 import { jstTodayDate } from '~/utils/jst'
@@ -13,11 +13,14 @@ import { jstTodayDate } from '~/utils/jst'
  */
 
 const props = defineProps<{
-  /** 運行管理者の画面に置くとき。見るだけにして「今すぐ切り出す」を出さない */
-  readonly?: boolean
+  /**
+   * 運行管理者の画面に置くとき。見るだけにして「今すぐ切り出す」を出さず、一覧と再生は運行管理者席の口で取る
+   * (管理者ログインの無い席は席の鍵)。席の鍵は `<video src>` に付けられないので、再生は 1 本を取り切ってから出す
+   */
+  seat?: boolean
 }>()
 
-const cameras = ref<CamClipsCamera[]>([])
+const cameras = ref<CamClipsCameraSummary[]>([])
 const cameraId = ref('')
 const date = ref(jstTodayDate())
 const events = ref<CamClipsEvent[]>([])
@@ -26,6 +29,11 @@ const error = ref('')
 const running = ref(false)
 const runResult = ref('')
 const playing = ref<{ sourceId: string, key: string, occurredAt: string, kind: CamClipsEvent['kind'] } | null>(null)
+/** 再生する URL。管理者の画面は proxy の URL (cookie 認証でシークできる)、席は取り切った blob の object URL。取得中は空 */
+const playingSrc = ref('')
+const playError = ref('')
+/** 押した回数。取り終える前に閉じた・別の行を押したかを見分ける (ref の中身は proxy なので同一性では比べられない) */
+let playSeq = 0
 /** 端末の表示名 (機体の鍵のラベル)。取れなくても一覧は出す (名前が「名前未登録の端末」になるだけ) */
 const { nameOf } = useDeviceNames()
 
@@ -35,10 +43,10 @@ function rowKey(ev: CamClipsEvent): string {
 }
 
 async function loadEvents() {
-  playing.value = null
+  closePlayer()
   if (!cameraId.value || !date.value) return
   try {
-    events.value = await listCamClipsEvents(cameraId.value, date.value)
+    events.value = await listCamClipsEvents(cameraId.value, date.value, props.seat ? 'manager-device' : 'admin')
     error.value = ''
   }
   catch (e) {
@@ -50,7 +58,7 @@ async function loadEvents() {
 
 onMounted(async () => {
   try {
-    cameras.value = (await listCamClipsCameras()).cameras
+    cameras.value = (await (props.seat ? listCamClipsCamerasForTenko() : listCamClipsCameras())).cameras
   }
   catch (e) {
     error.value = errorText(e, 'カメラの一覧を取得できませんでした')
@@ -80,11 +88,30 @@ async function runNow() {
   }
 }
 
-function play(ev: CamClipsEvent) {
-  playing.value = { sourceId: ev.source_id, key: ev.clip!.key, occurredAt: ev.occurred_at, kind: ev.kind }
+async function play(ev: CamClipsEvent) {
+  closePlayer()
+  const key = ev.clip!.key
+  playing.value = { sourceId: ev.source_id, key, occurredAt: ev.occurred_at, kind: ev.kind }
+  if (!props.seat) {
+    playingSrc.value = clipSrc(key)
+    return
+  }
+  const seq = playSeq
+  const url = await fetchCamClip(key)
+  // 取り終える前に閉じた・別の行を押した: 使わない URL は捨てる
+  if (seq !== playSeq) {
+    if (url) URL.revokeObjectURL(url)
+    return
+  }
+  if (url) playingSrc.value = url
+  else playError.value = '録画を取得できませんでした'
 }
 
 function closePlayer() {
+  playSeq += 1
+  if (playingSrc.value.startsWith('blob:')) URL.revokeObjectURL(playingSrc.value)
+  playingSrc.value = ''
+  playError.value = ''
   playing.value = null
 }
 
@@ -98,6 +125,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+  closePlayer()
 })
 </script>
 
@@ -113,7 +141,7 @@ onUnmounted(() => {
         </select>
       </label>
       <button
-        v-if="!props.readonly"
+        v-if="!props.seat"
         class="px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
         :disabled="!cameraId || running"
         data-testid="cam-clips-events-run"
@@ -188,8 +216,11 @@ onUnmounted(() => {
             閉じる
           </button>
         </div>
+        <p v-if="playError" class="text-sm text-red-600" data-testid="cam-clips-events-play-error">{{ playError }}</p>
+        <p v-else-if="!playingSrc" class="text-sm text-gray-500" data-testid="cam-clips-events-play-loading">録画を読み込んでいます…</p>
         <video
-          :src="clipSrc(playing.key)"
+          v-else
+          :src="playingSrc"
           controls
           autoplay
           preload="metadata"
