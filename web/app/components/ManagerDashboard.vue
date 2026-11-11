@@ -7,7 +7,6 @@ const props = defineProps<{
 }>()
 
 const activeTab = ref<TabKey>((props.initialTab as TabKey) ?? 'tenko')
-const { isAuthenticated } = useAuth()
 const tenkoDashboardSummaryRef = ref<{ refresh: () => void } | null>(null)
 
 const tabs: { key: TabKey, label: string }[] = [
@@ -100,13 +99,8 @@ const tabs: { key: TabKey, label: string }[] = [
 
       <CamLiveGrid v-if="activeTab === 'cam_live'" seat />
 
-      <!-- 録画の一覧・再生は管理者ログインだけに開いている (運行管理者席の鍵ではカメラの一覧しか取れない) -->
-      <template v-if="activeTab === 'cam_clips'">
-        <CamClipEvents v-if="isAuthenticated" readonly />
-        <p v-else class="text-sm text-gray-600" data-testid="manager-cam-clips-login-required">
-          録画を見るには、管理者のアカウントでログインしてください。
-        </p>
-      </template>
+      <!-- 録画は見るだけ (一覧と再生)。管理者ログインの無い席は席の鍵で取る。切り出しは管理者の画面だけ -->
+      <CamClipEvents v-if="activeTab === 'cam_clips'" seat />
 
       <ItTenkoGuide v-if="activeTab === 'it_guide'" />
     </div>

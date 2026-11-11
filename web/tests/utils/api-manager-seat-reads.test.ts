@@ -11,11 +11,12 @@ import {
   getMeasurement, getTenkoDashboard, listBaselines, listFailures, listTimecardCards, listTimePunches,
   listDevices, listPendingDeviceRegistrations, getCarryingItems, getVehicleCategories,
   getDtakoDrivers, getDtakoDailyHours,
-  fetchFacePhoto, fetchMeasurementVideo,
+  fetchFacePhoto, fetchMeasurementVideo, listCamClipsEvents, fetchCamClip,
   downloadTenkoRecordsCsv, downloadFailuresCsv, downloadTimePunchesCsv,
 } from '~/utils/api'
 import { noteDeviceToken, type DeviceTokenKind } from '~/utils/token-selection'
 import { browserJwt, devDeviceJwt, plainDeviceJwt } from '../helpers/dummy-jwt'
+import { UPLOAD_FETCH_TIMEOUT_MS } from '~/utils/fetch-timeout'
 
 const API_BASE = 'https://api.example.test'
 const ADMIN_JWT = browserJwt()
@@ -344,5 +345,54 @@ describe('CSV ダウンロード — scope', () => {
     await downloadTimePunchesCsv({})
 
     expect(sent().url).toBe(`${API_BASE}/api/timecard/punches/csv`)
+  })
+})
+
+describe('拠点カメラの録画 (運行管理者の画面。ippoan/alc-app#674 の続き)', () => {
+  const CLIP_KEY = 'clips/t/c/20261023T125800_20261023T125930.mp4'
+
+  it("★ 管理者ログインの無い席: 一覧 ('manager-device') と再生は席の鍵で送る", async () => {
+    managerGetter.mockResolvedValue(PLAIN_MANAGER_JWT)
+    initSeatOnly()
+
+    await listCamClipsEvents('c1', '2026-10-23', 'manager-device')
+    expect(await fetchCamClip(CLIP_KEY)).toBe('blob:test/x')
+
+    expect(kioskGetter).not.toHaveBeenCalled()
+    expect(sent(0)).toEqual({
+      url: '/api/proxy/cam-clips/events?camera_id=c1&date=2026-10-23',
+      bearer: `Bearer ${PLAIN_MANAGER_JWT}`,
+    })
+    expect(sent(1)).toEqual({ url: `/api/proxy/cam-clips/${CLIP_KEY}`, bearer: `Bearer ${PLAIN_MANAGER_JWT}` })
+  })
+
+  it('再生は取り切るまで待つので上限は UPLOAD と同じ', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    managerGetter.mockResolvedValue(PLAIN_MANAGER_JWT)
+    initSeatOnly()
+
+    await fetchCamClip(CLIP_KEY)
+
+    expect(timeout).toHaveBeenCalledWith(UPLOAD_FETCH_TIMEOUT_MS)
+  })
+
+  it('管理者ログインがある PC は、席の口でも admin JWT で送る', async () => {
+    initWithAdmin()
+
+    await listCamClipsEvents('c1', '2026-10-23', 'manager-device')
+    await fetchCamClip(CLIP_KEY)
+
+    expect(managerGetter).not.toHaveBeenCalled()
+    expect(sent(0).bearer).toBe(`Bearer ${ADMIN_JWT}`)
+    expect(sent(1).bearer).toBe(`Bearer ${ADMIN_JWT}`)
+  })
+
+  it('★ 席の鍵が取れない → 再生は null (キオスクの鍵にも無認証にも落とさない)', async () => {
+    managerGetter.mockResolvedValue(null)
+    initSeatOnly()
+
+    expect(await fetchCamClip(CLIP_KEY)).toBeNull()
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

@@ -11,7 +11,9 @@ import { FETCH_TIMEOUT_MESSAGE_WRITE } from '~/utils/fetch-timeout'
 
 const api = vi.hoisted(() => ({
   listCamClipsCameras: vi.fn(),
+  listCamClipsCamerasForTenko: vi.fn(),
   listCamClipsEvents: vi.fn(),
+  fetchCamClip: vi.fn(),
   runCamClipsAuto: vi.fn(),
   listDeviceLabels: vi.fn(),
   listCamHostKeys: vi.fn(),
@@ -37,8 +39,9 @@ const EVENTS: CamClipsEvent[] = [
 ]
 const t = (id: string) => `[data-testid="cam-clips-events-${id}"]`
 
-async function mountIt(cameras = [cam('c1', '正門')], props: { readonly?: boolean } = {}) {
+async function mountIt(cameras = [cam('c1', '正門')], props: { seat?: boolean } = {}) {
   api.listCamClipsCameras.mockResolvedValue({ can_edit_destination: false, cameras })
+  api.listCamClipsCamerasForTenko.mockResolvedValue({ cameras: cameras.map(({ id, name, device_ids }) => ({ id, name, device_ids })) })
   const w = await mountSuspended(CamClipEvents, { props })
   await flushPromises()
   return w
@@ -53,25 +56,98 @@ beforeEach(() => {
 })
 
 describe('CamClipEvents', () => {
-  it('readonly (運行管理者の画面) では「今すぐ切り出す」を出さず、一覧と再生はそのまま', async () => {
-    const w = await mountIt([cam('c1', '正門')], { readonly: true })
-    expect(w.find(t('run')).exists()).toBe(false)
-    expect(w.findAll(t('row'))).toHaveLength(EVENTS.length)
-    expect(w.findAll(t('play')).length).toBeGreaterThan(0)
+  describe('seat (運行管理者の画面。管理者ログインの無い席は席の鍵)', () => {
+    const created: string[] = []
+    const revoked: string[] = []
+    beforeEach(() => {
+      created.length = 0
+      revoked.length = 0
+      let n = 0
+      api.fetchCamClip.mockImplementation(async () => {
+        const url = `blob:clip-${++n}`
+        created.push(url)
+        return url
+      })
+      vi.spyOn(URL, 'revokeObjectURL').mockImplementation((u: string) => { revoked.push(u) })
+    })
+
+    it('「今すぐ切り出す」を出さず、カメラとイベントは運行管理者席の口で取る', async () => {
+      const w = await mountIt([cam('c1', '正門')], { seat: true })
+      expect(w.find(t('run')).exists()).toBe(false)
+      expect(api.listCamClipsCameras).not.toHaveBeenCalled()
+      expect(api.listCamClipsCamerasForTenko).toHaveBeenCalled()
+      expect(api.listCamClipsEvents).toHaveBeenCalledWith('c1', jstTodayDate(), 'manager-device')
+      expect(w.findAll(t('row'))).toHaveLength(EVENTS.length)
+    })
+
+    it('再生は 1 本を取り切ってから blob の URL で出し、閉じると URL を捨てる', async () => {
+      let resolve!: (u: string) => void
+      api.fetchCamClip.mockImplementationOnce(() => new Promise<string>((r) => { resolve = r }))
+      const w = await mountIt([cam('c1', '正門')], { seat: true })
+      await w.findAll(t('play'))[0]!.trigger('click')
+      expect(api.fetchCamClip).toHaveBeenCalledWith('clips/t/c/b.mp4')
+      expect(w.find(t('play-loading')).text()).toBe('録画を読み込んでいます…')
+      expect(w.find(t('video')).exists()).toBe(false)
+      resolve('blob:first')
+      await flushPromises()
+      expect(w.find(t('play-loading')).exists()).toBe(false)
+      expect(w.find(t('video')).attributes('src')).toBe('blob:first')
+      await w.find(t('modal-close')).trigger('click')
+      expect(revoked).toEqual(['blob:first'])
+      expect(w.find(t('modal')).exists()).toBe(false)
+    })
+
+    it('取り終える前に閉じた・別の行を押したら、遅れて届いた URL は使わずに捨てる', async () => {
+      const pending: Array<(u: string) => void> = []
+      api.fetchCamClip.mockImplementation(() => new Promise<string>((r) => { pending.push(r) }))
+      const w = await mountIt([cam('c1', '正門')], { seat: true })
+      const plays = w.findAll(t('play'))
+      await plays[0]!.trigger('click')
+      await plays[1]!.trigger('click')
+      pending[1]!('blob:second')
+      await flushPromises()
+      pending[0]!('blob:stale')
+      await flushPromises()
+      expect(w.find(t('video')).attributes('src')).toBe('blob:second')
+      expect(revoked).toEqual(['blob:stale'])
+      w.unmount()
+      expect(revoked).toEqual(['blob:stale', 'blob:second'])
+    })
+
+    it('閉じた後に取れなかった (null) ときは何もしない', async () => {
+      let resolve!: (u: string | null) => void
+      api.fetchCamClip.mockImplementationOnce(() => new Promise<string | null>((r) => { resolve = r }))
+      const w = await mountIt([cam('c1', '正門')], { seat: true })
+      await w.findAll(t('play'))[0]!.trigger('click')
+      await w.find(t('modal-close')).trigger('click')
+      resolve(null)
+      await flushPromises()
+      expect(w.find(t('modal')).exists()).toBe(false)
+      expect(revoked).toEqual([])
+    })
+
+    it('取れなければモーダルに理由を出す', async () => {
+      api.fetchCamClip.mockResolvedValueOnce(null)
+      const w = await mountIt([cam('c1', '正門')], { seat: true })
+      await w.findAll(t('play'))[0]!.trigger('click')
+      await flushPromises()
+      expect(w.find(t('play-error')).text()).toBe('録画を取得できませんでした')
+      expect(w.find(t('video')).exists()).toBe(false)
+    })
   })
 
   it('カメラが 1 台なら最初から選び、今日の日付で取得する', async () => {
     const w = await mountIt()
     expect((w.find(t('camera')).element as HTMLSelectElement).value).toBe('c1')
     expect((w.find(t('date')).element as HTMLInputElement).value).toBe(jstTodayDate())
-    expect(api.listCamClipsEvents).toHaveBeenCalledWith('c1', jstTodayDate())
+    expect(api.listCamClipsEvents).toHaveBeenCalledWith('c1', jstTodayDate(), 'admin')
   })
   it('カメラが複数なら選ぶまで取得しない', async () => {
     const w = await mountIt([cam('c1', '正門'), cam('c2', '裏門')])
     expect(api.listCamClipsEvents).not.toHaveBeenCalled()
     await w.find(t('camera')).setValue('c2')
     await flushPromises()
-    expect(api.listCamClipsEvents).toHaveBeenCalledWith('c2', jstTodayDate())
+    expect(api.listCamClipsEvents).toHaveBeenCalledWith('c2', jstTodayDate(), 'admin')
   })
   it('時刻・種類・端末・切り出しの 3 状態を出す', async () => {
     const w = await mountIt()
@@ -156,7 +232,7 @@ describe('CamClipEvents', () => {
     await w.findAll(t('play'))[0]!.trigger('click')
     await w.find(t('date')).setValue('2026-10-22')
     await flushPromises()
-    expect(api.listCamClipsEvents).toHaveBeenLastCalledWith('c1', '2026-10-22')
+    expect(api.listCamClipsEvents).toHaveBeenLastCalledWith('c1', '2026-10-22', 'admin')
     expect(w.find(t('video')).exists()).toBe(false)
   })
   it('日付を空にしたら取得しない', async () => {
@@ -205,7 +281,7 @@ describe('CamClipEvents', () => {
       await flushPromises()
       expect(api.runCamClipsAuto).toHaveBeenCalledWith('c1')
       expect(w.find(t('run-result')).text()).toBe('切り出し 2 本 / 失敗 0 / 次回へ 1')
-      expect(api.listCamClipsEvents).toHaveBeenCalledWith('c1', jstTodayDate())
+      expect(api.listCamClipsEvents).toHaveBeenCalledWith('c1', jstTodayDate(), 'admin')
     })
     it('実行中は押せない', async () => {
       let done!: (v: unknown) => void

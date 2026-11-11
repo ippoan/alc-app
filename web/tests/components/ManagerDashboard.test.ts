@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { computed } from 'vue'
-import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { mountSuspended } from '@nuxt/test-utils/runtime'
 import ManagerDashboard from '~/components/ManagerDashboard.vue'
 import { noteDeviceToken } from '~/utils/token-selection'
 import { devDeviceJwt } from '../helpers/dummy-jwt'
@@ -19,13 +18,6 @@ vi.mock('~/utils/api', () => ({
   interruptTenkoSession: vi.fn(),
   resumeTenkoSession: vi.fn(),
   cancelTenkoSession: vi.fn(),
-}))
-
-// 拠点カメラの録画タブは管理者ログインの有無で中身を変える。ほかは本物の useAuth のまま
-const loggedIn = vi.hoisted(() => ({ v: false }))
-mockNuxtImport<typeof useAuth>('useAuth', original => () => ({
-  ...original(),
-  isAuthenticated: computed(() => loggedIn.v),
 }))
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -168,16 +160,13 @@ describe('ManagerDashboard — IT点呼 の手順タブ (常に最後)', () => {
 describe('ManagerDashboard — 拠点カメラのタブ (管理者の画面と同じ 2 つ)', () => {
   const stubs = {
     CamLiveGrid: { name: 'CamLiveGrid', props: { seat: Boolean }, template: '<div data-testid="grid" :data-seat="String(seat)" />' },
-    CamClipEvents: { name: 'CamClipEvents', props: { readonly: Boolean }, template: '<div data-testid="events" :data-readonly="String(readonly)" />' },
+    CamClipEvents: { name: 'CamClipEvents', props: { seat: Boolean }, template: '<div data-testid="events" :data-seat="String(seat)" />' },
   }
   const clickTab = async (wrapper: Awaited<ReturnType<typeof mountSuspended>>, label: string) => {
     await wrapper.findAll('div.bg-blue-100 > button').find(b => b.text() === label)!.trigger('click')
   }
 
-  beforeEach(() => {
-    vi.clearAllMocks()
-    loggedIn.v = false
-  })
+  beforeEach(() => vi.clearAllMocks())
 
   it('「カメラ一覧」は運行管理者席の口で全カメラを映す', async () => {
     const wrapper = await mountSuspended(ManagerDashboard, { global: { stubs } })
@@ -186,17 +175,10 @@ describe('ManagerDashboard — 拠点カメラのタブ (管理者の画面と�
     wrapper.unmount()
   })
 
-  it('「拠点カメラの録画」は管理者ログインが無ければ案内だけ、あれば見るだけの一覧', async () => {
+  it('「拠点カメラの録画」は管理者ログインが無くても運行管理者席の口で見るだけの一覧を出す', async () => {
     const wrapper = await mountSuspended(ManagerDashboard, { global: { stubs } })
     await clickTab(wrapper, '拠点カメラの録画')
-    expect(wrapper.find('[data-testid="events"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="manager-cam-clips-login-required"]').text()).toBe('録画を見るには、管理者のアカウントでログインしてください。')
+    expect(wrapper.find('[data-testid="events"]').attributes('data-seat')).toBe('true')
     wrapper.unmount()
-
-    loggedIn.v = true
-    const admin = await mountSuspended(ManagerDashboard, { props: { initialTab: 'cam_clips' }, global: { stubs } })
-    expect(admin.find('[data-testid="events"]').attributes('data-readonly')).toBe('true')
-    expect(admin.find('[data-testid="manager-cam-clips-login-required"]').exists()).toBe(false)
-    admin.unmount()
   })
 })
