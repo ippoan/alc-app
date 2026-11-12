@@ -46,6 +46,7 @@
 import { bleDiagJson, isBleDiagEvent } from '~/utils/ble-diag'
 import { recordVeinLine } from '~/utils/vein-line-log'
 import { VEIN_IDENTIFY_KEEP_UNSUPPORTED } from '~/utils/vein-module'
+import type { KeepLateResult, KeepResult, LateRecord } from '~/utils/vein-module'
 import type { SerialClaimant } from '~/composables/useSerialArbiter'
 import { OTA_LOCKED_MESSAGE } from '~/composables/useCoreS3Serial'
 import { TIMECARD_DEVICE_KIND, writeLine } from '~/composables/useSerialArbiter'
@@ -79,6 +80,21 @@ const IDENTIFY_TIMEOUT_MS = 55_000
 
 /** `VEIN IDENTIFY KEEP ALL` を知らないファームだった (このページの間は `KEEP` だけにする) */
 let keepAllUnsupported = false
+
+/** `VEIN IDENTIFY KEEP LATE` を知らないファームだった (このページの間は `KEEP ALL` に戻す) */
+let keepLateUnsupported = false
+
+/**
+ * `VEIN IDENTIFY KEEP LATE` の結果の行の後に来る撮影 (`VEIN RECORD 1 …` → `VEIN KEEP DONE` / `VEIN KEEP SKIP <理由>`) が
+ * 来なかったときに、記録を諦めるまでの時間
+ */
+const KEEP_LATE_RECORD_TIMEOUT_MS = 20_000
+
+/**
+ * `VEIN IDENTIFY KEEP LATE` の撮影を待っている受け口。照合の結果の行で arbiter の枠は空くが、撮影の行は後から来るので、
+ * 終端 (`VEIN KEEP DONE` / `VEIN KEEP SKIP`) まで {@link rawLineTap} とは別にここで拾う
+ */
+const lateRecordTaps = new Set<(line: string) => void>()
 
 /** モジュールの照合結果。`SCORE=`・`TH=`・`VIA=`・`THS=` は新しいファームだけが付ける (無ければ null) */
 export interface VeinMatchResult {
@@ -373,6 +389,7 @@ export function useVeinSerial() {
       if (line.startsWith('EVT NFC_ALIVE')) nfcAliveAt.value = Date.now()
       else if (line.startsWith('EVT NFC_INIT_NG')) nfcInitNgAt.value = Date.now()
       rawLineTap?.(line)
+      for (const tap of [...lateRecordTaps]) tap(line)
       tapTiming(line)
       tapDiag(line)
       lineDispatch.dispatchLine(line)
@@ -708,10 +725,13 @@ export function useVeinSerial() {
     const id = identifiedId(line)
     // 記録が壊れていても照合の結果は使う (入れ替えだけ見送る)。KEEP ALL は外れても記録を出す (影の照合用)
     const record = broken || !Number.isInteger(total) || total < 0 ? null : assembleRecordOrNull(chunks, total)
+    return { id, record, ...keepFields() }
+  }
+
+  /** 直前の照合の点数・閾値・層 ({@link lastMatch}) とファームの版。無い項目は null */
+  function keepFields(): Required<Omit<KeepResult, 'id' | 'record'>> {
     const m = lastMatch.value
     return {
-      id,
-      record,
       score: m?.score ?? null,
       thresholds: m?.thresholds ?? null,
       via: m?.via ?? null,
@@ -721,6 +741,93 @@ export function useVeinSerial() {
       fvScore: m?.fvScore ?? null,
       firmware: deviceInfo.value?.ver ?? null,
     }
+  }
+
+  /**
+   * 照合してから、乗ったままの指を撮る (`VEIN IDENTIFY KEEP LATE`、ファームは ippoan/alc-app-s3#368)。`KEEP ALL` は撮ってから
+   * 照合するので結果が遅い (撮影のぶん 1〜2 秒)。こちらは `VEIN IDENTIFIED` / `VEIN NOMATCH` の行ですぐ結果を返し、撮った記録は
+   * `late` で後から渡す: 当たりの後に `VEIN RECORD 1 …` → `VEIN KEEP DONE`、撮れなければ `VEIN KEEP SKIP <理由>`。
+   * 記録が無い回の `late` は `{ record: null, reason }` (`NOMATCH` / `SKIP` の理由 / 壊れた記録は `BROKEN` /
+   * {@link KEEP_LATE_RECORD_TIMEOUT_MS} 待っても終端が来なければ `TIMEOUT`)。`late` は投げない。
+   * `LATE` を知らないファーム (`ERR VEIN: IDENTIFY は引数なしか KEEP …`) は、このページの間 {@link identifyKeep} に戻す
+   */
+  async function identifyKeepLate(onAgain?: () => void): Promise<KeepLateResult> {
+    if (keepLateUnsupported) return withLateRecord(await identifyKeep(onAgain))
+    const prefix = 'VEIN RECORD 1 '
+    const endPrefix = `${prefix}END `
+    const chunks: Array<{ offset: number; bytes: Uint8Array }> = []
+    let total = -1
+    let broken = false
+    /** 結果の行 (`VEIN IDENTIFIED`) を見るまでは撮影の行を拾わない (前の命令の行を混ぜない) */
+    let collecting = false
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let resolveLate!: (r: LateRecord) => void
+    const late = new Promise<LateRecord>((resolve) => { resolveLate = resolve })
+    const settle = (r: LateRecord): void => {
+      if (settled) return
+      settled = true
+      lateRecordTaps.delete(tap)
+      clearTimeout(timer)
+      resolveLate(r)
+    }
+    const tap = (line: string): void => {
+      if (!collecting) {
+        collecting = line.includes('VEIN IDENTIFIED ')
+        return
+      }
+      // 行は途中に連結されて届くことがあるので、行の中から探す (identifyKeep と同じ)
+      if (line.includes('VEIN KEEP DONE')) {
+        const record = broken || !Number.isInteger(total) || total < 0 ? null : assembleRecordOrNull(chunks, total)
+        settle(record ? { record, reason: null } : { record: null, reason: 'BROKEN' })
+        return
+      }
+      const skipAt = line.indexOf('VEIN KEEP SKIP')
+      if (skipAt >= 0) {
+        settle({ record: null, reason: line.slice(skipAt + 'VEIN KEEP SKIP'.length).trim() || '-' })
+        return
+      }
+      const at = line.indexOf(prefix)
+      if (at < 0) return
+      if (line.includes(endPrefix)) {
+        total = Number(line.slice(line.indexOf(endPrefix) + endPrefix.length).trim())
+        return
+      }
+      const [offset, hex] = line.slice(at + prefix.length).split(' ')
+      const bytes = hexToBytes(hex ?? '')
+      if (!/^\d+$/.test(offset!) || !bytes) broken = true
+      else chunks.push({ offset: Number(offset), bytes })
+    }
+    // 結果の行と撮影の行が同じ塊で届いても取りこぼさないよう、送る前に受け口を置く
+    lateRecordTaps.add(tap)
+    const offAgain = watchAgain(onAgain)
+    let line: string | null = null
+    try {
+      line = await veinRequest('VEIN IDENTIFY KEEP LATE', ['VEIN IDENTIFIED ', 'VEIN NOMATCH'], IDENTIFY_TIMEOUT_MS)
+    }
+    catch (e) {
+      settle({ record: null, reason: 'FAILED' })
+      const message = (e as Error).message
+      if (!message.includes('IDENTIFY は引数なしか KEEP') && !message.includes('IDENTIFY に引数は要りません')) return failMatch(e)
+    }
+    finally {
+      offAgain()
+    }
+    if (line === null) {
+      // LATE を知らないファーム: このページの間は KEEP ALL に戻す (撮ってから照合する今までの順)
+      keepLateUnsupported = true
+      console.info('[vein] ファームが KEEP LATE を受け付けないので、KEEP ALL で照合します')
+      return withLateRecord(await identifyKeep(onAgain))
+    }
+    if (line.startsWith('VEIN NOMATCH')) settle({ record: null, reason: 'NOMATCH' })
+    else timer = setTimeout(() => settle({ record: null, reason: 'TIMEOUT' }), KEEP_LATE_RECORD_TIMEOUT_MS)
+    const id = identifiedId(line)
+    return { id, ...keepFields(), late }
+  }
+
+  /** {@link identifyKeep} の結果を {@link identifyKeepLate} の形に (記録は手元に在るのですぐ渡す) */
+  function withLateRecord({ record, ...rest }: Awaited<ReturnType<typeof identifyKeep>>): KeepLateResult {
+    return { ...rest, late: Promise.resolve(record ? { record, reason: null } : { record: null, reason: 'NO_RECORD' }) }
   }
 
   /** {@link assembleRecord} の、壊れていれば null を返す版 */
@@ -891,6 +998,7 @@ export function useVeinSerial() {
     enroll,
     identify,
     identifyKeep,
+    identifyKeepLate,
     verify,
     lastMatch: readonly(lastMatch),
     syncWrite,

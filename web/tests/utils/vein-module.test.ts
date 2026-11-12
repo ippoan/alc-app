@@ -27,6 +27,10 @@ const db = vi.hoisted(() => ({
 }))
 vi.mock('~/utils/vein-db', () => db)
 
+// 開発用の端末の印 (キオスク・運行管理者席)。既定は本番の端末
+const devMarks = vi.hoisted(() => ({ kiosk: false, 'manager-device': false } as Record<string, boolean>))
+vi.mock('~/utils/token-selection', () => ({ isDevDevice: (kind: string) => devMarks[kind] === true }))
+
 let mod: typeof import('~/utils/vein-module')
 
 const EMP = { id: 'emp-1', name: '試験 一郎' } as ApiEmployee
@@ -44,6 +48,8 @@ function port(connected = true) {
 }
 
 beforeEach(async () => {
+  devMarks.kiosk = false
+  devMarks['manager-device'] = false
   localStorage.clear()
   vi.clearAllMocks()
   vi.resetModules()
@@ -873,6 +879,108 @@ describe('認証ログ (POST /api/vein/auth-shots)', () => {
     expect(await mod.matchVeinModuleEmployee(keep(12), 'emp-1')).toEqual({ id: 12, record: SHOT })
     await vi.waitFor(async () => expect((await lines()).some(l => l === 'PC VEIN AUTHLOG FAILED API エラー (500)')).toBe(true))
     expect((await lines()).join('\n')).not.toContain(btoa(String.fromCharCode(...SHOT)))
+  })
+})
+
+describe('開発用の端末の 1:N は照合の後に撮る (VEIN IDENTIFY KEEP LATE)', () => {
+  const SHOT = new Uint8Array([0xDE, 0xED, 9])
+
+  function latePort(id: number | null, late: Promise<unknown> = Promise.resolve({ record: SHOT, reason: null })) {
+    return {
+      identify: vi.fn(async () => null as number | null),
+      identifyKeep: vi.fn(async () => ({ id, record: SHOT, score: 71 })),
+      identifyKeepLate: vi.fn(async () => ({ id, score: 71, thresholds: [65, 60, 78], firmware: '1.2.3', late: late as Promise<any> })),
+    }
+  }
+
+  async function lines(): Promise<string[]> {
+    const { snapshotVeinLines } = await import('~/utils/vein-line-log')
+    return snapshotVeinLines().split('\n').map(l => l.replace(/^\S+ /, ''))
+  }
+
+  beforeEach(async () => {
+    await new Promise(r => setTimeout(r, 10))
+    mod.resetVeinAuthLogEnabled()
+    api.getVeinAuthLogEnabled.mockReset().mockResolvedValue({ enabled: true })
+    api.postVeinAuthShot.mockReset().mockResolvedValue(undefined)
+    db.loadVeinModuleEntries.mockResolvedValue([entry('emp-9', 13)])
+  })
+
+  it('★ 開発用のキオスク: KEEP LATE で照合し、結果は記録を待たずに返す。記録が届いてから認証ログを送る', async () => {
+    devMarks.kiosk = true
+    let deliver!: (r: unknown) => void
+    const port = latePort(13, new Promise((r) => { deliver = r }))
+    expect(await mod.identifyVeinModuleAnyone(port, undefined, () => {}, 'manager-device')).toBe(13)
+    expect(port.identifyKeepLate).toHaveBeenCalledTimes(1)
+    expect(port.identifyKeep).not.toHaveBeenCalled()
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+    deliver({ record: SHOT, reason: null })
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(1))
+    const [body, scope] = api.postVeinAuthShot.mock.calls[0]!
+    expect(body).toMatchObject({ employee_id: 'emp-9', shot: SHOT, module: { result: 'IDENTIFIED', slot: 13, hit: 'self', score: 71, thresholds: [65, 60, 78] }, firmware: '1.2.3' })
+    expect(scope).toBe('manager-device')
+  })
+
+  it('★ 開発用の運行管理者席でも KEEP LATE。撮れなかった (SKIP) ら送らず、診断ログに AUTHLOG SKIP <理由> を 1 行', async () => {
+    devMarks['manager-device'] = true
+    const port = latePort(13, Promise.resolve({ record: null, reason: 'NO_FINGER' }))
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(13)
+    await vi.waitFor(async () => expect((await lines()).filter(l => l === 'PC VEIN AUTHLOG SKIP NO_FINGER')).toHaveLength(1))
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+  })
+
+  it('★ 開発用でも不一致は 1 回やり直して null・送らない', async () => {
+    devMarks.kiosk = true
+    const port = latePort(null, Promise.resolve({ record: null, reason: 'NOMATCH' }))
+    expect(await mod.identifyVeinModuleAnyone(port)).toBeNull()
+    expect(port.identifyKeepLate).toHaveBeenCalledTimes(2)
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.postVeinAuthShot).not.toHaveBeenCalled()
+  })
+
+  it('★ 開発用の端末でない画面は今までどおり KEEP ALL (identifyKeep)', async () => {
+    const port = latePort(13)
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(13)
+    expect(port.identifyKeepLate).not.toHaveBeenCalled()
+    expect(port.identifyKeep).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(api.postVeinAuthShot).toHaveBeenCalledTimes(1))
+  })
+
+  it('開発用でも、認証ログを送らないテナントは普通の照合 (撮らない)', async () => {
+    devMarks.kiosk = true
+    api.getVeinAuthLogEnabled.mockResolvedValue({ enabled: false })
+    const port = latePort(13)
+    port.identify.mockResolvedValue(13)
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(13)
+    expect(port.identifyKeepLate).not.toHaveBeenCalled()
+  })
+
+  it('開発用でも、口が KEEP LATE を持たなければ KEEP ALL', async () => {
+    devMarks.kiosk = true
+    const { identifyKeepLate: _, ...port } = latePort(13)
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(13)
+    expect(port.identifyKeep).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ KEEP を知らない古いファームは普通の照合に戻し (KEEP UNSUPPORTED)、記録が無いので AUTHLOG SKIP NO_RECORD', async () => {
+    devMarks.kiosk = true
+    const port = latePort(13)
+    port.identifyKeepLate.mockRejectedValue(new Error(mod.VEIN_IDENTIFY_KEEP_UNSUPPORTED))
+    port.identify.mockResolvedValue(13)
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(13)
+    expect(await mod.identifyVeinModuleAnyone(port)).toBe(13)
+    expect(port.identifyKeepLate).toHaveBeenCalledTimes(1)
+    expect(port.identify).toHaveBeenCalledTimes(2)
+    await vi.waitFor(async () => expect((await lines()).filter(l => l === 'PC VEIN AUTHLOG SKIP NO_RECORD')).toHaveLength(2))
+    expect((await lines())).toContain('PC VEIN KEEP UNSUPPORTED')
+  })
+
+  it('ほかの照合の失敗はそのまま投げる', async () => {
+    devMarks.kiosk = true
+    const port = latePort(13)
+    port.identifyKeepLate.mockRejectedValue(new Error('NO_FINGER'))
+    await expect(mod.identifyVeinModuleAnyone(port)).rejects.toThrow('NO_FINGER')
   })
 })
 

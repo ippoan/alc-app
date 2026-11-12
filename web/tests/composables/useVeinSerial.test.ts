@@ -1174,6 +1174,141 @@ describe('useVeinSerial', () => {
     })
   })
 
+  describe('identifyKeepLate (VEIN IDENTIFY KEEP LATE)', () => {
+    const FIELDS = { score: null, thresholds: null, via: null, rule: null, fvSlot: null, fpSlot: null, fvScore: null, firmware: '0.1.0' }
+
+    it('★ 当たり: IDENTIFIED の行ですぐ結果を返し、後から来る RECORD → DONE を late で渡す', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      let again = 0
+      const hit = vein.identifyKeepLate(() => { again += 1 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP LATE\n')
+      // 結果の前の行 (CAPLOG・前の命令の RECORD) は拾わない
+      await reply(dev, 'EVT VEIN AGAIN 11\nVEIN RECORD 1 0 FFFF\nVEIN CAPLOG x\nVEIN IDENTIFIED 12 SCORE=71 TH=60 VIA=FV THS=65,60,78\n')
+      const got = await hit
+      expect(got).toMatchObject({ id: 12, score: 71, thresholds: [65, 60, 78], via: 'FV', firmware: '0.1.0' })
+      expect(again).toBe(1)
+      let settled = false
+      void got.late.then(() => { settled = true })
+      // ほかの ID の行は混ぜない。後ろの塊が先に来ても・前の行に連結されても拾う
+      await reply(dev, 'VEIN RECORD 2 0 FFFF\nVEIN RECORD 1 2 dead\nEVT NFC_READY VEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 4\n')
+      expect(settled).toBe(false)
+      await reply(dev, 'VEIN KEEP DONE\n')
+      await expect(got.late).resolves.toEqual({ record: new Uint8Array([0xDE, 0xED, 0xDE, 0xAD]), reason: null })
+    })
+
+    it('結果の行と撮影の行が同じ塊で届いても拾う', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const hit = vein.identifyKeepLate()
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'VEIN IDENTIFIED 12\nVEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 2\nVEIN KEEP DONE\n')
+      const got = await hit
+      expect(got).toEqual({ id: 12, ...FIELDS, late: expect.any(Promise) })
+      await expect(got.late).resolves.toEqual({ record: new Uint8Array([0xDE, 0xED]), reason: null })
+    })
+
+    it('★ 当たり + SKIP: 照合の結果はそのまま、late は記録なしで理由を渡す', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const hit = vein.identifyKeepLate()
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'VEIN IDENTIFIED 12\n')
+      const got = await hit
+      expect(got.id).toBe(12)
+      await reply(dev, 'VEIN KEEP SKIP NO_FINGER\n')
+      await expect(got.late).resolves.toEqual({ record: null, reason: 'NO_FINGER' })
+    })
+
+    it('SKIP に理由が無ければ -、記録が壊れていたら BROKEN、終端が 20 秒来なければ TIMEOUT', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      for (const [lines, reason] of [
+        ['VEIN KEEP SKIP\n', '-'],
+        ['VEIN RECORD 1 0 DE\nVEIN RECORD 1 END 4\nVEIN KEEP DONE\n', 'BROKEN'],
+        ['VEIN RECORD 1 X DEED\nVEIN RECORD 1 END 2\nVEIN KEEP DONE\n', 'BROKEN'],
+        ['VEIN RECORD 1 0\nVEIN RECORD 1 END 2\nVEIN KEEP DONE\n', 'BROKEN'],
+        ['VEIN RECORD 1 0 DEED\nVEIN KEEP DONE\n', 'BROKEN'],
+      ] as const) {
+        const p = vein.identifyKeepLate()
+        await vi.advanceTimersByTimeAsync(0)
+        await reply(dev, `VEIN IDENTIFIED 12\n${lines}`)
+        await expect((await p).late).resolves.toEqual({ record: null, reason })
+      }
+      const p = vein.identifyKeepLate()
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'VEIN IDENTIFIED 12\n')
+      const got = await p
+      await vi.advanceTimersByTimeAsync(19_999)
+      let settled = false
+      void got.late.then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(got.late).resolves.toEqual({ record: null, reason: 'TIMEOUT' })
+      // 時間切れの後に来た終端は捨てる
+      await reply(dev, 'VEIN KEEP DONE\n')
+    })
+
+    it('★ NOMATCH: null を返し、late は NOMATCH (撮影は来ない)', async () => {
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const miss = vein.identifyKeepLate()
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'VEIN CAPLOG x\nVEIN NOMATCH SCORE=0\n')
+      const got = await miss
+      expect(got).toEqual({ id: null, ...FIELDS, late: expect.any(Promise) })
+      await expect(got.late).resolves.toEqual({ record: null, reason: 'NOMATCH' })
+    })
+
+    it('★ ERR VEIN は照合の失敗として reason のまま投げる', async () => {
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const fail = vein.identifyKeepLate().catch(e => e)
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'ERR VEIN NO_FINGER\n')
+      expect(((await fail) as Error).message).toBe('NO_FINGER')
+    })
+
+    it('★ LATE を知らない古いファームは KEEP ALL に戻し (記録はすぐ late に)、以後は KEEP ALL だけを送る', async () => {
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const first = vein.identifyKeepLate()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP LATE\n')
+      await reply(dev, 'ERR VEIN: IDENTIFY は引数なしか KEEP [ALL] です\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP ALL\n')
+      await reply(dev, 'VEIN RECORD 1 0 DEED\nVEIN RECORD 1 END 2\nVEIN IDENTIFIED 12\n')
+      const got = await first
+      expect(got).toEqual({ id: 12, ...FIELDS, late: expect.any(Promise) })
+      await expect(got.late).resolves.toEqual({ record: new Uint8Array([0xDE, 0xED]), reason: null })
+
+      const second = vein.identifyKeepLate()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP ALL\n')
+      await reply(dev, 'VEIN NOMATCH\n')
+      await expect((await second).late).resolves.toEqual({ record: null, reason: 'NO_RECORD' })
+    })
+
+    it('KEEP を知らないファーム (IDENTIFY に引数は要りません) も KEEP ALL を経て VEIN_IDENTIFY_KEEP_UNSUPPORTED', async () => {
+      const { VEIN_IDENTIFY_KEEP_UNSUPPORTED } = await import('~/utils/vein-module')
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+      const dev = createMockPort()
+      await connectDevice(dev)
+      const old = vein.identifyKeepLate().catch(e => e)
+      await vi.advanceTimersByTimeAsync(0)
+      await reply(dev, 'ERR VEIN: IDENTIFY に引数は要りません\n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dev.writes.at(-1)).toBe('VEIN IDENTIFY KEEP ALL\n')
+      await reply(dev, 'ERR VEIN: IDENTIFY に引数は要りません\n')
+      expect(((await old) as Error).message).toBe(VEIN_IDENTIFY_KEEP_UNSUPPORTED)
+    })
+  })
+
   describe('identify', () => {
     it('VEIN IDENTIFIED <id> は ID、VEIN NOMATCH は null', async () => {
       const dev = createMockPort()
