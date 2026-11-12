@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>一歩庵点呼 遠隔点呼の機能と性能</title>
+<!-- 遠隔点呼の実施の届出 (電子申請 #67「点呼機器・システムのパンフレット等、性能及び機能が確認できる書類」) に添付する
+     製品のパンフレット。scripts/docs-pdf/build.sh が downloads/brochure.pdf にする。
+     書いてよいのは操作マニュアルと tenko-forms の product/ippoan-tenko.json で確かめられることだけ。 -->
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+@page { size: A4 portrait; margin: 0; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans JP', 'Noto Sans CJK JP', sans-serif; color: #1f2933; font-size: 9pt; line-height: 1.55; }
+.page { width: 210mm; height: 297mm; padding: 14mm 15mm 16mm; position: relative; page-break-after: always; overflow: hidden; }
+.page:last-child { page-break-after: auto; }
+.band { position: absolute; left: 0; top: 0; width: 100%; height: 8mm; background: #1e5f74; }
+.eyebrow { color: #1e5f74; font-weight: 700; letter-spacing: .2em; font-size: 8.5pt; margin-top: 3mm; }
+h1 { font-size: 22pt; margin: 1mm 0 0; letter-spacing: .05em; }
+.kana { color: #52606d; font-size: 9pt; letter-spacing: .1em; }
+.lead { margin: 4mm 0 2mm; font-size: 10pt; line-height: 1.75; border-left: 3px solid #1e5f74; padding-left: 4mm; }
+h2 { font-size: 12pt; color: #1e5f74; border-bottom: 1.5px solid #1e5f74; padding-bottom: .8mm; margin: 4mm 0 2mm; }
+table { width: 100%; border-collapse: collapse; }
+table.spec th, table.spec td { border-bottom: 1px solid #d9e2ec; padding: 1.2mm 2mm; vertical-align: top; text-align: left; }
+table.spec th { width: 40mm; color: #52606d; font-weight: 500; }
+table.req th, table.req td { border: 1px solid #d9e2ec; padding: 1mm 1.8mm; vertical-align: top; text-align: left; font-size: 8.2pt; line-height: 1.45; }
+table.req thead th { background: #e6f0f3; color: #1e5f74; font-weight: 700; }
+table.req td.no { width: 11mm; white-space: nowrap; text-align: center; font-weight: 700; color: #1e5f74; }
+table.req td.rq { width: 52mm; color: #3e4c59; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+.card { border: 1px solid #d9e2ec; border-radius: 2mm; padding: 2mm 3.5mm; }
+.card h3 { margin: 0 0 .6mm; font-size: 9.5pt; color: #1e5f74; }
+.card p { margin: 0; font-size: 8.4pt; line-height: 1.5; }
+.photos { display: grid; grid-template-columns: 1fr 1fr 0.8fr; gap: 3mm; }
+figure { margin: 0; }
+figure .crop { width: 100%; border-radius: 1.5mm; border: 1px solid #d9e2ec; overflow: hidden; }
+figure img { display: block; width: 100%; }
+figcaption { font-size: 7.8pt; color: #52606d; margin-top: .8mm; }
+.flow { display: flex; flex-wrap: wrap; gap: 1.2mm; font-size: 8.4pt; margin-top: 1mm; }
+.flow span { background: #e6f0f3; border-radius: 1mm; padding: .5mm 1.8mm; }
+.flow span.mgr { background: #fdf3d8; }
+.flow span.arrow { background: none; padding: .5mm 0; color: #829ab1; }
+.note { font-size: 7.8pt; color: #52606d; margin-top: 1.5mm; }
+.foot { position: absolute; bottom: 9mm; left: 15mm; right: 15mm; border-top: 1px solid #d9e2ec; padding-top: 1.5mm; font-size: 7.8pt; color: #829ab1; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<section class="page">
+  <div class="band"></div>
+  <div class="eyebrow">PRODUCT BROCHURE</div>
+  <h1>一歩庵点呼</h1>
+  <div class="kana">遠隔点呼・自動点呼システム　—　遠隔点呼の機能と性能</div>
+
+  <p class="lead">運転者は営業所の点呼台で、生体認証による本人確認からアルコール測定・健康状態の確認・指示事項の確認までを画面に沿って進めます。
+  運行管理者は離れた営業所の席で、映像と音声で運転者と通話しながら測定結果と運転者の情報を確かめ、判定します。点呼の内容は修正・削除できない点呼記録として残ります。</p>
+
+  <h2>構成機器</h2>
+  <table class="spec">
+    <tr><th>点呼端末</th><td>PC・タブレット (ブラウザで動作)。点呼の画面・映像と音声の通話に使います</td></tr>
+    <tr><th>アルコール検知器</th><td>タニタ FC-1200。点呼端末に接続し、測定値 (mg/L) を自動で取り込みます</td></tr>
+    <tr><th>指静脈認証装置</th><td>Vein Station / Vein Base (一歩庵製、NFC リーダー内蔵)。運転者は点呼の始め、運行管理者は通話の前に照合します</td></tr>
+    <tr><th>体温計・血圧計</th><td>Bluetooth で測定値を自動で取り込みます (血圧計: オムロン HEM-6231T・HCR-1901T2 ほか)</td></tr>
+    <tr><th>監視カメラ</th><td>点呼台の運転者の全身を撮影・録画します。録画は運行管理者の席で見られます</td></tr>
+    <tr><th>運行管理者の席</th><td>PC・カメラ・マイク・指静脈認証装置。着信を知らせる警告デバイスをつなげます</td></tr>
+    <tr><th>サーバ</th><td>一歩庵点呼サーバ (クラウド)。点呼記録・故障記録を保存し、営業所の間で共有します</td></tr>
+  </table>
+
+  <h2>遠隔点呼の流れ</h2>
+  <div class="flow">
+    <span>免許証 (NFC)・社員番号</span><span class="arrow">→</span><span>指静脈で本人確認</span><span class="arrow">→</span><span>体温・血圧</span><span class="arrow">→</span><span>自己申告</span><span class="arrow">→</span><span>日常点検</span><span class="arrow">→</span><span>携行品</span><span class="arrow">→</span><span>アルコール測定</span><span class="arrow">→</span><span>指示事項の確認</span><span class="arrow">→</span><span class="mgr">運行管理者を呼ぶ</span><span class="arrow">→</span><span class="mgr">運行管理者が指静脈で本人確認</span><span class="arrow">→</span><span class="mgr">ビデオ通話で確認</span><span class="arrow">→</span><span class="mgr">OK / NG の判定</span><span class="arrow">→</span><span>点呼記録</span>
+  </div>
+  <p class="note">青: 運転者が点呼台で行う段　黄: 運行管理者の席で行う段。前の段が済まないと次へ進めません。</p>
+
+  <h2>画面と機器</h2>
+  <figure>
+    <div class="crop" style="height:31mm"><img src="../../docs/images/admin-remote-tenko-call.png" alt="" style="margin-top:-17.2%"></div>
+    <figcaption>運行管理者の通話画面 (下側)。アルコール・体温・血圧・自己申告・安全判定・日常点検を見ながら OK / NG を判定します</figcaption>
+  </figure>
+  <div class="photos" style="margin-top:2mm">
+    <figure>
+      <div class="crop" style="height:46mm"><img src="../../docs/images/operator-remote-tenko-calling.png" alt="" style="margin-top:-2%"></div>
+      <figcaption>運転者の点呼端末 (通話の映像と点呼の段)</figcaption>
+    </figure>
+    <figure>
+      <div class="crop" style="height:46mm"><img src="https://raw.githubusercontent.com/ippoan/tenko-forms/main/product/photos/2026-11-07-kiosk.jpg" alt="" style="height:100%;object-fit:cover"></div>
+      <figcaption>点呼台 (点呼端末・アルコール検知器・体温計・指静脈認証装置)</figcaption>
+    </figure>
+    <figure>
+      <div class="crop" style="height:46mm"><img src="https://raw.githubusercontent.com/ippoan/tenko-forms/main/product/photos/2026-11-11-camera.jpg" alt="" style="height:100%;object-fit:cover"></div>
+      <figcaption>監視カメラ (運転者の全身を撮影・録画)</figcaption>
+    </figure>
+  </div>
+
+  <div class="foot"><span>一歩庵点呼　遠隔点呼の機能と性能</span><span>1 / 2</span></div>
+</section>
+
+<section class="page">
+  <div class="band"></div>
+  <div class="eyebrow">FUNCTIONS</div>
+  <h2 style="margin-top:2mm">遠隔点呼の機器・システムの要件と機能</h2>
+  <table class="req">
+    <thead><tr><th>項</th><th>要件 (要旨)</th><th>一歩庵点呼の機能</th></tr></thead>
+    <tr><td class="no">一</td><td class="rq">顔の表情・全身・酒気帯び・疾病等を映像と音声で随時明瞭に確認</td><td>点呼端末と運行管理者の席の間で映像と音声の双方向の通話を行います。点呼台の監視カメラの映像も通話の画面に並べて表示し、運転者の全身を確かめられます</td></tr>
+    <tr><td class="no">二</td><td class="rq">アルコールの測定結果を自動で記録・保存し、直ちに確認</td><td>FC-1200 の測定値と検知の有無を自動で記録し、吹き込み中の運転者の顔を動画で保存します。測定値は通話の画面にそのまま表示されます。検知した場合は点呼を中止し、運行管理者へ通知します</td></tr>
+    <tr><td class="no">三</td><td class="rq">運行管理者・運転者を生体認証で確実に識別</td><td>指静脈で 1 対 1 に照合します。運転者は一致したときだけ点呼を始められ、運行管理者は照合で特定され運行管理者の権限が確かめられたときだけ通話に入れます</td></tr>
+    <tr><td class="no">四</td><td class="rq">健康状態・労働時間・指導監督の記録・携行品・乗務員台帳・過去の点呼記録・車両の整備状況を共有・確認</td><td>通話の画面の「運転者情報」で、イ 健康状態・ロ 労働時間・ハ 指導監督の記録 (直近 10 件)・ニ 携行品・ホ 乗務員台帳・ヘ 過去の点呼記録 (直近 10 件)・ト 直近の日常点検と未解決の機器故障 を開けます</td></tr>
+    <tr><td class="no">五</td><td class="rq">安全な運転ができないおそれを平時と比べて確認</td><td>体温・血圧を運転者ごとの平時の値と許容の幅で比べ、自己申告 (疾病・疲労・睡眠不足) とあわせて安全判定を出し、通話の画面に表示します</td></tr>
+    <tr><td class="no">六</td><td class="rq">日常点検の結果を確認</td><td>運転者が点呼の中で入力した日常点検の結果 (全項目 OK / NG あり) を通話の画面に表示します</td></tr>
+    <tr><td class="no">七</td><td class="rq">運転者に伝える事項を確認</td><td>点呼の予定に登録した指示事項を運転者の画面に表示し、確認した時刻を記録します。通話の中で口頭でも伝えます</td></tr>
+    <tr><td class="no">八</td><td class="rq">点呼の事項を電磁的に記録・共有し、1 年間保存</td><td>運行管理者・運転者の氏名、車両番号、日時、点呼の方法、アルコールの測定値と動画、健康状態の確認結果、日常点検、指示事項、NG の理由と代替措置、点呼を受けた場所などを点呼記録としてサーバに保存し、1 年以上残します</td></tr>
+    <tr><td class="no">九</td><td class="rq">機器の故障の日時と内容を記録し、1 年間保存</td><td>機器・保存・通信の失敗を発生日時・内容・機器名とともに自動で故障記録に残します。運行管理者が手で記録することもできます</td></tr>
+    <tr><td class="no">十</td><td class="rq">記録を修正・消去できない</td><td>点呼記録は作成後の修正・削除をデータベースで拒否します。故障記録は削除できず、対応を記録するたびに変更前の内容を履歴に残します</td></tr>
+    <tr><td class="no">十一</td><td class="rq">記録を CSV で出力</td><td>点呼記録を期間・運転者・種別・状態で絞り込んで CSV で出力できます。故障記録も CSV で出力できます</td></tr>
+  </table>
+
+  <h2>運用を支える機能</h2>
+  <div class="cols">
+    <div class="card"><h3>着信の通知</h3><p>運転者が入力を終えると、運行管理者の席の「点呼受付」に着信が並び、警告デバイスが鳴ります。運行管理者が出るまで呼び続けます。</p></div>
+    <div class="card"><h3>出られないとき・通信が切れたとき</h3><p>運転者は「運行管理者が出ないので点呼をやめる」で中止でき、理由とともに記録されます。通話が切れたときは「再接続」でつなぎ直せます。</p></div>
+    <div class="card"><h3>判定の記録</h3><p>OK / NG の判定、NG の理由と代替措置、判定した運行管理者が点呼記録に残り、運転者の画面に判定が表示されます。</p></div>
+    <div class="card"><h3>自動点呼からの切り替え</h3><p>自動点呼の途中で血圧が測れないときなどは遠隔点呼に切り替わり、運行管理者が通話で確かめます。</p></div>
+  </div>
+
+  <h2>製作・サポート</h2>
+  <table class="spec">
+    <tr><th>製作事業者</th><td>合同会社一歩庵 (福岡県福岡市博多区博多駅前1丁目23番2号 ParkFront博多駅前1丁目5F-B)</td></tr>
+    <tr><th>修理・不具合</th><td>遠隔での診断 (診断ログ・故障記録)、ソフトウェア・ファームウェアの遠隔更新、機器の交換で対応します</td></tr>
+    <tr><th>操作マニュアル</th><td>https://ippoan.github.io/alc-app/ (運行者ガイド・運行管理者ガイド・システム管理者ガイド)</td></tr>
+  </table>
+
+  <div class="foot"><span>一歩庵点呼　遠隔点呼の機能と性能</span><span>2 / 2</span></div>
+</section>
+
+</body>
+</html>
