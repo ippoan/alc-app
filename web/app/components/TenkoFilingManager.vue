@@ -94,6 +94,14 @@ async function save() {
 
 const forms = computed(() => TENKO_FORMS.filter(f => f.kinds.includes(kind.value)))
 
+/** 機器の名称は選択の欄で文字を選べないので、e-Gov の欄へ貼れるようにコピーする (手で打つと版の書き方が揺れる) */
+const deviceNameCopied = ref(false)
+async function copyDeviceName() {
+  await navigator.clipboard.writeText(settings.value.device_name ?? '')
+  deviceNameCopied.value = true
+  setTimeout(() => { deviceNameCopied.value = false }, 2000)
+}
+
 async function download(form: TenkoForm) {
   busyForm.value = form.id
   downloadError.value = ''
@@ -180,9 +188,14 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       <div class="grid gap-3 sm:grid-cols-3">
         <label class="text-sm">
           <span class="text-gray-500">使用する機器の名称</span>
-          <select v-model="settings.device_name" :class="inputClass" data-testid="tenko-filing-device-name">
-            <option v-for="name in deviceNameOptions(settings.device_name, product.deviceName)" :key="name" :value="name">{{ name }}</option>
-          </select>
+          <span class="flex items-center gap-2">
+            <select v-model="settings.device_name" :class="inputClass" data-testid="tenko-filing-device-name">
+              <option v-for="name in deviceNameOptions(settings.device_name, product.deviceName)" :key="name" :value="name">{{ name }}</option>
+            </select>
+            <button type="button" class="shrink-0 text-sm text-blue-600 hover:underline" data-testid="tenko-filing-device-name-copy" @click.prevent="copyDeviceName">
+              {{ deviceNameCopied ? 'コピーしました' : 'コピー' }}
+            </button>
+          </span>
         </label>
         <label class="text-sm">
           <span class="text-gray-500">認定番号 (業務前自動点呼機器)</span>

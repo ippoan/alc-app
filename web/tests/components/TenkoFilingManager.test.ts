@@ -87,6 +87,32 @@ describe('TenkoFilingManager', () => {
     expect(old.findAll('[data-testid="tenko-filing-settings"] input').map(i => (i.element as HTMLInputElement).value)).toContain('前-0')
   })
 
+  it('機器の名称をコピーでき、2 秒で表示が戻る (e-Gov の欄へ貼るため)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      const w = await mountIt(saved({ device_name: null }))
+      const btn = w.find('[data-testid="tenko-filing-device-name-copy"]')
+      expect(btn.text()).toBe('コピー')
+      await btn.trigger('click')
+      await flushPromises()
+      expect(writeText).toHaveBeenCalledWith('一歩庵点呼 v1')
+      expect(btn.text()).toBe('コピーしました')
+      vi.advanceTimersByTime(2000)
+      await flushPromises()
+      expect(btn.text()).toBe('コピー')
+      w.vm.$.setupState.settings.device_name = null
+      await btn.trigger('click')
+      await flushPromises()
+      expect(writeText).toHaveBeenLastCalledWith('')
+    }
+    finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('読めないときは文言を出す (理由の記号は文にする)', async () => {
     const w = await mountIt(new Error('403 {"error":"forbidden"}'))
     expect(w.find('[data-testid="tenko-filing-load-error"]').text()).toBe('システム管理者だけが変更できます')
