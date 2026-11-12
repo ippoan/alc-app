@@ -42,6 +42,14 @@
 			// X-Alc-Proxy-Secret (= 上の INTERNAL_SHARED_SECRET、relay / kyuyo-mcp と同じ entry)。
 			"binding": "SCRAPER_RELAY",
 			"service": "nuxt-dtako-admin-scraper-relay"
+		},
+		{
+			// 点呼の届出の「申請済みの控え」の行に e-Gov での状況を出す (Refs ippoan/alc-app#676):
+			// server route (server/api/egov/*) が e-Gov 本番のトークン取得と API の呼び出しを
+			// egov-check と共通の worker `egov-prod` (ippoan/nuxt-egov workers/egov。公開ドメイン無し) に頼む。
+			// 本番だけ (staging は持たない → route は 503)。
+			"binding": "EGOV",
+			"service": "egov-prod"
 		}
 	],
 	"secrets_store_secrets": [
@@ -49,6 +57,13 @@
 			"binding": "INTERNAL_SHARED_SECRET",
 			"store_id": "bd7bc91a3e5f4111add4acf6cb4b8733",
 			"secret_name": "INTERNAL_SHARED_SECRET"
+		},
+		{
+			// e-Gov 本番のソフトウェア ID (egov-check の本番と同じ entry)。認可 URL を組むのに使う。
+			// client_secret は持たない (worker `egov-prod` が足す)
+			"binding": "EGOV_CLIENT_ID",
+			"store_id": "bd7bc91a3e5f4111add4acf6cb4b8733",
+			"secret_name": "NUXT_PUBLIC_EGOV_CLIENT_ID_PROD"
 		}
 	],
 	"env": {
@@ -109,7 +124,10 @@
 		"NUXT_PUBLIC_SIGNALING_URL": "https://alc-signaling.ippoan.org",
 		// 打刻更新の購読 WS (cf-alc-recorder /watch-timecard、Refs ippoan/alc-app-s3#134)。
 		// recorder は custom domain を持たないので workers.dev をそのまま指す。
-		"NUXT_PUBLIC_RECORDER_URL": "https://alc-recorder.m-tama-ramu.workers.dev"
+		"NUXT_PUBLIC_RECORDER_URL": "https://alc-recorder.m-tama-ramu.workers.dev",
+		// 点呼の届出の「申請済みの控え」で e-Gov の状況を出すか (Refs ippoan/alc-app#676)。
+		// e-Gov 本番のソフトウェア ID に戻り先 https://alc.ippoan.org/api/egov/callback を登録してから "on" にする
+		"NUXT_PUBLIC_EGOV_LOGIN": "off"
 	},
 	"routes": [
 		{

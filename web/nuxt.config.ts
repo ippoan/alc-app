@@ -26,6 +26,8 @@ export default defineNuxtConfig({
       // staging export/import の X-Staging-Key (rust-alc-api#391 opt-in 認証)。空なら送らない
       stagingApiKey: process.env.NUXT_PUBLIC_STAGING_API_KEY || '',
       appVersion: process.env.NUXT_PUBLIC_APP_VERSION || 'dev',
+      // 'on' で点呼の届出の控えの行に e-Gov の状況を出す (戻り先の登録が済んでから。Refs ippoan/alc-app#676)
+      egovLogin: process.env.NUXT_PUBLIC_EGOV_LOGIN || '',
     },
   },
 

@@ -19,6 +19,22 @@ import { FILING_LEAD_DAYS, earliestStartDate, type FilingPartner, type FilingSet
 /** 申請済みの控えのファイル名 (e-Gov は到達番号で名付ける: 16〜18 桁、末尾 1 字だけ英小文字のことがある) */
 export const ARRIVE_FILE = /^(\d{15,17}[0-9a-z])\.zip$/
 
+/** 到達番号の形 (控えの深いリンク `?arrive=` を確かめる) */
+export const ARRIVE_ID = /^\d{15,17}[0-9a-z]$/
+
+/** zip の中のファイル (フォルダは除く)。控えの中身 (申請書・添付) を開くため */
+export interface EgovZipFile {
+  path: string
+  name: string
+  bytes: Uint8Array
+}
+
+export function listEgovZipFiles(bytes: Uint8Array): EgovZipFile[] {
+  return Object.entries(unzipSync(bytes))
+    .filter(([path]) => !path.endsWith('/'))
+    .map(([path, b]) => ({ path, name: path.split('/').pop()!, bytes: b }))
+}
+
 const FILING_BASE = '15596A069500010000_01.xml'
 const FILING_INFO = '15596A069500020000_01.xml'
 const ENTRUST_BASE = '15596A047800010000_01.xml'

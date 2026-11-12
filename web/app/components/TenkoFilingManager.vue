@@ -1,6 +1,12 @@
 <script setup lang="ts">
-import { downloadFilingArchive, getTenkoFilingSettings, listFilingArchives, putTenkoFilingSettings, saveFilingArchive, type FilingArchive } from '~/utils/api'
-import { ARRIVE_FILE, checkEgovFiling, fillSettingsFromFiling, parseEgovZip, type EgovFiling, type EgovFinding } from '~/utils/egov-filing'
+import {
+  downloadFilingArchive, fetchFilingArchive, getEgovApplyStatus, getTenkoFilingSettings, listFilingArchives, logoutEgov,
+  putTenkoFilingSettings, saveFilingArchive, type EgovApplyStatus, type FilingArchive,
+} from '~/utils/api'
+import {
+  ARRIVE_FILE, ARRIVE_ID, checkEgovFiling, fillSettingsFromFiling, listEgovZipFiles, parseEgovZip,
+  type EgovFiling, type EgovFinding,
+} from '~/utils/egov-filing'
 import { jstTodayDate } from '~/utils/jst'
 import {
   BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm,
@@ -13,7 +19,14 @@ import {
  * ダウンロードさせる。提出は人が手で行う (e-Gov アプリ)。ダウンロードは保存前の入力のままでも書き込む。
  * 機器の名称と認定番号の既定は製品の設定 (tenko-forms の product/ippoan-tenko.json) から入れる (版を上げると切り替わる)。
  * 自動点呼機器の認定申請は製作元の手続なので、ここではなく auth.ippoan.org の開発者専用ページで作る。
+ *
+ * 申請済みの控え (Refs #676): 行ごとに e-Gov での状況 (e-Gov にログインしたとき) と egov-check の詳細へのリンクを出す。
+ * `?arrive=<到達番号>` で、その控えの中身 (申請書・添付・照らした結果) を直接開く。egov-check とは統合しない
+ * (あちらは e-Gov の手続一般を見る道具)。e-Gov のトークンは server route の HttpOnly の cookie にだけある。
  */
+
+/** egov-check (ippoan/nuxt-egov) の申請の詳細 */
+const EGOV_CHECK_APPLY = 'https://egov-check.ippoan.org/apply/'
 
 const ERRORS: Record<string, string> = {
   invalid_business_number: '事業者番号は半角数字 12 桁で入力してください',
@@ -185,14 +198,154 @@ async function loadArchives() {
   }
   catch (e) {
     archivesError.value = messageOf(e, '控えの一覧を取得できませんでした')
+    return
+  }
+  await loadEgovStatuses()
+}
+
+/** URL の 1 つのクエリを書き換える (画面の他のクエリは残す。履歴は増やさない) */
+function setQuery(key: string, value: string | null) {
+  const u = new URL(window.location.href)
+  if (value) u.searchParams.set(key, value)
+  else u.searchParams.delete(key)
+  window.history.replaceState(window.history.state, '', `${u.pathname}${u.search}`)
+}
+
+onMounted(async () => {
+  const q = new URLSearchParams(window.location.search)
+  if (q.get('egov') === 'ng') {
+    egovLoginFailed.value = true
+    setQuery('egov', null)
+  }
+  const arrive = q.get('arrive') ?? ''
+  if (arrive) await openArchive(arrive)
+  await loadArchives()
+})
+
+/** e-Gov での状況を出すか (本番のソフトウェア ID に戻り先を登録してから 'on') */
+const egovEnabled = useRuntimeConfig().public.egovLogin === 'on'
+/** 控えの到達番号ごとの e-Gov での状況 (文字は取れなかった理由) */
+const egovStatuses = ref<Record<string, EgovApplyStatus | string>>({})
+const egovLoginNeeded = ref(false)
+const egovLoginFailed = ref(false)
+
+async function loadEgovStatuses() {
+  if (!egovEnabled) return
+  let needLogin = false
+  const entries = await Promise.all(archives.value.map(async (a): Promise<[string, EgovApplyStatus | string | null]> => {
+    try {
+      const st = await getEgovApplyStatus(a.id)
+      if (!st) needLogin = true
+      return [a.id, st]
+    }
+    catch (e) {
+      return [a.id, messageOf(e, 'e-Gov の状況を取得できませんでした')]
+    }
+  }))
+  egovLoginNeeded.value = needLogin
+  egovStatuses.value = Object.fromEntries(entries.filter((x): x is [string, EgovApplyStatus | string] => x[1] !== null))
+}
+
+/** e-Gov のログインの入口 (済んだらいまの画面へ戻る) */
+function egovLoginHref(): string {
+  return `/api/egov/login?return=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`
+}
+
+async function egovLogout() {
+  await logoutEgov()
+  egovStatuses.value = {}
+  egovLoginNeeded.value = true
+}
+
+function egovStatusText(st: EgovApplyStatus): string {
+  return `${st.status} / 通知 ${st.notice_count} 件・公文書 ${st.doc_count} 件`
+}
+
+/** 開いている控えの中身 (`?arrive=`) */
+interface OpenedArchive {
+  arriveId: string
+  loading: boolean
+  /** その到達番号の控えが未保存 */
+  missing: boolean
+  error: string
+  filing: EgovFiling | null
+  files: { path: string, name: string, size: number, url: string }[]
+  saved: string
+}
+const opened = ref<OpenedArchive | null>(null)
+
+function mimeOf(name: string): string {
+  if (/\.pdf$/i.test(name)) return 'application/pdf'
+  if (/\.xml$/i.test(name)) return 'application/xml'
+  return 'application/octet-stream'
+}
+
+function closeArchive() {
+  opened.value?.files.forEach(f => URL.revokeObjectURL(f.url))
+  opened.value = null
+  setQuery('arrive', null)
+}
+
+async function openArchive(arriveId: string) {
+  opened.value?.files.forEach(f => URL.revokeObjectURL(f.url))
+  const base: OpenedArchive = { arriveId, loading: true, missing: false, error: '', filing: null, files: [], saved: '' }
+  opened.value = base
+  setQuery('arrive', arriveId)
+  if (!ARRIVE_ID.test(arriveId)) {
+    opened.value = { ...base, loading: false, error: '到達番号の形ではありません' }
+    return
+  }
+  try {
+    const bytes = await fetchFilingArchive(arriveId)
+    if (!bytes) {
+      opened.value = { ...base, loading: false, missing: true }
+      return
+    }
+    const files = listEgovZipFiles(bytes).map(f => ({
+      path: f.path,
+      name: f.name,
+      size: f.bytes.length,
+      url: URL.createObjectURL(new Blob([f.bytes as BlobPart], { type: mimeOf(f.name) })),
+    }))
+    let filing: EgovFiling | null = null
+    let error = ''
+    try {
+      filing = parseEgovZip(bytes)
+    }
+    catch (e) {
+      error = messageOf(e, '申請データを読めませんでした')
+    }
+    opened.value = { ...base, loading: false, filing, files, error }
+  }
+  catch (e) {
+    opened.value = { ...base, loading: false, error: messageOf(e, '控えを取得できませんでした') }
   }
 }
-onMounted(loadArchives)
+
+/** 開いている控えを、いまの「書き込む値」と規則に照らした結果 */
+const openedFindings = computed(() => opened.value?.filing ? checkEgovFiling(opened.value.filing, settings.value, jstTodayDate()) : [])
+
+/** 未保存の到達番号に、手元の zip を控えとして保存する (ファイル名でなく開いている到達番号で) */
+async function saveMissing(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files![0]!
+  const o = opened.value!
+  input.value = ''
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    await saveFilingArchive(o.arriveId, bytes, file.name, archiveMeta(parseEgovZip(bytes)))
+  }
+  catch (err) {
+    opened.value = { ...o, saved: messageOf(err, '控えを保存できませんでした') }
+    return
+  }
+  await openArchive(o.arriveId)
+  await loadArchives()
+}
 
 /** 申請済みの控えを到達番号で保存する (同じ到達番号は上書き) */
-async function saveArchive(c: EgovCheck) {
-  const f = c.filing!
-  const meta = {
+function archiveMeta(f: EgovFiling): Record<string, unknown> {
+  return {
     procedure: f.procedure,
     procName: f.procName,
     reportKind: f.reportKind,
@@ -201,8 +354,11 @@ async function saveArchive(c: EgovCheck) {
     offices: f.offices.map(o => o.name),
     destinations: f.destinations,
   }
+}
+
+async function saveArchive(c: EgovCheck) {
   try {
-    await saveFilingArchive(c.arriveId, c.bytes, c.file, meta)
+    await saveFilingArchive(c.arriveId, c.bytes, c.file, archiveMeta(c.filing!))
     egovChecks.value = egovChecks.value.map(x => x === c ? { ...x, saved: '控えを保存しました' } : x)
     await loadArchives()
   }
@@ -263,6 +419,56 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         様式の原本は毎週取り直している最新版 (ippoan/tenko-forms) を使います。
       </p>
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-filing-load-error">{{ loadError }}</p>
+    </div>
+
+    <!-- 開いている控えの中身 (?arrive=) -->
+    <div v-if="opened" class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-opened">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="font-semibold text-gray-800">申請済みの控え (到達番号 <span class="font-mono">{{ opened.arriveId }}</span>)</h3>
+        <div class="flex items-center gap-3 text-sm">
+          <a :href="`${EGOV_CHECK_APPLY}${opened.arriveId}`" target="_blank" rel="noopener" class="text-blue-600 hover:underline" data-testid="tenko-filing-opened-egov-check">egov-check で e-Gov の状況を見る</a>
+          <button class="text-gray-600 hover:underline" data-testid="tenko-filing-opened-close" @click="closeArchive">閉じる</button>
+        </div>
+      </div>
+      <p v-if="opened.loading" class="text-sm text-gray-500">読み込み中…</p>
+      <template v-else-if="opened.missing">
+        <p class="text-sm text-amber-700" data-testid="tenko-filing-opened-missing">
+          この到達番号の控えは未保存です。e-Gov アプリのマイページでこの申請の申請データ (zip) を取り出し、ここで選ぶと控えとして保存します。
+        </p>
+        <input type="file" accept=".zip" class="text-sm" data-testid="tenko-filing-opened-save-input" @change="saveMissing">
+        <p v-if="opened.saved" class="text-sm text-red-600" data-testid="tenko-filing-opened-save-error">{{ opened.saved }}</p>
+      </template>
+      <template v-else>
+        <p v-if="opened.error" class="text-sm text-red-600" data-testid="tenko-filing-opened-error">{{ opened.error }}</p>
+        <template v-if="opened.filing">
+          <p v-if="opened.filing.procedure === 'filing'" class="text-sm text-gray-600" data-testid="tenko-filing-opened-summary">
+            {{ opened.filing.reportKind }} / {{ opened.filing.tenkoType }} / 申請日 {{ opened.filing.applyDate || '-' }} / 開始日 {{ opened.filing.startDate || '-' }} / 提出先 {{ opened.filing.destinations.join('、') || '-' }}
+          </p>
+          <p v-else-if="opened.filing.entrust" class="text-sm text-gray-600" data-testid="tenko-filing-opened-summary">
+            受委託の許可申請 / 委託者 {{ opened.filing.entrust.consignor.name || '-' }} → 受託者 {{ opened.filing.entrust.consignee.name || '-' }} / 期間 {{ opened.filing.entrust.startDate || '-' }} 〜 {{ opened.filing.entrust.endDate || '-' }}
+          </p>
+          <p v-else class="text-sm text-gray-600" data-testid="tenko-filing-opened-summary">{{ opened.filing.procName || opened.filing.procId || '手続名なし' }}</p>
+          <ul v-if="openedFindings.length" class="space-y-0.5 text-sm" data-testid="tenko-filing-opened-findings">
+            <li v-for="(x, i) in openedFindings" :key="i" :class="x.level === 'error' ? 'text-red-600' : 'text-amber-700'">
+              {{ x.level === 'error' ? '要修正' : '確認' }}: {{ x.message }}
+            </li>
+          </ul>
+          <p v-else class="text-sm text-green-700">いまの「書き込む値」と規則に照らして、食い違いは見つかりませんでした</p>
+        </template>
+        <div class="text-sm">
+          <div class="text-gray-500">中のファイル (申請書・添付)</div>
+          <ul class="divide-y" data-testid="tenko-filing-opened-files">
+            <li v-for="f in opened.files" :key="f.path" class="flex items-center justify-between py-1">
+              <span class="truncate" :title="f.path">{{ f.name }}</span>
+              <span class="flex items-center gap-3 shrink-0">
+                <span class="text-gray-400">{{ Math.ceil(f.size / 1024) }} KB</span>
+                <a :href="f.url" target="_blank" rel="noopener" class="text-blue-600 hover:underline">開く</a>
+                <a :href="f.url" :download="f.name" class="text-blue-600 hover:underline">保存</a>
+              </span>
+            </li>
+          </ul>
+        </div>
+      </template>
     </div>
 
     <!-- 設定 -->
@@ -456,6 +662,14 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
     <!-- 申請済みの控え -->
     <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-archives">
       <h3 class="font-semibold text-gray-800">申請済みの控え</h3>
+      <div v-if="egovEnabled" class="flex flex-wrap items-center gap-3 text-sm" data-testid="tenko-filing-egov-login">
+        <template v-if="egovLoginNeeded">
+          <span class="text-gray-600">e-Gov にログインすると、控えごとに e-Gov での状況 (ステータス・通知・公文書) が出ます。</span>
+          <a :href="egovLoginHref()" class="text-blue-600 hover:underline" data-testid="tenko-filing-egov-login-button">e-Gov にログイン</a>
+        </template>
+        <button v-else-if="Object.keys(egovStatuses).length" class="text-gray-600 hover:underline" data-testid="tenko-filing-egov-logout" @click="egovLogout">e-Gov からログアウト</button>
+        <span v-if="egovLoginFailed" class="text-red-600" data-testid="tenko-filing-egov-login-failed">e-Gov にログインできませんでした。もう一度お試しください。</span>
+      </div>
       <p v-if="archivesError" class="text-sm text-red-600" data-testid="tenko-filing-archives-error">{{ archivesError }}</p>
       <p v-else-if="!archives.length" class="text-sm text-gray-500">まだありません。上で到達番号の名前の zip を読み、「控えとして保存」を押してください。</p>
       <table v-else class="w-full text-sm">
@@ -463,6 +677,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           <tr class="text-left text-gray-500">
             <th class="py-1">到達番号</th>
             <th class="py-1">中身</th>
+            <th v-if="egovEnabled" class="py-1">e-Gov の状況</th>
             <th class="py-1">保存</th>
             <th />
           </tr>
@@ -471,8 +686,15 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           <tr v-for="a in archives" :key="a.id" class="border-t" data-testid="tenko-filing-archive-row">
             <td class="py-1 font-mono">{{ a.id }}</td>
             <td class="py-1">{{ archiveSummary(a) }}</td>
+            <td v-if="egovEnabled" class="py-1" data-testid="tenko-filing-archive-egov">
+              <template v-if="typeof egovStatuses[a.id] === 'object'">{{ egovStatusText(egovStatuses[a.id] as EgovApplyStatus) }}</template>
+              <span v-else-if="egovStatuses[a.id]" class="text-red-600">{{ egovStatuses[a.id] }}</span>
+              <span v-else class="text-gray-400">-</span>
+            </td>
             <td class="py-1">{{ a.saved_at.slice(0, 10) }}</td>
-            <td class="py-1 text-right">
+            <td class="py-1 text-right whitespace-nowrap space-x-3">
+              <button class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-open" @click="openArchive(a.id)">中身を見る</button>
+              <a :href="`${EGOV_CHECK_APPLY}${a.id}`" target="_blank" rel="noopener" class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-egov-check">egov-check</a>
               <button class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-download" @click="downloadArchive(a)">ダウンロード</button>
             </td>
           </tr>
