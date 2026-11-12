@@ -3372,7 +3372,7 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
 
   it('事業者: 一覧・追加・置き換え・削除', async () => {
     const c = { id: SEED_DEVICE_ID, name: '架空運輸', is_self: true, office_ids: [SEED_SESSION_ID] }
-    const input = { name: c.name, is_self: true, office_ids: c.office_ids }
+    const input = { name: c.name, is_self: true }
     mockFetch.mockResolvedValueOnce(okJson([c]))
     await expect(listTenkoCompanies()).resolves.toEqual([c])
     expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/companies$/)
@@ -3517,7 +3517,7 @@ describe.skipIf(isLive)('点呼の営業所', () => {
   })
 
   it('一覧を取り、作成・置き換え・削除を送る', async () => {
-    const office = { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: [], vehicle_ids: [] }
+    const office = { id: 'o1', name: '本社営業所', company_id: null, company_name: null, address: null, manager_ids: [], vehicle_ids: [] }
     const { id: _id, ...body } = office
     mockFetch.mockResolvedValueOnce(okJson({ offices: [office], vehicles: [] }))
     await expect(getTenkoOffices()).resolves.toEqual({ offices: [office], vehicles: [] })

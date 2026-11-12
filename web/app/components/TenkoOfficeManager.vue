@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { ApiEmployee, TenkoOffice, TenkoOfficeCarinsBase, TenkoOfficeCarinsBaseKey, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
-import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listCamHostKeys, updateTenkoOffice } from '~/utils/api'
+import type { ApiEmployee, TenkoCompany, TenkoOffice, TenkoOfficeCarinsBase, TenkoOfficeCarinsBaseKey, TenkoOfficeInput, TenkoOfficeVehicle } from '~/types'
+import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listCamHostKeys, listTenkoCompanies, updateTenkoOffice } from '~/utils/api'
 import { lastDeviceId } from '~/utils/token-selection'
 
 /**
@@ -21,6 +21,7 @@ const ERRORS: Record<string, string> = {
   invalid_vehicle: '車両を選び直してください',
   invalid_carins_base: '車検証の使用の本拠・使用者を選び直してください',
   invalid_device: '点呼端末を選び直してください',
+  invalid_company: '事業者を選び直してください',
   forbidden: 'システム管理者だけが変更できます',
 }
 
@@ -45,6 +46,8 @@ const thisDeviceId = lastDeviceId('kiosk')
 function deviceName(d: { device_id: string, label: string | null }): string {
   return `${d.label || '名前の無い機体'} ${d.device_id.slice(6, 14)}`
 }
+/** 登録済みの事業者。読めなくても営業所の設定は止めない */
+const companies = ref<TenkoCompany[]>([])
 const managers = ref<ApiEmployee[]>([])
 const loadError = ref('')
 const busy = ref(false)
@@ -69,6 +72,7 @@ async function load() {
     vehicles.value = res.vehicles
     carinsBases.value = res.carins_bases
     managers.value = employees.filter(e => e.role.includes('manager') || e.role.includes('admin'))
+    companies.value = await listTenkoCompanies().catch(() => [])
     const keys = await listCamHostKeys().then(r => r.keys, () => [])
     devices.value = [...keys.filter(k => k.device_id === thisDeviceId), ...keys.filter(k => k.device_id !== thisDeviceId)]
   }
@@ -85,7 +89,7 @@ function keyOf(row: Row, i: number): string {
 }
 
 function addOffice() {
-  rows.value.push({ id: null, name: '', company_name: '', address: '', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] })
+  rows.value.push({ id: null, name: '', company_id: null, company_name: '', address: '', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] })
 }
 
 /** 車両・車検証の組がいま別の営業所に所属していればその名前 (選ぶと移ることを見せる) */
@@ -94,9 +98,14 @@ function otherOfficeName(item: { office_id: string | null }, row: Row): string {
   return rows.value.find(r => r.id === item.office_id)?.name ?? ''
 }
 
+/** 営業所の会社の表示名。事業者を選んでいれば事業者名、無ければ以前の会社名 (どちらも無ければ空) */
+function companyLabel(o: { company_id: string | null, company_name: string | null }): string {
+  return (o.company_id && companies.value.find(c => c.id === o.company_id)?.name) || o.company_name || ''
+}
+
 /** 端末がほかにも所属している営業所の名前 (端末は複数の営業所に所属できる。選んでも移らない) */
 function deviceAlsoIn(deviceId: string, row: Row): string {
-  return rows.value.filter(r => r.id !== row.id && r.device_ids.includes(deviceId)).map(r => r.company_name ? `${r.company_name} ${r.name}` : r.name).join('、')
+  return rows.value.filter(r => r.id !== row.id && r.device_ids.includes(deviceId)).map(r => companyLabel(r) ? `${companyLabel(r)} ${r.name}` : r.name).join('、')
 }
 
 /** チェックボックスの値 (組の 2 項目だけ。v-model の配列と形をそろえる) */
@@ -126,6 +135,7 @@ async function act(row: Row, i: number, run: () => Promise<unknown>, done: strin
 function save(row: Row, i: number) {
   const body: TenkoOfficeInput = {
     name: row.name,
+    company_id: row.company_id,
     company_name: row.company_name || null,
     address: row.address || null,
     manager_ids: row.manager_ids,
@@ -158,7 +168,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         所属が未設定のときは対面点呼として記録します。
       </p>
       <p class="text-xs text-gray-500">
-        グループ企業の営業所は会社名を入れます。他社の営業所の運行管理者が行う点呼は、点呼の受委託の許可が前提です。
+        営業所の事業者は、登録した事業者から選びます (事業者は「点呼の届出」の事業者の表で登録します)。他社の営業所の運行管理者が行う点呼は、点呼の受委託の許可が前提です。
       </p>
       <p class="text-xs text-gray-500" data-testid="tenko-offices-cohabit-hint">
         同じ建物でも会社が違えば、会社ごとに別の営業所として登録します。自社の車両をグループ企業の営業所の運行管理者が判定すると、遠隔点呼として記録します。
@@ -183,8 +193,12 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           <input v-model="row.name" :class="inputClass" data-testid="tenko-office-name">
         </label>
         <label class="text-sm">
-          <span class="text-gray-500">会社名 (グループ企業の営業所だけ)</span>
-          <input v-model="row.company_name" :class="inputClass" placeholder="自社なら空欄" data-testid="tenko-office-company">
+          <span class="text-gray-500">事業者</span>
+          <select v-model="row.company_id" :class="inputClass" data-testid="tenko-office-company">
+            <option :value="null">未設定</option>
+            <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+          <span v-if="!row.company_id && row.company_name" class="text-xs text-gray-400" data-testid="tenko-office-company-legacy">以前の会社名: {{ row.company_name }}</span>
         </label>
         <label class="text-sm">
           <span class="text-gray-500">所在地</span>

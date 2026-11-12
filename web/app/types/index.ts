@@ -617,10 +617,14 @@ export interface SubmitManagerJudgment {
   method?: ManagerJudgmentMethod
 }
 
-/** 点呼の営業所 (`GET /api/tenko/offices`)。`company_name` が null なら自社、値があればグループ企業の営業所 */
+/**
+ * 点呼の営業所 (`GET /api/tenko/offices`)。会社は登録した事業者から選ぶ (`company_id`、null なら未設定)。
+ * `company_name` は以前の自由入力の会社名で、事業者を選ぶまでの表示に使う (保存では今の値を送り返す)
+ */
 export interface TenkoOffice {
   id: string
   name: string
+  company_id: string | null
   company_name: string | null
   address: string | null
   /** 所属する運行管理者 (兼務あり) */
@@ -638,11 +642,11 @@ export interface TenkoCompany {
   id: string
   name: string
   is_self: boolean
-  /** この事業者に振り分けた営業所 (営業所は 1 つの事業者だけ) */
+  /** この事業者に属する営業所 (営業所の画面で事業者を選ぶ。読むだけ。営業所は 1 つの事業者だけ) */
   office_ids: string[]
 }
 
-export type TenkoCompanyInput = Omit<TenkoCompany, 'id'>
+export type TenkoCompanyInput = Omit<TenkoCompany, 'id' | 'office_ids'>
 
 /** 受委託 (事業者間遠隔点呼)。委託・受託の営業所には、それぞれ事業者が付いている必要がある */
 export interface TenkoConsignment {

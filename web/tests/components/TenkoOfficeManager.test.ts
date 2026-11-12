@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   updateTenkoOffice: vi.fn(),
   deleteTenkoOffice: vi.fn(),
   listCamHostKeys: vi.fn(),
+  listTenkoCompanies: vi.fn(),
 }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -19,8 +20,8 @@ vi.mock('~/utils/api', async importOriginal => ({
 
 const OFFICES = {
   offices: [
-    { id: 'o1', name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['alarm:aa11bb22cc33dd44'] },
-    { id: 'o2', name: '帯広営業所', company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] },
+    { id: 'o1', name: '本社営業所', company_id: 'c1', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1'], carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['alarm:aa11bb22cc33dd44'] },
+    { id: 'o2', name: '帯広営業所', company_id: null, company_name: 'グループ運輸', address: '帯広市', manager_ids: [], vehicle_ids: [], carins_bases: [], device_ids: [] },
   ],
   carins_bases: [
     { use_base: '長崎県長崎市', user_name: '一歩運輸', office_id: 'o1', vehicle_count: 3 },
@@ -31,6 +32,10 @@ const OFFICES = {
     { id: 'v2', registration_number: '帯広100か5678', display_name: null, office_id: null },
   ],
 }
+const COMPANIES = [
+  { id: 'c1', name: '架空運輸', is_self: true, office_ids: ['o1'] },
+  { id: 'c2', name: '架空物流', is_self: false, office_ids: [] },
+]
 const EMPLOYEES = [
   { id: 'm1', name: '運行 一郎', role: ['manager'] },
   { id: 'm2', name: '管理 次郎', role: ['admin'] },
@@ -50,6 +55,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.getTenkoOffices.mockResolvedValue(OFFICES)
   api.getEmployees.mockResolvedValue(EMPLOYEES)
+  api.listTenkoCompanies.mockResolvedValue(COMPANIES)
   api.listCamHostKeys.mockResolvedValue({ keys: [
     { device_id: 'alarm:aa11bb22cc33dd44', label: '長崎の点呼端末' },
     { device_id: 'alarm:5de95ff4aabbccdd', label: null },
@@ -62,7 +68,12 @@ describe('TenkoOfficeManager', () => {
     expect(api.getEmployees).toHaveBeenCalledWith('admin')
     expect(cards(w)).toHaveLength(2)
     expect((btn(w, 0, 'tenko-office-name').element as HTMLInputElement).value).toBe('本社営業所')
-    expect((btn(w, 1, 'tenko-office-company').element as HTMLInputElement).value).toBe('グループ運輸')
+    const sel0 = btn(w, 0, 'tenko-office-company').element as HTMLSelectElement
+    expect(Array.from(sel0.options).map(o => o.textContent)).toEqual(['未設定', '架空運輸', '架空物流'])
+    expect(sel0.value).toBe('c1')
+    expect(cards(w)[0]!.find('[data-testid="tenko-office-company-legacy"]').exists()).toBe(false)
+    expect((btn(w, 1, 'tenko-office-company').element as HTMLSelectElement).selectedIndex).toBe(0)
+    expect(cards(w)[1]!.find('[data-testid="tenko-office-company-legacy"]').text()).toBe('以前の会社名: グループ運輸')
     const managers = cards(w)[0]!.findAll('[data-testid="tenko-office-manager"]')
     expect(managers).toHaveLength(2)
     expect((managers[0]!.element as HTMLInputElement).checked).toBe(true)
@@ -93,7 +104,7 @@ describe('TenkoOfficeManager', () => {
     expect(devs).toHaveLength(2)
     expect(cards(w)[1]!.text()).toContain('長崎の点呼端末 aa11bb22')
     expect(cards(w)[1]!.text()).toContain('名前の無い機体 5de95ff4')
-    expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('ほかに 本社営業所')
+    expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('ほかに 架空運輸 本社営業所')
     expect(cards(w)[0]!.find('[data-testid="tenko-office-device-elsewhere"]').exists()).toBe(false)
     await devs[0]!.setValue(true)
     await btn(w, 1, 'tenko-office-save').trigger('click')
@@ -118,7 +129,7 @@ describe('TenkoOfficeManager', () => {
     await btn(w, 0, 'tenko-office-save').trigger('click')
     await flushPromises()
     expect(api.updateTenkoOffice).toHaveBeenCalledWith('o1', {
-      name: '本社営業所', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1', 'v2'],
+      name: '本社営業所', company_id: 'c1', company_name: null, address: null, manager_ids: ['m1'], vehicle_ids: ['v1', 'v2'],
       carins_bases: [{ use_base: '長崎県長崎市', user_name: '一歩運輸' }], device_ids: ['alarm:aa11bb22cc33dd44'],
     })
     expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
@@ -135,14 +146,43 @@ describe('TenkoOfficeManager', () => {
     expect(api.deleteTenkoOffice).not.toHaveBeenCalled()
     await w.find('[data-testid="tenko-offices-add"]').trigger('click')
     await btn(w, 2, 'tenko-office-name').setValue('釧路営業所')
-    await btn(w, 2, 'tenko-office-company').setValue('グループ運輸')
+    await btn(w, 2, 'tenko-office-company').setValue('c2')
     await btn(w, 2, 'tenko-office-address').setValue('釧路市')
     await cards(w)[2]!.findAll('[data-testid="tenko-office-manager"]')[1]!.setValue(true)
     await btn(w, 2, 'tenko-office-save').trigger('click')
     await flushPromises()
     expect(api.createTenkoOffice).toHaveBeenCalledWith({
-      name: '釧路営業所', company_name: 'グループ運輸', address: '釧路市', manager_ids: ['m2'], vehicle_ids: [], carins_bases: [], device_ids: [],
+      name: '釧路営業所', company_id: 'c2', company_name: null, address: '釧路市', manager_ids: ['m2'], vehicle_ids: [], carins_bases: [], device_ids: [],
     })
+  })
+
+  it('事業者を選ぶと company_id を送り、以前の会社名は消さずに送り返す。選び直しの失敗は日本語で出す', async () => {
+    api.updateTenkoOffice.mockRejectedValueOnce(new Error('API error 400: {"error":"invalid_company"}'))
+    const w = await mountIt()
+    await btn(w, 1, 'tenko-office-company').setValue('c2')
+    await btn(w, 1, 'tenko-office-save').trigger('click')
+    await flushPromises()
+    expect(btn(w, 1, 'tenko-office-error').text()).toBe('事業者を選び直してください')
+    expect(api.updateTenkoOffice).toHaveBeenCalledWith('o2', expect.objectContaining({ company_id: 'c2', company_name: 'グループ運輸' }))
+    await (btn(w, 1, 'tenko-office-company').findAll('option')[0]!).setSelected()
+    await btn(w, 1, 'tenko-office-save').trigger('click')
+    await flushPromises()
+    expect(api.updateTenkoOffice).toHaveBeenLastCalledWith('o2', expect.objectContaining({ company_id: null }))
+  })
+
+  it('事業者の一覧を読めなくても営業所は出し、会社の表示は以前の会社名に落とす', async () => {
+    api.listTenkoCompanies.mockRejectedValue(new Error('boom'))
+    api.getTenkoOffices.mockResolvedValue({
+      ...OFFICES,
+      offices: [
+        { ...OFFICES.offices[0]!, company_id: 'c1', company_name: '以前の会社' },
+        { ...OFFICES.offices[1]!, device_ids: ['alarm:aa11bb22cc33dd44'] },
+      ],
+    })
+    const w = await mountIt()
+    expect(cards(w)).toHaveLength(2)
+    expect(cards(w)[1]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('ほかに 以前の会社 本社営業所')
+    expect(cards(w)[0]!.find('[data-testid="tenko-office-device-elsewhere"]').text()).toContain('ほかに グループ運輸 帯広営業所')
   })
 
   it('保存済みの営業所を削除する', async () => {
