@@ -257,8 +257,44 @@ async function egovLogout() {
   egovLoginNeeded.value = true
 }
 
-function egovStatusText(st: EgovApplyStatus): string {
-  return `${st.status} / 通知 ${st.notice_count} 件・公文書 ${st.doc_count} 件`
+/** 状況のバッジの文字 (取れなかったら「取得できません」、未ログインなら「未確認」) */
+function egovLabel(st: EgovApplyStatus | string | undefined): string {
+  if (typeof st === 'object') return st.status
+  return st ? '取得できません' : '未確認'
+}
+
+/** 状況のバッジの色 (egov-check の一覧と同じ区分: 到達・審査中・手続終了・取下げ) */
+function egovTone(st: EgovApplyStatus | string | undefined): string {
+  if (typeof st === 'string') return 'bg-red-50 text-red-700 ring-red-600/20'
+  const s = st?.status ?? ''
+  if (s.includes('手続終了')) return 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+  if (s.includes('審査中')) return 'bg-amber-50 text-amber-800 ring-amber-600/20'
+  if (s.includes('取下げ')) return 'bg-gray-100 text-gray-600 ring-gray-500/20'
+  if (s.includes('到達')) return 'bg-blue-50 text-blue-700 ring-blue-600/20'
+  return 'bg-gray-50 text-gray-500 ring-gray-400/20'
+}
+
+/**
+ * e-Gov アプリの「ステータス」の段。API v2 の申請案件取得が返すのは到達日時と呼んだ時点の状況だけで、
+ * 段ごとの日時・履歴は無い (e-Gov の電子申請 API の FAQ 3)。なので日時は到達だけ出す
+ */
+const EGOV_STAGES = ['到達', '審査中', '審査終了', '手続終了'] as const
+
+/** いまの段の位置 (取下げ・知らない状況は -1) */
+function egovStageIndex(status: string): number {
+  if (status.includes('取下げ')) return -1
+  for (let i = EGOV_STAGES.length - 1; i >= 0; i--) {
+    if (status.includes(EGOV_STAGES[i]!)) return i
+  }
+  return -1
+}
+
+/** 開いている控えの e-Gov での状況 (一覧で取ったもの) */
+const openedEgov = computed(() => opened.value ? egovStatuses.value[opened.value.arriveId] : undefined)
+
+/** 通知・公文書の件数 (1 件以上は目立たせる。補正の連絡は通知で来る) */
+function egovCounts(st: EgovApplyStatus): { label: string, n: number }[] {
+  return [{ label: '通知', n: st.notice_count }, { label: '公文書', n: st.doc_count }]
 }
 
 /** 開いている控えの中身 (`?arrive=`) */
@@ -429,6 +465,44 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           <a :href="`${EGOV_CHECK_APPLY}${opened.arriveId}`" target="_blank" rel="noopener" class="text-blue-600 hover:underline" data-testid="tenko-filing-opened-egov-check">egov-check で e-Gov の状況を見る</a>
           <button class="text-gray-600 hover:underline" data-testid="tenko-filing-opened-close" @click="closeArchive">閉じる</button>
         </div>
+      </div>
+      <div v-if="egovEnabled && openedEgov" class="rounded-lg border border-gray-200 px-4 py-3" data-testid="tenko-filing-opened-egov">
+        <p v-if="typeof openedEgov === 'string'" class="text-sm text-red-600">{{ openedEgov }}</p>
+        <template v-else>
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-sm font-medium text-gray-800">e-Gov のステータス: {{ openedEgov.status }}</span>
+            <span class="flex gap-2">
+              <span
+                v-for="c in egovCounts(openedEgov)"
+                :key="c.label"
+                class="text-xs"
+                :class="c.n ? 'font-medium text-amber-700' : 'text-gray-400'"
+              >{{ c.label }} {{ c.n }}</span>
+            </span>
+          </div>
+          <ol v-if="egovStageIndex(openedEgov.status) >= 0" class="mt-3 grid grid-cols-4" data-testid="tenko-filing-opened-egov-stages">
+            <li
+              v-for="(stage, i) in EGOV_STAGES"
+              :key="stage"
+              class="relative flex flex-col items-center gap-1 text-center"
+              :data-state="i < egovStageIndex(openedEgov.status) ? 'done' : i === egovStageIndex(openedEgov.status) ? 'current' : 'todo'"
+            >
+              <span
+                v-if="i > 0"
+                class="absolute right-1/2 top-2 h-0.5 w-full -translate-y-1/2"
+                :class="i <= egovStageIndex(openedEgov.status) ? 'bg-blue-500' : 'bg-gray-200'"
+              />
+              <span
+                class="relative z-10 h-4 w-4 rounded-full border-2"
+                :class="i < egovStageIndex(openedEgov.status) ? 'border-blue-500 bg-blue-500'
+                  : i === egovStageIndex(openedEgov.status) ? 'border-blue-500 bg-white ring-4 ring-blue-100' : 'border-gray-300 bg-white'"
+              />
+              <span class="text-xs" :class="i === egovStageIndex(openedEgov.status) ? 'font-semibold text-blue-700' : i < egovStageIndex(openedEgov.status) ? 'text-gray-700' : 'text-gray-400'">{{ stage }}</span>
+              <span v-if="i === 0" class="text-[11px] text-gray-500">{{ openedEgov.arrive_date.slice(0, 16) }}</span>
+            </li>
+          </ol>
+          <p class="mt-2 text-[11px] text-gray-400">審査開始・審査終了・手続終了の日時は e-Gov の API から取れないため出していません (e-Gov アプリのマイページで見られます)。</p>
+        </template>
       </div>
       <p v-if="opened.loading" class="text-sm text-gray-500">読み込み中…</p>
       <template v-else-if="opened.missing">
@@ -661,45 +735,108 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
 
     <!-- 申請済みの控え -->
     <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-archives">
-      <h3 class="font-semibold text-gray-800">申請済みの控え</h3>
-      <div v-if="egovEnabled" class="flex flex-wrap items-center gap-3 text-sm" data-testid="tenko-filing-egov-login">
-        <template v-if="egovLoginNeeded">
-          <span class="text-gray-600">e-Gov にログインすると、控えごとに e-Gov での状況 (ステータス・通知・公文書) が出ます。</span>
-          <a :href="egovLoginHref()" class="text-blue-600 hover:underline" data-testid="tenko-filing-egov-login-button">e-Gov にログイン</a>
-        </template>
-        <button v-else-if="Object.keys(egovStatuses).length" class="text-gray-600 hover:underline" data-testid="tenko-filing-egov-logout" @click="egovLogout">e-Gov からログアウト</button>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="font-semibold text-gray-800">申請済みの控え</h3>
+        <button
+          v-if="egovEnabled && !egovLoginNeeded && Object.keys(egovStatuses).length"
+          class="text-xs text-gray-500 hover:text-gray-800"
+          data-testid="tenko-filing-egov-logout"
+          @click="egovLogout"
+        >
+          e-Gov からログアウト
+        </button>
+      </div>
+      <div
+        v-if="egovEnabled && (egovLoginNeeded || egovLoginFailed)"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-blue-50 px-3 py-2.5 text-sm"
+        data-testid="tenko-filing-egov-login"
+      >
         <span v-if="egovLoginFailed" class="text-red-600" data-testid="tenko-filing-egov-login-failed">e-Gov にログインできませんでした。もう一度お試しください。</span>
+        <span v-else class="text-blue-900">e-Gov にログインすると、控えごとに e-Gov での状況 (ステータス・通知・公文書) が出ます。</span>
+        <a
+          v-if="egovLoginNeeded"
+          :href="egovLoginHref()"
+          class="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700"
+          data-testid="tenko-filing-egov-login-button"
+        >e-Gov にログイン</a>
       </div>
       <p v-if="archivesError" class="text-sm text-red-600" data-testid="tenko-filing-archives-error">{{ archivesError }}</p>
       <p v-else-if="!archives.length" class="text-sm text-gray-500">まだありません。上で到達番号の名前の zip を読み、「控えとして保存」を押してください。</p>
-      <table v-else class="w-full text-sm">
-        <thead>
-          <tr class="text-left text-gray-500">
-            <th class="py-1">到達番号</th>
-            <th class="py-1">中身</th>
-            <th v-if="egovEnabled" class="py-1">e-Gov の状況</th>
-            <th class="py-1">保存</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="a in archives" :key="a.id" class="border-t" data-testid="tenko-filing-archive-row">
-            <td class="py-1 font-mono">{{ a.id }}</td>
-            <td class="py-1">{{ archiveSummary(a) }}</td>
-            <td v-if="egovEnabled" class="py-1" data-testid="tenko-filing-archive-egov">
-              <template v-if="typeof egovStatuses[a.id] === 'object'">{{ egovStatusText(egovStatuses[a.id] as EgovApplyStatus) }}</template>
-              <span v-else-if="egovStatuses[a.id]" class="text-red-600">{{ egovStatuses[a.id] }}</span>
-              <span v-else class="text-gray-400">-</span>
-            </td>
-            <td class="py-1">{{ a.saved_at.slice(0, 10) }}</td>
-            <td class="py-1 text-right whitespace-nowrap space-x-3">
-              <button class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-open" @click="openArchive(a.id)">中身を見る</button>
-              <a :href="`${EGOV_CHECK_APPLY}${a.id}`" target="_blank" rel="noopener" class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-egov-check">egov-check</a>
-              <button class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-download" @click="downloadArchive(a)">ダウンロード</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else class="overflow-x-auto rounded-lg border border-gray-200">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 text-left text-xs font-medium text-gray-500">
+            <tr>
+              <th class="px-3 py-2">到達番号</th>
+              <th v-if="egovEnabled" class="px-3 py-2">e-Gov の状況</th>
+              <th class="px-3 py-2">控え保存</th>
+              <th class="w-px px-3 py-2" />
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            <tr
+              v-for="a in archives"
+              :key="a.id"
+              class="cursor-pointer transition-colors"
+              :class="opened?.arriveId === a.id ? 'bg-blue-50' : 'hover:bg-gray-50'"
+              title="中身を見る"
+              data-testid="tenko-filing-archive-row"
+              @click="openArchive(a.id)"
+            >
+              <td class="px-3 py-2.5">
+                <div class="font-mono text-sm text-gray-900">{{ a.id }}</div>
+                <div v-if="archiveSummary(a)" class="mt-0.5 text-xs text-gray-500" data-testid="tenko-filing-archive-summary">{{ archiveSummary(a) }}</div>
+              </td>
+              <td v-if="egovEnabled" class="px-3 py-2.5">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span
+                    class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset"
+                    :class="egovTone(egovStatuses[a.id])"
+                    :title="typeof egovStatuses[a.id] === 'string' ? egovStatuses[a.id] as string : undefined"
+                    data-testid="tenko-filing-archive-egov"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-current" />
+                    {{ egovLabel(egovStatuses[a.id]) }}
+                  </span>
+                  <template v-if="typeof egovStatuses[a.id] === 'object'">
+                    <span
+                      v-for="c in egovCounts(egovStatuses[a.id] as EgovApplyStatus)"
+                      :key="c.label"
+                      class="text-xs"
+                      :class="c.n ? 'font-medium text-amber-700' : 'text-gray-400'"
+                      data-testid="tenko-filing-archive-count"
+                    >{{ c.label }} {{ c.n }}</span>
+                  </template>
+                </div>
+              </td>
+              <td class="whitespace-nowrap px-3 py-2.5 text-xs text-gray-500">{{ a.saved_at.slice(0, 10) }}</td>
+              <td class="px-2 py-2.5" @click.stop>
+                <div class="flex items-center justify-end gap-0.5">
+                  <a
+                    :href="`${EGOV_CHECK_APPLY}${a.id}`"
+                    target="_blank"
+                    rel="noopener"
+                    class="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                    title="egov-check で開く"
+                    aria-label="egov-check で開く"
+                    data-testid="tenko-filing-archive-egov-check"
+                  >
+                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M11 3h6v6M17 3l-8 8M15 11v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </a>
+                  <button
+                    class="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                    title="zip をダウンロード"
+                    aria-label="zip をダウンロード"
+                    data-testid="tenko-filing-archive-download"
+                    @click="downloadArchive(a)"
+                  >
+                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 16h12" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-if="archiveError" class="text-sm text-red-600" data-testid="tenko-filing-archive-error">{{ archiveError }}</p>
     </div>
 
