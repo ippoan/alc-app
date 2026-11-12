@@ -292,6 +292,25 @@ function egovStageIndex(status: string): number {
 /** 開いている控えの e-Gov での状況 (一覧で取ったもの) */
 const openedEgov = computed(() => opened.value ? egovStatuses.value[opened.value.arriveId] : undefined)
 
+/** 一覧の行の 2 段目: 手続名・提出先・到達日時 */
+function egovLine(st: EgovApplyStatus): string {
+  return [st.proc_name, st.submission_destination, `到達 ${st.arrive_date.slice(0, 16)}`].filter(Boolean).join(' ・ ')
+}
+
+/** 開いた控えに並べる、申請案件取得が返す項目 (空の項目は出さない) */
+function egovFields(st: EgovApplyStatus): [string, string][] {
+  const rows: [string, string][] = [
+    ['手続名', st.proc_name],
+    ['提出先', st.submission_destination],
+    ['到達日時', st.arrive_date],
+    ['法人名', st.corporation_name],
+    ['申請者', st.applicant_name],
+    ['提出したアカウント', st.applied_account],
+    ['納付状況', st.pay_status],
+  ]
+  return rows.filter(([, v]) => v)
+}
+
 /** 通知・公文書の件数 (1 件以上は目立たせる。補正の連絡は通知で来る) */
 function egovCounts(st: EgovApplyStatus): { label: string, n: number }[] {
   return [{ label: '通知', n: st.notice_count }, { label: '公文書', n: st.doc_count }]
@@ -501,7 +520,32 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
               <span v-if="i === 0" class="text-[11px] text-gray-500">{{ openedEgov.arrive_date.slice(0, 16) }}</span>
             </li>
           </ol>
-          <p class="mt-2 text-[11px] text-gray-400">審査開始・審査終了・手続終了の日時は e-Gov の API から取れないため出していません (e-Gov アプリのマイページで見られます)。</p>
+          <dl class="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs sm:grid-cols-[auto_1fr_auto_1fr]" data-testid="tenko-filing-opened-egov-fields">
+            <template v-for="[label, value] in egovFields(openedEgov)" :key="label">
+              <dt class="text-gray-500">{{ label }}</dt>
+              <dd class="text-gray-800">{{ value }}</dd>
+            </template>
+          </dl>
+          <div v-if="openedEgov.notices.length" class="mt-3 space-y-1" data-testid="tenko-filing-opened-egov-notices">
+            <div class="text-xs font-medium text-gray-600">通知</div>
+            <div v-for="(n, i) in openedEgov.notices" :key="i" class="rounded-md bg-amber-50 px-3 py-1.5 text-xs">
+              <span v-if="n.type" class="mr-1 rounded bg-amber-100 px-1 text-amber-800">{{ n.type }}</span>
+              <span class="font-medium text-gray-800">{{ n.title || '件名なし' }}</span>
+              <span class="ml-2 text-gray-500">{{ n.issue_date.slice(0, 16) }}<template v-if="n.issuer"> ・{{ n.issuer }}</template></span>
+              <span v-if="n.correct_expired_date" class="ml-2 font-medium text-red-600">補正期限 {{ n.correct_expired_date }}</span>
+            </div>
+          </div>
+          <div v-if="openedEgov.documents.length" class="mt-3 space-y-1" data-testid="tenko-filing-opened-egov-documents">
+            <div class="text-xs font-medium text-gray-600">公文書</div>
+            <div v-for="(d, i) in openedEgov.documents" :key="i" class="rounded-md bg-gray-50 px-3 py-1.5 text-xs">
+              <span class="font-medium text-gray-800">{{ d.title || '件名なし' }}</span>
+              <span class="ml-2 text-gray-500">{{ d.issue_date.slice(0, 16) }}</span>
+              <span class="ml-2" :class="d.downloaded_date ? 'text-gray-500' : 'text-amber-700'">
+                {{ d.downloaded_date ? '取得済み' : `未取得${d.expired_date ? ` (取得期限 ${d.expired_date})` : ''}` }}
+              </span>
+            </div>
+          </div>
+          <p class="mt-3 text-[11px] text-gray-400">審査開始・審査終了・手続終了の日時は e-Gov の API から取れないため出していません (e-Gov アプリのマイページで見られます)。公文書と通知の本文は egov-check で開けます。</p>
         </template>
       </div>
       <p v-if="opened.loading" class="text-sm text-gray-500">読み込み中…</p>
@@ -784,6 +828,9 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
             >
               <td class="px-3 py-2.5">
                 <div class="font-mono text-sm text-gray-900">{{ a.id }}</div>
+                <div v-if="typeof egovStatuses[a.id] === 'object'" class="mt-0.5 text-xs text-gray-600" data-testid="tenko-filing-archive-egov-line">
+                  {{ egovLine(egovStatuses[a.id] as EgovApplyStatus) }}
+                </div>
                 <div v-if="archiveSummary(a)" class="mt-0.5 text-xs text-gray-500" data-testid="tenko-filing-archive-summary">{{ archiveSummary(a) }}</div>
               </td>
               <td v-if="egovEnabled" class="px-3 py-2.5">

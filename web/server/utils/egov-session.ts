@@ -161,23 +161,69 @@ export async function egovGet<T>(event: H3Event, worker: Fetcher, path: string):
   return body as T
 }
 
-/** 申請済みの控えの行に出す、到達番号ごとの e-Gov での状況 */
+/** 通知 (補正の連絡など) の一覧の 1 件 */
+export interface EgovNotice {
+  title: string
+  type: string
+  issue_date: string
+  issuer: string
+  /** 補正期限 (YYYY-MM-DD)。無ければ空 */
+  correct_expired_date: string
+}
+
+/** 公文書の一覧の 1 件 */
+export interface EgovDocument {
+  title: string
+  issue_date: string
+  /** 取得期限 (YYYY-MM-DD)。無ければ空 */
+  expired_date: string
+  /** 取得完了日時。未取得なら空 */
+  downloaded_date: string
+}
+
+/**
+ * 申請済みの控えに出す、到達番号ごとの e-Gov での状況 (申請案件取得が返すもののうち画面に出すもの)。
+ * 段ごとの日時・履歴は API に無い (e-Gov の電子申請 API の FAQ 3)。本文・添付は出さない (egov-check で見る)
+ */
 export interface EgovApplySummary {
   status: string
   arrive_date: string
   proc_name: string
+  submission_destination: string
+  corporation_name: string
+  applicant_name: string
+  applied_account: string
+  pay_status: string
   notice_count: number
   doc_count: number
+  notices: EgovNotice[]
+  documents: EgovDocument[]
 }
 
 interface ApplyDetail {
   status: string
   arrive_date: string
   proc_name: string
+  submission_destination?: string
+  corporation_name?: string
+  applicant_name?: string
+  applied_account?: string
+  pay_status?: string
   notice_count?: number
   doc_count?: number
-  notice_list?: unknown[]
-  official_list?: unknown[]
+  notice_list?: {
+    notice_title?: string
+    notice_data_type?: string
+    issue_date?: string
+    issuer_organization?: string
+    correct_expired_date?: string
+  }[]
+  official_list?: {
+    doc_title?: string
+    allowed_date?: string
+    doc_download_expired_date?: string
+    doc_download_date?: string
+  }[]
 }
 
 export function summarizeApply(r: ApplyDetail): EgovApplySummary {
@@ -185,7 +231,25 @@ export function summarizeApply(r: ApplyDetail): EgovApplySummary {
     status: r.status,
     arrive_date: r.arrive_date,
     proc_name: r.proc_name,
+    submission_destination: r.submission_destination ?? '',
+    corporation_name: r.corporation_name ?? '',
+    applicant_name: r.applicant_name ?? '',
+    applied_account: r.applied_account ?? '',
+    pay_status: r.pay_status ?? '',
     notice_count: r.notice_count ?? r.notice_list?.length ?? 0,
     doc_count: r.doc_count ?? r.official_list?.length ?? 0,
+    notices: (r.notice_list ?? []).map(n => ({
+      title: n.notice_title ?? '',
+      type: n.notice_data_type ?? '',
+      issue_date: n.issue_date ?? '',
+      issuer: n.issuer_organization ?? '',
+      correct_expired_date: n.correct_expired_date ?? '',
+    })),
+    documents: (r.official_list ?? []).map(d => ({
+      title: d.doc_title ?? '',
+      issue_date: d.allowed_date ?? '',
+      expired_date: d.doc_download_expired_date ?? '',
+      downloaded_date: d.doc_download_date ?? '',
+    })),
   }
 }

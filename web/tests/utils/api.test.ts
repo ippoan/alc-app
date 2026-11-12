@@ -3417,7 +3417,7 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
 
   it('e-Gov の状況: admin JWT で /api/egov/apply/{到達番号} を GET。e-Gov へのログインが要れば null、ほかは投げる', async () => {
     initApi(API_BASE, () => 'admin-jwt', () => 'tid')
-    const st = { status: '審査中', arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: 0, doc_count: 0 }
+    const st = { status: '審査中', arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', submission_destination: '', corporation_name: '', applicant_name: '', applied_account: '', pay_status: '', notice_count: 0, doc_count: 0, notices: [], documents: [] }
     mockFetch.mockResolvedValueOnce(okJson(st))
     await expect(getEgovApplyStatus('20991231235959001e')).resolves.toEqual(st)
     const [url, init] = mockFetch.mock.calls[0]
