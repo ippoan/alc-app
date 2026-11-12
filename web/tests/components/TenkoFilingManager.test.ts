@@ -301,12 +301,13 @@ describe('TenkoFilingManager', () => {
       procedure: 'entrust', procName: '架空の受委託', reportKind: '', tenkoType: '', startDate: '2099-06-01', offices: [], destinations: ['長崎運輸支局'],
     }])
     expect(w.find('[data-testid="tenko-filing-egov-archive-result"]').text()).toBe('控えを保存しました')
-    const rows = w.findAll('[data-testid="tenko-filing-archive-row"]').map(r => r.findAll('td').map(td => td.text()))
+    const rows = w.findAll('[data-testid="tenko-filing-archive-row"]').map(r => r.findAll('td').map(td => td.text().replace(/\s+/g, ' ')))
     expect(rows).toEqual([
-      ['20991231235959001e', '実施 / 遠隔点呼 / 開始 2099-12-01 / 甲・乙', '2099-12-31', '中身を見るegov-checkダウンロード'],
-      ['2099123123595902', '架空の受委託', '2099-12-31', '中身を見るegov-checkダウンロード'],
-      ['2099123123595903', '', '2099-12-31', '中身を見るegov-checkダウンロード'],
+      ['20991231235959001e実施 / 遠隔点呼 / 開始 2099-12-01 / 甲・乙', '2099-12-31', ''],
+      ['2099123123595902架空の受委託', '2099-12-31', ''],
+      ['2099123123595903', '2099-12-31', ''],
     ])
+    expect(w.find('[data-testid="tenko-filing-archive-summary"]').exists()).toBe(true)
     api.saveFilingArchive.mockRejectedValueOnce(new Error('控えの保存に失敗しました (503): x'))
     await w.find('[data-testid="tenko-filing-egov-archive"]').trigger('click')
     await flushPromises()
@@ -352,24 +353,67 @@ describe('TenkoFilingManager', () => {
       expect(w.find('[data-testid="tenko-filing-archive-egov-check"]').attributes('href')).toBe(`https://egov-check.ippoan.org/apply/${A}`)
     })
 
-    it('ログイン済みなら行ごとに状況を出し (取れない行は理由)、ログアウトでログインの入口に戻る', async () => {
+    it('ログイン済みなら行ごとに状況のバッジと件数を出し (取れない行は理由を title に)、ログアウトでログインの入口に戻る', async () => {
       rc.egovLogin = 'on'
-      api.listFilingArchives.mockResolvedValue([row(A), row(B), row('2099123123595903')])
+      const st = (status: string, notice = 0, doc = 0) => ({ status, arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: notice, doc_count: doc })
+      const ids = [A, B, '2099123123595903', '2099123123595904', '2099123123595905', '2099123123595906', '2099123123595907']
+      api.listFilingArchives.mockResolvedValue(ids.map(row))
       api.getEgovApplyStatus.mockImplementation(async (id: string) => {
-        if (id === A) return { status: '審査中', arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: 1, doc_count: 0 }
+        if (id === A) return st('審査中', 1, 0)
         if (id === B) throw new Error('e-Gov のエラー (404): 該当なし')
-        throw null
+        if (id === ids[2]) throw null
+        return st({ [ids[3]!]: '到達', [ids[4]!]: '手続終了', [ids[5]!]: '取下げ済', [ids[6]!]: '架空の状態' }[id]!)
       })
       const w = await mountIt()
-      const cells = w.findAll('[data-testid="tenko-filing-archive-egov"]').map(c => c.text())
-      expect(cells).toEqual(['審査中 / 通知 1 件・公文書 0 件', 'e-Gov のエラー (404): 該当なし', 'e-Gov の状況を取得できませんでした'])
+      const badges = w.findAll('[data-testid="tenko-filing-archive-egov"]')
+      expect(badges.map(c => c.text())).toEqual(['審査中', '取得できません', '取得できません', '到達', '手続終了', '取下げ済', '架空の状態'])
+      expect(badges.map(c => c.classes().find(k => /^text-[a-z]+-\d+$/.test(k)))).toEqual([
+        'text-amber-800', 'text-red-700', 'text-red-700', 'text-blue-700', 'text-emerald-700', 'text-gray-600', 'text-gray-500',
+      ])
+      expect([badges[1]!.attributes('title'), badges[2]!.attributes('title'), badges[0]!.attributes('title')])
+        .toEqual(['e-Gov のエラー (404): 該当なし', 'e-Gov の状況を取得できませんでした', undefined])
+      const counts = w.findAll('[data-testid="tenko-filing-archive-row"]')[0]!.findAll('[data-testid="tenko-filing-archive-count"]')
+      expect(counts.map(c => [c.text(), c.classes().includes('text-amber-700')])).toEqual([['通知 1', true], ['公文書 0', false]])
       expect(w.find('[data-testid="tenko-filing-egov-login-button"]').exists()).toBe(false)
       await w.find('[data-testid="tenko-filing-egov-logout"]').trigger('click')
       await flushPromises()
       expect(api.logoutEgov).toHaveBeenCalled()
       expect(w.find('[data-testid="tenko-filing-egov-login-button"]').attributes('href'))
         .toBe(`/api/egov/login?return=${encodeURIComponent('/?role=admin&tab=tenko_filing')}`)
-      expect(w.findAll('[data-testid="tenko-filing-archive-egov"]').map(c => c.text())).toEqual(['-', '-', '-'])
+      expect(new Set(w.findAll('[data-testid="tenko-filing-archive-egov"]').map(c => c.text()))).toEqual(new Set(['未確認']))
+    })
+
+    it('開いた控えに e-Gov の段の帯を出す (いまの段まで色、日時は到達だけ)。取下げ・知らない状況は帯を出さず、取れなければ理由', async () => {
+      rc.egovLogin = 'on'
+      const ids = [A, B, '2099123123595903', '2099123123595904', '2099123123595905']
+      api.listFilingArchives.mockResolvedValue(ids.map(row))
+      const st = (status: string) => ({ status, arrive_date: '2099-12-31 12:03:00', proc_name: '架空の届出', notice_count: 2, doc_count: 0 })
+      api.getEgovApplyStatus.mockImplementation(async (id: string) => {
+        if (id === ids[4]) throw new Error('e-Gov のエラー (404): 該当なし')
+        return st({ [A]: '審査中', [B]: '手続終了', [ids[2]!]: '取下げ済', [ids[3]!]: '架空の状態' }[id]!)
+      })
+      api.fetchFilingArchive.mockResolvedValue(zipSync({ 'a.txt': strToU8('x') }))
+      const w = await mountIt()
+      const openRow = async (i: number) => {
+        await w.findAll('[data-testid="tenko-filing-archive-row"]')[i]!.trigger('click')
+        await flushPromises()
+      }
+      const states = () => w.findAll('[data-testid="tenko-filing-opened-egov-stages"] li').map(li => li.attributes('data-state'))
+      await openRow(0)
+      const box = () => w.find('[data-testid="tenko-filing-opened-egov"]')
+      expect(box().text()).toContain('e-Gov のステータス: 審査中')
+      expect(box().text()).toContain('通知 2')
+      expect(states()).toEqual(['done', 'current', 'todo', 'todo'])
+      expect(box().text()).toContain('2099-12-31 12:03')
+      await openRow(1)
+      expect(states()).toEqual(['done', 'done', 'done', 'current'])
+      await openRow(2)
+      expect(box().text()).toContain('取下げ済')
+      expect(w.find('[data-testid="tenko-filing-opened-egov-stages"]').exists()).toBe(false)
+      await openRow(3)
+      expect(w.find('[data-testid="tenko-filing-opened-egov-stages"]').exists()).toBe(false)
+      await openRow(4)
+      expect(box().text()).toBe('e-Gov のエラー (404): 該当なし')
     })
 
     it('e-Gov に未ログインならログインの入口を出す。ログインに失敗して戻ったら知らせ、印は URL から消す', async () => {
@@ -416,7 +460,7 @@ describe('TenkoFilingManager', () => {
       const w = await mountIt()
       const open = async (bytes: Uint8Array) => {
         api.fetchFilingArchive.mockResolvedValueOnce(bytes)
-        await w.find('[data-testid="tenko-filing-archive-open"]').trigger('click')
+        await w.find('[data-testid="tenko-filing-archive-row"]').trigger('click')
         await flushPromises()
       }
       await open(zipSync({ 'k/kousei.xml': strToU8('<DataRoot/>'), 'k/15596A047800020000_01.xml': strToU8('<DataRoot><申請内容><委託者><氏名又は名称>架空物流</氏名又は名称></委託者><受託者/></申請内容></DataRoot>') }))
