@@ -33,6 +33,7 @@ import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { recordVeinLine } from '~/utils/vein-line-log'
+import { isDevDevice } from '~/utils/token-selection'
 
 export const VEIN_MODULE_ID_MIN = 10
 export const VEIN_MODULE_ID_MAX = 100
@@ -204,9 +205,19 @@ function isAuthLogEnabled(scope: RequestTokenScope): Promise<boolean> {
 
 /**
  * 照合の後に裏で認証ログを送る (次のタスクへ回す)。撮った記録が無ければ何もしない。
- * `hit` はモジュールが当たった枠: `self` = 本人 / `other` = 他人 / `none` = 不一致
+ * `hit` はモジュールが当たった枠: `self` = 本人 / `other` = 他人 / `none` = 不一致。
+ * 照合の後に撮る形 (`VEIN IDENTIFY KEEP LATE`、{@link KeepLateResult}) は記録が届くのを待ってから送り、撮れなかった回は
+ * 送らずに診断ログへ `PC VEIN AUTHLOG SKIP <理由>` を 1 行残す (照合の結果には触らない)
  */
-function scheduleVeinAuthShot(employeeId: string, got: KeepResult, hit: 'self' | 'other' | 'none', scope: RequestTokenScope): void {
+function scheduleVeinAuthShot(employeeId: string, got: KeepResult | KeepLateResult, hit: 'self' | 'other' | 'none', scope: RequestTokenScope): void {
+  if ('late' in got) {
+    const capturedAt = new Date().toISOString()
+    void got.late.then((r) => {
+      if (r.record) return sendVeinAuthShot(employeeId, r.record, got, hit, capturedAt, scope)
+      recordVeinLine(`PC VEIN AUTHLOG SKIP ${r.reason}`)
+    })
+    return
+  }
   if (!got.record) return
   const shot = got.record
   const capturedAt = new Date().toISOString()
@@ -215,7 +226,7 @@ function scheduleVeinAuthShot(employeeId: string, got: KeepResult, hit: 'self' |
   }, 0)
 }
 
-async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: KeepResult, hit: 'self' | 'other' | 'none', capturedAt: string, scope: RequestTokenScope): Promise<void> {
+async function sendVeinAuthShot(employeeId: string, shot: Uint8Array, got: Omit<KeepResult, 'record'>, hit: 'self' | 'other' | 'none', capturedAt: string, scope: RequestTokenScope): Promise<void> {
   try {
     if (!await isAuthLogEnabled(scope)) return
     const started = performance.now()
@@ -254,6 +265,8 @@ export interface VeinMatchPort {
   identify: (onAgain?: () => void) => Promise<number | null>
   /** 置いた 1 回の指を撮ってから照合する (`VEIN IDENTIFY KEEP`)。無い・古いファームは `identify` に戻す */
   identifyKeep?: (onAgain?: () => void) => Promise<KeepResult>
+  /** 照合してから乗ったままの指を撮る (`VEIN IDENTIFY KEEP LATE`)。開発用の端末の 1:N だけが使う ({@link identifyVeinModuleAnyone}) */
+  identifyKeepLate?: (onAgain?: () => void) => Promise<KeepLateResult>
 }
 
 /** `VEIN IDENTIFY KEEP` の結果: 当たった ID (不一致は null)・撮った記録 (撮れなかった・当たらなかった古いファームは null)・モジュールの点数 (無ければ null) */
@@ -272,6 +285,12 @@ export interface KeepResult {
   /** ファームの版 (`DEVICE … VER=`、分からなければ null) */
   firmware?: string | null
 }
+
+/** `VEIN IDENTIFY KEEP LATE` の後から届く撮影: 撮れた記録、または撮れなかった理由 (`SKIP` の理由・`NOMATCH`・`TIMEOUT` 等) */
+export type LateRecord = { record: Uint8Array; reason: null } | { record: null; reason: string }
+
+/** `VEIN IDENTIFY KEEP LATE` の結果: 照合の結果はすぐ、撮った記録は `late` で後から (照合の後に撮るので) */
+export type KeepLateResult = Omit<KeepResult, 'record'> & { late: Promise<LateRecord> }
 
 /** 本人が決まった人の照合の結果: 当たった ID と、同じ置き方で撮った記録 (撮れなかった・古いファームは null) */
 export interface VeinMatch {
@@ -347,7 +366,9 @@ async function verifyOnServer(employeeId: string, shot: Uint8Array, scope: Reque
  * 本人が決まっていない 1:N の照合 (血圧測定台・キオスクの指だけの入口・運行管理者の入口)。当たった ID (不一致は null) を返し、
  * 不一致は {@link VEIN_NOMATCH_RETRIES} 回までやり直す (やり直す前に `onRetry`)。認証ログを送るテナントだけ、置いた 1 回の指を
  * 撮ってから照合し (`VEIN IDENTIFY KEEP ALL`)、承認済みの枠に当たった回を、当たった人の撮影として裏で送る ({@link scheduleVeinAuthShot})。
- * 不一致の回は乗務員が決まらないので送らない。送らないテナントは今までどおりの照合 (`VEIN IDENTIFY`、記録の読み出しで遅くしない)
+ * 不一致の回は乗務員が決まらないので送らない。送らないテナントは今までどおりの照合 (`VEIN IDENTIFY`、記録の読み出しで遅くしない)。
+ * **開発用の端末 (キオスク・運行管理者席の鍵が dev) だけ**、撮るのを照合の後に回す (`VEIN IDENTIFY KEEP LATE`): 結果はすぐ返り、
+ * 撮影は届いてから送る。本番の端末は `KEEP ALL` のまま (照合の後に乗ったままの指を撮れるかが実機で未確認のため)
  */
 export async function identifyVeinModuleAnyone(
   port: VeinMatchPort,
@@ -356,13 +377,13 @@ export async function identifyVeinModuleAnyone(
   scope: RequestTokenScope = 'default',
 ): Promise<number | null> {
   const keep = await isAuthLogEnabled(scope)
+  const late = isDevDevice('kiosk') || isDevDevice('manager-device')
   const read = async (): Promise<number | null> => {
     if (!keep) return await port.identify(onAgain)
-    const got = await readKeeping(port, onAgain)
-    if (got.id !== null) {
-      const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
-      if (entry?.approved) scheduleVeinAuthShot(entry.employeeId, got, 'self', scope)
-    }
+    const got = late ? await readKeepingLate(port, onAgain) : await readKeeping(port, onAgain)
+    if (got.id === null) return null
+    const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
+    if (entry?.approved) scheduleVeinAuthShot(entry.employeeId, got, 'self', scope)
     return got.id
   }
   return await retryOnVeinMiss(read, id => id === null, onRetry)
@@ -370,9 +391,22 @@ export async function identifyVeinModuleAnyone(
 
 /** 撮ってから照合する。`KEEP` を知らないファームなら、このページの間は普通の照合 (記録なし) に戻す */
 async function readKeeping(port: VeinMatchPort, onAgain?: () => void): Promise<KeepResult> {
-  if (port.identifyKeep && !identifyKeepUnsupported) {
+  const identifyKeep = port.identifyKeep
+  return await keepingOr(identifyKeep && (() => identifyKeep(onAgain)), async () => ({ id: await port.identify(onAgain), record: null }))
+}
+
+/** 照合してから撮る (`KEEP LATE`)。口が持たなければ撮ってから照合する形 ({@link readKeeping}) のまま */
+async function readKeepingLate(port: VeinMatchPort, onAgain?: () => void): Promise<KeepResult | KeepLateResult> {
+  const identifyKeepLate = port.identifyKeepLate
+  if (!identifyKeepLate) return await readKeeping(port, onAgain)
+  return await keepingOr(() => identifyKeepLate(onAgain), async () => ({ id: await port.identify(onAgain), late: Promise.resolve<LateRecord>({ record: null, reason: 'NO_RECORD' }) }))
+}
+
+/** `keepRead` (撮る照合) を使い、`KEEP` を知らないファームなら、このページの間は `plain` (普通の照合) に戻す */
+async function keepingOr<T>(keepRead: (() => Promise<T>) | undefined, plain: () => Promise<T>): Promise<T> {
+  if (keepRead && !identifyKeepUnsupported) {
     try {
-      return await port.identifyKeep(onAgain)
+      return await keepRead()
     }
     catch (e) {
       if ((e as Error).message !== VEIN_IDENTIFY_KEEP_UNSUPPORTED) throw e
@@ -380,7 +414,7 @@ async function readKeeping(port: VeinMatchPort, onAgain?: () => void): Promise<K
       recordVeinLine('PC VEIN KEEP UNSUPPORTED')
     }
   }
-  return { id: await port.identify(onAgain), record: null }
+  return await plain()
 }
 
 /**
