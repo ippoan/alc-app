@@ -3,6 +3,9 @@ import type { ApiEmployee, TenkoCompany, TenkoOffice, TenkoOfficeCarinsBase, Ten
 import { createTenkoOffice, deleteTenkoOffice, getEmployees, getTenkoOffices, listCamHostKeys, listTenkoCompanies, updateTenkoOffice } from '~/utils/api'
 import { lastDeviceId } from '~/utils/token-selection'
 
+/** 保存・削除が通ったら出す (「点呼の届出」の画面で事業者の表を読み直すため) */
+const emit = defineEmits<{ saved: [] }>()
+
 /**
  * 点呼の営業所 (システム管理者)。営業所ごとに所属の運行管理者 (兼務あり) と車両を決める。車両の所属は基本を車検証の
  * 「使用の本拠の位置 + 使用者」の組で決め (組は 1 営業所)、手で選んだ車両 (1 台 1 営業所) はその上書きにする。
@@ -122,6 +125,7 @@ async function act(row: Row, i: number, run: () => Promise<unknown>, done: strin
   try {
     await run()
     notice.value = `${row.name} を${done}しました`
+    emit('saved')
     await load()
   }
   catch (e) {

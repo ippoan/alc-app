@@ -4,6 +4,8 @@ import { flushPromises } from '@vue/test-utils'
 import { strToU8, zipSync } from 'fflate'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import TenkoFilingManager from '~/components/TenkoFilingManager.vue'
+import TenkoCompanyManager from '~/components/TenkoCompanyManager.vue'
+import TenkoOfficeManager from '~/components/TenkoOfficeManager.vue'
 import { emptySettings, type FilingSettings } from '~/utils/tenko-forms'
 
 const api = vi.hoisted(() => ({
@@ -19,6 +21,8 @@ const api = vi.hoisted(() => ({
   setFilingArchiveCompanies: vi.fn(),
   getTenkoOffices: vi.fn(),
   listTenkoConsignments: vi.fn(),
+  getEmployees: vi.fn(),
+  listCamHostKeys: vi.fn(),
 }))
 const rc = vi.hoisted(() => ({ egovLogin: '' }))
 mockNuxtImport('useRuntimeConfig', original => () => {
@@ -65,6 +69,8 @@ beforeEach(() => {
   api.listTenkoCompanies.mockResolvedValue([CO_A, CO_B])
   api.getTenkoOffices.mockResolvedValue({ offices: [], vehicles: [], carins_bases: [] })
   api.listTenkoConsignments.mockResolvedValue([])
+  api.getEmployees.mockResolvedValue([])
+  api.listCamHostKeys.mockResolvedValue({ keys: [] })
   api.setFilingArchiveCompanies.mockResolvedValue({ id: '', company_ids: [] })
   forms.fetchProductInfo.mockResolvedValue({ deviceName: '一歩庵点呼 v1', certPre: null, certPost: null })
 })
@@ -695,6 +701,30 @@ describe('TenkoFilingManager', () => {
       expect(api.getTenkoFilingSettings).toHaveBeenLastCalledWith(CO_A.id)
       expect(w.find('[data-testid="tenko-filing-company-name"]').text()).toBe('架空運輸')
       expect(rows(w)[0]!.classes()).toContain('bg-blue-50')
+    })
+
+    it('事業者の表の直下に営業所の表を出す。営業所を保存したら事業者を読み直し、事業者を変えたら営業所の表を読み直す', async () => {
+      const w = await mountIt()
+      const html = w.html()
+      const company = html.indexOf('data-testid="tenko-company-row"')
+      const offices = html.indexOf('data-testid="tenko-offices"')
+      expect(company).toBeGreaterThan(-1)
+      expect(offices).toBeGreaterThan(company)
+      expect(html.indexOf('data-testid="tenko-filing-settings"')).toBeGreaterThan(offices)
+      // 営業所の保存 → 事業者の一覧と、事業者の表の営業所名を読み直す
+      api.listTenkoCompanies.mockClear()
+      api.getTenkoOffices.mockClear()
+      w.findComponent(TenkoOfficeManager).vm.$emit('saved')
+      await flushPromises()
+      expect(api.listTenkoCompanies).toHaveBeenCalledTimes(1)
+      expect(api.getTenkoOffices).toHaveBeenCalledTimes(1)
+      // 事業者の変更 → 事業者の一覧と、営業所の表 (事業者の候補) を読み直す
+      api.listTenkoCompanies.mockClear()
+      api.getTenkoOffices.mockClear()
+      w.findComponent(TenkoCompanyManager).vm.$emit('changed')
+      await flushPromises()
+      expect(api.listTenkoCompanies).toHaveBeenCalledTimes(2)
+      expect(api.getTenkoOffices).toHaveBeenCalledTimes(1)
     })
   })
 })

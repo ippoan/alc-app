@@ -95,6 +95,7 @@ describe('TenkoOfficeManager', () => {
     await btn(w, 1, 'tenko-office-save').trigger('click')
     await flushPromises()
     expect(api.updateTenkoOffice.mock.calls[0][1].carins_bases).toEqual([{ use_base: '長崎県長崎市', user_name: '一歩運輸' }])
+    expect(w.emitted('saved')).toHaveLength(1)
   })
 
   it('点呼端末 (機体の鍵) を選ぶ。名前の無い機体は指紋の頭で出し、ほかの営業所にも所属する端末はその名前を出す (選んでも移らない)', async () => {
@@ -192,6 +193,7 @@ describe('TenkoOfficeManager', () => {
     await flushPromises()
     expect(api.deleteTenkoOffice).toHaveBeenCalledWith('o2')
     expect(w.find('[data-testid="tenko-offices-notice"]').text()).toBe('帯広営業所 を削除しました')
+    expect(w.emitted('saved')).toHaveLength(1)
   })
 
   it('保存・削除の失敗は語を日本語にして行に出す。知らない文言はそのまま、文言が無ければ既定の文', async () => {
@@ -200,6 +202,7 @@ describe('TenkoOfficeManager', () => {
     await btn(w, 0, 'tenko-office-save').trigger('click')
     await flushPromises()
     expect(btn(w, 0, 'tenko-office-error').text()).toBe('営業所の名称を入力してください')
+    expect(w.emitted('saved')).toBeUndefined()
     api.deleteTenkoOffice.mockRejectedValueOnce(new Error('boom'))
     await btn(w, 1, 'tenko-office-delete').trigger('click')
     await flushPromises()
