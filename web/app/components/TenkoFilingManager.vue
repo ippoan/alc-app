@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { getTenkoFilingSettings, putTenkoFilingSettings } from '~/utils/api'
+import { checkEgovFiling, parseEgovZip, type EgovFiling, type EgovFinding } from '~/utils/egov-filing'
 import { jstTodayDate } from '~/utils/jst'
 import {
   BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm,
@@ -111,6 +112,30 @@ async function download(form: TenkoForm) {
   finally {
     busyForm.value = ''
   }
+}
+
+/** e-Gov の申請データ (一時保存・到達の zip) を読み、保存した値と規則に照らした結果 */
+interface EgovCheck {
+  file: string
+  filing: EgovFiling | null
+  findings: EgovFinding[]
+  error: string
+}
+const egovChecks = ref<EgovCheck[]>([])
+
+async function checkEgovFiles(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files!)
+  egovChecks.value = await Promise.all(files.map(async (f) => {
+    try {
+      const filing = parseEgovZip(new Uint8Array(await f.arrayBuffer()))
+      return { file: f.name, filing, findings: checkEgovFiling(filing, settings.value, jstTodayDate()), error: '' }
+    }
+    catch (err) {
+      return { file: f.name, filing: null, findings: [], error: messageOf(err, '読めませんでした') }
+    }
+  }))
+  input.value = ''
 }
 
 /** 文字の欄 (ラベルと欄の名前) */
@@ -259,6 +284,31 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         e-Gov の参考様式に書けるのは営業所・車庫 {{ EGOV_OFFICE_SLOTS }} 件までです。6 件目からは別紙にしてください。
       </p>
       <p v-if="downloadError" class="text-sm text-red-600" data-testid="tenko-filing-download-error">{{ downloadError }}</p>
+    </div>
+
+    <!-- e-Gov の申請データの確認 -->
+    <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-egov-check">
+      <h3 class="font-semibold text-gray-800">e-Gov の申請データを確かめる</h3>
+      <p class="text-sm text-gray-600">
+        e-Gov アプリで一時保存した申請データや、到達後にダウンロードした zip を選ぶと、上の「書き込む値」と規則 (開始日・添付・提出先) に照らして食い違いを出します。
+        ファイルはこのブラウザの中だけで読み、送りません。
+      </p>
+      <input type="file" accept=".zip" multiple class="text-sm" data-testid="tenko-filing-egov-input" @change="checkEgovFiles">
+      <div v-for="c in egovChecks" :key="c.file" class="border rounded-lg p-3 space-y-1 text-sm" data-testid="tenko-filing-egov-result">
+        <div class="font-medium">{{ c.file }}</div>
+        <p v-if="c.error" class="text-red-600">{{ c.error }}</p>
+        <template v-else>
+          <p class="text-gray-600">
+            {{ c.filing!.reportKind }} / {{ c.filing!.tenkoType }} / 開始日 {{ c.filing!.startDate || '-' }} / 提出先 {{ c.filing!.destinations.join('、') || '-' }}
+          </p>
+          <ul v-if="c.findings.length" class="space-y-0.5">
+            <li v-for="(x, i) in c.findings" :key="i" :class="x.level === 'error' ? 'text-red-600' : 'text-amber-700'">
+              {{ x.level === 'error' ? '要修正' : '確認' }}: {{ x.message }}
+            </li>
+          </ul>
+          <p v-else class="text-green-700">食い違いは見つかりませんでした</p>
+        </template>
+      </div>
     </div>
 
   </div>

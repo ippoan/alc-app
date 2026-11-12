@@ -1,6 +1,7 @@
 // 管理者の画面のタブ「点呼の届出」。値は架空。
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
+import { strToU8, zipSync } from 'fflate'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import TenkoFilingManager from '~/components/TenkoFilingManager.vue'
 import { emptySettings, type FilingSettings } from '~/utils/tenko-forms'
@@ -141,5 +142,41 @@ describe('TenkoFilingManager', () => {
     await w.find('[data-testid="tenko-filing-dl-remote-kamotsu-bessi7-jisshi"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="tenko-filing-download-error"]').text()).toBe('様式を作れませんでした')
+  })
+  it('e-Gov の申請データを選ぶと、保存した値と規則に照らした結果を出す (読めないファイルは理由)', async () => {
+    const xml = (device: string, start = '2099/1/1', name = '甲') => `<DataRoot><届出報告情報><届出報告種別>実施</届出報告種別><届出報告内容><点呼の種別>遠隔点呼</点呼の種別><西暦>${start}</西暦>`
+      + `<点呼に係る営業所又は車庫情報><申請1件目><点呼の実施被実施の別>実施</点呼の実施被実施の別><営業所又は車庫の名称>${name}</営業所又は車庫の名称><営業所又は車庫の位置>長崎県架空市1</営業所又は車庫の位置><使用する機器の名称>${device}</使用する機器の名称></申請1件目></点呼に係る営業所又は車庫情報>`
+      + '<遠隔点呼又は事業者間遠隔点呼の場合><点呼機器システムのパンフレット等性能及び機能が確認できる書類>1</点呼機器システムのパンフレット等性能及び機能が確認できる書類><対面による点呼と同等の効果を有するものとして国土交通大臣が定める方法を定める告示に規定されている要件を遵守します>1</対面による点呼と同等の効果を有するものとして国土交通大臣が定める方法を定める告示に規定されている要件を遵守します></遠隔点呼又は事業者間遠隔点呼の場合>'
+      + '</届出報告内容></届出報告情報></DataRoot>'
+    const zipFile = (name: string, files: Record<string, string>) =>
+      new File([zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)])))], name)
+    const kousei = '<DataRoot><提出先名称>国土交通省,九州運輸局,長崎運輸支局</提出先名称><添付書類ファイル名称>67_a.pdf</添付書類ファイル名称></DataRoot>'
+    const w = await mountIt(saved({ device_name: null, offices: [{ name: '甲', address: '長崎県架空市1', role: 1 }] }))
+    const input = w.find('[data-testid="tenko-filing-egov-input"]')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [
+        zipFile('ok.zip', { 'x/15596A069500020000_01.xml': xml('一歩庵点呼 v1'), 'x/kousei.xml': kousei }),
+        zipFile('ng.zip', { '15596A069500020000_01.xml': xml('一歩庵点呼　v01') }),
+        zipFile('other.zip', { 'a.txt': 'x' }),
+        zipFile('warn.zip', { '15596A069500020000_01.xml': xml('一歩庵点呼 v1', '', '乙') }),
+      ],
+    })
+    await input.trigger('change')
+    await flushPromises()
+    const results = w.findAll('[data-testid="tenko-filing-egov-result"]').map(r => r.text().replace(/\s+/g, ' '))
+    expect(results[0]).toBe('ok.zip実施 / 遠隔点呼 / 開始日 2099-01-01 / 提出先 長崎運輸支局食い違いは見つかりませんでした')
+    expect(results[1]).toContain('提出先 -')
+    expect(results[1]).toContain('要修正: 申請 1 件目 (甲): 使用する機器の名称が「一歩庵点呼 v01」です')
+    expect(results[1]).toContain('要修正: #67 点呼機器のパンフレットのファイル')
+    expect(results[2]).toBe('other.zipe-Gov の点呼の届出の申請データが見つかりません')
+    expect(results[3]).toContain('開始日 -')
+    expect(results[3]).toContain('確認: 申請 1 件目 (乙): 届出の画面に保存した営業所にありません')
+    expect((input.element as HTMLInputElement).value).toBe('')
+
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [{ name: 'broken.zip', arrayBuffer: () => Promise.reject(null) }] })
+    await input.trigger('change')
+    await flushPromises()
+    expect(w.find('[data-testid="tenko-filing-egov-result"]').text()).toContain('読めませんでした')
   })
 })
