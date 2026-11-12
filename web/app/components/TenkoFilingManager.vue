@@ -577,6 +577,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
 
     <TenkoCompanyManager :key="officesRev" v-model="companyId" :companies="companies" @changed="onCompaniesChanged" />
     <TenkoOfficeManager :key="companiesRev" @saved="onOfficesSaved" />
+    <TenkoContractMaker :key="`${officesRev}-${companiesRev}`" :companies="companies" />
 
     <!-- 開いている控えの中身 (?arrive=) -->
     <div v-if="opened" class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-opened">

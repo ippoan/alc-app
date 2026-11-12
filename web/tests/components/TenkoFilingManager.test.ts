@@ -717,14 +717,16 @@ describe('TenkoFilingManager', () => {
       w.findComponent(TenkoOfficeManager).vm.$emit('saved')
       await flushPromises()
       expect(api.listTenkoCompanies).toHaveBeenCalledTimes(1)
-      expect(api.getTenkoOffices).toHaveBeenCalledTimes(1)
+      // 事業者の表と契約書の欄 (営業所の候補) の 2 か所
+      expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
       // 事業者の変更 → 事業者の一覧と、営業所の表 (事業者の候補) を読み直す
       api.listTenkoCompanies.mockClear()
       api.getTenkoOffices.mockClear()
       w.findComponent(TenkoCompanyManager).vm.$emit('changed')
       await flushPromises()
       expect(api.listTenkoCompanies).toHaveBeenCalledTimes(2)
-      expect(api.getTenkoOffices).toHaveBeenCalledTimes(1)
+      // 営業所の表と契約書の欄の 2 か所
+      expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
     })
   })
 })
