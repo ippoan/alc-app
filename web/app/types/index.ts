@@ -633,6 +633,33 @@ export interface TenkoOffice {
   carins_bases: TenkoOfficeCarinsBaseKey[]
 }
 
+/** 点呼の事業者 (`GET /api/tenko/companies`)。1 つのテナントに複数。`is_self` は既定の事業者 (1 つまで) */
+export interface TenkoCompany {
+  id: string
+  name: string
+  is_self: boolean
+  /** この事業者に振り分けた営業所 (営業所は 1 つの事業者だけ) */
+  office_ids: string[]
+}
+
+export type TenkoCompanyInput = Omit<TenkoCompany, 'id'>
+
+/** 受委託 (事業者間遠隔点呼)。委託・受託の営業所には、それぞれ事業者が付いている必要がある */
+export interface TenkoConsignment {
+  id: string
+  consignor_office_id: string
+  consignee_office_id: string
+  /** 許可申請の到達番号 */
+  arrive_id: string | null
+  /** 空なら申請中 */
+  permit_no: string | null
+  permit_date: string | null
+  valid_from: string | null
+  valid_to: string | null
+}
+
+export type TenkoConsignmentInput = Omit<TenkoConsignment, 'id'>
+
 /**
  * キオスクの車両番号の候補 (`GET …/vehicle-candidates`)。`linked` は点呼の営業所に紐づいているか、`device_office` は
  * この端末の営業所の車両か。`carins_cert_no` は車検証から出た候補の管理番号 (選んだら `carins_cert_no` で登録する)

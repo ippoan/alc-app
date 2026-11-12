@@ -94,6 +94,15 @@ import {
   getBpNotifySettings,
   updateBpNotifySetting,
   getTenkoFilingSettings,
+  listTenkoCompanies,
+  createTenkoCompany,
+  updateTenkoCompany,
+  deleteTenkoCompany,
+  listTenkoConsignments,
+  createTenkoConsignment,
+  updateTenkoConsignment,
+  deleteTenkoConsignment,
+  setFilingArchiveCompanies,
   putTenkoFilingSettings,
   listFilingArchives,
   saveFilingArchive,
@@ -3347,21 +3356,73 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
     vi.unstubAllGlobals()
   })
 
-  it('GET で取り、PUT で全部の欄を送る', async () => {
+  it('GET で取り、PUT で全部の欄を送る (どちらも事業者の company_id 付き)', async () => {
     const s = { business_number: '000000000001', offices: [] }
+    const co = TEST_EMPLOYEE_ID
     mockFetch.mockResolvedValueOnce(okJson(s))
-    await expect(getTenkoFilingSettings()).resolves.toEqual(s)
-    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/filing-settings$/)
+    await expect(getTenkoFilingSettings(co)).resolves.toEqual(s)
+    expect(mockFetch.mock.calls[0][0]).toMatch(new RegExp(`/tenko/filing-settings\\?company_id=${co}$`))
     mockFetch.mockResolvedValueOnce(okJson(s))
-    await expect(putTenkoFilingSettings(s as never)).resolves.toEqual(s)
+    await expect(putTenkoFilingSettings(co, s as never)).resolves.toEqual(s)
     const [url, init] = mockFetch.mock.calls[1]
-    expect(url).toMatch(/\/tenko\/filing-settings$/)
+    expect(url).toMatch(new RegExp(`/tenko/filing-settings\\?company_id=${co}$`))
     expect(init.method).toBe('PUT')
     expect(JSON.parse(init.body)).toEqual(s)
   })
 
+  it('事業者: 一覧・追加・置き換え・削除', async () => {
+    const c = { id: SEED_DEVICE_ID, name: '架空運輸', is_self: true, office_ids: [SEED_SESSION_ID] }
+    const input = { name: c.name, is_self: true, office_ids: c.office_ids }
+    mockFetch.mockResolvedValueOnce(okJson([c]))
+    await expect(listTenkoCompanies()).resolves.toEqual([c])
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/companies$/)
+    mockFetch.mockResolvedValueOnce(okJson(c))
+    await expect(createTenkoCompany(input)).resolves.toEqual(c)
+    expect(mockFetch.mock.calls[1][1].method).toBe('POST')
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual(input)
+    mockFetch.mockResolvedValueOnce(okJson(c))
+    await expect(updateTenkoCompany(c.id, input)).resolves.toEqual(c)
+    expect(mockFetch.mock.calls[2][0]).toMatch(new RegExp(`/tenko/companies/${c.id}$`))
+    expect(mockFetch.mock.calls[2][1].method).toBe('PUT')
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve('') })
+    await deleteTenkoCompany(c.id)
+    expect(mockFetch.mock.calls[3][0]).toMatch(new RegExp(`/tenko/companies/${c.id}$`))
+    expect(mockFetch.mock.calls[3][1].method).toBe('DELETE')
+  })
+
+  it('受委託: 一覧・追加・置き換え・削除', async () => {
+    const k = {
+      id: SEED_GUIDANCE_ID, consignor_office_id: SEED_SESSION_ID, consignee_office_id: SEED_SCHEDULE_ID,
+      arrive_id: null, permit_no: null, permit_date: null, valid_from: null, valid_to: null,
+    }
+    const { id, ...input } = k
+    mockFetch.mockResolvedValueOnce(okJson([k]))
+    await expect(listTenkoConsignments()).resolves.toEqual([k])
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/consignments$/)
+    mockFetch.mockResolvedValueOnce(okJson(k))
+    await expect(createTenkoConsignment(input)).resolves.toEqual(k)
+    expect(mockFetch.mock.calls[1][1].method).toBe('POST')
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual(input)
+    mockFetch.mockResolvedValueOnce(okJson(k))
+    await expect(updateTenkoConsignment(id, input)).resolves.toEqual(k)
+    expect(mockFetch.mock.calls[2][0]).toMatch(new RegExp(`/tenko/consignments/${id}$`))
+    expect(mockFetch.mock.calls[2][1].method).toBe('PUT')
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve('') })
+    await deleteTenkoConsignment(id)
+    expect(mockFetch.mock.calls[3][1].method).toBe('DELETE')
+  })
+
+  it('控えに付ける事業者を PUT で置き換える', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ id: '20991231235959001e', company_ids: [SEED_DEVICE_ID] }))
+    await expect(setFilingArchiveCompanies('20991231235959001e', [SEED_DEVICE_ID])).resolves.toEqual({ id: '20991231235959001e', company_ids: [SEED_DEVICE_ID] })
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/tenko\/filing-archives\/20991231235959001e\/companies$/)
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({ company_ids: [SEED_DEVICE_ID] })
+  })
+
   it('申請済みの控え: 一覧を取り、zip を到達番号で PUT し (名前と要約はクエリ)、失敗は本文付きで投げる', async () => {
-    const a = { id: '20991231235959001e', name: 'a b.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, meta: null }
+    const a = { id: '20991231235959001e', name: 'a b.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, meta: null, company_ids: [] }
     mockFetch.mockResolvedValueOnce(okJson([a]))
     await expect(listFilingArchives()).resolves.toEqual([a])
     expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/filing-archives$/)
