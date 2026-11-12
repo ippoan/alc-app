@@ -13,7 +13,7 @@
 
 ## 認定申請の資料
 
-自動点呼機器の認定申請に添付する資料です。操作マニュアルを更新するたびに作り直しています。
+自動点呼機器の認定申請と、遠隔点呼の届出に添付する資料です。操作マニュアルを更新するたびに作り直しています。
 
 | 資料 | 内容 |
 |---|---|
@@ -21,3 +21,4 @@
 | [根拠資料 業務前（PDF）](https://ippoan.github.io/alc-app/downloads/evidence-pre.pdf) | 様式３－１ の資料番号ごとの要件・適否・内容と、操作マニュアルの該当箇所 |
 | [根拠資料 業務後（PDF）](https://ippoan.github.io/alc-app/downloads/evidence-post.pdf) | 様式３－２ の資料番号ごとの要件・適否・内容と、操作マニュアルの該当箇所 |
 | [会社概要（PDF）](https://ippoan.github.io/alc-app/downloads/company-profile.pdf) | 製作事業者の会社概要と製品の紹介 |
+| [遠隔点呼の機能と性能（PDF）](https://ippoan.github.io/alc-app/downloads/brochure.pdf) | 遠隔点呼の届出に添付する製品のパンフレット（構成機器・流れ・機器システムの要件ごとの機能） |
