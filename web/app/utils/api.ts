@@ -5,7 +5,7 @@ import type {
   TenkoSession, StartTenkoSession, SubmitMedicalData, SubmitSelfDeclaration,
   SubmitDailyInspection, SubmitOperationReport, CancelTenkoSession, InterruptSession, ResumeSession,
   SubmitManagerJudgment, UpdateTenkoSessionVehicle, TenkoSettings,
-  TenkoOffice, TenkoOfficeInput, TenkoOfficesResponse, InPersonScope, VehicleCandidate,
+  TenkoOffice, TenkoOfficeInput, TenkoOfficesResponse, TenkoCompany, TenkoCompanyInput, TenkoConsignment, TenkoConsignmentInput, InPersonScope, VehicleCandidate,
   TenkoRemoteEscalationReason,
   TenkoSessionFilter, TenkoSessionsResponse,
   TenkoRecordFilter,
@@ -1188,17 +1188,57 @@ export async function linkBpNotifyByName(dryRun: boolean): Promise<ApiBpNotifyLi
   }, 'admin')
 }
 
-/** 点呼の届出・認定申請に差し込む値 (管理者だけ)。保存が無ければ既定値 */
-export async function getTenkoFilingSettings(): Promise<FilingSettings> {
-  return request<FilingSettings>('/api/tenko/filing-settings', {}, 'admin')
+/** 事業者の点呼の届出・認定申請に差し込む値 (管理者だけ)。保存が無ければ既定値 */
+export async function getTenkoFilingSettings(companyId: string): Promise<FilingSettings> {
+  return request<FilingSettings>(`/api/tenko/filing-settings?company_id=${encodeURIComponent(companyId)}`, {}, 'admin')
 }
 
-/** 点呼の届出・認定申請に差し込む値を保存する (管理者だけ。全部の欄を置き換える)。欄が外れていれば 400 */
-export async function putTenkoFilingSettings(body: FilingSettings): Promise<FilingSettings> {
-  return request<FilingSettings>('/api/tenko/filing-settings', {
+/** 事業者の点呼の届出・認定申請に差し込む値を保存する (管理者だけ。全部の欄を置き換える)。欄が外れていれば 400 */
+export async function putTenkoFilingSettings(companyId: string, body: FilingSettings): Promise<FilingSettings> {
+  return request<FilingSettings>(`/api/tenko/filing-settings?company_id=${encodeURIComponent(companyId)}`, {
     method: 'PUT',
     body: JSON.stringify(body),
   }, 'admin')
+}
+
+/** 点呼の事業者の一覧 (管理者だけ。名称順。営業所の振り分け付き) */
+export async function listTenkoCompanies(): Promise<TenkoCompany[]> {
+  return request<TenkoCompany[]>('/api/tenko/companies', {}, 'admin')
+}
+
+/** 事業者を足す (管理者だけ) */
+export async function createTenkoCompany(body: TenkoCompanyInput): Promise<TenkoCompany> {
+  return request<TenkoCompany>('/api/tenko/companies', { method: 'POST', body: JSON.stringify(body) }, 'admin')
+}
+
+/** 事業者を置き換える (管理者だけ。営業所の振り分けも全部置き換える。既定にすると、ほかの事業者の既定は外れる) */
+export async function updateTenkoCompany(id: string, body: TenkoCompanyInput): Promise<TenkoCompany> {
+  return request<TenkoCompany>(`/api/tenko/companies/${id}`, { method: 'PUT', body: JSON.stringify(body) }, 'admin')
+}
+
+/** 事業者を消す (管理者だけ。書き込む値と控えの振り分けも消え、営業所は振り分け前に戻る) */
+export async function deleteTenkoCompany(id: string): Promise<void> {
+  await request<void>(`/api/tenko/companies/${id}`, { method: 'DELETE' }, 'admin')
+}
+
+/** 受委託 (事業者間遠隔点呼) の一覧 (管理者だけ) */
+export async function listTenkoConsignments(): Promise<TenkoConsignment[]> {
+  return request<TenkoConsignment[]>('/api/tenko/consignments', {}, 'admin')
+}
+
+/** 受委託を足す (管理者だけ) */
+export async function createTenkoConsignment(body: TenkoConsignmentInput): Promise<TenkoConsignment> {
+  return request<TenkoConsignment>('/api/tenko/consignments', { method: 'POST', body: JSON.stringify(body) }, 'admin')
+}
+
+/** 受委託を置き換える (管理者だけ) */
+export async function updateTenkoConsignment(id: string, body: TenkoConsignmentInput): Promise<TenkoConsignment> {
+  return request<TenkoConsignment>(`/api/tenko/consignments/${id}`, { method: 'PUT', body: JSON.stringify(body) }, 'admin')
+}
+
+/** 受委託を消す (管理者だけ) */
+export async function deleteTenkoConsignment(id: string): Promise<void> {
+  await request<void>(`/api/tenko/consignments/${id}`, { method: 'DELETE' }, 'admin')
 }
 
 /** 点呼の届出の申請済みの控え (e-Gov の zip を到達番号で R2 に置いたもの) */
@@ -1210,6 +1250,8 @@ export interface FilingArchive {
   saved_at: string
   saved_by: string | null
   meta: Record<string, unknown> | null
+  /** この控えを付けた事業者 (どれにも付けていなければ空) */
+  company_ids: string[]
 }
 
 /** 点呼の届出の申請済みの控えの一覧 (管理者だけ。保存の新しい順) */
@@ -1247,6 +1289,14 @@ export async function downloadFilingArchive(arriveId: string, filename: string):
     filename,
     '控えのダウンロード',
   )
+}
+
+/** 申請済みの控えを付ける事業者を置き換える (管理者だけ。控えの zip が未保存でも振り分けだけ持てる) */
+export async function setFilingArchiveCompanies(arriveId: string, companyIds: string[]): Promise<{ id: string, company_ids: string[] }> {
+  return request<{ id: string, company_ids: string[] }>(`/api/tenko/filing-archives/${encodeURIComponent(arriveId)}/companies`, {
+    method: 'PUT',
+    body: JSON.stringify({ company_ids: companyIds }),
+  }, 'admin')
 }
 
 /** 申請済みの控えの zip の中身 (管理者だけ)。その到達番号の控えが未保存なら null */

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import {
   downloadFilingArchive, fetchFilingArchive, getEgovApplyStatus, getTenkoFilingSettings, listFilingArchives, logoutEgov,
-  putTenkoFilingSettings, saveFilingArchive, type EgovApplyStatus, type FilingArchive,
+  listTenkoCompanies, putTenkoFilingSettings, saveFilingArchive, setFilingArchiveCompanies,
+  type EgovApplyStatus, type FilingArchive,
 } from '~/utils/api'
+import type { TenkoCompany } from '~/types'
 import {
   ARRIVE_FILE, ARRIVE_ID, checkEgovFiling, fillSettingsFromFiling, listEgovZipFiles, parseEgovZip,
   type EgovFiling, type EgovFinding,
@@ -19,6 +21,9 @@ import {
  * ダウンロードさせる。提出は人が手で行う (e-Gov アプリ)。ダウンロードは保存前の入力のままでも書き込む。
  * 機器の名称と認定番号の既定は製品の設定 (tenko-forms の product/ippoan-tenko.json) から入れる (版を上げると切り替わる)。
  * 自動点呼機器の認定申請は製作元の手続なので、ここではなく auth.ippoan.org の開発者専用ページで作る。
+ *
+ * 事業者ごと: 上の事業者の表で選んだ事業者の「書き込む値」と申請済みの控えを出す (事業者は TenkoCompanyManager)。
+ * どの事業者にも付いていない控えは「振り分けていない控え」として全事業者の画面に出し、付けられるようにする。
  *
  * 申請済みの控え (Refs #676): 行ごとに e-Gov での状況 (e-Gov にログインしたとき) と egov-check の詳細へのリンクを出す。
  * `?arrive=<到達番号>` で、その控えの中身 (申請書・添付・照らした結果) を直接開く。egov-check とは統合しない
@@ -38,7 +43,27 @@ const ERRORS: Record<string, string> = {
   invalid_corporate_number: '法人番号は半角数字 13 桁で入力してください',
   too_many_partners: '受委託の相手の会社は 10 社までです',
   invalid_partner: '受委託の相手の会社と、その営業所の名称を入力してください',
+  company_required: '事業者を選んでください',
+  invalid_company: '事業者を選び直してください',
   forbidden: 'システム管理者だけが変更できます',
+}
+
+/** 事業者の一覧と、いま選んでいる事業者 (無ければ空) */
+const companies = ref<TenkoCompany[]>([])
+const companyId = ref('')
+
+/** 一覧を読み、選んでいる事業者が無ければ既定の事業者 (無ければ先頭) を選ぶ */
+async function loadCompanies() {
+  try {
+    companies.value = await listTenkoCompanies()
+  }
+  catch (e) {
+    loadError.value = messageOf(e, '事業者を取得できませんでした')
+    return
+  }
+  if (!companies.value.some(c => c.id === companyId.value)) {
+    companyId.value = (companies.value.find(c => c.is_self) ?? companies.value[0])?.id ?? ''
+  }
 }
 
 const settings = ref<FilingSettings>(emptySettings())
@@ -67,11 +92,24 @@ function messageOf(e: unknown, fallback: string): string {
 
 onMounted(async () => {
   product.value = await fetchProductInfo()
+  await loadCompanies()
+})
+
+/** 選んだ事業者の書き込む値を読む (切り替えが早いときは、古い応答を捨てる) */
+watch(companyId, async (id) => {
+  loadError.value = ''
+  notice.value = ''
+  saveError.value = ''
+  if (!id) {
+    settings.value = emptySettings()
+    return
+  }
   try {
-    settings.value = adopt(await getTenkoFilingSettings())
+    const s = await getTenkoFilingSettings(id)
+    if (id === companyId.value) settings.value = adopt(s)
   }
   catch (e) {
-    loadError.value = messageOf(e, '設定を取得できませんでした')
+    if (id === companyId.value) loadError.value = messageOf(e, '設定を取得できませんでした')
   }
 })
 
@@ -107,7 +145,7 @@ async function save() {
   saveError.value = ''
   notice.value = ''
   try {
-    settings.value = adopt(await putTenkoFilingSettings(settings.value))
+    settings.value = adopt(await putTenkoFilingSettings(companyId.value, settings.value))
     notice.value = '保存しました'
   }
   catch (e) {
@@ -203,6 +241,46 @@ async function loadArchives() {
   await loadEgovStatuses()
 }
 
+/** 選んだ事業者の控えと、どの事業者にも付いていない控え (全事業者の画面に出す) */
+const shownArchives = computed(() => [
+  ...archives.value.filter(a => a.company_ids.includes(companyId.value)),
+  ...archives.value.filter(a => !a.company_ids.length),
+])
+
+function companyNames(a: FilingArchive): string {
+  return a.company_ids.map(id => companies.value.find(c => c.id === id)?.name ?? '').filter(Boolean).join('・')
+}
+
+/** 保存の後、選んでいる事業者を控えに付ける (すでに付いている事業者は残す) */
+async function attachSelected(arriveId: string) {
+  if (!companyId.value) return
+  const current = archives.value.find(a => a.id === arriveId)?.company_ids ?? []
+  await setFilingArchiveCompanies(arriveId, [...new Set([...current, companyId.value])])
+}
+
+/** 付け替えの欄を開いている控え (到達番号) と、その選び */
+const assigning = ref('')
+const assignIds = ref<string[]>([])
+const assignError = ref('')
+
+function startAssign(a: FilingArchive) {
+  assignError.value = ''
+  assignIds.value = [...a.company_ids]
+  assigning.value = assigning.value === a.id ? '' : a.id
+}
+
+async function saveAssign(a: FilingArchive) {
+  assignError.value = ''
+  try {
+    await setFilingArchiveCompanies(a.id, assignIds.value)
+    assigning.value = ''
+    await loadArchives()
+  }
+  catch (e) {
+    assignError.value = messageOf(e, '事業者を付けられませんでした')
+  }
+}
+
 /** URL の 1 つのクエリを書き換える (画面の他のクエリは残す。履歴は増やさない) */
 function setQuery(key: string, value: string | null) {
   const u = new URL(window.location.href)
@@ -220,6 +298,9 @@ onMounted(async () => {
   const arrive = q.get('arrive') ?? ''
   if (arrive) await openArchive(arrive)
   await loadArchives()
+  // 事業者が付いている控えを直接開いたときは、その事業者を選んだ状態にする
+  const owners = archives.value.find(a => a.id === arrive)?.company_ids ?? []
+  if (owners.length && !owners.includes(companyId.value)) companyId.value = owners[0]!
 })
 
 /** e-Gov での状況を出すか (本番のソフトウェア ID に戻り先を登録してから 'on') */
@@ -389,6 +470,7 @@ async function saveMissing(e: Event) {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
     await saveFilingArchive(o.arriveId, bytes, file.name, archiveMeta(parseEgovZip(bytes)))
+    await attachSelected(o.arriveId)
   }
   catch (err) {
     opened.value = { ...o, saved: messageOf(err, '控えを保存できませんでした') }
@@ -414,6 +496,7 @@ function archiveMeta(f: EgovFiling): Record<string, unknown> {
 async function saveArchive(c: EgovCheck) {
   try {
     await saveFilingArchive(c.arriveId, c.bytes, c.file, archiveMeta(c.filing!))
+    await attachSelected(c.arriveId)
     egovChecks.value = egovChecks.value.map(x => x === c ? { ...x, saved: '控えを保存しました' } : x)
     await loadArchives()
   }
@@ -475,6 +558,8 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       </p>
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-filing-load-error">{{ loadError }}</p>
     </div>
+
+    <TenkoCompanyManager v-model="companyId" :companies="companies" @changed="loadCompanies" />
 
     <!-- 開いている控えの中身 (?arrive=) -->
     <div v-if="opened" class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-opened">
@@ -590,8 +675,11 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
     </div>
 
     <!-- 設定 -->
-    <div class="bg-white rounded-xl p-4 shadow-sm space-y-4" data-testid="tenko-filing-settings">
-      <h3 class="font-semibold text-gray-800">書き込む値</h3>
+    <div v-if="!companyId" class="bg-white rounded-xl p-4 shadow-sm" data-testid="tenko-filing-no-company">
+      <p class="text-sm text-gray-600">事業者を追加してください</p>
+    </div>
+    <div v-else class="bg-white rounded-xl p-4 shadow-sm space-y-4" data-testid="tenko-filing-settings">
+      <h3 class="font-semibold text-gray-800">書き込む値<span class="ml-2 text-sm font-normal text-gray-500" data-testid="tenko-filing-company-name">{{ companies.find(c => c.id === companyId)?.name }}</span></h3>
 
       <div class="grid gap-3 sm:grid-cols-3">
         <label class="text-sm">
@@ -805,7 +893,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         >e-Gov にログイン</a>
       </div>
       <p v-if="archivesError" class="text-sm text-red-600" data-testid="tenko-filing-archives-error">{{ archivesError }}</p>
-      <p v-else-if="!archives.length" class="text-sm text-gray-500">まだありません。上で到達番号の名前の zip を読み、「控えとして保存」を押してください。</p>
+      <p v-else-if="!shownArchives.length" class="text-sm text-gray-500">まだありません。上で到達番号の名前の zip を読み、「控えとして保存」を押してください。</p>
       <div v-else class="overflow-x-auto rounded-lg border border-gray-200">
         <table class="w-full text-sm">
           <thead class="bg-gray-50 text-left text-xs font-medium text-gray-500">
@@ -817,9 +905,8 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
+            <template v-for="a in shownArchives" :key="a.id">
             <tr
-              v-for="a in archives"
-              :key="a.id"
               class="cursor-pointer transition-colors"
               :class="opened?.arriveId === a.id ? 'bg-blue-50' : 'hover:bg-gray-50'"
               title="中身を見る"
@@ -827,7 +914,11 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
               @click="openArchive(a.id)"
             >
               <td class="px-3 py-2.5">
-                <div class="font-mono text-sm text-gray-900">{{ a.id }}</div>
+                <div class="font-mono text-sm text-gray-900">
+                  {{ a.id }}
+                  <span v-if="!a.company_ids.length" class="ml-2 rounded-full bg-amber-50 px-2 py-0.5 font-sans text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20" data-testid="tenko-filing-archive-unassigned">振り分けていない控え</span>
+                  <span v-else class="ml-2 font-sans text-xs text-gray-500" data-testid="tenko-filing-archive-companies">{{ companyNames(a) }}</span>
+                </div>
                 <div v-if="typeof egovStatuses[a.id] === 'object'" class="mt-0.5 text-xs text-gray-600" data-testid="tenko-filing-archive-egov-line">
                   {{ egovLine(egovStatuses[a.id] as EgovApplyStatus) }}
                 </div>
@@ -858,6 +949,15 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
               <td class="whitespace-nowrap px-3 py-2.5 text-xs text-gray-500">{{ a.saved_at.slice(0, 10) }}</td>
               <td class="px-2 py-2.5" @click.stop>
                 <div class="flex items-center justify-end gap-0.5">
+                  <button
+                    class="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                    title="事業者を付け替える"
+                    aria-label="事業者を付け替える"
+                    data-testid="tenko-filing-archive-assign"
+                    @click="startAssign(a)"
+                  >
+                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 10l7-7h7v7l-7 7-7-7zM13 7h.01" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </button>
                   <a
                     :href="`${EGOV_CHECK_APPLY}${a.id}`"
                     target="_blank"
@@ -881,6 +981,20 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
                 </div>
               </td>
             </tr>
+            <tr v-if="assigning === a.id" class="bg-gray-50" data-testid="tenko-filing-archive-assign-row">
+              <td :colspan="egovEnabled ? 4 : 3" class="px-3 py-2.5">
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                  <span class="text-gray-500">付ける事業者 (複数可)</span>
+                  <label v-for="c in companies" :key="c.id" class="flex items-center gap-1 text-gray-800">
+                    <input v-model="assignIds" type="checkbox" :value="c.id" data-testid="tenko-filing-archive-assign-company">
+                    {{ c.name }}
+                  </label>
+                  <button class="rounded-lg bg-blue-600 px-3 py-1 text-xs text-white" data-testid="tenko-filing-archive-assign-save" @click="saveAssign(a)">保存</button>
+                  <span v-if="assignError" class="text-red-600" data-testid="tenko-filing-archive-assign-error">{{ assignError }}</span>
+                </div>
+              </td>
+            </tr>
+            </template>
           </tbody>
         </table>
       </div>

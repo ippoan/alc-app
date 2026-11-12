@@ -15,6 +15,10 @@ const api = vi.hoisted(() => ({
   fetchFilingArchive: vi.fn(),
   getEgovApplyStatus: vi.fn(),
   logoutEgov: vi.fn(),
+  listTenkoCompanies: vi.fn(),
+  setFilingArchiveCompanies: vi.fn(),
+  getTenkoOffices: vi.fn(),
+  listTenkoConsignments: vi.fn(),
 }))
 const rc = vi.hoisted(() => ({ egovLogin: '' }))
 mockNuxtImport('useRuntimeConfig', original => () => {
@@ -35,12 +39,16 @@ vi.mock('~/utils/tenko-forms', async importOriginal => ({
   ...forms,
 }))
 
+const CO_A = { id: 'cccccccc-0001-0001-0001-cccccccccccc', name: '架空運輸', is_self: false, office_ids: [] as string[] }
+const CO_B = { id: 'cccccccc-0002-0002-0002-cccccccccccc', name: '架空物流', is_self: true, office_ids: [] as string[] }
+
 function saved(over: Partial<FilingSettings> = {}): FilingSettings {
   return { ...emptySettings(), business_number: '000000000001', updated_at: '2026-11-02T00:00:00Z', ...over }
 }
 
-async function mountIt(s: FilingSettings | Error = saved()) {
-  if (s instanceof Error) api.getTenkoFilingSettings.mockRejectedValue(s)
+async function mountIt(s: FilingSettings | Error | null = saved()) {
+  if (s === null) { /* getTenkoFilingSettings はテスト側で決める */ }
+  else if (s instanceof Error) api.getTenkoFilingSettings.mockRejectedValue(s)
   else api.getTenkoFilingSettings.mockResolvedValue(s)
   const w = await mountSuspended(TenkoFilingManager)
   await flushPromises()
@@ -54,6 +62,10 @@ beforeEach(() => {
   rc.egovLogin = ''
   window.history.replaceState(null, '', '/?role=admin&tab=tenko_filing')
   api.listFilingArchives.mockResolvedValue([])
+  api.listTenkoCompanies.mockResolvedValue([CO_A, CO_B])
+  api.getTenkoOffices.mockResolvedValue({ offices: [], vehicles: [], carins_bases: [] })
+  api.listTenkoConsignments.mockResolvedValue([])
+  api.setFilingArchiveCompanies.mockResolvedValue({ id: '', company_ids: [] })
   forms.fetchProductInfo.mockResolvedValue({ deviceName: '一歩庵点呼 v1', certPre: null, certPost: null })
 })
 
@@ -145,7 +157,7 @@ describe('TenkoFilingManager', () => {
     api.putTenkoFilingSettings.mockResolvedValue(saved({ offices: [{ name: '', address: '', role: 2 }] }))
     await w.find('[data-testid="tenko-filing-save"]').trigger('click')
     await flushPromises()
-    expect(api.putTenkoFilingSettings.mock.calls[0]![0].offices).toEqual([{ name: '', address: '', role: 2 }])
+    expect(api.putTenkoFilingSettings.mock.calls[0]![1].offices).toEqual([{ name: '', address: '', role: 2 }])
     expect(w.find('[data-testid="tenko-filing-notice"]').text()).toBe('保存しました')
   })
 
@@ -232,10 +244,10 @@ describe('TenkoFilingManager', () => {
     await partner.find('[data-testid="tenko-filing-add-partner-office"]').trigger('click')
     await partner.findAll('[data-testid="tenko-filing-remove-partner-office"]')[0]!.trigger('click')
     await partner.findAll('input')[3]!.setValue('本社営業所')
-    api.putTenkoFilingSettings.mockImplementation(async (s: FilingSettings) => s)
+    api.putTenkoFilingSettings.mockImplementation(async (_id: string, s: FilingSettings) => s)
     await w.find('[data-testid="tenko-filing-save"]').trigger('click')
     await flushPromises()
-    expect(api.putTenkoFilingSettings.mock.calls[0]![0].partners).toEqual([
+    expect(api.putTenkoFilingSettings.mock.calls[0]![1].partners).toEqual([
       { name: '架空物流', address: null, representative: null, offices: [{ name: '本社営業所', address: null }] },
     ])
     for (const [word, text] of [
@@ -288,7 +300,7 @@ describe('TenkoFilingManager', () => {
   })
 
   it('到達番号の名前の zip は控えとして保存でき、一覧からダウンロードする。失敗は理由を出す', async () => {
-    const archive = { id: '20991231235959001e', name: '20991231235959001e.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, meta: { reportKind: '実施', tenkoType: '遠隔点呼', startDate: '2099-12-01', offices: ['甲', '乙'] } }
+    const archive = { id: '20991231235959001e', name: '20991231235959001e.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, company_ids: [CO_B.id], meta: { reportKind: '実施', tenkoType: '遠隔点呼', startDate: '2099-12-01', offices: ['甲', '乙'] } }
     api.listFilingArchives.mockResolvedValueOnce([]).mockResolvedValueOnce([archive, { ...archive, id: '2099123123595902', meta: { procName: '架空の受委託' } }, { ...archive, id: '2099123123595903', meta: null }])
     const w = await mountIt(saved())
     expect(w.find('[data-testid="tenko-filing-archives"]').text()).toContain('まだありません')
@@ -301,11 +313,12 @@ describe('TenkoFilingManager', () => {
       procedure: 'entrust', procName: '架空の受委託', reportKind: '', tenkoType: '', startDate: '2099-06-01', offices: [], destinations: ['長崎運輸支局'],
     }])
     expect(w.find('[data-testid="tenko-filing-egov-archive-result"]').text()).toBe('控えを保存しました')
+    expect(api.setFilingArchiveCompanies).toHaveBeenCalledWith('20991231235959001e', [CO_B.id])
     const rows = w.findAll('[data-testid="tenko-filing-archive-row"]').map(r => r.findAll('td').map(td => td.text().replace(/\s+/g, ' ')))
     expect(rows).toEqual([
-      ['20991231235959001e実施 / 遠隔点呼 / 開始 2099-12-01 / 甲・乙', '2099-12-31', ''],
-      ['2099123123595902架空の受委託', '2099-12-31', ''],
-      ['2099123123595903', '2099-12-31', ''],
+      ['20991231235959001e 架空物流実施 / 遠隔点呼 / 開始 2099-12-01 / 甲・乙', '2099-12-31', ''],
+      ['2099123123595902 架空物流架空の受委託', '2099-12-31', ''],
+      ['2099123123595903 架空物流', '2099-12-31', ''],
     ])
     expect(w.find('[data-testid="tenko-filing-archive-summary"]').exists()).toBe(true)
     api.saveFilingArchive.mockRejectedValueOnce(new Error('控えの保存に失敗しました (503): x'))
@@ -325,7 +338,7 @@ describe('TenkoFilingManager', () => {
   describe('申請済みの控えの e-Gov の状況と中身 (?arrive=)', () => {
     const A = '20991231235959001e'
     const B = '2099123123595902'
-    const row = (id: string) => ({ id, name: `${id}.zip`, size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, meta: null })
+    const row = (id: string) => ({ id, name: `${id}.zip`, size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, company_ids: [CO_B.id], meta: null })
     const filingZip = (extra: Record<string, string> = {}) => zipSync({
       'x/kousei.xml': strToU8('<DataRoot><手続ID>15596A0695000001</手続ID><手続名称>架空の届出</手続名称><提出先名称>国土交通省,九州運輸局,長崎運輸支局</提出先名称></DataRoot>'),
       'x/15596A069500020000_01.xml': strToU8('<DataRoot><届出報告情報><届出報告種別>実施</届出報告種別><届出報告内容><点呼の種別>遠隔点呼</点呼の種別><西暦>2099/1/1</西暦></届出報告内容></届出報告情報></DataRoot>'),
@@ -566,5 +579,122 @@ describe('TenkoFilingManager', () => {
     api.listFilingArchives.mockRejectedValueOnce(new Error('403 {"error":"forbidden"}'))
     const w = await mountIt()
     expect(w.find('[data-testid="tenko-filing-archives-error"]').text()).toBe('システム管理者だけが変更できます')
+  })
+
+  describe('事業者ごとの切り替え', () => {
+    const A = '20991231235959001e'
+    const arc = (id: string, company_ids: string[]) => ({ id, name: `${id}.zip`, size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, company_ids, meta: null })
+    const ids = (w: W) => w.findAll('[data-testid="tenko-filing-archive-row"]').map(r => r.find('.font-mono').text().split(' ')[0])
+    const rows = (w: W) => w.findAll('[data-testid="tenko-company-row"]')
+
+    it('既定の事業者の書き込む値を、company_id 付きで読む。行を選ぶと別の事業者の値に切り替わる', async () => {
+      api.getTenkoFilingSettings.mockImplementation(async (id: string) => saved({ business_number: id === CO_A.id ? '000000000001' : '000000000002' }))
+      const w = await mountIt(null)
+      const num = () => (w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value
+      expect(api.getTenkoFilingSettings).toHaveBeenCalledWith(CO_B.id)
+      expect([num(), w.find('[data-testid="tenko-filing-company-name"]').text()]).toEqual(['000000000002', '架空物流'])
+      await rows(w)[0]!.trigger('click')
+      await flushPromises()
+      expect(api.getTenkoFilingSettings).toHaveBeenLastCalledWith(CO_A.id)
+      expect([num(), w.find('[data-testid="tenko-filing-company-name"]').text()]).toEqual(['000000000001', '架空運輸'])
+      api.putTenkoFilingSettings.mockImplementation(async (_id: string, v: FilingSettings) => v)
+      await w.find('[data-testid="tenko-filing-save"]').trigger('click')
+      await flushPromises()
+      expect(api.putTenkoFilingSettings.mock.calls[0]![0]).toBe(CO_A.id)
+    })
+
+    it('既定が無ければ先頭を選ぶ。事業者が無いときは「事業者を追加してください」だけ出し、値は読まない', async () => {
+      api.listTenkoCompanies.mockResolvedValue([{ ...CO_A }])
+      const first = await mountIt()
+      expect(api.getTenkoFilingSettings).toHaveBeenCalledWith(CO_A.id)
+      expect(first.find('[data-testid="tenko-filing-settings"]').exists()).toBe(true)
+      api.getTenkoFilingSettings.mockClear()
+      api.listTenkoCompanies.mockResolvedValue([])
+      const none = await mountIt()
+      expect(api.getTenkoFilingSettings).not.toHaveBeenCalled()
+      expect(none.find('[data-testid="tenko-filing-settings"]').exists()).toBe(false)
+      expect(none.find('[data-testid="tenko-filing-no-company"]').text()).toBe('事業者を追加してください')
+    })
+
+    it('事業者の一覧・値が取れなければ理由を出す。切り替えの途中で戻った古い応答は捨てる', async () => {
+      api.listTenkoCompanies.mockRejectedValueOnce(new Error('403 {"error":"forbidden"}'))
+      const bad = await mountIt()
+      expect(bad.find('[data-testid="tenko-filing-load-error"]').text()).toBe('システム管理者だけが変更できます')
+      let slow!: (v: FilingSettings) => void
+      api.getTenkoFilingSettings.mockImplementationOnce(() => new Promise<FilingSettings>((r) => { slow = r }))
+      const w = await mountIt(null)
+      expect(api.getTenkoFilingSettings).toHaveBeenCalledTimes(1)
+      api.getTenkoFilingSettings.mockResolvedValueOnce(saved({ business_number: '000000000001' }))
+      await rows(w)[0]!.trigger('click')
+      await flushPromises()
+      slow(saved({ business_number: '999999999999' }))
+      await flushPromises()
+      expect((w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value).toBe('000000000001')
+      api.getTenkoFilingSettings.mockRejectedValueOnce(new Error('404 not found'))
+      await rows(w)[1]!.trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-load-error"]').text()).toContain('not found')
+    })
+
+    it('控えは選んだ事業者のものと、どこにも付いていないもの (「振り分けていない控え」) を出す', async () => {
+      api.listFilingArchives.mockResolvedValue([arc('1', [CO_A.id]), arc('2', [CO_B.id]), arc('3', []), arc('4', [CO_A.id, CO_B.id])])
+      const w = await mountIt()
+      expect(ids(w)).toEqual(['2', '4', '3'])
+      expect(w.findAll('[data-testid="tenko-filing-archive-unassigned"]').map(e => e.text())).toEqual(['振り分けていない控え'])
+      expect(w.findAll('[data-testid="tenko-filing-archive-companies"]').map(e => e.text())).toEqual(['架空物流', '架空運輸・架空物流'])
+      await rows(w)[0]!.trigger('click')
+      await flushPromises()
+      expect(ids(w)).toEqual(['1', '4', '3'])
+    })
+
+    it('控えごとに事業者を付け替えられる (複数可)。失敗は理由を出す', async () => {
+      api.listFilingArchives.mockResolvedValue([arc('3', [])])
+      const w = await mountIt()
+      const open = () => w.find('[data-testid="tenko-filing-archive-assign"]').trigger('click')
+      await open()
+      expect(w.findAll('[data-testid="tenko-filing-archive-assign-company"]')).toHaveLength(2)
+      await open()
+      expect(w.find('[data-testid="tenko-filing-archive-assign-row"]').exists()).toBe(false)
+      await open()
+      const boxes = w.findAll('[data-testid="tenko-filing-archive-assign-company"]')
+      await boxes[0]!.setValue(true)
+      await boxes[1]!.setValue(true)
+      api.setFilingArchiveCompanies.mockRejectedValueOnce(new Error('400 {"error":"invalid_company"}'))
+      await w.find('[data-testid="tenko-filing-archive-assign-save"]').trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-archive-assign-error"]').text()).toBe('事業者を選び直してください')
+      api.listFilingArchives.mockResolvedValue([arc('3', [CO_A.id, CO_B.id])])
+      await w.find('[data-testid="tenko-filing-archive-assign-save"]').trigger('click')
+      await flushPromises()
+      expect(api.setFilingArchiveCompanies).toHaveBeenLastCalledWith('3', [CO_A.id, CO_B.id])
+      expect(w.find('[data-testid="tenko-filing-archive-assign-row"]').exists()).toBe(false)
+      expect(w.find('[data-testid="tenko-filing-archive-companies"]').text()).toBe('架空運輸・架空物流')
+    })
+
+    it('保存した控えには選んでいる事業者を足す (すでに付いている事業者は残す)。事業者が無ければ付けない', async () => {
+      window.history.replaceState(null, '', `/?role=admin&tab=tenko_filing&arrive=${A}`)
+      api.listFilingArchives.mockResolvedValue([arc(A, [CO_A.id])])
+      api.fetchFilingArchive.mockResolvedValue(null)
+      const w = await mountIt()
+      expect(w.find('[data-testid="tenko-filing-opened-missing"]').exists()).toBe(true)
+      expect(api.setFilingArchiveCompanies).not.toHaveBeenCalled()
+      const bytes = zipSync({ 'x/kousei.xml': strToU8('<DataRoot><手続ID>15596A0695000001</手続ID></DataRoot>') })
+      const input = w.find('[data-testid="tenko-filing-opened-save-input"]')
+      Object.defineProperty(input.element, 'files', { value: [new File([bytes as BlobPart], 'a.zip')], configurable: true })
+      await input.trigger('change')
+      await flushPromises()
+      expect(api.saveFilingArchive).toHaveBeenCalled()
+      expect(api.setFilingArchiveCompanies).toHaveBeenCalledWith(A, [CO_A.id])
+    })
+
+    it('事業者が付いている控えを ?arrive= で開くと、その事業者を選んだ状態にする', async () => {
+      window.history.replaceState(null, '', `/?role=admin&tab=tenko_filing&arrive=${A}`)
+      api.listFilingArchives.mockResolvedValue([arc(A, [CO_A.id])])
+      api.fetchFilingArchive.mockResolvedValue(null)
+      const w = await mountIt()
+      expect(api.getTenkoFilingSettings).toHaveBeenLastCalledWith(CO_A.id)
+      expect(w.find('[data-testid="tenko-filing-company-name"]').text()).toBe('架空運輸')
+      expect(rows(w)[0]!.classes()).toContain('bg-blue-50')
+    })
   })
 })
