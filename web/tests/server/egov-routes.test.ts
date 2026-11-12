@@ -116,11 +116,33 @@ describe('egov-session の小物', () => {
     expect(['abc', '2099', '20991231235959001E', '../x'].map(v => ARRIVE_ID.test(v))).toEqual([false, false, false, false])
   })
 
-  it('状況の要約: 件数が無ければ一覧の長さ、それも無ければ 0', () => {
-    expect(summarizeApply({ status: 's', arrive_date: 'd', proc_name: 'p', notice_list: [1, 2], official_list: [1] }))
-      .toEqual({ status: 's', arrive_date: 'd', proc_name: 'p', notice_count: 2, doc_count: 1 })
-    expect(summarizeApply({ status: 's', arrive_date: 'd', proc_name: 'p' }))
-      .toEqual({ status: 's', arrive_date: 'd', proc_name: 'p', notice_count: 0, doc_count: 0 })
+  it('状況の要約: 画面に出す項目だけ。件数が無ければ一覧の長さ、それも無ければ 0。欠けた項目は空', () => {
+    expect(summarizeApply({
+      status: '審査中', arrive_date: 'd', proc_name: '架空の届出', submission_destination: '架空運輸支局',
+      corporation_name: '架空運輸', applicant_name: '架空 太郎', applied_account: 'a@example.test', pay_status: '納付不要',
+      notice_list: [
+        { notice_title: '補正のお知らせ', notice_data_type: '補正', issue_date: 'i', issuer_organization: '架空局', correct_expired_date: '2099-12-31' },
+        {},
+      ],
+      official_list: [{ doc_title: '受理通知', allowed_date: 'a', doc_download_expired_date: 'e', doc_download_date: 'g' }, {}],
+    })).toEqual({
+      status: '審査中', arrive_date: 'd', proc_name: '架空の届出', submission_destination: '架空運輸支局',
+      corporation_name: '架空運輸', applicant_name: '架空 太郎', applied_account: 'a@example.test', pay_status: '納付不要',
+      notice_count: 2, doc_count: 2,
+      notices: [
+        { title: '補正のお知らせ', type: '補正', issue_date: 'i', issuer: '架空局', correct_expired_date: '2099-12-31' },
+        { title: '', type: '', issue_date: '', issuer: '', correct_expired_date: '' },
+      ],
+      documents: [
+        { title: '受理通知', issue_date: 'a', expired_date: 'e', downloaded_date: 'g' },
+        { title: '', issue_date: '', expired_date: '', downloaded_date: '' },
+      ],
+    })
+    expect(summarizeApply({ status: 's', arrive_date: 'd', proc_name: 'p', notice_count: 5, doc_count: 3 })).toMatchObject({ notice_count: 5, doc_count: 3 })
+    expect(summarizeApply({ status: 's', arrive_date: 'd', proc_name: 'p' })).toEqual({
+      status: 's', arrive_date: 'd', proc_name: 'p', submission_destination: '', corporation_name: '', applicant_name: '',
+      applied_account: '', pay_status: '', notice_count: 0, doc_count: 0, notices: [], documents: [],
+    })
   })
 
   it('預けた state は 1 回で消え、壊れていれば null', () => {
@@ -217,7 +239,7 @@ describe('GET /api/egov/apply/{到達番号}', () => {
   it('★ admin だけ。cookie のトークンで worker の /api/apply/{到達番号} を呼び、状況の要約だけ返す', async () => {
     egovReplies[`/api/apply/${ARRIVE}`] = json(DETAIL)
     const ev = call()
-    expect(await apply(ev)).toEqual({ status: '審査中', arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: 2, doc_count: 1 })
+    expect(await apply(ev)).toMatchObject({ status: '審査中', arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: 2, doc_count: 1, notices: [] })
     expect(egovCalls[0]!.headers.get('authorization')).toBe('Bearer at-1')
     expect(ev.node.res.getHeader('cache-control')).toBe('no-store')
   })

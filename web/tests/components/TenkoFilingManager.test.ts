@@ -333,6 +333,12 @@ describe('TenkoFilingManager', () => {
       ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, strToU8(v)])),
     })
     const urls = vi.hoisted(() => ({ made: [] as string[], revoked: [] as string[] }))
+    /** e-Gov の申請案件取得の要約 (server/api/egov/apply の応答)。値は架空 */
+    const egov = (status: string, over: Record<string, unknown> = {}) => ({
+      status, arrive_date: '2099-12-31 12:03:00', proc_name: '架空の届出', submission_destination: '架空運輸支局',
+      corporation_name: '', applicant_name: '', applied_account: '', pay_status: '',
+      notice_count: 0, doc_count: 0, notices: [], documents: [], ...over,
+    })
 
     beforeEach(() => {
       urls.made = []
@@ -355,7 +361,7 @@ describe('TenkoFilingManager', () => {
 
     it('ログイン済みなら行ごとに状況のバッジと件数を出し (取れない行は理由を title に)、ログアウトでログインの入口に戻る', async () => {
       rc.egovLogin = 'on'
-      const st = (status: string, notice = 0, doc = 0) => ({ status, arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: notice, doc_count: doc })
+      const st = (status: string, notice = 0, doc = 0) => egov(status, { notice_count: notice, doc_count: doc })
       const ids = [A, B, '2099123123595903', '2099123123595904', '2099123123595905', '2099123123595906', '2099123123595907']
       api.listFilingArchives.mockResolvedValue(ids.map(row))
       api.getEgovApplyStatus.mockImplementation(async (id: string) => {
@@ -387,7 +393,7 @@ describe('TenkoFilingManager', () => {
       rc.egovLogin = 'on'
       const ids = [A, B, '2099123123595903', '2099123123595904', '2099123123595905']
       api.listFilingArchives.mockResolvedValue(ids.map(row))
-      const st = (status: string) => ({ status, arrive_date: '2099-12-31 12:03:00', proc_name: '架空の届出', notice_count: 2, doc_count: 0 })
+      const st = (status: string) => egov(status, { notice_count: 2 })
       api.getEgovApplyStatus.mockImplementation(async (id: string) => {
         if (id === ids[4]) throw new Error('e-Gov のエラー (404): 該当なし')
         return st({ [A]: '審査中', [B]: '手続終了', [ids[2]!]: '取下げ済', [ids[3]!]: '架空の状態' }[id]!)
@@ -414,6 +420,43 @@ describe('TenkoFilingManager', () => {
       expect(w.find('[data-testid="tenko-filing-opened-egov-stages"]').exists()).toBe(false)
       await openRow(4)
       expect(box().text()).toBe('e-Gov のエラー (404): 該当なし')
+    })
+
+    it('行の 2 段目に手続名・提出先・到達日時、開いた控えに取れる項目と通知・公文書を出す (空の項目は出さない)', async () => {
+      rc.egovLogin = 'on'
+      api.listFilingArchives.mockResolvedValue([row(A), row(B)])
+      api.getEgovApplyStatus.mockImplementation(async (id: string) => id === A
+        ? egov('審査中', {
+            corporation_name: '架空運輸', applicant_name: '架空 太郎', applied_account: 'a@example.test', pay_status: '納付不要',
+            notice_count: 2, doc_count: 2,
+            notices: [
+              { title: '補正のお知らせ', type: '補正', issue_date: '2099-12-31 13:00:00', issuer: '架空局', correct_expired_date: '2100-01-10' },
+              { title: '', type: '', issue_date: '2099-12-31 14:00:00', issuer: '', correct_expired_date: '' },
+            ],
+            documents: [
+              { title: '受理通知', issue_date: '2099-12-31 15:00:00', expired_date: '2100-03-31', downloaded_date: '' },
+              { title: '', issue_date: '2099-12-31 16:00:00', expired_date: '', downloaded_date: '' },
+              { title: '許可書', issue_date: '2099-12-31 17:00:00', expired_date: '2100-03-31', downloaded_date: '2100-01-01 00:00:00' },
+            ],
+          })
+        : egov('到達', { proc_name: '', submission_destination: '' }))
+      api.fetchFilingArchive.mockResolvedValue(zipSync({ 'a.txt': strToU8('x') }))
+      const w = await mountIt()
+      expect(w.findAll('[data-testid="tenko-filing-archive-egov-line"]').map(x => x.text()))
+        .toEqual(['架空の届出 ・ 架空運輸支局 ・ 到達 2099-12-31 12:03', '到達 2099-12-31 12:03'])
+      await w.findAll('[data-testid="tenko-filing-archive-row"]')[0]!.trigger('click')
+      await flushPromises()
+      const fields = w.find('[data-testid="tenko-filing-opened-egov-fields"]')
+      expect(fields.findAll('dt').map(x => x.text())).toEqual(['手続名', '提出先', '到達日時', '法人名', '申請者', '提出したアカウント', '納付状況'])
+      const notices = w.findAll('[data-testid="tenko-filing-opened-egov-notices"] > div').slice(1).map(x => x.findAll(':scope > span').map(t => t.text().replace(/\s+/g, ' ')).join(' '))
+      expect(notices).toEqual(['補正 補正のお知らせ 2099-12-31 13:00 ・架空局 補正期限 2100-01-10', '件名なし 2099-12-31 14:00'])
+      const docs = w.findAll('[data-testid="tenko-filing-opened-egov-documents"] > div').slice(1).map(x => x.findAll(':scope > span').map(t => t.text().replace(/\s+/g, ' ')).join(' '))
+      expect(docs).toEqual(['受理通知 2099-12-31 15:00 未取得 (取得期限 2100-03-31)', '件名なし 2099-12-31 16:00 未取得', '許可書 2099-12-31 17:00 取得済み'])
+      await w.findAll('[data-testid="tenko-filing-archive-row"]')[1]!.trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-opened-egov-fields"]').findAll('dt').map(x => x.text())).toEqual(['到達日時'])
+      expect(w.find('[data-testid="tenko-filing-opened-egov-notices"]').exists()).toBe(false)
+      expect(w.find('[data-testid="tenko-filing-opened-egov-documents"]').exists()).toBe(false)
     })
 
     it('e-Gov に未ログインならログインの入口を出す。ログインに失敗して戻ったら知らせ、印は URL から消す', async () => {

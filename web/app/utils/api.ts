@@ -1260,13 +1260,20 @@ export async function fetchFilingArchive(arriveId: string): Promise<Uint8Array |
   return new Uint8Array(await res.arrayBuffer())
 }
 
-/** 到達番号ごとの e-Gov での状況 (server/api/egov/apply の応答) */
+/** 到達番号ごとの e-Gov での状況 (server/api/egov/apply の応答。server/utils/egov-session.ts の EgovApplySummary) */
 export interface EgovApplyStatus {
   status: string
   arrive_date: string
   proc_name: string
+  submission_destination: string
+  corporation_name: string
+  applicant_name: string
+  applied_account: string
+  pay_status: string
   notice_count: number
   doc_count: number
+  notices: { title: string, type: string, issue_date: string, issuer: string, correct_expired_date: string }[]
+  documents: { title: string, issue_date: string, expired_date: string, downloaded_date: string }[]
 }
 
 /**
