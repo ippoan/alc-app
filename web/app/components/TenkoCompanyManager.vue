@@ -7,8 +7,8 @@ import {
 
 /**
  * 点呼の届出の事業者 (システム管理者)。1 つのテナントに事業者 (会社) を複数登録し、行を選ぶと、親の画面が
- * その事業者の「書き込む値」と申請済みの控えに切り替わる。営業所は事業者の行の中で選んで振り分ける
- * (営業所は 1 つの事業者だけ。車両は営業所に付いているので、営業所経由で事業者に紐づく)。
+ * その事業者の「書き込む値」と申請済みの控えに切り替わる。営業所の事業者は「点呼の営業所」の画面で選ぶ (ここでは読むだけ。
+ * 営業所は 1 つの事業者だけ。車両は営業所に付いているので、営業所経由で事業者に紐づく)。
  * 受委託 (事業者間遠隔点呼) は委託・受託のどちらかが選んだ事業者の営業所なら出す (両方の事業者から見える)。
  * 一覧は親が持つ。ここで変えたら `changed` を出し、親が読み直す。
  */
@@ -27,10 +27,8 @@ const ERRORS: Record<string, string> = {
   invalid_name: '事業者の名称を入力してください',
   too_long: '入力が長すぎます (名称は 500 文字、許可番号は 100 文字まで)',
   duplicate_name: '同じ名称の事業者がすでにあります',
-  invalid_office: '営業所を選び直してください',
-  too_many_ids: '選べる営業所が多すぎます',
   too_many_companies: '事業者は 100 件までです',
-  office_without_company: '委託・受託の営業所は、先に事業者へ振り分けてください',
+  office_without_company: '委託・受託の営業所は、先に「点呼の営業所」の画面で事業者を選んでください',
   same_company: '委託と受託は別の事業者の営業所にしてください',
   invalid_arrive_id: '到達番号は数字 15〜17 桁と末尾 1 字です',
   invalid_period: '期間は開始日と終了日を両方入れ、終了日は開始日以降・5 年未満にしてください',
@@ -75,12 +73,6 @@ function officeNames(c: TenkoCompany): string {
   return c.office_ids.map(officeName).join('・')
 }
 
-/** その営業所がいま振り分けられている事業者の名称 (別の事業者なら、選ぶと移ることを見せる) */
-function ownerName(officeId: string, companyId: string | null): string {
-  const owner = props.companies.find(c => c.id !== companyId && c.office_ids.includes(officeId))
-  return owner?.name ?? ''
-}
-
 // --- 事業者 ---
 
 interface CompanyDraft extends TenkoCompanyInput {
@@ -91,19 +83,25 @@ const draftError = ref('')
 
 function addCompany() {
   draftError.value = ''
-  draft.value = { id: null, name: '', is_self: !props.companies.length, office_ids: [] }
+  draft.value = { id: null, name: '', is_self: !props.companies.length }
 }
 
 function editCompany(c: TenkoCompany) {
   draftError.value = ''
-  draft.value = { id: c.id, name: c.name, is_self: c.is_self, office_ids: [...c.office_ids] }
+  draft.value = { id: c.id, name: c.name, is_self: c.is_self }
 }
+
+/** 編集中の事業者に属する営業所の名前 (読むだけ。新しい事業者はまだ無い) */
+const draftOffices = computed(() => {
+  const c = props.companies.find(x => x.id === draft.value?.id)
+  return (c ? officeNames(c) : '') || '営業所なし'
+})
 
 async function saveCompany() {
   const d = draft.value!
   busy.value = true
   draftError.value = ''
-  const body: TenkoCompanyInput = { name: d.name.trim(), is_self: d.is_self, office_ids: d.office_ids }
+  const body: TenkoCompanyInput = { name: d.name.trim(), is_self: d.is_self }
   try {
     const saved = d.id ? await updateTenkoCompany(d.id, body) : await createTenkoCompany(body)
     draft.value = null
@@ -120,7 +118,7 @@ async function saveCompany() {
 
 const tableError = ref('')
 async function removeCompany(c: TenkoCompany) {
-  if (!confirm(`${c.name} を削除しますか？ 書き込む値と控えの振り分けも消え、営業所は振り分け前に戻ります。`)) return
+  if (!confirm(`${c.name} を削除しますか？ 書き込む値と控えの振り分けも消え、営業所の事業者は未設定に戻ります。`)) return
   tableError.value = ''
   try {
     await deleteTenkoCompany(c.id)
@@ -256,7 +254,7 @@ const iconButton = 'rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-
         </button>
       </div>
       <p class="text-xs text-gray-500">
-        行を選ぶと、下の「書き込む値」と申請済みの控えがその事業者のものに切り替わります。営業所は事業者の編集で振り分けます (営業所は 1 つの事業者だけ)。
+        行を選ぶと、下の「書き込む値」と申請済みの控えがその事業者のものに切り替わります。営業所の事業者は「点呼の営業所」の画面で選びます (営業所は 1 つの事業者だけ)。
       </p>
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-company-load-error">{{ loadError }}</p>
       <p v-if="!companies.length" class="text-sm text-gray-500" data-testid="tenko-company-empty">事業者がまだありません。「事業者を追加」で登録してください。</p>
@@ -310,17 +308,11 @@ const iconButton = 'rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-
             既定の事業者にする
           </label>
         </div>
-        <fieldset class="space-y-1">
-          <legend class="text-sm text-gray-500">振り分ける営業所</legend>
-          <p v-if="!offices.length" class="text-xs text-gray-500">営業所がまだありません (「点呼の営業所」で登録します)</p>
-          <div class="flex flex-wrap gap-x-4 gap-y-1">
-            <label v-for="o in offices" :key="o.id" class="flex items-center gap-1 text-sm text-gray-800">
-              <input v-model="draft.office_ids" type="checkbox" :value="o.id" data-testid="tenko-company-office">
-              {{ o.name }}
-              <span v-if="draft.office_ids.includes(o.id) && ownerName(o.id, draft.id)" class="text-xs text-amber-700" data-testid="tenko-company-office-owner">({{ ownerName(o.id, draft.id) }} から移ります)</span>
-            </label>
-          </div>
-        </fieldset>
+        <div class="space-y-1" data-testid="tenko-company-offices">
+          <p class="text-sm text-gray-500">この事業者の営業所</p>
+          <p class="text-sm text-gray-800" data-testid="tenko-company-offices-list">{{ draftOffices }}</p>
+          <p class="text-xs text-gray-500">営業所の事業者は「点呼の営業所」の画面で選びます。</p>
+        </div>
         <div class="flex items-center gap-3">
           <button class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50" :disabled="busy" data-testid="tenko-company-save" @click="saveCompany">
             {{ busy ? '保存中…' : '保存' }}
