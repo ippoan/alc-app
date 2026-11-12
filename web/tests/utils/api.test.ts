@@ -95,6 +95,9 @@ import {
   updateBpNotifySetting,
   getTenkoFilingSettings,
   putTenkoFilingSettings,
+  listFilingArchives,
+  saveFilingArchive,
+  downloadFilingArchive,
   getTenkoOffices,
   createTenkoOffice,
   updateTenkoOffice,
@@ -3352,6 +3355,49 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
     expect(url).toMatch(/\/tenko\/filing-settings$/)
     expect(init.method).toBe('PUT')
     expect(JSON.parse(init.body)).toEqual(s)
+  })
+
+  it('申請済みの控え: 一覧を取り、zip を到達番号で PUT し (名前と要約はクエリ)、失敗は本文付きで投げる', async () => {
+    const a = { id: '20991231235959001e', name: 'a b.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, meta: null }
+    mockFetch.mockResolvedValueOnce(okJson([a]))
+    await expect(listFilingArchives()).resolves.toEqual([a])
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/filing-archives$/)
+
+    const bytes = new Uint8Array([0x50, 0x4b, 3, 4])
+    mockFetch.mockResolvedValueOnce(okJson(a))
+    await expect(saveFilingArchive(a.id, bytes, 'a b.zip', { k: 'あ' })).resolves.toEqual(a)
+    const [url, init] = mockFetch.mock.calls[1]
+    expect(url).toMatch(/\/tenko\/filing-archives\/20991231235959001e\?name=a%20b\.zip&meta=%7B%22k%22%3A%22%E3%81%82%22%7D$/)
+    expect(init.method).toBe('PUT')
+    expect(init.body).toBe(bytes)
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/zip')
+
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 400, statusText: 'Bad Request', text: () => Promise.resolve('{"error":"not_zip"}') })
+    await expect(saveFilingArchive(a.id, bytes, 'x.zip', {})).rejects.toThrow('控えの保存に失敗しました (400): {"error":"not_zip"}')
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Service Unavailable', text: () => Promise.reject(new Error('x')) })
+    await expect(saveFilingArchive(a.id, bytes, 'x.zip', {})).rejects.toThrow('控えの保存に失敗しました (503): Service Unavailable')
+  })
+
+  it('申請済みの控えを元の名前でブラウザに保存し、失敗は投げる', async () => {
+    const anchor = { href: '', download: '', click: vi.fn() }
+    const create = vi.spyOn(document, 'createElement').mockReturnValue(anchor as never)
+    const url = globalThis.URL as unknown as Record<string, unknown>
+    const before = [url.createObjectURL, url.revokeObjectURL]
+    url.createObjectURL = vi.fn(() => 'blob:test/archive')
+    url.revokeObjectURL = vi.fn()
+    try {
+      mockFetch.mockResolvedValueOnce({ ok: true, blob: () => Promise.resolve(new Blob(['zip'])) })
+      await downloadFilingArchive('20991231235959001e', '控え.zip')
+      expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/filing-archives\/20991231235959001e$/)
+      expect([anchor.href, anchor.download]).toEqual(['blob:test/archive', '控え.zip'])
+      expect(anchor.click).toHaveBeenCalled()
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404, statusText: 'Not Found', text: () => Promise.resolve('') })
+      await expect(downloadFilingArchive('20991231235959001e', 'x.zip')).rejects.toThrow('控えのダウンロード失敗 (404): Not Found')
+    }
+    finally {
+      create.mockRestore()
+      ;[url.createObjectURL, url.revokeObjectURL] = before
+    }
   })
 })
 

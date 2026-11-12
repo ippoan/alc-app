@@ -9,6 +9,9 @@ import { emptySettings, type FilingSettings } from '~/utils/tenko-forms'
 const api = vi.hoisted(() => ({
   getTenkoFilingSettings: vi.fn(),
   putTenkoFilingSettings: vi.fn(),
+  listFilingArchives: vi.fn(),
+  saveFilingArchive: vi.fn(),
+  downloadFilingArchive: vi.fn(),
 }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -40,6 +43,7 @@ const dlButtons = (w: W) => w.findAll('[data-testid^="tenko-filing-dl-"]').map(b
 
 beforeEach(() => {
   vi.clearAllMocks()
+  api.listFilingArchives.mockResolvedValue([])
   forms.fetchProductInfo.mockResolvedValue({ deviceName: '一歩庵点呼 v1', certPre: null, certPost: null })
 })
 
@@ -191,11 +195,11 @@ describe('TenkoFilingManager', () => {
     await input.trigger('change')
     await flushPromises()
     const results = w.findAll('[data-testid="tenko-filing-egov-result"]').map(r => r.text().replace(/\s+/g, ' '))
-    expect(results[0]).toBe('ok.zip実施 / 遠隔点呼 / 開始日 2099-01-01 / 提出先 長崎運輸支局食い違いは見つかりませんでした')
+    expect(results[0]).toBe('ok.zip実施 / 遠隔点呼 / 開始日 2099-01-01 / 提出先 長崎運輸支局食い違いは見つかりませんでした 空の欄にこの申請データの値を入れる')
     expect(results[1]).toContain('提出先 -')
     expect(results[1]).toContain('要修正: 申請 1 件目 (甲): 使用する機器の名称が「一歩庵点呼 v01」です')
     expect(results[1]).toContain('要修正: #67 点呼機器のパンフレットのファイル')
-    expect(results[2]).toBe('other.zipe-Gov の点呼の届出の申請データが見つかりません')
+    expect(results[2]).toBe('other.zipe-Gov の申請データが見つかりません')
     expect(results[3]).toContain('開始日 -')
     expect(results[3]).toContain('確認: 申請 1 件目 (乙): 届出の画面に保存した営業所にありません')
     expect((input.element as HTMLInputElement).value).toBe('')
@@ -204,5 +208,112 @@ describe('TenkoFilingManager', () => {
     await input.trigger('change')
     await flushPromises()
     expect(w.find('[data-testid="tenko-filing-egov-result"]').text()).toContain('読めませんでした')
+  })
+
+  it('受委託の相手の会社と営業所を足して消し、保存で送る。外れた理由を文にする', async () => {
+    const w = await mountIt(saved())
+    await w.find('[data-testid="tenko-filing-add-partner"]').trigger('click')
+    await w.find('[data-testid="tenko-filing-add-partner"]').trigger('click')
+    expect(w.findAll('[data-testid="tenko-filing-partner"]').length).toBe(2)
+    await w.findAll('[data-testid="tenko-filing-remove-partner"]')[1]!.trigger('click')
+    const partner = w.find('[data-testid="tenko-filing-partner"]')
+    await partner.findAll('input')[0]!.setValue('架空物流')
+    await partner.find('[data-testid="tenko-filing-add-partner-office"]').trigger('click')
+    await partner.find('[data-testid="tenko-filing-add-partner-office"]').trigger('click')
+    await partner.findAll('[data-testid="tenko-filing-remove-partner-office"]')[0]!.trigger('click')
+    await partner.findAll('input')[3]!.setValue('本社営業所')
+    api.putTenkoFilingSettings.mockImplementation(async (s: FilingSettings) => s)
+    await w.find('[data-testid="tenko-filing-save"]').trigger('click')
+    await flushPromises()
+    expect(api.putTenkoFilingSettings.mock.calls[0]![0].partners).toEqual([
+      { name: '架空物流', address: null, representative: null, offices: [{ name: '本社営業所', address: null }] },
+    ])
+    for (const [word, text] of [
+      ['invalid_postal_code', '郵便番号は半角数字 7 桁で入力してください'],
+      ['invalid_corporate_number', '法人番号は半角数字 13 桁で入力してください'],
+      ['too_many_partners', '受委託の相手の会社は 10 社までです'],
+      ['invalid_partner', '受委託の相手の会社と、その営業所の名称を入力してください'],
+    ]) {
+      api.putTenkoFilingSettings.mockRejectedValueOnce(new Error(`400 {"error":"${word}"}`))
+      await w.find('[data-testid="tenko-filing-save"]').trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-save-error"]').text()).toBe(text)
+    }
+  })
+
+  const entrustZip = (name: string) => {
+    const kousei = '<DataRoot><手続ID>15596A0478000001</手続ID><手続名称>架空の受委託</手続名称><申請者情報><氏名>架空 太郎</氏名><法人団体名>架空運輸</法人団体名></申請者情報>'
+      + '<提出先名称>国土交通省,九州運輸局,長崎運輸支局</提出先名称></DataRoot>'
+    const info = '<DataRoot><申請内容><委託者><氏名又は名称>架空物流</氏名又は名称><委託営業所><名称>本社</名称></委託営業所></委託者>'
+      + '<受託者><氏名又は名称>架空運輸</氏名又は名称><受託営業所><名称>甲</名称></受託営業所></受託者>'
+      + '<開始の予定日及び期間><西暦>2099/6/1</西暦><西暦>2104/5/31</西暦></開始の予定日及び期間>'
+      + '<管理の委託受託契約書>1</管理の委託受託契約書><管理の報酬その他管理の実施方法の細目を記載した書類>1</管理の報酬その他管理の実施方法の細目を記載した書類></申請内容></DataRoot>'
+    return new File([zipSync({ 'd/kousei.xml': strToU8(kousei), 'd/15596A047800020000_01.xml': strToU8(info) })], name)
+  }
+  const pick = async (w: W, files: File[]) => {
+    const input = w.find('[data-testid="tenko-filing-egov-input"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await flushPromises()
+  }
+
+  it('受委託の一時保存を読み、空の欄に値を入れて照らし直す。ほかの手続は手続名を出す', async () => {
+    const w = await mountIt(saved({ offices: [{ name: '甲', address: null, role: 1 }] }))
+    const other = new File([zipSync({ 'k/kousei.xml': strToU8('<DataRoot><手続ID>999</手続ID></DataRoot>') })], 'other.zip')
+    const bare = new File([zipSync({ 'k/kousei.xml': strToU8('<DataRoot/>') })], 'bare.zip')
+    await pick(w, [entrustZip('input.zip'), other, bare])
+    const text = () => w.findAll('[data-testid="tenko-filing-egov-result"]').map(r => r.text().replace(/\s+/g, ' '))
+    expect(w.find('[data-testid="tenko-filing-egov-entrust"]').text().replace(/\s+/g, ' '))
+      .toBe('受委託の許可申請 / 委託者 架空物流 → 受託者 架空運輸 / 期間 2099-06-01 〜 2104-05-31 / 提出先 長崎運輸支局')
+    expect(text()[0]).toContain('確認: 委託者 (架空物流): 受委託の相手の会社に保存されていません')
+    expect(text()[0]).not.toContain('控えとして保存')
+    expect(text()[1]).toContain('999')
+    expect(text()[2]).toContain('手続名なし')
+    await w.find('[data-testid="tenko-filing-egov-adopt"]').trigger('click')
+    await flushPromises()
+    const s = w.vm.$.setupState.settings as FilingSettings
+    expect([s.operator_name, s.operator_representative, s.partners.map(p => p.name)]).toEqual(['架空運輸', '架空 太郎', ['架空物流']])
+    expect(w.find('[data-testid="tenko-filing-notice"]').text()).toContain('「保存」を押すと残ります')
+    expect(text()[0]).not.toContain('受委託の相手の会社に保存されていません')
+  })
+
+  it('到達番号の名前の zip は控えとして保存でき、一覧からダウンロードする。失敗は理由を出す', async () => {
+    const archive = { id: '20991231235959001e', name: '20991231235959001e.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, meta: { reportKind: '実施', tenkoType: '遠隔点呼', startDate: '2099-12-01', offices: ['甲', '乙'] } }
+    api.listFilingArchives.mockResolvedValueOnce([]).mockResolvedValueOnce([archive, { ...archive, id: '2099123123595902', meta: { procName: '架空の受委託' } }, { ...archive, id: '2099123123595903', meta: null }])
+    const w = await mountIt(saved())
+    expect(w.find('[data-testid="tenko-filing-archives"]').text()).toContain('まだありません')
+    await pick(w, [entrustZip('20991231235959001e.zip')])
+    api.saveFilingArchive.mockResolvedValueOnce(archive)
+    await w.find('[data-testid="tenko-filing-egov-archive"]').trigger('click')
+    await flushPromises()
+    const [id, bytes, name, meta] = api.saveFilingArchive.mock.calls[0]!
+    expect([id, bytes instanceof Uint8Array, name, meta]).toEqual(['20991231235959001e', true, '20991231235959001e.zip', {
+      procedure: 'entrust', procName: '架空の受委託', reportKind: '', tenkoType: '', startDate: '2099-06-01', offices: [], destinations: ['長崎運輸支局'],
+    }])
+    expect(w.find('[data-testid="tenko-filing-egov-archive-result"]').text()).toBe('控えを保存しました')
+    const rows = w.findAll('[data-testid="tenko-filing-archive-row"]').map(r => r.findAll('td').map(td => td.text()))
+    expect(rows).toEqual([
+      ['20991231235959001e', '実施 / 遠隔点呼 / 開始 2099-12-01 / 甲・乙', '2099-12-31', 'ダウンロード'],
+      ['2099123123595902', '架空の受委託', '2099-12-31', 'ダウンロード'],
+      ['2099123123595903', '', '2099-12-31', 'ダウンロード'],
+    ])
+    api.saveFilingArchive.mockRejectedValueOnce(new Error('控えの保存に失敗しました (503): x'))
+    await w.find('[data-testid="tenko-filing-egov-archive"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="tenko-filing-egov-archive-result"]').text()).toBe('控えの保存に失敗しました (503): x')
+
+    await w.find('[data-testid="tenko-filing-archive-download"]').trigger('click')
+    await flushPromises()
+    expect(api.downloadFilingArchive).toHaveBeenCalledWith('20991231235959001e', '20991231235959001e.zip')
+    api.downloadFilingArchive.mockRejectedValueOnce(null)
+    await w.find('[data-testid="tenko-filing-archive-download"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="tenko-filing-archive-error"]').text()).toBe('控えをダウンロードできませんでした')
+  })
+
+  it('控えの一覧を取れなければ理由を出す', async () => {
+    api.listFilingArchives.mockRejectedValueOnce(new Error('403 {"error":"forbidden"}'))
+    const w = await mountIt()
+    expect(w.find('[data-testid="tenko-filing-archives-error"]').text()).toBe('システム管理者だけが変更できます')
   })
 })

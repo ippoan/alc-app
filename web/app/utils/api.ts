@@ -1201,6 +1201,54 @@ export async function putTenkoFilingSettings(body: FilingSettings): Promise<Fili
   }, 'admin')
 }
 
+/** 点呼の届出の申請済みの控え (e-Gov の zip を到達番号で R2 に置いたもの) */
+export interface FilingArchive {
+  /** 到達番号 */
+  id: string
+  name: string
+  size: number
+  saved_at: string
+  saved_by: string | null
+  meta: Record<string, unknown> | null
+}
+
+/** 点呼の届出の申請済みの控えの一覧 (管理者だけ。保存の新しい順) */
+export async function listFilingArchives(): Promise<FilingArchive[]> {
+  return request<FilingArchive[]>('/api/tenko/filing-archives', {}, 'admin')
+}
+
+/**
+ * 申請済みの控えの zip を到達番号で保存する (管理者だけ。同じ到達番号は上書き)。
+ * 名前と要約はクエリで送る (auth-worker の代理はヘッダーを作り直すため)
+ */
+export async function saveFilingArchive(
+  arriveId: string,
+  bytes: Uint8Array,
+  name: string,
+  meta: Record<string, unknown>,
+): Promise<FilingArchive> {
+  const qs = `?name=${encodeURIComponent(name)}&meta=${encodeURIComponent(JSON.stringify(meta))}`
+  const res = await proxyRawFetch(`/api/tenko/filing-archives/${encodeURIComponent(arriveId)}${qs}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/zip' },
+    body: bytes as BodyInit,
+  }, undefined, 'admin')
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`控えの保存に失敗しました (${res.status}): ${body || res.statusText}`)
+  }
+  return await res.json() as FilingArchive
+}
+
+/** 申請済みの控えの zip をブラウザに保存する (管理者だけ) */
+export async function downloadFilingArchive(arriveId: string, filename: string): Promise<void> {
+  await saveBlobResponse(
+    await proxyRawFetch(`/api/tenko/filing-archives/${encodeURIComponent(arriveId)}`, {}, undefined, 'admin'),
+    filename,
+    '控えのダウンロード',
+  )
+}
+
 /** 点呼の営業所と、車両の選択肢 (管理者だけ) */
 export async function getTenkoOffices(): Promise<TenkoOfficesResponse> {
   return request<TenkoOfficesResponse>('/api/tenko/offices', {}, 'admin')
@@ -1480,9 +1528,14 @@ async function downloadCsv(path: string, filename: string, scope: RequestTokenSc
 
 /** CSV の応答を検査してブラウザに保存する (失敗は本文付きで投げる) */
 async function saveCsvResponse(res: Response, filename: string): Promise<void> {
+  await saveBlobResponse(res, filename, 'CSV ダウンロード')
+}
+
+/** 応答を検査してブラウザに保存する (失敗は `{what}失敗 (status): 本文` で投げる) */
+async function saveBlobResponse(res: Response, filename: string, what: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(`CSV ダウンロード失敗 (${res.status}): ${body || res.statusText}`)
+    throw new Error(`${what}失敗 (${res.status}): ${body || res.statusText}`)
   }
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
