@@ -35,6 +35,16 @@ export default defineNuxtConfig({
     preset: 'cloudflare_module',
   },
 
+  hooks: {
+    // @ippoan/egov-shinsei-sdk は TypeScript のソースのまま配られる (server/api/egov/login.get.ts が
+    // `/auth` を使う。Refs ippoan/alc-app#676)。nitro の esbuild は node_modules を変換しないので、
+    // この SDK だけ変換させる。nuxt.config の nitro.esbuild では Nuxt の既定の除外と配列で足し合わされて
+    // 効かないため、出来上がった設定をここで差し替える
+    'nitro:config'(config) {
+      config.esbuild = { ...config.esbuild, options: { ...config.esbuild?.options, exclude: [/node_modules\/(?!@ippoan\/egov-shinsei-sdk\/)/] } }
+    },
+  },
+
   // chunk load 失敗 (immutable キャッシュされた `/_nuxt/*.js` の 404) からの自動復旧。
   // `experimental.emitRouteChunkError = 'manual'` と transpile 登録も module 側が行う
   // ので consumer は 1 行で済む (Refs ippoan/auth-worker#452)。
