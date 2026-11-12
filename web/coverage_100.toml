@@ -431,6 +431,11 @@ branches = true
 [[files]]
 path = "app/utils/tenko-forms.ts"
 
+# e-Gov の申請データ (zip) を読んで照らす・控えの中のファイル (Refs ippoan/alc-app#676)
+[[files]]
+path = "app/utils/egov-filing.ts"
+branches = true
+
 # 故障の自動記録 (機器・保存・通信の失敗)
 [[files]]
 path = "app/utils/equipment-failure-report.ts"

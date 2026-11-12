@@ -1249,6 +1249,47 @@ export async function downloadFilingArchive(arriveId: string, filename: string):
   )
 }
 
+/** 申請済みの控えの zip の中身 (管理者だけ)。その到達番号の控えが未保存なら null */
+export async function fetchFilingArchive(arriveId: string): Promise<Uint8Array | null> {
+  const res = await proxyRawFetch(`/api/tenko/filing-archives/${encodeURIComponent(arriveId)}`, {}, undefined, 'admin')
+  if (res.status === 404) return null
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`控えを取得できませんでした (${res.status}): ${body || res.statusText}`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+/** 到達番号ごとの e-Gov での状況 (server/api/egov/apply の応答) */
+export interface EgovApplyStatus {
+  status: string
+  arrive_date: string
+  proc_name: string
+  notice_count: number
+  doc_count: number
+}
+
+/**
+ * 到達番号の e-Gov での状況 (管理者だけ)。e-Gov のトークンは HttpOnly の cookie にあり、この JS には無い。
+ * e-Gov へのログインが要るときは null
+ */
+export async function getEgovApplyStatus(arriveId: string): Promise<EgovApplyStatus | null> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  try {
+    return await bearerRequest<EgovApplyStatus>(`/api/egov/apply/${encodeURIComponent(arriveId)}`, jwt, { method: 'GET' })
+  }
+  catch (e) {
+    if ((e as Error).message.includes('egov_login_required')) return null
+    throw e
+  }
+}
+
+/** e-Gov からログアウトする (このブラウザの e-Gov の cookie を消す) */
+export async function logoutEgov(): Promise<void> {
+  await fetchWithTimeout('/api/egov/logout', { method: 'POST' })
+}
+
 /** 点呼の営業所と、車両の選択肢 (管理者だけ) */
 export async function getTenkoOffices(): Promise<TenkoOfficesResponse> {
   return request<TenkoOfficesResponse>('/api/tenko/offices', {}, 'admin')

@@ -26,11 +26,23 @@ export default defineNuxtConfig({
       // staging export/import の X-Staging-Key (rust-alc-api#391 opt-in 認証)。空なら送らない
       stagingApiKey: process.env.NUXT_PUBLIC_STAGING_API_KEY || '',
       appVersion: process.env.NUXT_PUBLIC_APP_VERSION || 'dev',
+      // 'on' で点呼の届出の控えの行に e-Gov の状況を出す (戻り先の登録が済んでから。Refs ippoan/alc-app#676)
+      egovLogin: process.env.NUXT_PUBLIC_EGOV_LOGIN || '',
     },
   },
 
   nitro: {
     preset: 'cloudflare_module',
+  },
+
+  hooks: {
+    // @ippoan/egov-shinsei-sdk は TypeScript のソースのまま配られる (server/api/egov/login.get.ts が
+    // `/auth` を使う。Refs ippoan/alc-app#676)。nitro の esbuild は node_modules を変換しないので、
+    // この SDK だけ変換させる。nuxt.config の nitro.esbuild では Nuxt の既定の除外と配列で足し合わされて
+    // 効かないため、出来上がった設定をここで差し替える
+    'nitro:config'(config) {
+      config.esbuild = { ...config.esbuild, options: { ...config.esbuild?.options, exclude: [/node_modules\/(?!@ippoan\/egov-shinsei-sdk\/)/] } }
+    },
   },
 
   // chunk load 失敗 (immutable キャッシュされた `/_nuxt/*.js` の 404) からの自動復旧。

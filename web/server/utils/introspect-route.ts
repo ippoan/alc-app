@@ -19,7 +19,7 @@ export interface IntrospectedCaller {
   recorder: { fetch: typeof fetch }
 }
 
-async function resolveSecret(binding: unknown): Promise<string | null> {
+export async function resolveSecret(binding: unknown): Promise<string | null> {
   if (typeof binding === 'string') return binding
   if (binding && typeof (binding as { get?: unknown }).get === 'function') {
     return (await (binding as { get(): Promise<string> }).get()) ?? null

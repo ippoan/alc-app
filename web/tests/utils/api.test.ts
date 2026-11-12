@@ -98,6 +98,9 @@ import {
   listFilingArchives,
   saveFilingArchive,
   downloadFilingArchive,
+  fetchFilingArchive,
+  getEgovApplyStatus,
+  logoutEgov,
   getTenkoOffices,
   createTenkoOffice,
   updateTenkoOffice,
@@ -3398,6 +3401,47 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
       create.mockRestore()
       ;[url.createObjectURL, url.revokeObjectURL] = before
     }
+  })
+
+  it('申請済みの控えの中身をバイト列で取る。未保存 (404) は null、ほかの失敗は本文付きで投げる', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, arrayBuffer: () => Promise.resolve(new Uint8Array([0x50, 0x4b]).buffer) })
+    await expect(fetchFilingArchive('20991231235959001e')).resolves.toEqual(new Uint8Array([0x50, 0x4b]))
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/filing-archives\/20991231235959001e$/)
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404, statusText: 'Not Found', text: () => Promise.resolve('') })
+    await expect(fetchFilingArchive('20991231235959001e')).resolves.toBeNull()
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden', text: () => Promise.resolve('{"error":"forbidden"}') })
+    await expect(fetchFilingArchive('x')).rejects.toThrow('控えを取得できませんでした (403): {"error":"forbidden"}')
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Service Unavailable', text: () => Promise.reject(new Error('x')) })
+    await expect(fetchFilingArchive('x')).rejects.toThrow('控えを取得できませんでした (503): Service Unavailable')
+  })
+
+  it('e-Gov の状況: admin JWT で /api/egov/apply/{到達番号} を GET。e-Gov へのログインが要れば null、ほかは投げる', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const st = { status: '審査中', arrive_date: '2099-12-31 00:00:00', proc_name: '架空の届出', notice_count: 0, doc_count: 0 }
+    mockFetch.mockResolvedValueOnce(okJson(st))
+    await expect(getEgovApplyStatus('20991231235959001e')).resolves.toEqual(st)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/egov/apply/20991231235959001e')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer admin-jwt')
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: () => Promise.resolve('{"statusMessage":"egov_login_required"}') })
+    await expect(getEgovApplyStatus('20991231235959001e')).resolves.toBeNull()
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404, statusText: 'Not Found', text: () => Promise.resolve('e-Gov のエラー (404)') })
+    await expect(getEgovApplyStatus('20991231235959001e')).rejects.toThrow('API エラー (404): e-Gov のエラー (404)')
+
+    mockFetch.mockReset()
+    initApi(API_BASE, () => null, () => 'tid')
+    await expect(getEgovApplyStatus('20991231235959001e')).rejects.toThrow('ログインが必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+    // 後ろの describe は手前の admin JWT の状態を前提にしているので戻す
+    initApi(API_BASE, () => 'admin-jwt')
+  })
+
+  it('e-Gov からのログアウトは /api/egov/logout に POST するだけ', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ ok: true }))
+    await logoutEgov()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect([url, init.method]).toEqual(['/api/egov/logout', 'POST'])
   })
 })
 
