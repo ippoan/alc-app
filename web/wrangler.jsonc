@@ -126,8 +126,8 @@
 		// recorder は custom domain を持たないので workers.dev をそのまま指す。
 		"NUXT_PUBLIC_RECORDER_URL": "https://alc-recorder.m-tama-ramu.workers.dev",
 		// 点呼の届出の「申請済みの控え」で e-Gov の状況を出すか (Refs ippoan/alc-app#676)。
-		// e-Gov 本番のソフトウェア ID に戻り先 https://alc.ippoan.org/api/egov/callback を登録してから "on" にする
-		"NUXT_PUBLIC_EGOV_LOGIN": "off"
+		// 本番のソフトウェア ID に戻り先 https://alc.ippoan.org/api/egov/callback を登録済み (2026-11-12)
+		"NUXT_PUBLIC_EGOV_LOGIN": "on"
 	},
 	"routes": [
 		{
