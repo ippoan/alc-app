@@ -51,6 +51,22 @@ const ERRORS: Record<string, string> = {
 /** 事業者の一覧と、いま選んでいる事業者 (無ければ空) */
 const companies = ref<TenkoCompany[]>([])
 const companyId = ref('')
+/**
+ * 事業者の表の下に営業所の表を並べる。片方を保存したらもう片方を key で作り直して読み直させる
+ * (事業者の表の営業所名・営業所の表の事業者の候補は、どちらも開いたときにしか読まないため)
+ */
+const officesRev = ref(0)
+const companiesRev = ref(0)
+
+function onCompaniesChanged() {
+  companiesRev.value++
+  return loadCompanies()
+}
+
+function onOfficesSaved() {
+  officesRev.value++
+  return loadCompanies()
+}
 
 /** 一覧を読み、選んでいる事業者が無ければ既定の事業者 (無ければ先頭) を選ぶ */
 async function loadCompanies() {
@@ -559,7 +575,8 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-filing-load-error">{{ loadError }}</p>
     </div>
 
-    <TenkoCompanyManager v-model="companyId" :companies="companies" @changed="loadCompanies" />
+    <TenkoCompanyManager :key="officesRev" v-model="companyId" :companies="companies" @changed="onCompaniesChanged" />
+    <TenkoOfficeManager :key="companiesRev" @saved="onOfficesSaved" />
 
     <!-- 開いている控えの中身 (?arrive=) -->
     <div v-if="opened" class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-opened">

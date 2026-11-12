@@ -92,7 +92,7 @@ describe('TenkoCompanyManager 事業者の表', () => {
     await t(w, 'tenko-company-name').setValue(' 架空商事 ')
     expect(w.find('[data-testid="tenko-company-office"]').exists()).toBe(false)
     expect(t(w, 'tenko-company-offices-list').text()).toBe('営業所なし')
-    expect(t(w, 'tenko-company-offices').text()).toContain('「点呼の営業所」の画面で選びます')
+    expect(t(w, 'tenko-company-offices').text()).toContain('下の営業所の表で選びます')
     await t(w, 'tenko-company-save').trigger('click')
     await flushPromises()
     expect(api.createTenkoCompany).toHaveBeenCalledWith({ name: '架空商事', is_self: false })
