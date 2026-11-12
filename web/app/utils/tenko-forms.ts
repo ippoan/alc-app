@@ -22,6 +22,20 @@ export interface FilingOffice {
   role: number
 }
 
+/** 受委託の相手の会社の営業所 */
+export interface FilingPartnerOffice {
+  name: string
+  address: string | null
+}
+
+/** 受委託の相手の会社 (事業者間遠隔点呼の受委託の許可申請の委託者・受託者) */
+export interface FilingPartner {
+  name: string
+  address: string | null
+  representative: string | null
+  offices: FilingPartnerOffice[]
+}
+
 /** テナントに保存する値 (`/api/tenko/filing-settings`) */
 export interface FilingSettings {
   business_number: string | null
@@ -37,6 +51,19 @@ export interface FilingSettings {
   operator_contact_name: string | null
   operator_contact_phone: string | null
   operator_contact_email: string | null
+  /** 以下は e-Gov の申請データ (一時保存・控え) と突き合わせる欄 (alc-migrations 213) */
+  operator_kana: string | null
+  operator_address_kana: string | null
+  operator_postal_code: string | null
+  operator_phone: string | null
+  operator_corporate_number: string | null
+  operator_representative_kana: string | null
+  operator_representative_title: string | null
+  operator_contact_kana: string | null
+  operator_contact_dept: string | null
+  operator_contact_postal_code: string | null
+  operator_contact_address: string | null
+  partners: FilingPartner[]
   updated_at?: string | null
 }
 
@@ -113,6 +140,18 @@ export function emptySettings(): FilingSettings {
     operator_contact_name: null,
     operator_contact_phone: null,
     operator_contact_email: null,
+    operator_kana: null,
+    operator_address_kana: null,
+    operator_postal_code: null,
+    operator_phone: null,
+    operator_corporate_number: null,
+    operator_representative_kana: null,
+    operator_representative_title: null,
+    operator_contact_kana: null,
+    operator_contact_dept: null,
+    operator_contact_postal_code: null,
+    operator_contact_address: null,
+    partners: [],
   }
 }
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { getTenkoFilingSettings, putTenkoFilingSettings } from '~/utils/api'
-import { checkEgovFiling, parseEgovZip, type EgovFiling, type EgovFinding } from '~/utils/egov-filing'
+import { downloadFilingArchive, getTenkoFilingSettings, listFilingArchives, putTenkoFilingSettings, saveFilingArchive, type FilingArchive } from '~/utils/api'
+import { ARRIVE_FILE, checkEgovFiling, fillSettingsFromFiling, parseEgovZip, type EgovFiling, type EgovFinding } from '~/utils/egov-filing'
 import { jstTodayDate } from '~/utils/jst'
 import {
   BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm,
@@ -21,6 +21,10 @@ const ERRORS: Record<string, string> = {
   invalid_office: '営業所・車庫の名称と、実施・被実施の別を入力してください',
   too_many_offices: '営業所・車庫は 20 件までです',
   too_long: '入力が長すぎます (1 欄 500 文字まで)',
+  invalid_postal_code: '郵便番号は半角数字 7 桁で入力してください',
+  invalid_corporate_number: '法人番号は半角数字 13 桁で入力してください',
+  too_many_partners: '受委託の相手の会社は 10 社までです',
+  invalid_partner: '受委託の相手の会社と、その営業所の名称を入力してください',
   forbidden: 'システム管理者だけが変更できます',
 }
 
@@ -77,6 +81,14 @@ function removeOffice(i: number) {
   settings.value.offices.splice(i, 1)
 }
 
+function addPartner() {
+  settings.value.partners.push({ name: '', address: null, representative: null, offices: [] })
+}
+
+function removePartner(i: number) {
+  settings.value.partners.splice(i, 1)
+}
+
 async function save() {
   saving.value = true
   saveError.value = ''
@@ -122,38 +134,121 @@ async function download(form: TenkoForm) {
   }
 }
 
-/** e-Gov の申請データ (一時保存・到達の zip) を読み、保存した値と規則に照らした結果 */
+/** e-Gov の申請データ (一時保存・申請済みの控えの zip) を読み、保存した値と規則に照らした結果 */
 interface EgovCheck {
   file: string
+  bytes: Uint8Array
+  /** ファイル名が `{到達番号}.zip` なら到達番号 (申請済みの控え)。でなければ空 */
+  arriveId: string
   filing: EgovFiling | null
   findings: EgovFinding[]
   error: string
+  saved: string
 }
 const egovChecks = ref<EgovCheck[]>([])
+
+function runCheck(c: EgovCheck): EgovCheck {
+  if (!c.filing) return c
+  return { ...c, findings: checkEgovFiling(c.filing, settings.value, jstTodayDate()) }
+}
 
 async function checkEgovFiles(e: Event) {
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files!)
   egovChecks.value = await Promise.all(files.map(async (f) => {
+    const base = { file: f.name, arriveId: ARRIVE_FILE.exec(f.name)?.[1] ?? '', saved: '' }
     try {
-      const filing = parseEgovZip(new Uint8Array(await f.arrayBuffer()))
-      return { file: f.name, filing, findings: checkEgovFiling(filing, settings.value, jstTodayDate()), error: '' }
+      const bytes = new Uint8Array(await f.arrayBuffer())
+      return runCheck({ ...base, bytes, filing: parseEgovZip(bytes), findings: [], error: '' })
     }
     catch (err) {
-      return { file: f.name, filing: null, findings: [], error: messageOf(err, '読めませんでした') }
+      return { ...base, bytes: new Uint8Array(), filing: null, findings: [], error: messageOf(err, '読めませんでした') }
     }
   }))
   input.value = ''
 }
 
+/** 申請データの値で「書き込む値」の空の欄を埋める (保存は「保存」で)。照らし直す */
+function adoptFromFiling(c: EgovCheck) {
+  settings.value = fillSettingsFromFiling(c.filing!, settings.value)
+  notice.value = '申請データの値を空の欄に入れました。「保存」を押すと残ります'
+  egovChecks.value = egovChecks.value.map(runCheck)
+}
+
+/** 申請済みの控えの一覧 */
+const archives = ref<FilingArchive[]>([])
+const archivesError = ref('')
+async function loadArchives() {
+  try {
+    archives.value = await listFilingArchives()
+    archivesError.value = ''
+  }
+  catch (e) {
+    archivesError.value = messageOf(e, '控えの一覧を取得できませんでした')
+  }
+}
+onMounted(loadArchives)
+
+/** 申請済みの控えを到達番号で保存する (同じ到達番号は上書き) */
+async function saveArchive(c: EgovCheck) {
+  const f = c.filing!
+  const meta = {
+    procedure: f.procedure,
+    procName: f.procName,
+    reportKind: f.reportKind,
+    tenkoType: f.tenkoType,
+    startDate: f.startDate || f.entrust?.startDate || '',
+    offices: f.offices.map(o => o.name),
+    destinations: f.destinations,
+  }
+  try {
+    await saveFilingArchive(c.arriveId, c.bytes, c.file, meta)
+    egovChecks.value = egovChecks.value.map(x => x === c ? { ...x, saved: '控えを保存しました' } : x)
+    await loadArchives()
+  }
+  catch (e) {
+    egovChecks.value = egovChecks.value.map(x => x === c ? { ...x, saved: messageOf(e, '控えを保存できませんでした') } : x)
+  }
+}
+
+const archiveError = ref('')
+async function downloadArchive(a: FilingArchive) {
+  archiveError.value = ''
+  try {
+    await downloadFilingArchive(a.id, a.name)
+  }
+  catch (e) {
+    archiveError.value = messageOf(e, '控えをダウンロードできませんでした')
+  }
+}
+
+/** 控えの要約 (保存のときに画面が付けたもの) */
+function archiveSummary(a: FilingArchive): string {
+  const m = (a.meta ?? {}) as Record<string, unknown>
+  const parts = [m.reportKind, m.tenkoType, m.startDate ? `開始 ${String(m.startDate)}` : '']
+  const offices = Array.isArray(m.offices) ? (m.offices as string[]).join('・') : ''
+  return [...parts.filter(Boolean).map(String), offices].filter(Boolean).join(' / ') || String(m.procName ?? '')
+}
+
 /** 文字の欄 (ラベルと欄の名前) */
 const OPERATOR_FIELDS = [
   ['operator_name', '氏名又は名称'],
+  ['operator_kana', '氏名又は名称のフリガナ'],
+  ['operator_corporate_number', '法人番号 (半角 13 桁)'],
+  ['operator_postal_code', '郵便番号 (半角 7 桁)'],
   ['operator_address', '住所'],
+  ['operator_address_kana', '住所のフリガナ'],
+  ['operator_phone', '事業者の電話番号'],
   ['operator_representative', '代表者氏名'],
+  ['operator_representative_kana', '代表者氏名のフリガナ'],
+  ['operator_representative_title', '代表者の役職'],
   ['operator_contact_name', '担当者氏名'],
+  ['operator_contact_kana', '担当者氏名のフリガナ'],
+  ['operator_contact_dept', '担当者の部門名'],
   ['operator_contact_phone', '電話番号'],
   ['operator_contact_email', 'メールアドレス'],
+  ['operator_contact_postal_code', '担当者の郵便番号 (事業者と違うときだけ)'],
+  ['operator_contact_address', '担当者の住所 (事業者と違うときだけ)'],
 ] as const
 
 const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
@@ -242,6 +337,27 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         </div>
       </fieldset>
 
+      <fieldset class="space-y-2" data-testid="tenko-filing-partners">
+        <div class="flex items-center justify-between">
+          <legend class="text-sm font-medium text-gray-700">受委託の相手の会社 (事業者間遠隔点呼の受委託の許可申請の委託者・受託者)</legend>
+          <button class="text-sm text-blue-600 hover:underline" data-testid="tenko-filing-add-partner" @click="addPartner">＋ 追加</button>
+        </div>
+        <div v-for="(p, i) in settings.partners" :key="i" class="border rounded-lg p-3 space-y-2" data-testid="tenko-filing-partner">
+          <div class="grid gap-2 sm:grid-cols-[2fr_3fr_2fr_auto] items-center">
+            <input v-model="p.name" :class="inputClass" placeholder="氏名又は名称">
+            <input v-model="p.address" :class="inputClass" placeholder="住所">
+            <input v-model="p.representative" :class="inputClass" placeholder="代表者氏名">
+            <button class="text-sm text-red-600 hover:underline" data-testid="tenko-filing-remove-partner" @click="removePartner(i)">削除</button>
+          </div>
+          <div v-for="(o, j) in p.offices" :key="j" class="grid gap-2 sm:grid-cols-[2fr_3fr_auto] items-center pl-4">
+            <input v-model="o.name" :class="inputClass" placeholder="営業所の名称">
+            <input v-model="o.address" :class="inputClass" placeholder="営業所の所在地">
+            <button class="text-sm text-red-600 hover:underline" data-testid="tenko-filing-remove-partner-office" @click="p.offices.splice(j, 1)">削除</button>
+          </div>
+          <button class="text-sm text-blue-600 hover:underline pl-4" data-testid="tenko-filing-add-partner-office" @click="p.offices.push({ name: '', address: null })">＋ 営業所を追加</button>
+        </div>
+      </fieldset>
+
       <div class="flex items-center gap-3">
         <button
           class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
@@ -303,25 +419,66 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
     <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-egov-check">
       <h3 class="font-semibold text-gray-800">e-Gov の申請データを確かめる</h3>
       <p class="text-sm text-gray-600">
-        e-Gov アプリで一時保存した申請データや、到達後にダウンロードした zip を選ぶと、上の「書き込む値」と規則 (開始日・添付・提出先) に照らして食い違いを出します。
-        ファイルはこのブラウザの中だけで読み、送りません。
+        e-Gov アプリで一時保存した申請データや、申請済みの控え (到達番号の名前の zip) を選ぶと、上の「書き込む値」と規則 (開始日・添付・提出先・申請者情報・受委託の相手) に照らして食い違いを出します。
+        ファイルはこのブラウザの中で読みます。「控えとして保存」を押したときだけ、到達番号で保管します (e-Gov からは申請書・添付を後で取り出せないため)。
       </p>
       <input type="file" accept=".zip" multiple class="text-sm" data-testid="tenko-filing-egov-input" @change="checkEgovFiles">
       <div v-for="c in egovChecks" :key="c.file" class="border rounded-lg p-3 space-y-1 text-sm" data-testid="tenko-filing-egov-result">
         <div class="font-medium">{{ c.file }}</div>
         <p v-if="c.error" class="text-red-600">{{ c.error }}</p>
         <template v-else>
-          <p class="text-gray-600">
+          <p v-if="c.filing!.procedure === 'filing'" class="text-gray-600">
             {{ c.filing!.reportKind }} / {{ c.filing!.tenkoType }} / 開始日 {{ c.filing!.startDate || '-' }} / 提出先 {{ c.filing!.destinations.join('、') || '-' }}
           </p>
+          <p v-else-if="c.filing!.entrust" class="text-gray-600" data-testid="tenko-filing-egov-entrust">
+            受委託の許可申請 / 委託者 {{ c.filing!.entrust.consignor.name || '-' }} → 受託者 {{ c.filing!.entrust.consignee.name || '-' }} / 期間 {{ c.filing!.entrust.startDate || '-' }} 〜 {{ c.filing!.entrust.endDate || '-' }} / 提出先 {{ c.filing!.destinations.join('、') || '-' }}
+          </p>
+          <p v-else class="text-gray-600">{{ c.filing!.procName || c.filing!.procId || '手続名なし' }}</p>
           <ul v-if="c.findings.length" class="space-y-0.5">
             <li v-for="(x, i) in c.findings" :key="i" :class="x.level === 'error' ? 'text-red-600' : 'text-amber-700'">
               {{ x.level === 'error' ? '要修正' : '確認' }}: {{ x.message }}
             </li>
           </ul>
           <p v-else class="text-green-700">食い違いは見つかりませんでした</p>
+          <div class="flex flex-wrap items-center gap-3 pt-1">
+            <button class="text-sm text-blue-600 hover:underline" data-testid="tenko-filing-egov-adopt" @click="adoptFromFiling(c)">
+              空の欄にこの申請データの値を入れる
+            </button>
+            <button v-if="c.arriveId" class="text-sm text-blue-600 hover:underline" data-testid="tenko-filing-egov-archive" @click="saveArchive(c)">
+              控えとして保存 (到達番号 {{ c.arriveId }})
+            </button>
+            <span v-if="c.saved" class="text-sm text-gray-700" data-testid="tenko-filing-egov-archive-result">{{ c.saved }}</span>
+          </div>
         </template>
       </div>
+    </div>
+
+    <!-- 申請済みの控え -->
+    <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-archives">
+      <h3 class="font-semibold text-gray-800">申請済みの控え</h3>
+      <p v-if="archivesError" class="text-sm text-red-600" data-testid="tenko-filing-archives-error">{{ archivesError }}</p>
+      <p v-else-if="!archives.length" class="text-sm text-gray-500">まだありません。上で到達番号の名前の zip を読み、「控えとして保存」を押してください。</p>
+      <table v-else class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500">
+            <th class="py-1">到達番号</th>
+            <th class="py-1">中身</th>
+            <th class="py-1">保存</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in archives" :key="a.id" class="border-t" data-testid="tenko-filing-archive-row">
+            <td class="py-1 font-mono">{{ a.id }}</td>
+            <td class="py-1">{{ archiveSummary(a) }}</td>
+            <td class="py-1">{{ a.saved_at.slice(0, 10) }}</td>
+            <td class="py-1 text-right">
+              <button class="text-blue-600 hover:underline" data-testid="tenko-filing-archive-download" @click="downloadArchive(a)">ダウンロード</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-if="archiveError" class="text-sm text-red-600" data-testid="tenko-filing-archive-error">{{ archiveError }}</p>
     </div>
 
   </div>
