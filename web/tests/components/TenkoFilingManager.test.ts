@@ -47,7 +47,7 @@ const CO_A = { id: 'cccccccc-0001-0001-0001-cccccccccccc', name: '架空運輸',
 const CO_B = { id: 'cccccccc-0002-0002-0002-cccccccccccc', name: '架空物流', is_self: true, office_ids: [] as string[] }
 
 function saved(over: Partial<FilingSettings> = {}): FilingSettings {
-  return { ...emptySettings(), business_number: '000000000001', updated_at: '2026-11-02T00:00:00Z', ...over }
+  return { ...emptySettings(), business_number: '000000000001', trade_name: '架空屋', updated_at: '2026-11-02T00:00:00Z', ...over }
 }
 
 async function mountIt(s: FilingSettings | Error | null = saved()) {
@@ -78,8 +78,8 @@ beforeEach(() => {
 describe('TenkoFilingManager', () => {
   it('保存した値を出し、種別ごとに様式を並べる', async () => {
     const w = await mountIt()
-    expect((w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value).toBe('000000000001')
-    expect(w.find('[data-testid="tenko-filing-business-number-hint"]').text()).toContain('分からなければ空欄のまま出せます')
+    expect((w.find('[data-testid="tenko-filing-trade-name"]').element as HTMLInputElement).value).toBe('架空屋')
+    expect(w.find('[data-testid="tenko-filing-business-number"]').exists()).toBe(false)
     expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou', 'tenko-filing-dl-remote-kamotsu-bessi7-jisshi'])
     await w.find('[data-testid="tenko-filing-kind-auto"]').setValue(true)
     expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou'])
@@ -594,9 +594,9 @@ describe('TenkoFilingManager', () => {
     const rows = (w: W) => w.findAll('[data-testid="tenko-company-row"]')
 
     it('既定の事業者の書き込む値を、company_id 付きで読む。行を選ぶと別の事業者の値に切り替わる', async () => {
-      api.getTenkoFilingSettings.mockImplementation(async (id: string) => saved({ business_number: id === CO_A.id ? '000000000001' : '000000000002' }))
+      api.getTenkoFilingSettings.mockImplementation(async (id: string) => saved({ trade_name: id === CO_A.id ? '000000000001' : '000000000002' }))
       const w = await mountIt(null)
-      const num = () => (w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value
+      const num = () => (w.find('[data-testid="tenko-filing-trade-name"]').element as HTMLInputElement).value
       expect(api.getTenkoFilingSettings).toHaveBeenCalledWith(CO_B.id)
       expect([num(), w.find('[data-testid="tenko-filing-company-name"]').text()]).toEqual(['000000000002', '架空物流'])
       await rows(w)[0]!.trigger('click')
@@ -631,12 +631,12 @@ describe('TenkoFilingManager', () => {
       const w = await mountIt(null)
       // 選んだ事業者の値 1 回と、事業者の表 (住所・代表者) の 2 社ぶん
       expect(api.getTenkoFilingSettings).toHaveBeenCalledTimes(3)
-      api.getTenkoFilingSettings.mockResolvedValueOnce(saved({ business_number: '000000000001' }))
+      api.getTenkoFilingSettings.mockResolvedValueOnce(saved({ trade_name: '000000000001' }))
       await rows(w)[0]!.trigger('click')
       await flushPromises()
-      slow(saved({ business_number: '999999999999' }))
+      slow(saved({ trade_name: '999999999999' }))
       await flushPromises()
-      expect((w.find('[data-testid="tenko-filing-business-number"]').element as HTMLInputElement).value).toBe('000000000001')
+      expect((w.find('[data-testid="tenko-filing-trade-name"]').element as HTMLInputElement).value).toBe('000000000001')
       api.getTenkoFilingSettings.mockRejectedValueOnce(new Error('404 not found'))
       await rows(w)[1]!.trigger('click')
       await flushPromises()

@@ -35,6 +35,7 @@ const ERRORS: Record<string, string> = {
   same_company: '委託と受託は別の事業者の営業所にしてください',
   invalid_arrive_id: '到達番号は数字 15〜17 桁と末尾 1 字です',
   invalid_period: '期間は開始日と終了日を両方入れ、終了日は開始日以降・5 年未満にしてください',
+  invalid_business_number: '事業者番号は半角数字 12 桁で入力してください',
   forbidden: 'システム管理者だけが変更できます',
 }
 
@@ -80,6 +81,7 @@ function officeNames(c: TenkoCompany): string {
 
 /** 事業者の表で入れる「書き込む値」の欄 (名称は事業者の名称と同じ値を書く) */
 const IDENTITY_FIELDS = [
+  ['business_number', '事業者番号 (任意・半角 12 桁)'],
   ['operator_postal_code', '郵便番号'],
   ['operator_address', '住所'],
   ['operator_representative_title', '代表者の役職'],
@@ -108,9 +110,10 @@ watch(() => props.companies, async (cs) => {
 
 function identityText(c: TenkoCompany): string {
   const s = settingsOf.value[c.id]
+  const num = s?.business_number ? `No.${s.business_number}` : ''
   const address = [s?.operator_postal_code ? `〒${s.operator_postal_code}` : '', s?.operator_address ?? ''].filter(Boolean).join(' ')
   const rep = [s?.operator_representative_title ?? '', s?.operator_representative ?? ''].filter(Boolean).join(' ')
-  return [address, rep].filter(Boolean).join(' / ') || '未入力'
+  return [num, address, rep].filter(Boolean).join(' / ') || '未入力'
 }
 
 interface CompanyDraft extends TenkoCompanyInput {
@@ -307,7 +310,7 @@ const iconButton = 'rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-
           <thead class="bg-gray-50 text-left text-xs font-medium text-gray-500">
             <tr>
               <th class="px-3 py-2">事業者</th>
-              <th class="px-3 py-2">住所・代表者</th>
+              <th class="px-3 py-2">事業者番号・住所・代表者</th>
               <th class="px-3 py-2">営業所</th>
               <th class="w-px px-3 py-2" />
             </tr>
@@ -354,13 +357,16 @@ const iconButton = 'rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-
             既定の事業者にする
           </label>
         </div>
-        <div class="grid gap-3 sm:grid-cols-[1fr_3fr_1fr_2fr]">
+        <div class="grid gap-3 sm:grid-cols-[3fr_2fr_6fr_2fr_4fr]">
           <label v-for="[key, label] in IDENTITY_FIELDS" :key="key" class="text-sm">
             <span class="text-gray-500">{{ label }}</span>
             <input v-model="draft.identity[key]" :class="inputClass" :data-testid="`tenko-company-${key}`">
           </label>
         </div>
-        <p class="text-xs text-gray-500">名称・住所・代表者は、届出の様式と受委託の契約書に書き込みます。</p>
+        <p class="text-xs text-gray-500" data-testid="tenko-company-business-number-hint">
+          事業者番号は、一般貨物自動車運送事業の許可のときに交付された許可書に書かれた 12 桁の番号です。0 で始まるときは 0 も入れます。e-Gov では任意の欄なので、分からなければ空欄のまま出せます。
+        </p>
+        <p class="text-xs text-gray-500">事業者番号・名称・住所・代表者は、届出の様式と受委託の契約書に書き込みます。</p>
         <div class="space-y-1" data-testid="tenko-company-offices">
           <p class="text-sm text-gray-500">この事業者の営業所</p>
           <p class="text-sm text-gray-800" data-testid="tenko-company-offices-list">{{ draftOffices }}</p>

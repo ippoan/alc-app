@@ -697,17 +697,10 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
     <div v-else class="bg-white rounded-xl p-4 shadow-sm space-y-4" data-testid="tenko-filing-settings">
       <h3 class="font-semibold text-gray-800">書き込む値<span class="ml-2 text-sm font-normal text-gray-500" data-testid="tenko-filing-company-name">{{ companies.find(c => c.id === companyId)?.name }}</span></h3>
 
-      <div class="grid gap-3 sm:grid-cols-3">
-        <label class="text-sm">
-          <span class="text-gray-500">事業者番号 (任意・半角 12 桁)</span>
-          <input v-model="settings.business_number" :class="inputClass" inputmode="numeric" maxlength="12" placeholder="例: 012345678901" data-testid="tenko-filing-business-number">
-          <span class="block text-xs text-gray-500 mt-1" data-testid="tenko-filing-business-number-hint">
-            一般貨物自動車運送事業の許可のときに交付された許可書に書かれた 12 桁の番号です。0 で始まるときは 0 も入れます。e-Gov では任意の欄なので、分からなければ空欄のまま出せます。
-          </span>
-        </label>
+      <div class="grid gap-3 sm:grid-cols-2">
         <label class="text-sm">
           <span class="text-gray-500">屋号等</span>
-          <input v-model="settings.trade_name" :class="inputClass">
+          <input v-model="settings.trade_name" :class="inputClass" data-testid="tenko-filing-trade-name">
         </label>
         <label class="text-sm">
           <span class="text-gray-500">事業種別</span>
@@ -757,7 +750,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
 
       <fieldset class="space-y-2">
         <legend class="text-sm font-medium text-gray-700">届け出る事業者 (別紙7)</legend>
-        <p class="text-xs text-gray-500" data-testid="tenko-filing-identity-note">名称・郵便番号・住所・代表者は、上の事業者の表の編集で入れます。</p>
+        <p class="text-xs text-gray-500" data-testid="tenko-filing-identity-note">事業者番号・名称・郵便番号・住所・代表者は、上の事業者の表の編集で入れます。</p>
         <div class="grid gap-3 sm:grid-cols-2">
           <label v-for="[key, label] in OPERATOR_FIELDS" :key="key" class="text-sm">
             <span class="text-gray-500">{{ label }}</span>
