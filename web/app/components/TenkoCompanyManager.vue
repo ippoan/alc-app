@@ -143,7 +143,9 @@ async function saveCompany() {
   const d = draft.value!
   busy.value = true
   draftError.value = ''
-  const body: TenkoCompanyInput = { name: d.name.trim(), is_self: d.is_self }
+  /** 営業所の振り分けは今のまま送る (省くとサーバーが外す) */
+  const officeIds = props.companies.find(c => c.id === d.id)?.office_ids
+  const body: TenkoCompanyInput = { name: d.name.trim(), is_self: d.is_self, ...(officeIds ? { office_ids: officeIds } : {}) }
   try {
     const saved = d.id ? await updateTenkoCompany(d.id, body) : await createTenkoCompany(body)
     /** 書き込む値はほかの欄を残して、名称・住所・代表者だけ置き換える (最新を読んでから書く) */

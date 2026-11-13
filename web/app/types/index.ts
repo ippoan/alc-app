@@ -646,7 +646,11 @@ export interface TenkoCompany {
   office_ids: string[]
 }
 
-export type TenkoCompanyInput = Omit<TenkoCompany, 'id' | 'office_ids'>
+/**
+ * 事業者の作成・置き換えの本文。サーバーは `office_ids` を省くと営業所の振り分けを空で置き換えるので、
+ * 置き換えでは今の振り分けをそのまま送る (振り分けは営業所の表で変える)
+ */
+export type TenkoCompanyInput = Omit<TenkoCompany, 'id' | 'office_ids'> & { office_ids?: string[] }
 
 /** 受委託 (事業者間遠隔点呼)。委託・受託の営業所には、それぞれ事業者が付いている必要がある */
 export interface TenkoConsignment {
