@@ -214,3 +214,49 @@ describe('HubMeasurementsViewer — 端末は名前 (ID はツールチップ)',
     wrapper.unmount()
   })
 })
+
+describe('HubMeasurementsViewer — 点呼の区分と実施場所', () => {
+  beforeEach(() => {
+    getEmployeesMock.mockResolvedValue([EMPLOYEE])
+    listHubMeasurementsMock.mockResolvedValue({
+      items: [
+        // 同じ点呼: 免許証の行には点呼が結ばれず、アルコールの行に結ばれている
+        { ...ROW_WITH_EMPLOYEE, id: 'hm-a', kind: 'alcohol', payload: { value: 0, result: 'normal' }, tenko_method: 'IT点呼', manager_judgment_method: 'in_person', tenko_location: '本社営業所' },
+        // 同じ点呼の古い測定に別の点呼が結ばれていても、新しい方 (先に来る行) を採る
+        { ...ROW_WITH_EMPLOYEE, id: 'hm-b', kind: 'temperature', payload: { value: 36.5 }, tenko_method: '遠隔点呼', tenko_location: '別営業所' },
+        ROW_WITH_EMPLOYEE,
+        { ...ROW_WITHOUT_EMPLOYEE, tenko_method: 'IT点呼', manager_judgment_method: 'it', tenko_location: null },
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'hm-3', session_id: 's-3' },
+      ],
+      limit: 50, offset: 0, has_more: false,
+    })
+  })
+
+  it('★ 束ねた測定のどれかに結ばれた点呼の区分 (IT点呼を対面で確定したら対面点呼) と実施場所を出す。無ければ —', async () => {
+    const wrapper = await mountSuspended(HubMeasurementsViewer, { props: { scope: 'tenko' } })
+    await flush()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findAll('thead th').map(th => th.text())).toEqual(expect.arrayContaining(['区分', '実施場所']))
+    expect(wrapper.findAll('[data-testid="hub-tenko-method"]').map(td => td.text())).toEqual(['対面点呼', 'IT点呼', '—'])
+    expect(wrapper.findAll('[data-testid="hub-tenko-location"]').map(td => td.text())).toEqual(['本社営業所', '—', '—'])
+  })
+
+  it('打刻タブ (scope=timecard) には区分・実施場所の列を出さない', async () => {
+    const wrapper = await mountSuspended(HubMeasurementsViewer, { props: { scope: 'timecard' } })
+    await flush()
+    await wrapper.vm.$nextTick()
+    const heads = wrapper.findAll('thead th').map(th => th.text())
+    expect(heads).not.toContain('区分')
+    expect(heads).not.toContain('実施場所')
+  })
+
+  it('JSON を開いた行は列数ぶん colspan を取る', async () => {
+    for (const [scope, span] of [['tenko', '10'], ['timecard', '9'], ['all', '11']] as const) {
+      const wrapper = await mountSuspended(HubMeasurementsViewer, { props: { scope } })
+      await flush()
+      await wrapper.vm.$nextTick()
+      await wrapper.find('tbody button').trigger('click')
+      expect(wrapper.find('td[colspan]').attributes('colspan')).toBe(span)
+    }
+  })
+})

@@ -14,6 +14,7 @@ import { getEmployees, getMeasurements, listHubMeasurements } from '~/utils/api'
 import { readAlcohol, alcoholResultLabel, alcoholResultClass, type AlcoholPayload } from '~/utils/alcohol'
 import { HUB_MEASUREMENT_KINDS, type ApiEmployee, type ApiMeasurement, type HubMeasurement } from '~/types'
 import { isKeyDeviceId } from '~/utils/device-name'
+import { tenkoMethodLabel } from '~/utils/tenko-type'
 
 const PAGE_SIZE = 50
 
@@ -89,6 +90,10 @@ interface SessionRow {
   temperature: number | null
   /** 打刻 (kind=timecard)。かざしたカードの生値と種別。打刻でなければ null。 */
   card: { cardId: string, cardKind: string | null } | null
+  /** 点呼の区分 (IT点呼 等)。束ねた測定のどれかが点呼に結ばれていれば入る。無ければ null。 */
+  tenkoMethod: string | null
+  /** 点呼の実施場所。無ければ null。 */
+  tenkoLocation: string | null
 }
 
 /** 打刻の payload から card_id / card_kind を取り出す (形が違えば null)。 */
@@ -160,6 +165,8 @@ const sessions = computed<SessionRow[]>(() => {
         alcohol: null,
         temperature: null,
         card: null,
+        tenkoMethod: null,
+        tenkoLocation: null,
       }
       byKey.set(key, row)
       rows.push(row)
@@ -170,6 +177,9 @@ const sessions = computed<SessionRow[]>(() => {
     if (item.kind === 'alcohol' && !row.alcohol) row.alcohol = readAlcohol(item.payload)
     if (item.kind === 'temperature' && row.temperature === null) row.temperature = readTemperature(item.payload)
     if (item.kind === KIND_TIMECARD && !row.card) row.card = readCard(item.payload)
+    // 点呼に結ばれているのは測定 (アルコール・体温など) の行だけ。どれか 1 行に在れば採る
+    if (item.tenko_method && !row.tenkoMethod) row.tenkoMethod = tenkoMethodLabel(item.tenko_method, item.manager_judgment_method)
+    if (item.tenko_location && !row.tenkoLocation) row.tenkoLocation = item.tenko_location
   }
   return rows
 })
@@ -419,6 +429,8 @@ onMounted(() => {
               <th class="px-2 py-2 text-left text-gray-500">受信日時</th>
               <th class="px-2 py-2 text-left text-gray-500">端末</th>
               <th class="px-2 py-2 text-left text-gray-500">乗務員</th>
+              <th v-if="scope !== 'timecard'" class="px-2 py-2 text-left text-gray-500">区分</th>
+              <th v-if="scope !== 'timecard'" class="px-2 py-2 text-left text-gray-500">実施場所</th>
               <th class="px-2 py-2 text-left text-gray-500">免許 有効期限</th>
               <th class="px-2 py-2 text-left text-gray-500">アルコール</th>
               <th class="px-2 py-2 text-left text-gray-500">体温</th>
@@ -440,6 +452,12 @@ onMounted(() => {
                     <span class="text-gray-400 text-xs">({{ employeeOf(row)?.code || '社員番号なし' }})</span>
                   </span>
                   <span v-else class="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">未登録</span>
+                </td>
+                <td v-if="scope !== 'timecard'" class="px-2 py-2 whitespace-nowrap text-gray-700" data-testid="hub-tenko-method">
+                  {{ row.tenkoMethod ?? '—' }}
+                </td>
+                <td v-if="scope !== 'timecard'" class="px-2 py-2 whitespace-nowrap text-gray-700" data-testid="hub-tenko-location">
+                  {{ row.tenkoLocation ?? '—' }}
                 </td>
                 <td class="px-2 py-2 whitespace-nowrap text-gray-700">
                   <template v-if="row.license">
@@ -504,7 +522,7 @@ onMounted(() => {
                 </td>
               </tr>
               <tr v-if="expanded.has(row.key)" class="bg-gray-50">
-                <td :colspan="scope === 'tenko' ? 8 : 9" class="px-2 py-2">
+                <td :colspan="scope === 'tenko' ? 10 : scope === 'timecard' ? 9 : 11" class="px-2 py-2">
                   <div v-for="item in row.items" :key="item.id" class="mb-2 last:mb-0">
                     <div class="text-xs text-gray-500">
                       {{ item.kind }} / seq {{ item.seq }} / 端末計時 {{ formatDateTime(item.recorded_at) }}
