@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import {
-  CONTRACT_TEMPLATE_PATH, bureauOf, buildContract, contractDate, contractOfficeName, contractValues, defaultOffice, fiveYearsEnd,
+  BUREAU_NAMES, CONTRACT_TEMPLATE_PATH, bureauOf, buildContract, contractDate, contractOfficeName, contractValues, defaultOffice, fiveYearsEnd,
   fillContract, missingContractFields, type ContractRequest,
 } from '~/utils/consignment-contract'
 import { emptySettings, type FilingSettings } from '~/utils/tenko-forms'
@@ -77,6 +77,7 @@ describe('契約書の書き方', () => {
     expect(bureauOf('架空県')).toBe('')
     expect(bureauOf(null)).toBe('')
     expect(bureauOf(undefined)).toBe('')
+    expect(BUREAU_NAMES).toHaveLength(10)
   })
 
   it('目印ごとの値。郵便番号・役職が無ければ付けない', () => {

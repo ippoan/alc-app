@@ -2,7 +2,7 @@
 import type { TenkoCompany, TenkoConsignment, TenkoOffice } from '~/types'
 import { getTenkoFilingSettings, getTenkoOffices, listTenkoConsignments } from '~/utils/api'
 import {
-  bureauOf, buildContract, contractOfficeName, defaultOffice, fiveYearsEnd, missingContractFields, type ContractRequest,
+  BUREAU_NAMES, bureauOf, buildContract, contractOfficeName, defaultOffice, fiveYearsEnd, missingContractFields, type ContractRequest,
 } from '~/utils/consignment-contract'
 import { jstTodayDate } from '~/utils/jst'
 import { saveBytes } from '~/utils/tenko-forms'
@@ -163,7 +163,10 @@ const inputClass = 'border rounded-lg px-2 py-1'
       </label>
       <label class="flex flex-col">
         <span class="text-gray-500">延長を許可する運輸局長</span>
-        <input v-model="bureau" type="text" placeholder="九州運輸局長" :class="inputClass" data-testid="tenko-contract-bureau">
+        <select v-model="bureau" :class="inputClass" data-testid="tenko-contract-bureau">
+          <option value="">乙の事業者の住所から</option>
+          <option v-for="b in BUREAU_NAMES" :key="b" :value="b">{{ b }}</option>
+        </select>
       </label>
     </div>
     <div class="flex flex-wrap items-center gap-3">
