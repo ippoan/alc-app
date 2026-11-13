@@ -726,6 +726,11 @@ watch(step, async (s, prev) => {
 
 // FC-1200 測定結果 → BLE 医療データ / 手動入力データをマージ → API に保存
 async function onMeasurementResult(result: MeasurementResult) {
+  // 保存する測定の id は**最初に控える**。結果画面は保存中も「次の測定へ」(reset) を出しているので、
+  // 写真のアップロード等を待つ間に押されると `activeMeasurementId` が null に戻る。後から読むと
+  // 完了の PUT が `/measurements/null` (404) になり、作り直しの経路で別の測定に点呼が付いて、
+  // 始めた測定は started のまま残っていた (2026-11-12 に 2 件。Refs #676)
+  const savingId = activeMeasurementId.value
   // 吹き込みの写真。FC-1200 が測定中 (measuring) に入った瞬間に撮った控えを使う
   // (顔がまだ機器の前にある)。控えが無ければここで撮る — 録画を止めるとカメラが落ちるので
   // その前に。upload は保存の中で行う (中断された測定の写真をサーバーに残さないため)
@@ -769,7 +774,7 @@ async function onMeasurementResult(result: MeasurementResult) {
   step.value = 'result'
 
   // 録画停止 + ローカル保存 (カメラもここで落ちる)
-  await finishVideoRecording(employeeId.value, activeMeasurementId.value || undefined)
+  await finishVideoRecording(employeeId.value, savingId || undefined)
 
   isSaving.value = true
   saveError.value = null
@@ -777,8 +782,8 @@ async function onMeasurementResult(result: MeasurementResult) {
   // IT点呼 の通話の部屋の id (= 完了の PUT が作った点呼の記録)。通常点呼では使わない
   let itSessionId: string | null = null
   try {
-    console.log('[Measurement] activeMeasurementId:', activeMeasurementId.value, 'isOnline:', isOnline.value)
-    if (activeMeasurementId.value && isOnline.value) {
+    console.log('[Measurement] savingId:', savingId, 'isOnline:', isOnline.value)
+    if (savingId && isOnline.value) {
       // 吹き終わりの写真を保存して測定に載せる (失敗しても測定の保存は止めない。オフラインは対象外)
       if (blowPhoto) {
         try {
@@ -819,7 +824,6 @@ async function onMeasurementResult(result: MeasurementResult) {
       delete loggableUpdateData.carins_cert_no
       delete loggableUpdateData.carins_vehicle_id
       console.log('[Measurement] updateMeasurement PUT data:', JSON.stringify(loggableUpdateData))
-      const savingId = activeMeasurementId.value
       const saved = await updateMeasurement(savingId, updateData)
       if (itActive.value) itSessionId = saved.tenko_session_id ?? null
       console.log('[Measurement] updateMeasurement success')
@@ -828,17 +832,17 @@ async function onMeasurementResult(result: MeasurementResult) {
       if (saved.tenko_pending === true && activeMeasurementId.value === savingId) openItOffer(savingId)
 
       // 録画をバックグラウンドでアップロード (録画が無ければ何もしない)
-      uploadVideoRecording(activeMeasurementId.value)
+      uploadVideoRecording(savingId)
     } else {
       // オフラインまたは activeMeasurementId なし → 従来のフロー
       console.log('[Measurement] fallback to offlineSave')
-      saveStatus.value = await offlineSave(result, undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
+      saveStatus.value = await offlineSave(result, undefined, savingId || undefined, videoStoreId.value || undefined)
     }
   } catch (e) {
     // 更新失敗時はオフラインキューにフォールバック
     console.error('[Measurement] updateMeasurement failed:', e)
     try {
-      saveStatus.value = await offlineSave(result, undefined, activeMeasurementId.value || undefined, videoStoreId.value || undefined)
+      saveStatus.value = await offlineSave(result, undefined, savingId || undefined, videoStoreId.value || undefined)
     } catch (e2) {
       saveError.value = e2 instanceof Error ? e2.message : '保存エラー'
       console.warn('測定結果の保存に失敗:', e2)

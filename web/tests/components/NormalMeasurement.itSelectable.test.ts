@@ -428,6 +428,26 @@ describe('NormalMeasurement — itSelectable: 即保存と、IT点呼 を選べ�
     wrapper.unmount()
   })
 
+  it('★ 結果が出た直後 (保存の前) に「次の測定へ」で戻っても、始めた測定を完了にする (/measurements/null にしない。Refs #676)', async () => {
+    const wrapper = await mountNm({ itSelectable: true })
+    await touch(wrapper, 'driver_license')
+    await wrapper.find('[data-testid="choice-alcohol"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(BleStatusStub).vm.$emit('skip')
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(AlcMeasurementStub).vm.$emit('result', measurementResult())
+    // 結果画面が出たら、保存が進む前に押す (2026-11-12 の 2 件は写真のアップロード中に押されていた)
+    for (let i = 0; i < 20 && !nextButton(wrapper); i++) await wrapper.vm.$nextTick()
+    await nextButton(wrapper)!.trigger('click')
+    await flush(wrapper)
+    await flush(wrapper)
+
+    expect(updateMeasurementMock.mock.calls.map(c => c[0])).toEqual(['measurement-1'])
+    expect(completedBodies()).toHaveLength(1)
+    expect(offlineSaveMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('★ tenko_pending を返さない backend では確定待ちにせず「次の測定へ」の形のまま', async () => {
     updateMeasurementMock.mockImplementation(async () => ({ id: 'measurement-1', tenko_session_id: 'session-1' }))
     const wrapper = await mountNm({ itSelectable: true })
