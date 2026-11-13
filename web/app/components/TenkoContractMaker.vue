@@ -2,7 +2,7 @@
 import type { TenkoCompany, TenkoConsignment, TenkoOffice } from '~/types'
 import { getTenkoFilingSettings, getTenkoOffices, listTenkoConsignments } from '~/utils/api'
 import {
-  bureauOf, buildContract, contractOfficeName, defaultOffice, missingContractFields, type ContractRequest,
+  bureauOf, buildContract, contractOfficeName, defaultOffice, fiveYearsEnd, missingContractFields, type ContractRequest,
 } from '~/utils/consignment-contract'
 import { jstTodayDate } from '~/utils/jst'
 import { saveBytes } from '~/utils/tenko-forms'
@@ -65,6 +65,11 @@ watch([kouOffice, otsuOffice, consignments], () => {
   bureau.value = bureauOf(offices.value.find(o => o.id === otsuOffice.value)?.address)
 }, { immediate: true })
 
+/** 開始日を入れたら終了日を 5 年 (開始日の 5 年後の前日) にする。終了日は後から直せる */
+function onFromInput() {
+  validTo.value = fiveYearsEnd(validFrom.value)
+}
+
 const problem = computed(() => {
   if (!kouCompany.value || !otsuCompany.value) return '委託と受託の事業者を選んでください'
   if (kouCompany.value === otsuCompany.value) return '委託と受託は別の事業者にしてください'
@@ -115,7 +120,7 @@ const inputClass = 'border rounded-lg px-2 py-1'
     <h3 class="font-semibold text-gray-800">受委託の契約書を作る</h3>
     <p class="text-sm text-gray-600">
       事業者間遠隔点呼の業務の管理の委託受託契約書を、各事業者の「書き込む値」(名称・住所・代表者) を入れた Word で保存します。
-      営業所は本社が既定です。期間は、選んだ営業所の受委託に登録した期間が既定です。
+      営業所は本社が既定です。期間は、選んだ営業所の受委託に登録した期間が既定です。開始日を入れると、終了日は 5 年 (開始日の 5 年後の前日) になります。
     </p>
     <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-contract-load-error">{{ loadError }}</p>
     <div class="grid gap-3 sm:grid-cols-2 text-sm">
@@ -141,7 +146,7 @@ const inputClass = 'border rounded-lg px-2 py-1'
     <div class="flex flex-wrap items-end gap-4 text-sm">
       <label class="flex flex-col">
         <span class="text-gray-500">期間の開始日</span>
-        <input v-model="validFrom" type="date" :class="inputClass" data-testid="tenko-contract-from">
+        <input v-model="validFrom" type="date" :class="inputClass" data-testid="tenko-contract-from" @input="onFromInput">
       </label>
       <label class="flex flex-col">
         <span class="text-gray-500">期間の終了日</span>

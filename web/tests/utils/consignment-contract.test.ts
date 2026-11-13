@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import {
-  CONTRACT_TEMPLATE_PATH, bureauOf, buildContract, contractDate, contractOfficeName, contractValues, defaultOffice,
+  CONTRACT_TEMPLATE_PATH, bureauOf, buildContract, contractDate, contractOfficeName, contractValues, defaultOffice, fiveYearsEnd,
   fillContract, missingContractFields, type ContractRequest,
 } from '~/utils/consignment-contract'
 import { emptySettings, type FilingSettings } from '~/utils/tenko-forms'
@@ -48,6 +48,13 @@ describe('契約書の書き方', () => {
     expect(contractDate('2026-11-12')).toBe('令和８年11月12日')
     expect(contractDate('')).toBe('令和　　年　　月　　日')
     expect(contractDate('2018-12-31')).toBe('令和　　年　　月　　日')
+  })
+
+  it('5 年の終了日は開始日の 5 年後の前日。月をまたいでも繰り下げ、うるう日は 2 月 28 日まで。読めなければ空', () => {
+    expect(fiveYearsEnd('2027-02-01')).toBe('2032-01-31')
+    expect(fiveYearsEnd('2027-01-01')).toBe('2031-12-31')
+    expect(fiveYearsEnd('2028-02-29')).toBe('2033-02-28')
+    expect(fiveYearsEnd('')).toBe('')
   })
 
   it('営業所は括弧書きを落とし、営業所で終わらなければ足す', () => {

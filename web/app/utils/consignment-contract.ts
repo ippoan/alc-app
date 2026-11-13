@@ -41,6 +41,17 @@ export function contractDate(date: string): string {
   return `令和${jaNumber(Number(m[1]) - 2018)}年${jaNumber(Number(m[2]))}月${jaNumber(Number(m[3]))}日`
 }
 
+/**
+ * 開始日から 5 年の期間の終了日 (開始日の 5 年後の前日。2027-02-01 → 2032-01-31)。
+ * 受委託の許可は 5 年未満なので、終了日は開始日 + 5 年より前にする。読めなければ空
+ */
+export function fiveYearsEnd(from: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(from)
+  if (!m) return ''
+  const d = new Date(Date.UTC(Number(m[1]) + 5, Number(m[2]) - 1, Number(m[3]) - 1))
+  return d.toISOString().slice(0, 10)
+}
+
 /** 営業所の名前を契約書の書き方にする (後ろの括弧書きを落とし、営業所で終わらなければ足す) */
 export function contractOfficeName(name: string): string {
   const base = name.replace(/\s*[（(][^（()）]*[)）]\s*$/, '').trim()
