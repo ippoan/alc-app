@@ -711,6 +711,10 @@ function onManualMedicalSubmit(data: import('~/types').SubmitMedicalData) {
   step.value = 'measuring'
 }
 
+// 段の移り変わりを残す。`[Measurement]` は診断ログとしてサーバーへ送られるので、点呼が未完了で
+// 止まった回にどの段で止まったかを後から追える (Refs #676)
+watch(step, (s, prev) => console.log('[Measurement] step', prev, '->', s))
+
 // measuring ステップでカメラ起動/停止 (デモモードは FC-1200 の state 変化が来ないので即録画)
 watch(step, async (s, prev) => {
   if (s === 'measuring') {

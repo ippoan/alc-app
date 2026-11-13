@@ -260,3 +260,34 @@ describe('HubMeasurementsViewer — 点呼の区分と実施場所', () => {
     }
   })
 })
+
+describe('HubMeasurementsViewer — 点呼まで進まなかった回は「未完了」と理由', () => {
+  beforeEach(() => {
+    getEmployeesMock.mockResolvedValue([EMPLOYEE])
+    listHubMeasurementsMock.mockResolvedValue({
+      items: [
+        // ① アルコールは届いたが測定が started のまま (2026-11-13 4:10 の実例)
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'u-1', session_id: 'u1', measurement_status: 'started' },
+        // ② 体温だけで止まった
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'u-2', session_id: 'u2', kind: 'temperature', payload: { value: 36.8 }, measurement_status: 'started' },
+        // ③ 完了して点呼もある
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'u-3', session_id: 'u3', measurement_status: 'completed', tenko_method: '通常点呼', tenko_location: '釧路営業所' },
+        // ④ 完了したが点呼が無い / ⑤ 測定に結ばれない
+        { ...ROW_WITHOUT_EMPLOYEE, id: 'u-4', session_id: 'u4', measurement_status: 'completed' },
+        { ...ROW_WITH_EMPLOYEE, id: 'u-5', session_id: 'u5' },
+      ],
+      limit: 50, offset: 0, has_more: false,
+    })
+  })
+
+  it('★ 測定が完了していない回は「未完了」とどこで止まったかを出す。完了・結ばれない行は従来どおり', async () => {
+    const wrapper = await mountSuspended(HubMeasurementsViewer, { props: { scope: 'tenko' } })
+    await flush()
+    await wrapper.vm.$nextTick()
+    const cells = wrapper.findAll('[data-testid="hub-tenko-method"]').map(td => td.text())
+    expect(cells[0]).toBe('未完了アルコールは測ったが、画面で点呼が保存されていない')
+    expect(cells[1]).toBe('未完了アルコールを測る前に止まった')
+    expect(cells.slice(2)).toEqual(['通常点呼', '—', '—'])
+    expect(wrapper.findAll('[data-testid="hub-tenko-incomplete-reason"]')).toHaveLength(2)
+  })
+})

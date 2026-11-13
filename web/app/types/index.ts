@@ -1544,6 +1544,8 @@ export interface HubMeasurement {
   manager_judgment_method?: string | null
   /** 結ばれた点呼の実施場所 (端末の営業所) */
   tenko_location?: string | null
+  /** 結ばれた測定の状態 (`started` / `completed` …)。測定に結ばれていない・API が古い間は無い */
+  measurement_status?: string | null
 }
 
 /**

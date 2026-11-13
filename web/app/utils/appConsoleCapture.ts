@@ -20,6 +20,8 @@ export const APP_LOG_TAGS = [
   '[vein]',
   '[ALARM-DEV]',
   '[SERIAL]',
+  // 点呼の段の移り変わりと保存の成否。点呼が未完了で止まった回の原因を後から追う (Refs #676)
+  '[Measurement]',
 ] as const
 
 const LEVELS = ['log', 'info', 'warn', 'error'] as const
