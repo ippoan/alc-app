@@ -4,12 +4,17 @@ import type { FilingSettings } from './tenko-forms'
 /**
  * 事業者間遠隔点呼の受委託の契約書 (業務の管理の委託受託契約書) に値を差し込む (管理画面の「点呼の届出」タブ)。
  *
- * 雛形は `public/forms/tenko-consignment-contract.docx`。国の様式ではなく自前の文案なので tenko-forms ではなくここに置く。
+ * 雛形は `public/forms/tenko-consignment-contract.docx` (31 契約書) と `tenko-consignment-saimoku.docx` (32 実施方法の細目)。
+ * 国の様式ではなく自前の文案なので tenko-forms ではなくここに置く。受委託は相互なので、甲乙を入れ替えた 2 組を 1 つの zip にする。
  * 本文の差し込む位置に `{{KOU_NAME}}` などの目印が 1 つの run に収まって入っている。ブラウザで目印を置き換えて
  * そのまま保存させる。サーバーには送らない。
  */
 
 export const CONTRACT_TEMPLATE_PATH = '/forms/tenko-consignment-contract.docx'
+export const SAIMOKU_TEMPLATE_PATH = '/forms/tenko-consignment-saimoku.docx'
+
+/** 細目に入る目印 (期間・営業所・運輸局長は無い) */
+const SAIMOKU_KEYS = ['KOU_NAME', 'OTSU_NAME', 'KOU_ADDRESS', 'OTSU_ADDRESS', 'KOU_REPRESENTATIVE', 'OTSU_REPRESENTATIVE', 'CONTRACT_DATE']
 
 /** 契約の一方 (甲 = 委託者、乙 = 受託者) */
 export interface ContractParty {
@@ -126,13 +131,15 @@ export function contractValues(req: ContractRequest): Record<string, string> {
   }
 }
 
-/** 雛形の目印を置き換える。雛形に無い目印・置き換え残しがあれば例外 (雛形と食い違い) */
-export function fillContract(file: Uint8Array, req: ContractRequest): Uint8Array {
+/** 雛形の目印 (keys) を置き換える。雛形に無い目印・置き換え残しがあれば例外 (雛形と食い違い) */
+export function fillContract(file: Uint8Array, req: ContractRequest, keys?: string[]): Uint8Array {
   const zip = unzipSync(file)
   const path = 'word/document.xml'
   if (!zip[path]) throw new Error('契約書の雛形の本文が見つかりません')
   let xml = strFromU8(zip[path]!)
-  for (const [key, value] of Object.entries(contractValues(req))) {
+  const values = contractValues(req)
+  for (const key of keys ?? Object.keys(values)) {
+    const value = values[key]!
     const mark = `{{${key}}}`
     if (!xml.includes(mark)) throw new Error(`契約書の雛形に ${mark} がありません`)
     xml = xml.split(mark).join(escapeXml(value))
@@ -143,11 +150,32 @@ export function fillContract(file: Uint8Array, req: ContractRequest): Uint8Array
   return zipSync(zip, { level: 6 })
 }
 
-/** 雛形を取り、値を書いた中身とファイル名を返す */
-export async function buildContract(req: ContractRequest, fetcher: typeof fetch = fetch): Promise<{ bytes: Uint8Array, filename: string }> {
-  const res = await fetcher(CONTRACT_TEMPLATE_PATH, { cache: 'no-store' })
+/** 甲乙を入れ替えた受委託 (延長を許可する運輸局長は、新しい乙の管轄) */
+export function reverseRequest(req: ContractRequest, bureau: string): ContractRequest {
+  return { ...req, kou: req.otsu, otsu: req.kou, bureau }
+}
+
+async function fetchTemplate(path: string, fetcher: typeof fetch): Promise<Uint8Array> {
+  const res = await fetcher(path, { cache: 'no-store' })
   if (!res.ok) throw new Error(`契約書の雛形を取得できませんでした (${res.status})`)
-  const bytes = fillContract(new Uint8Array(await res.arrayBuffer()), req)
-  const name = (s: FilingSettings) => s.operator_name || '名称未設定'
-  return { bytes, filename: `委託受託契約書_委託${name(req.kou.settings)}_受託${name(req.otsu.settings)}.docx` }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+function nameOf(p: ContractParty): string {
+  return p.settings.operator_name || '名称未設定'
+}
+
+/**
+ * 相互の受委託の契約書と細目を 1 つの zip にする。A = req の向き、B = 甲乙を入れ替えた向き (運輸局長は reverseBureau)。
+ * 各組に 31 契約書・32 実施方法の細目を入れる
+ */
+export async function buildContracts(req: ContractRequest, reverseBureau: string, fetcher: typeof fetch = fetch): Promise<{ bytes: Uint8Array, filename: string }> {
+  const [contract, saimoku] = await Promise.all([fetchTemplate(CONTRACT_TEMPLATE_PATH, fetcher), fetchTemplate(SAIMOKU_TEMPLATE_PATH, fetcher)])
+  const files: Record<string, Uint8Array> = {}
+  for (const [label, r] of [['A', req], ['B', reverseRequest(req, reverseBureau)]] as const) {
+    const dir = `${label}_委託${nameOf(r.kou)}_受託${nameOf(r.otsu)}`
+    files[`${dir}/31_管理の委託受託契約書.docx`] = fillContract(contract, r)
+    files[`${dir}/32_管理の報酬その他管理の実施方法の細目を記載した書類.docx`] = fillContract(saimoku, r, SAIMOKU_KEYS)
+  }
+  return { bytes: zipSync(files), filename: `受委託契約書_${nameOf(req.kou)}_${nameOf(req.otsu)}.zip` }
 }

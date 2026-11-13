@@ -14,7 +14,7 @@ vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   ...api,
 }))
-const contract = vi.hoisted(() => ({ buildContract: vi.fn() }))
+const contract = vi.hoisted(() => ({ buildContracts: vi.fn() }))
 vi.mock('~/utils/consignment-contract', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/consignment-contract')>()),
   ...contract,
@@ -60,7 +60,7 @@ beforeEach(() => {
     operator_address: id === C1 ? '長崎県架空市' : '',
     operator_representative: '架空　太郎',
   }))
-  contract.buildContract.mockResolvedValue({ bytes: new Uint8Array([1]), filename: 'k.docx' })
+  contract.buildContracts.mockResolvedValue({ bytes: new Uint8Array([1]), filename: 'k.zip' })
 })
 
 describe('TenkoContractMaker', () => {
@@ -81,15 +81,17 @@ describe('TenkoContractMaker', () => {
     await t(w, 'tenko-contract-bureau').setValue('')
     await t(w, 'tenko-contract-download').trigger('click')
     await flushPromises()
-    const req = contract.buildContract.mock.calls[0]![0]
+    const req = contract.buildContracts.mock.calls[0]![0]
     expect([req.kou.office, req.otsu.office, req.validFrom, req.validTo, req.bureau])
       .toEqual(['本社営業所', '釧路営業所', '2027-02-01', '2032-01-31', ''])
-    expect(forms.saveBytes).toHaveBeenCalledWith(new Uint8Array([1]), 'k.docx', 'docx')
+    expect(forms.saveBytes).toHaveBeenCalledWith(new Uint8Array([1]), 'k.zip', 'zip')
+    // 入れ替えた向きの運輸局長は、甲の営業所 (長崎) の管轄
+    expect(contract.buildContracts.mock.calls[0]![1]).toBe('九州運輸局長')
     expect(t(w, 'tenko-contract-missing').text()).toContain('乙の住所')
     await t(w, 'tenko-contract-bureau').setValue('九州運輸局長')
     await t(w, 'tenko-contract-download').trigger('click')
     await flushPromises()
-    expect(contract.buildContract.mock.calls[1]![0].bureau).toBe('九州運輸局長')
+    expect(contract.buildContracts.mock.calls[1]![0].bureau).toBe('九州運輸局長')
   })
 
   it('書き込む値の名称が空なら事業者の表の名称を書く', async () => {
@@ -97,7 +99,7 @@ describe('TenkoContractMaker', () => {
     const w = await mountIt()
     await t(w, 'tenko-contract-download').trigger('click')
     await flushPromises()
-    const req = contract.buildContract.mock.calls[0]![0]
+    const req = contract.buildContracts.mock.calls[0]![0]
     expect([req.kou.settings.operator_name, req.otsu.settings.operator_name]).toEqual(['架空運輸', '架空物流'])
   })
 
@@ -112,11 +114,11 @@ describe('TenkoContractMaker', () => {
 
   it('作れなければ理由を出す (理由が無ければ決まり文句)', async () => {
     const w = await mountIt()
-    contract.buildContract.mockRejectedValueOnce(new Error('契約書の雛形を取得できませんでした (404)'))
+    contract.buildContracts.mockRejectedValueOnce(new Error('契約書の雛形を取得できませんでした (404)'))
     await t(w, 'tenko-contract-download').trigger('click')
     await flushPromises()
     expect(t(w, 'tenko-contract-error').text()).toBe('契約書の雛形を取得できませんでした (404)')
-    contract.buildContract.mockRejectedValueOnce('x')
+    contract.buildContracts.mockRejectedValueOnce('x')
     await t(w, 'tenko-contract-download').trigger('click')
     await flushPromises()
     expect(t(w, 'tenko-contract-error').text()).toBe('契約書を作成できませんでした')
