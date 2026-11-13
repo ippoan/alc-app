@@ -94,6 +94,22 @@ interface SessionRow {
   tenkoMethod: string | null
   /** 点呼の実施場所。無ければ null。 */
   tenkoLocation: string | null
+  /** 結ばれた測定の状態 (`started` / `completed` …)。測定に結ばれていなければ null。 */
+  measurementStatus: string | null
+}
+
+/**
+ * 点呼まで進まなかった回 (測定は始まったが完了していない) の理由。未完了でなければ null。
+ *
+ * 点呼の記録は測定の完了の保存で作られるので、測定が `completed` でなく点呼も無い回は、
+ * 画面が途中で止まった・離れた・読み込み直された回 (2026-11-13 の実例は体温の後で止まり、
+ * 4 分後の読み込み直しで消えた)。ハブにアルコールが届いているかで、どこまで進んだかを分ける。
+ */
+function incompleteReason(row: SessionRow): string | null {
+  if (row.tenkoMethod || !row.measurementStatus || row.measurementStatus === 'completed') return null
+  return row.alcohol
+    ? 'アルコールは測ったが、画面で点呼が保存されていない'
+    : 'アルコールを測る前に止まった'
 }
 
 /** 打刻の payload から card_id / card_kind を取り出す (形が違えば null)。 */
@@ -167,6 +183,7 @@ const sessions = computed<SessionRow[]>(() => {
         card: null,
         tenkoMethod: null,
         tenkoLocation: null,
+        measurementStatus: null,
       }
       byKey.set(key, row)
       rows.push(row)
@@ -180,6 +197,7 @@ const sessions = computed<SessionRow[]>(() => {
     // 点呼に結ばれているのは測定 (アルコール・体温など) の行だけ。どれか 1 行に在れば採る
     if (item.tenko_method && !row.tenkoMethod) row.tenkoMethod = tenkoMethodLabel(item.tenko_method, item.manager_judgment_method)
     if (item.tenko_location && !row.tenkoLocation) row.tenkoLocation = item.tenko_location
+    if (item.measurement_status && !row.measurementStatus) row.measurementStatus = item.measurement_status
   }
   return rows
 })
@@ -453,8 +471,12 @@ onMounted(() => {
                   </span>
                   <span v-else class="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">未登録</span>
                 </td>
-                <td v-if="scope !== 'timecard'" class="px-2 py-2 whitespace-nowrap text-gray-700" data-testid="hub-tenko-method">
-                  {{ row.tenkoMethod ?? '—' }}
+                <td v-if="scope !== 'timecard'" class="px-2 py-2 text-gray-700" data-testid="hub-tenko-method">
+                  <template v-if="incompleteReason(row)">
+                    <span class="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 whitespace-nowrap">未完了</span>
+                    <div class="mt-1 text-xs text-red-700" data-testid="hub-tenko-incomplete-reason">{{ incompleteReason(row) }}</div>
+                  </template>
+                  <span v-else class="whitespace-nowrap">{{ row.tenkoMethod ?? '—' }}</span>
                 </td>
                 <td v-if="scope !== 'timecard'" class="px-2 py-2 whitespace-nowrap text-gray-700" data-testid="hub-tenko-location">
                   {{ row.tenkoLocation ?? '—' }}
