@@ -1538,6 +1538,12 @@ export interface HubMeasurement {
   recorded_at: string | null
   /** サーバ受信時刻。一覧の並び順・期間絞り込みはこの列が基準 */
   created_at: string
+  /** 列 `measurement_id` で結ばれた点呼の区分 (通常点呼 / IT点呼 / 遠隔点呼 / 自動点呼)。結ばれていない・API が古い間は無い */
+  tenko_method?: string | null
+  /** IT点呼 を運行管理者が通話 (`it`) と対面 (`in_person`) のどちらで確定したか */
+  manager_judgment_method?: string | null
+  /** 結ばれた点呼の実施場所 (端末の営業所) */
+  tenko_location?: string | null
 }
 
 /**
