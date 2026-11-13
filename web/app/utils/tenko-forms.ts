@@ -525,6 +525,31 @@ export async function buildFilledForm(
   return { bytes, filename: `${form.id}_${req.kind}_${version}_記入済み.${form.ext}` }
 }
 
+/** 遠隔点呼の届出に #67 として添える点呼機器のパンフレット */
+export const BROCHURE_URL = 'https://ippoan.github.io/alc-app/downloads/brochure.pdf'
+export const BROCHURE_FILENAME = '67_遠隔点呼の機能と性能.pdf'
+
+/** 手続に使う様式をまとめて記入し、遠隔点呼ならパンフレットも入れた zip にする */
+export async function buildFilingZip(
+  forms: TenkoForm[],
+  s: FilingSettings,
+  req: FilingRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<{ bytes: Uint8Array, filename: string }> {
+  const files: Record<string, Uint8Array> = {}
+  for (const form of forms) {
+    const { bytes, filename } = await buildFilledForm(form, s, req, fetcher)
+    files[filename] = bytes
+  }
+  if (req.kind === 'remote') {
+    const res = await fetcher(BROCHURE_URL, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`パンフレットを取得できませんでした (${res.status})`)
+    files[BROCHURE_FILENAME] = new Uint8Array(await res.arrayBuffer())
+  }
+  const label = req.kind === 'remote' ? '遠隔点呼' : '自動点呼'
+  return { bytes: zipSync(files), filename: `点呼の届出_${label}_${req.applyDate}.zip` }
+}
+
 const MIME = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

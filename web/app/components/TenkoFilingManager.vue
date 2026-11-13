@@ -11,7 +11,7 @@ import {
 } from '~/utils/egov-filing'
 import { jstTodayDate } from '~/utils/jst'
 import {
-  BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilledForm,
+  BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilingZip, buildFilledForm,
   deviceNameOptions, earliestStartDate, emptySettings, fetchProductInfo, saveBytes,
   type FilingKind, type FilingSettings, type ProductInfo, type TenkoForm,
 } from '~/utils/tenko-forms'
@@ -195,6 +195,25 @@ async function download(form: TenkoForm) {
       startDate: startDate.value,
     })
     saveBytes(bytes, filename, form.ext)
+  }
+  catch (e) {
+    downloadError.value = messageOf(e, '様式を作れませんでした')
+  }
+  finally {
+    busyForm.value = ''
+  }
+}
+
+async function downloadZip() {
+  busyForm.value = 'zip'
+  downloadError.value = ''
+  try {
+    const { bytes, filename } = await buildFilingZip(forms.value, settings.value, {
+      kind: kind.value,
+      applyDate: applyDate.value,
+      startDate: startDate.value,
+    })
+    saveBytes(bytes, filename, 'zip')
   }
   catch (e) {
     downloadError.value = messageOf(e, '様式を作れませんでした')
@@ -811,6 +830,17 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
           <span class="text-gray-500">実施予定日 (申請の {{ FILING_LEAD_DAYS }} 日後以降)</span>
           <input v-model="startDate" type="date" :min="minStartDate || undefined" class="border rounded-lg px-2 py-1" data-testid="tenko-filing-start-date">
         </label>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <button
+          class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
+          data-testid="tenko-filing-dl-zip"
+          :disabled="!!busyForm"
+          @click="downloadZip"
+        >
+          {{ busyForm === 'zip' ? '作成中…' : 'まとめて zip でダウンロード' }}
+        </button>
+        <span v-if="kind === 'remote'" class="text-xs text-gray-500" data-testid="tenko-filing-zip-brochure-note">パンフレット (#67 の添付) も入ります</span>
       </div>
       <ul class="divide-y">
         <li v-for="form in forms" :key="form.id" class="flex items-center justify-between py-2">
