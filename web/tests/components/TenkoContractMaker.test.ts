@@ -91,6 +91,15 @@ describe('TenkoContractMaker', () => {
     expect(contract.buildContract.mock.calls[1]![0].bureau).toBe('九州運輸局長')
   })
 
+  it('書き込む値の名称が空なら事業者の表の名称を書く', async () => {
+    api.getTenkoFilingSettings.mockResolvedValue(emptySettings())
+    const w = await mountIt()
+    await t(w, 'tenko-contract-download').trigger('click')
+    await flushPromises()
+    const req = contract.buildContract.mock.calls[0]![0]
+    expect([req.kou.settings.operator_name, req.otsu.settings.operator_name]).toEqual(['架空運輸', '架空物流'])
+  })
+
   it('開始日を入れると終了日を 5 年にする。終了日は後から直せる', async () => {
     const w = await mountIt()
     await t(w, 'tenko-contract-from').setValue('2028-04-01')

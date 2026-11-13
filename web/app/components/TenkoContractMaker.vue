@@ -91,7 +91,12 @@ async function download() {
   error.value = ''
   missing.value = []
   try {
-    const [kou, otsu] = await Promise.all([getTenkoFilingSettings(kouCompany.value), getTenkoFilingSettings(otsuCompany.value)])
+    /** 名称は事業者の表の名称 (書き込む値の名称が空のとき) */
+    const settingsOf = async (id: string) => {
+      const s = await getTenkoFilingSettings(id)
+      return { ...s, operator_name: s.operator_name || props.companies.find(c => c.id === id)!.name }
+    }
+    const [kou, otsu] = await Promise.all([settingsOf(kouCompany.value), settingsOf(otsuCompany.value)])
     const req: ContractRequest = {
       kou: { settings: kou, office: officeLabel(kouOffice.value) },
       otsu: { settings: otsu, office: officeLabel(otsuOffice.value) },
@@ -119,7 +124,7 @@ const inputClass = 'border rounded-lg px-2 py-1'
   <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-contract">
     <h3 class="font-semibold text-gray-800">受委託の契約書を作る</h3>
     <p class="text-sm text-gray-600">
-      事業者間遠隔点呼の業務の管理の委託受託契約書を、各事業者の「書き込む値」(名称・住所・代表者) を入れた Word で保存します。
+      事業者間遠隔点呼の業務の管理の委託受託契約書を、事業者の表の名称・住所・代表者を入れた Word で保存します。
       営業所は本社が既定です。期間は、選んだ営業所の受委託に登録した期間が既定です。開始日を入れると、終了日は 5 年 (開始日の 5 年後の前日) になります。
     </p>
     <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-contract-load-error">{{ loadError }}</p>
@@ -173,7 +178,7 @@ const inputClass = 'border rounded-lg px-2 py-1'
       <span v-if="problem" class="text-sm text-gray-500" data-testid="tenko-contract-problem">{{ problem }}</span>
     </div>
     <p v-if="missing.length" class="text-sm text-amber-700" data-testid="tenko-contract-missing">
-      「書き込む値」に入っていないため空欄にしました: {{ missing.join('・') }}
+      事業者の表に入っていないため空欄にしました: {{ missing.join('・') }}
     </p>
     <p v-if="error" class="text-sm text-red-600" data-testid="tenko-contract-error">{{ error }}</p>
   </div>

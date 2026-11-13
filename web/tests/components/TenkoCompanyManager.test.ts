@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import TenkoCompanyManager from '~/components/TenkoCompanyManager.vue'
+import { emptySettings } from '~/utils/tenko-forms'
 
 const api = vi.hoisted(() => ({
   getTenkoOffices: vi.fn(),
@@ -13,6 +14,8 @@ const api = vi.hoisted(() => ({
   createTenkoConsignment: vi.fn(),
   updateTenkoConsignment: vi.fn(),
   deleteTenkoConsignment: vi.fn(),
+  getTenkoFilingSettings: vi.fn(),
+  putTenkoFilingSettings: vi.fn(),
 }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -52,13 +55,48 @@ beforeEach(() => {
   })
   api.listTenkoConsignments.mockResolvedValue(CONS)
   vi.stubGlobal('confirm', vi.fn(() => true))
+  api.getTenkoFilingSettings.mockImplementation(async (id: string) => (id === C1
+    ? { ...emptySettings(), operator_postal_code: '999-0001', operator_address: '長崎県架空市1-1', operator_representative_title: '代表取締役', operator_representative: '架空　太郎', operator_phone: '000-0000-0000' }
+    : emptySettings()))
+  api.putTenkoFilingSettings.mockImplementation(async (_id: string, body: unknown) => body)
 })
 
 describe('TenkoCompanyManager 事業者の表', () => {
+  it('名称・住所・代表者を事業者の表で入れ、書き込む値のほかの欄は残して置き換える。名称は事業者の名称と同じ', async () => {
+    api.updateTenkoCompany.mockResolvedValueOnce(COMPANIES[0])
+    const w = await mountIt()
+    await w.findAll('[data-testid="tenko-company-edit"]')[0]!.trigger('click')
+    const v = (id: string) => (t(w, id).element as HTMLInputElement).value
+    expect(['operator_postal_code', 'operator_address', 'operator_representative_title', 'operator_representative'].map(k => v(`tenko-company-${k}`)))
+      .toEqual(['999-0001', '長崎県架空市1-1', '代表取締役', '架空　太郎'])
+    await t(w, 'tenko-company-operator_address').setValue(' 長崎県架空市2-2 ')
+    await t(w, 'tenko-company-operator_representative_title').setValue('')
+    await t(w, 'tenko-company-save').trigger('click')
+    await flushPromises()
+    expect(api.putTenkoFilingSettings).toHaveBeenCalledWith(C1, {
+      ...emptySettings(),
+      operator_name: '架空運輸',
+      operator_postal_code: '999-0001',
+      operator_address: '長崎県架空市2-2',
+      operator_representative_title: null,
+      operator_representative: '架空　太郎',
+      operator_phone: '000-0000-0000',
+    })
+  })
+
+  it('住所・代表者が読めなければ理由を出す', async () => {
+    api.getTenkoFilingSettings.mockRejectedValueOnce(new Error('403 {"error":"forbidden"}'))
+    const w = await mountIt()
+    expect(t(w, 'tenko-company-identity-error').text()).toBe('システム管理者だけが変更できます')
+    api.getTenkoFilingSettings.mockRejectedValueOnce('x')
+    const w2 = await mountIt()
+    expect(t(w2, 'tenko-company-identity-error').text()).toBe('事業者の住所・代表者を取得できませんでした')
+  })
+
   it('行 = 事業者。既定の印と営業所を出し、行を選ぶと選択を知らせる。操作は文字でなくアイコン', async () => {
     const w = await mountIt()
     const rows = w.findAll('[data-testid="tenko-company-row"]')
-    expect(rows.map(r => r.findAll('td').map(td => td.text()))).toEqual([['架空運輸既定', '本社営業所', ''], ['架空物流', '港営業所', '']])
+    expect(rows.map(r => r.findAll('td').map(td => td.text()))).toEqual([['架空運輸既定', '〒999-0001 長崎県架空市1-1 / 代表取締役 架空　太郎', '本社営業所', ''], ['架空物流', '未入力', '港営業所', '']])
     expect(rows[0]!.classes()).toContain('bg-blue-50')
     await rows[1]!.trigger('click')
     expect(w.emitted('update:modelValue')).toEqual([[C2]])
@@ -96,6 +134,7 @@ describe('TenkoCompanyManager 事業者の表', () => {
     await t(w, 'tenko-company-save').trigger('click')
     await flushPromises()
     expect(api.createTenkoCompany).toHaveBeenCalledWith({ name: '架空商事', is_self: false })
+    expect(api.putTenkoFilingSettings).toHaveBeenCalledWith('new', { ...emptySettings(), operator_name: '架空商事' })
     expect(w.emitted('update:modelValue')).toEqual([['new']])
     expect(w.emitted('changed')).toHaveLength(1)
     expect(t(w, 'tenko-company-form').exists()).toBe(false)
