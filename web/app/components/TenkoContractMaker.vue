@@ -2,14 +2,15 @@
 import type { TenkoCompany, TenkoConsignment, TenkoOffice } from '~/types'
 import { getTenkoFilingSettings, getTenkoOffices, listTenkoConsignments } from '~/utils/api'
 import {
-  BUREAU_NAMES, bureauOf, buildContract, contractOfficeName, defaultOffice, fiveYearsEnd, missingContractFields, type ContractRequest,
+  BUREAU_NAMES, bureauOf, buildContracts, contractOfficeName, defaultOffice, fiveYearsEnd, missingContractFields, type ContractRequest,
 } from '~/utils/consignment-contract'
 import { jstTodayDate } from '~/utils/jst'
 import { saveBytes } from '~/utils/tenko-forms'
 
 /**
  * 事業者間遠隔点呼の受委託の契約書を作る (システム管理者)。委託者 (甲) と受託者 (乙) の事業者・営業所を選び、
- * 各事業者の「書き込む値」(名称・住所・代表者) と期間を雛形に差し込んで docx を保存させる。
+ * 各事業者の名称・住所・代表者と期間を雛形に差し込み、甲乙を入れ替えた向きの分も含めて
+ * 契約書・細目を 1 つの zip で保存させる。
  * 営業所の既定は本社 (名前に「本社」を含む営業所)。期間の既定は、選んだ営業所の組の受委託に登録した期間。
  */
 
@@ -106,8 +107,11 @@ async function download() {
       bureau: bureau.value.trim() || bureauOf(otsu.operator_address),
     }
     missing.value = missingContractFields(req)
-    const { bytes, filename } = await buildContract(req)
-    saveBytes(bytes, filename, 'docx')
+    /** 入れ替えた向きの運輸局長は、委託の営業所 (新しい乙) の住所から。引けなければ選んだもの */
+    const kouAddress = offices.value.find(o => o.id === kouOffice.value)?.address
+    const reverseBureau = bureauOf(kouAddress) || bureauOf(kou.operator_address) || req.bureau
+    const { bytes, filename } = await buildContracts(req, reverseBureau)
+    saveBytes(bytes, filename, 'zip')
   }
   catch (e) {
     error.value = e instanceof Error && e.message ? e.message : '契約書を作成できませんでした'
@@ -124,7 +128,7 @@ const inputClass = 'border rounded-lg px-2 py-1'
   <div class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-contract">
     <h3 class="font-semibold text-gray-800">受委託の契約書を作る</h3>
     <p class="text-sm text-gray-600">
-      事業者間遠隔点呼の業務の管理の委託受託契約書を、事業者の表の名称・住所・代表者を入れた Word で保存します。
+      事業者間遠隔点呼の業務の管理の委託受託契約書と実施方法の細目を、事業者の表の名称・住所・代表者を入れた Word で作ります。甲乙を入れ替えた向き (相互) の分も含めて 1 つの zip で保存します。
       営業所は本社が既定です。期間は、選んだ営業所の受委託に登録した期間が既定です。開始日を入れると、終了日は 5 年 (開始日の 5 年後の前日) になります。
     </p>
     <p v-if="loadError" class="text-sm text-red-600" data-testid="tenko-contract-load-error">{{ loadError }}</p>
@@ -176,7 +180,7 @@ const inputClass = 'border rounded-lg px-2 py-1'
         :disabled="busy || !!problem"
         @click="download"
       >
-        {{ busy ? '作成中…' : '契約書をダウンロード' }}
+        {{ busy ? '作成中…' : '契約書・細目 (相互) を zip でダウンロード' }}
       </button>
       <span v-if="problem" class="text-sm text-gray-500" data-testid="tenko-contract-problem">{{ problem }}</span>
     </div>

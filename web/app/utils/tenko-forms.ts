@@ -528,6 +528,7 @@ export async function buildFilledForm(
 const MIME = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  zip: 'application/zip',
 } as const
 
 /** ブラウザに保存させる */
