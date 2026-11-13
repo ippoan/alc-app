@@ -23,7 +23,13 @@ const api = vi.hoisted(() => ({
   listTenkoConsignments: vi.fn(),
   getEmployees: vi.fn(),
   listCamHostKeys: vi.fn(),
+  listTenkoFilings: vi.fn(),
+  createTenkoFiling: vi.fn(),
+  setTenkoFilingArriveId: vi.fn(),
+  deleteTenkoFiling: vi.fn(),
 }))
+const auth = vi.hoisted(() => ({ user: null as { name: string } | null }))
+mockNuxtImport('useAuth', () => () => ({ user: ref(auth.user) }))
 const rc = vi.hoisted(() => ({ egovLogin: '' }))
 mockNuxtImport('useRuntimeConfig', original => () => {
   const c = original()
@@ -62,9 +68,19 @@ async function mountIt(s: FilingSettings | Error | null = saved()) {
 type W = Awaited<ReturnType<typeof mountIt>>
 const dlButtons = (w: W) => w.findAll('[data-testid^="tenko-filing-dl-"]').map(b => b.attributes('data-testid'))
 
+/** 点呼の営業所の表の営業所 (値は架空) */
+function master(id: string, name: string, company_name: string | null, address: string | null) {
+  return { id, name, company_id: null, company_name, address, manager_ids: [], vehicle_ids: [], device_ids: [], carins_bases: [] }
+}
+const OFF_1 = master('off-1', '甲営業所', '架空物流', '長崎県架空市1-1')
+const OFF_2 = master('off-2', '乙営業所', '架空運輸', null)
+const OFF_3 = master('off-3', '丙車庫', null, '福岡県架空町3-3')
+
 beforeEach(() => {
   vi.clearAllMocks()
   rc.egovLogin = ''
+  auth.user = null
+  api.listTenkoFilings.mockResolvedValue([])
   window.history.replaceState(null, '', '/?role=admin&tab=tenko_filing')
   api.listFilingArchives.mockResolvedValue([])
   api.listTenkoCompanies.mockResolvedValue([CO_A, CO_B])
@@ -156,18 +172,49 @@ describe('TenkoFilingManager', () => {
     expect(other.find('[data-testid="tenko-filing-load-error"]').text()).toBe('設定を取得できませんでした')
   })
 
-  it('営業所を足して消し、保存する', async () => {
-    const w = await mountIt(saved({ offices: [] }))
-    await w.find('[data-testid="tenko-filing-add-office"]').trigger('click')
-    await w.find('[data-testid="tenko-filing-add-office"]').trigger('click')
-    const rows = () => w.findAll('[data-testid="tenko-filing-office-role"]')
-    expect(rows().map(s => (s.element as HTMLSelectElement).value)).toEqual(['1', '2'])
-    await w.findAll('button').find(b => b.text() === '削除')!.trigger('click')
-    api.putTenkoFilingSettings.mockResolvedValue(saved({ offices: [{ name: '', address: '', role: 2 }] }))
+  it('営業所は点呼の営業所の表から選び (同じ営業所は 2 度選べない)、所在地はマスタの値を出す。旧形式の行は削除だけできる', async () => {
+    api.getTenkoOffices.mockResolvedValue({ offices: [OFF_1, OFF_2, OFF_3], vehicles: [], carins_bases: [] })
+    const w = await mountIt(saved({ offices: [{ name: '手入力の営業所', address: '架空', role: 1 }] }))
+    const add = () => w.find('[data-testid="tenko-filing-add-office"]')
+    const choices = () => add().findAll('option').map(o => o.text())
+    expect(w.find('[data-testid="tenko-filing-office-legacy"]').text()).toContain('マスタに無い営業所: 手入力の営業所')
+    expect(choices()).toEqual(['＋ 営業所を選んで追加', '甲営業所 (架空物流)', '乙営業所 (架空運輸)', '丙車庫'])
+    await add().setValue('')
+    expect(w.findAll('[data-testid="tenko-filing-office"]')).toHaveLength(1)
+    await add().setValue('off-1')
+    await add().setValue('off-2')
+    expect((add().element as HTMLSelectElement).value).toBe('')
+    expect(choices()).toEqual(['＋ 営業所を選んで追加', '丙車庫'])
+    expect(w.findAll('[data-testid="tenko-filing-office-name"]').map(e => e.text())).toEqual(['甲営業所 (架空物流)', '乙営業所 (架空運輸)'])
+    expect(w.findAll('[data-testid="tenko-filing-office-address"]').map(e => e.text()))
+      .toEqual(['長崎県架空市1-1', '所在地が未入力です (点呼の営業所の表で入れてください)'])
+    expect(w.findAll('[data-testid="tenko-filing-office-role"]').map(s => (s.element as HTMLSelectElement).value)).toEqual(['2', '2'])
+    await w.findAll('[data-testid="tenko-filing-remove-office"]')[0]!.trigger('click')
+    await add().setValue('off-3')
+    expect(add().exists()).toBe(false)
+    api.putTenkoFilingSettings.mockImplementation(async (_id: string, v: FilingSettings) => v)
     await w.find('[data-testid="tenko-filing-save"]').trigger('click')
     await flushPromises()
-    expect(api.putTenkoFilingSettings.mock.calls[0]![1].offices).toEqual([{ name: '', address: '', role: 2 }])
+    expect(api.putTenkoFilingSettings.mock.calls[0]![1].offices).toEqual([
+      { office_id: 'off-1', name: '甲営業所', address: '長崎県架空市1-1', role: 2 },
+      { office_id: 'off-2', name: '乙営業所', address: null, role: 2 },
+      { office_id: 'off-3', name: '丙車庫', address: '福岡県架空町3-3', role: 2 },
+    ])
     expect(w.find('[data-testid="tenko-filing-notice"]').text()).toBe('保存しました')
+  })
+
+  it('点呼の営業所の表が空なら足し方を出し、取れなければ理由を出す', async () => {
+    const w = await mountIt(saved({ offices: [] }))
+    expect(w.find('[data-testid="tenko-filing-no-master-office"]').text()).toBe('点呼の営業所の表に営業所を足すと、ここで選べます')
+    api.getTenkoOffices.mockRejectedValue(new Error(''))
+    const bad = await mountIt()
+    expect(bad.find('[data-testid="tenko-filing-master-error"]').text()).toBe('営業所を取得できませんでした')
+    // 営業所の表を保存したら読み直す (取れたら理由を消す)
+    api.getTenkoOffices.mockResolvedValue({ offices: [OFF_3], vehicles: [], carins_bases: [] })
+    bad.findComponent(TenkoOfficeManager).vm.$emit('saved')
+    await flushPromises()
+    expect(bad.find('[data-testid="tenko-filing-master-error"]').exists()).toBe(false)
+    expect(bad.find('[data-testid="tenko-filing-add-office"]').text()).toContain('丙車庫')
   })
 
   it('保存が外れたら理由を出す', async () => {
@@ -262,29 +309,22 @@ describe('TenkoFilingManager', () => {
     expect(w.find('[data-testid="tenko-filing-egov-result"]').text()).toContain('読めませんでした')
   })
 
-  it('受委託の相手の会社と営業所を足して消し、保存で送る。外れた理由を文にする', async () => {
-    const w = await mountIt(saved())
-    await w.find('[data-testid="tenko-filing-add-partner"]').trigger('click')
-    await w.find('[data-testid="tenko-filing-add-partner"]').trigger('click')
-    expect(w.findAll('[data-testid="tenko-filing-partner"]').length).toBe(2)
-    await w.findAll('[data-testid="tenko-filing-remove-partner"]')[1]!.trigger('click')
-    const partner = w.find('[data-testid="tenko-filing-partner"]')
-    await partner.findAll('input')[0]!.setValue('架空物流')
-    await partner.find('[data-testid="tenko-filing-add-partner-office"]').trigger('click')
-    await partner.find('[data-testid="tenko-filing-add-partner-office"]').trigger('click')
-    await partner.findAll('[data-testid="tenko-filing-remove-partner-office"]')[0]!.trigger('click')
-    await partner.findAll('input')[3]!.setValue('本社営業所')
-    api.putTenkoFilingSettings.mockImplementation(async (_id: string, s: FilingSettings) => s)
-    await w.find('[data-testid="tenko-filing-save"]').trigger('click')
-    await flushPromises()
-    expect(api.putTenkoFilingSettings.mock.calls[0]![1].partners).toEqual([
-      { name: '架空物流', address: null, representative: null, offices: [{ name: '本社営業所', address: null }] },
+  it('受委託の相手の会社は応答のものを読み取り専用で出す。保存が外れた理由を文にする', async () => {
+    const w = await mountIt(saved({ partners: [
+      { name: '架空倉庫', address: '福岡県架空町2-2', representative: '架空 次郎', offices: [{ name: '本社営業所', address: null }] },
+      { name: '架空商事', address: null, representative: null, offices: [] },
+    ] }))
+    const partners = w.findAll('[data-testid="tenko-filing-partner"]').map(p => p.text().replace(/\s+/g, ' '))
+    expect(partners).toEqual([
+      '架空倉庫住所: 福岡県架空町2-2 / 代表者: 架空 次郎本社営業所 (所在地が未入力)',
+      '架空商事住所: 未入力 / 代表者: 未入力',
     ])
+    expect(w.find('[data-testid="tenko-filing-partners"]').text()).toContain('他社の営業所を上で選ぶと、その事業者がここに出ます')
+    expect(w.find('[data-testid="tenko-filing-partners"] input').exists()).toBe(false)
     for (const [word, text] of [
       ['invalid_postal_code', '郵便番号は半角数字 7 桁で入力してください'],
       ['invalid_corporate_number', '法人番号は半角数字 13 桁で入力してください'],
-      ['too_many_partners', '受委託の相手の会社は 10 社までです'],
-      ['invalid_partner', '受委託の相手の会社と、その営業所の名称を入力してください'],
+      ['invalid_office', '営業所・車庫を点呼の営業所の表から選び直してください (同じ営業所は 1 度だけ)'],
     ]) {
       api.putTenkoFilingSettings.mockRejectedValueOnce(new Error(`400 {"error":"${word}"}`))
       await w.find('[data-testid="tenko-filing-save"]').trigger('click')
@@ -324,9 +364,24 @@ describe('TenkoFilingManager', () => {
     await w.find('[data-testid="tenko-filing-egov-adopt"]').trigger('click')
     await flushPromises()
     const s = w.vm.$.setupState.settings as FilingSettings
-    expect([s.operator_name, s.operator_representative, s.partners.map(p => p.name)]).toEqual(['架空運輸', '架空 太郎', ['架空物流']])
-    expect(w.find('[data-testid="tenko-filing-notice"]').text()).toContain('「保存」を押すと残ります')
-    expect(text()[0]).not.toContain('受委託の相手の会社に保存されていません')
+    expect([s.operator_name, s.operator_representative, s.partners]).toEqual(['架空運輸', '架空 太郎', []])
+    expect(w.find('[data-testid="tenko-filing-notice"]').text()).toBe('申請データの値を空の欄に入れました。「保存」を押すと残ります')
+    // 受委託の相手は他社の営業所を選んで保存すると応答に出る (ここでは足さない)
+    expect(text()[0]).toContain('受委託の相手の会社に保存されていません')
+  })
+
+  it('届出の申請データの営業所は、マスタに同じ名称のあるものだけ取り込み、無い名称は知らせる', async () => {
+    api.getTenkoOffices.mockResolvedValue({ offices: [OFF_1], vehicles: [], carins_bases: [] })
+    const xml = '<DataRoot><届出報告情報><届出報告種別>実施</届出報告種別><届出報告内容><点呼の種別>遠隔点呼</点呼の種別><西暦>2099/1/1</西暦><点呼に係る営業所又は車庫情報>'
+      + '<申請1件目><点呼の実施被実施の別>被実施</点呼の実施被実施の別><営業所又は車庫の名称>甲営業所</営業所又は車庫の名称></申請1件目>'
+      + '<申請2件目><点呼の実施被実施の別>実施</点呼の実施被実施の別><営業所又は車庫の名称>丁営業所</営業所又は車庫の名称></申請2件目>'
+      + '</点呼に係る営業所又は車庫情報></届出報告内容></届出報告情報></DataRoot>'
+    const w = await mountIt(saved({ offices: [] }))
+    await pick(w, [new File([zipSync({ 'x/15596A069500020000_01.xml': strToU8(xml) })], 'draft.zip')])
+    await w.find('[data-testid="tenko-filing-egov-adopt"]').trigger('click')
+    await flushPromises()
+    expect((w.vm.$.setupState.settings as FilingSettings).offices).toEqual([{ office_id: 'off-1', name: '甲営業所', address: '長崎県架空市1-1', role: 2 }])
+    expect(w.find('[data-testid="tenko-filing-notice"]').text()).toContain('マスタに無い営業所: 丁営業所 (点呼の営業所の表に足してから選んでください)')
   })
 
   it('到達番号の名前の zip は控えとして保存でき、一覧からダウンロードする。失敗は理由を出す', async () => {
@@ -742,8 +797,8 @@ describe('TenkoFilingManager', () => {
       w.findComponent(TenkoOfficeManager).vm.$emit('saved')
       await flushPromises()
       expect(api.listTenkoCompanies).toHaveBeenCalledTimes(1)
-      // 事業者の表と契約書の欄 (営業所の候補) の 2 か所
-      expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
+      // 事業者の表と契約書の欄 (営業所の候補) と、届出の営業所の選択肢の 3 か所
+      expect(api.getTenkoOffices).toHaveBeenCalledTimes(3)
       // 事業者の変更 → 事業者の一覧と、営業所の表 (事業者の候補) を読み直す
       api.listTenkoCompanies.mockClear()
       api.getTenkoOffices.mockClear()
@@ -755,6 +810,216 @@ describe('TenkoFilingManager', () => {
       expect(api.getTenkoFilingSettings).toHaveBeenCalled()
       // 営業所の表と契約書の欄の 2 か所
       expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('申請の作成と一覧', () => {
+    const ARR = '20991231235959001e'
+    /** 申請 1 件 (値は架空) */
+    const filingRow = (over: Record<string, unknown> = {}) => ({
+      id: 'f-1', company_id: CO_B.id, kind: 'remote', apply_date: '2099-01-01', start_date: '2099-01-20',
+      offices: [{ office_id: 'off-1', role: 1, name: '甲営業所', address: null }, { office_id: 'off-2', role: 9, name: '乙営業所', address: null }],
+      arrive_id: null, created_by: null, created_by_name: '架空 花子', created_at: '2099-01-01T00:00:00Z', updated_at: '2099-01-01T00:00:00Z',
+      ...over,
+    })
+    const create = (w: W) => w.find('[data-testid="tenko-filing-create"]')
+    const rowsOf = (w: W) => w.findAll('[data-testid="tenko-filing-filing-row"]')
+
+    beforeEach(() => {
+      api.getTenkoOffices.mockResolvedValue({ offices: [OFF_1, OFF_2], vehicles: [], carins_bases: [] })
+      forms.buildFilingZip.mockResolvedValue({ bytes: new Uint8Array([7]), filename: 'f.zip' })
+    })
+
+    it('マスタから選んだ営業所が無ければ押せず、理由を出す (旧形式の行は申請に載らない)', async () => {
+      const w = await mountIt(saved({ offices: [{ name: '手入力の営業所', address: null, role: 1 }] }))
+      expect(create(w).attributes('disabled')).toBeDefined()
+      expect(w.find('[data-testid="tenko-filing-create-blocked"]').text()).toContain('点呼の営業所の表から営業所を選んでください')
+    })
+
+    it('申請を記録してから同じ zip を落とし、一覧を読み直す (作成者はログイン中の利用者の氏名)', async () => {
+      auth.user = { name: '架空 花子' }
+      const offices = [
+        { office_id: 'off-1', name: '甲営業所', address: null, role: 1 },
+        { name: '手入力の営業所', address: null, role: 2 },
+        { office_id: 'off-2', name: '乙営業所', address: null, role: 3 },
+      ]
+      const w = await mountIt(saved({ offices }))
+      expect(w.find('[data-testid="tenko-filing-create-blocked"]').exists()).toBe(false)
+      await w.find('[data-testid="tenko-filing-download"] input[type="date"]').setValue('2099-01-01')
+      await w.find('[data-testid="tenko-filing-start-date"]').setValue('2099-01-20')
+      await w.find('[data-testid="tenko-filing-kind-auto"]').setValue(true)
+      let done!: (v: unknown) => void
+      api.createTenkoFiling.mockImplementationOnce(() => new Promise((r) => { done = r }))
+      api.listTenkoFilings.mockClear()
+      await create(w).trigger('click')
+      expect(create(w).text()).toBe('作成中…')
+      expect(w.find('[data-testid="tenko-filing-dl-zip"]').attributes('disabled')).toBeDefined()
+      api.listTenkoFilings.mockResolvedValue([filingRow({ kind: 'auto' })])
+      done(filingRow())
+      await flushPromises()
+      expect(api.createTenkoFiling).toHaveBeenCalledWith({
+        company_id: CO_B.id, kind: 'auto', apply_date: '2099-01-01', start_date: '2099-01-20',
+        offices: [{ office_id: 'off-1', role: 1 }, { office_id: 'off-2', role: 3 }], created_by_name: '架空 花子',
+      })
+      expect(api.listTenkoFilings).toHaveBeenCalledWith(CO_B.id)
+      expect(forms.saveBytes).toHaveBeenCalledWith(new Uint8Array([7]), 'f.zip', 'zip')
+      expect(rowsOf(w)).toHaveLength(1)
+      expect(create(w).text()).toBe('申請を作成 (zip を保存して記録)')
+    })
+
+    it('氏名が取れなければ作成者は送らない。実施予定日が空なら null。外れたら理由を出し、zip は落とさない', async () => {
+      const w = await mountIt(saved({ offices: [{ office_id: 'off-1', name: '甲営業所', address: null, role: 1 }] }))
+      for (const [word, text] of [
+        ['invalid_office', '営業所・車庫を点呼の営業所の表から選び直してください (同じ営業所は 1 度だけ)'],
+        ['invalid_date', '申請日と実施予定日を入れ直してください'],
+        ['invalid_kind', '届出の種類を選び直してください'],
+      ]) {
+        api.createTenkoFiling.mockRejectedValueOnce(new Error(`400 {"error":"${word}"}`))
+        await create(w).trigger('click')
+        await flushPromises()
+        expect(w.find('[data-testid="tenko-filing-download-error"]').text()).toBe(text)
+      }
+      api.createTenkoFiling.mockRejectedValueOnce('x')
+      await create(w).trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-download-error"]').text()).toBe('申請を作成できませんでした')
+      expect(api.createTenkoFiling.mock.calls[0]![0]).not.toHaveProperty('created_by_name')
+      expect(api.createTenkoFiling.mock.calls[0]![0].start_date).toBeNull()
+      expect(forms.buildFilingZip).not.toHaveBeenCalled()
+      expect(create(w).attributes('disabled')).toBeUndefined()
+    })
+
+    it('一覧に種類・日付・営業所・作成者と、下書きか到達番号を出す。空・取れないときは文を出す', async () => {
+      api.listTenkoFilings.mockResolvedValue([
+        filingRow(),
+        filingRow({ id: 'f-2', kind: 'auto', start_date: null, created_by_name: null, arrive_id: ARR, offices: [] }),
+      ])
+      const w = await mountIt()
+      const cells = rowsOf(w).map(r => r.findAll('td').slice(0, 5).map(c => c.text()))
+      expect(cells).toEqual([
+        ['遠隔点呼', '2099-01-01', '2099-01-20', '甲営業所 (実施)・乙営業所 ()', '架空 花子'],
+        ['自動点呼', '2099-01-01', '-', '', '-'],
+      ])
+      expect(rowsOf(w)[0]!.find('[data-testid="tenko-filing-filing-draft"]').text()).toContain('下書き')
+      const sub = rowsOf(w)[1]!.find('[data-testid="tenko-filing-filing-submitted"]')
+      expect(sub.text()).toContain(ARR)
+      expect(sub.find('[data-testid="tenko-filing-filing-egov"]').exists()).toBe(false)
+      expect(sub.find('[data-testid="tenko-filing-filing-open"]').attributes('href')).toBe(`/?role=admin&tab=tenko_filing&arrive=${ARR}`)
+      api.fetchFilingArchive.mockResolvedValue(null)
+      await sub.find('[data-testid="tenko-filing-filing-open"]').trigger('click')
+      await flushPromises()
+      expect(api.fetchFilingArchive).toHaveBeenCalledWith(ARR)
+      expect(w.find('[data-testid="tenko-filing-opened-missing"]').exists()).toBe(true)
+
+      api.listTenkoFilings.mockResolvedValue([])
+      const empty = await mountIt()
+      expect(empty.find('[data-testid="tenko-filing-filings-empty"]').text()).toBe('まだありません')
+      api.listTenkoFilings.mockRejectedValue(new Error(''))
+      const bad = await mountIt()
+      expect(bad.find('[data-testid="tenko-filing-filings-error"]').text()).toBe('申請の一覧を取得できませんでした')
+    })
+
+    it('到達番号を付ける (前後の空白は落とす)。外れた理由は行に出す', async () => {
+      api.listTenkoFilings.mockResolvedValue([filingRow()])
+      const w = await mountIt()
+      const attach = () => w.find('[data-testid="tenko-filing-filing-attach"]').trigger('click')
+      for (const [word, text] of [
+        ['invalid_arrive_id', '到達番号は e-Gov の到達番号 (数字と英字 16〜18 桁) を入れてください'],
+        ['duplicate_arrive_id', 'この到達番号は別の申請に付いています'],
+        ['not_found', '申請が見つかりません。一覧を読み直してください'],
+      ]) {
+        api.setTenkoFilingArriveId.mockRejectedValueOnce(new Error(`400 {"error":"${word}"}`))
+        await attach()
+        await flushPromises()
+        expect(w.find('[data-testid="tenko-filing-filing-error"]').text()).toBe(text)
+      }
+      expect(api.setTenkoFilingArriveId).toHaveBeenLastCalledWith('f-1', '')
+      api.setTenkoFilingArriveId.mockRejectedValueOnce('x')
+      await attach()
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-filing-error"]').text()).toBe('到達番号を付けられませんでした')
+      await w.find('[data-testid="tenko-filing-filing-arrive-input"]').setValue(` ${ARR} `)
+      api.setTenkoFilingArriveId.mockResolvedValueOnce(filingRow({ arrive_id: ARR }))
+      api.listTenkoFilings.mockResolvedValue([filingRow({ arrive_id: ARR })])
+      await attach()
+      await flushPromises()
+      expect(api.setTenkoFilingArriveId).toHaveBeenLastCalledWith('f-1', ARR)
+      expect(w.find('[data-testid="tenko-filing-filing-submitted"]').exists()).toBe(true)
+      expect(w.find('[data-testid="tenko-filing-filing-error"]').exists()).toBe(false)
+    })
+
+    it('下書きは確かめてから削除する。外れた理由は行に出す', async () => {
+      api.listTenkoFilings.mockResolvedValue([filingRow({ kind: 'auto' })])
+      const confirm = vi.fn().mockReturnValue(false)
+      vi.stubGlobal('confirm', confirm)
+      try {
+        const w = await mountIt()
+        const del = () => w.find('[data-testid="tenko-filing-filing-delete"]').trigger('click')
+        await del()
+        expect(confirm).toHaveBeenCalledWith('2099-01-01 の自動点呼の申請 (下書き) を削除しますか？')
+        expect(api.deleteTenkoFiling).not.toHaveBeenCalled()
+        confirm.mockReturnValue(true)
+        api.deleteTenkoFiling.mockRejectedValueOnce(new Error('409 {"error":"already_submitted"}'))
+        await del()
+        await flushPromises()
+        expect(w.find('[data-testid="tenko-filing-filing-error"]').text()).toBe('到達番号を付けた申請は削除できません')
+        api.deleteTenkoFiling.mockRejectedValueOnce('x')
+        await del()
+        await flushPromises()
+        expect(w.find('[data-testid="tenko-filing-filing-error"]').text()).toBe('申請を削除できませんでした')
+        api.deleteTenkoFiling.mockResolvedValueOnce(undefined)
+        api.listTenkoFilings.mockResolvedValue([])
+        await del()
+        await flushPromises()
+        expect(api.deleteTenkoFiling).toHaveBeenLastCalledWith('f-1')
+        expect(w.find('[data-testid="tenko-filing-filings-empty"]').exists()).toBe(true)
+      }
+      finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('e-Gov の状況は控えと申請の到達番号を合わせて 1 回ずつ取り、申請の行にもバッジを出す', async () => {
+      rc.egovLogin = 'on'
+      const B = '2099123123595902'
+      api.listFilingArchives.mockResolvedValue([{ id: ARR, name: 'a.zip', size: 4, saved_at: '2099-12-31T00:00:00Z', saved_by: null, company_ids: [CO_B.id], meta: null }])
+      api.listTenkoFilings.mockResolvedValue([filingRow({ arrive_id: ARR }), filingRow({ id: 'f-2', arrive_id: B }), filingRow({ id: 'f-3' })])
+      api.getEgovApplyStatus.mockImplementation(async (id: string) => ({
+        status: id === ARR ? '審査中' : '到達', arrive_date: '2099-12-31 12:03:00', proc_name: '', submission_destination: '',
+        corporation_name: '', applicant_name: '', applied_account: '', pay_status: '', notice_count: 0, doc_count: 0, notices: [], documents: [],
+      }))
+      const w = await mountIt()
+      const called = api.getEgovApplyStatus.mock.calls.map(c => c[0])
+      expect(new Set(called)).toEqual(new Set([ARR, B]))
+      expect(w.findAll('[data-testid="tenko-filing-filing-egov"]').map(b => b.text())).toEqual(['審査中', '到達'])
+    })
+
+    it('事業者を切り替えたら申請も読み直し、遅れて戻った古い一覧は捨てる。事業者が無くなったら空にする', async () => {
+      let slow!: (v: unknown) => void
+      api.listTenkoFilings.mockImplementationOnce(() => new Promise((r) => { slow = r }))
+      const w = await mountIt()
+      api.listTenkoFilings.mockResolvedValueOnce([filingRow({ id: 'f-a', company_id: CO_A.id })])
+      await w.findAll('[data-testid="tenko-company-row"]')[0]!.trigger('click')
+      await flushPromises()
+      expect(api.listTenkoFilings).toHaveBeenLastCalledWith(CO_A.id)
+      slow([filingRow(), filingRow({ id: 'f-x' })])
+      await flushPromises()
+      expect(rowsOf(w)).toHaveLength(1)
+      let slowErr!: (e: unknown) => void
+      api.listTenkoFilings.mockImplementationOnce(() => new Promise((_, rej) => { slowErr = rej }))
+      await w.findAll('[data-testid="tenko-company-row"]')[1]!.trigger('click')
+      await flushPromises()
+      api.listTenkoFilings.mockResolvedValueOnce([])
+      await w.findAll('[data-testid="tenko-company-row"]')[0]!.trigger('click')
+      await flushPromises()
+      slowErr(new Error('古い失敗'))
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-filings-error"]').exists()).toBe(false)
+      api.listTenkoCompanies.mockResolvedValue([])
+      w.findComponent(TenkoCompanyManager).vm.$emit('changed')
+      await flushPromises()
+      expect(w.find('[data-testid="tenko-filing-filings"]').exists()).toBe(false)
+      expect((w.vm.$.setupState.filings as unknown[]).length).toBe(0)
     })
   })
 })

@@ -333,9 +333,20 @@ export function checkEgovFiling(f: EgovFiling, s: FilingSettings, today: string)
   return out
 }
 
-/** 書き込む値の空の欄だけ、申請データで読んだ値で埋めた写し (受委託の相手の会社は無ければ足す) */
-export function fillSettingsFromFiling(f: EgovFiling, s: FilingSettings): FilingSettings {
-  const next: FilingSettings = { ...s, partners: s.partners.map(p => ({ ...p, offices: [...p.offices] })) }
+/** 申請データの営業所と名称で突き合わせる、点呼の営業所の表の営業所 */
+export interface MasterOffice {
+  id: string
+  name: string
+  address: string | null
+}
+
+/**
+ * 書き込む値の空の欄だけ、申請データで読んだ値で埋めた写し。営業所は点呼の営業所の表に同じ名称のあるものだけ
+ * office_id 付きで足し (選んである営業所は重ねない)、表に無い名称は `missing` に返す。
+ * 受委託の相手の会社は保存しても無視される (選んだ他社の営業所から作られる) ので足さない
+ */
+export function fillSettingsFromFiling(f: EgovFiling, s: FilingSettings, master: MasterOffice[]): { settings: FilingSettings, missing: string[] } {
+  const next: FilingSettings = { ...s, offices: [...s.offices] }
   const fill = <K extends keyof FilingSettings>(key: K, v: string) => {
     if (!next[key] && v.trim()) (next[key] as string | null) = v.trim()
   }
@@ -362,18 +373,18 @@ export function fillSettingsFromFiling(f: EgovFiling, s: FilingSettings): Filing
     if (norm(c.address) !== norm(next.operator_address)) fill('operator_contact_address', c.address)
   }
   fill('operator_corporate_number', digitsOf(f.corporateNumber))
-  for (const p of f.entrust ? [f.entrust.consignor, f.entrust.consignee] : []) {
-    if (!p.name.trim() || norm(p.name) === norm(next.operator_name)) continue
-    let partner = next.partners.find(x => norm(x.name) === norm(p.name))
-    if (!partner) {
-      partner = { name: p.name.trim(), address: p.address.trim() || null, representative: p.representative.trim() || null, offices: [] }
-      next.partners.push(partner)
+  const missing: string[] = []
+  for (const o of f.offices) {
+    if (!o.name.trim()) continue
+    const m = master.find(x => squash(x.name) === squash(o.name))
+    if (!m) {
+      if (!missing.includes(o.name.trim())) missing.push(o.name.trim())
+      continue
     }
-    if (p.officeName.trim() && !partner.offices.some(o => norm(o.name) === norm(p.officeName))) {
-      partner.offices.push({ name: p.officeName.trim(), address: p.officeAddress.trim() || null })
-    }
+    if (next.offices.some(x => x.office_id === m.id)) continue
+    next.offices.push({ office_id: m.id, name: m.name, address: m.address, role: ROLES.indexOf(o.role) + 1 || 1 })
   }
-  return next
+  return { settings: next, missing }
 }
 
 /** 各種点呼の届出の届出・報告情報を照らす */

@@ -33,7 +33,7 @@ import type {
 } from '~/utils/cam-clips'
 import type { KnownDeviceName } from '~/utils/device-name'
 import type { DeviceKeyStatus } from '~/utils/device-key-status'
-import type { FilingSettings } from '~/utils/tenko-forms'
+import type { FilingKind, FilingSettings } from '~/utils/tenko-forms'
 import { createAuthFetch } from '@ippoan/auth-client'
 import {
   withTimeout, asTimeoutError, fetchWithTimeout, UPLOAD_FETCH_TIMEOUT_MS,
@@ -1199,6 +1199,58 @@ export async function putTenkoFilingSettings(companyId: string, body: FilingSett
     method: 'PUT',
     body: JSON.stringify(body),
   }, 'admin')
+}
+
+/** 届出の申請 1 件 (`/api/tenko/filings`)。営業所の名称・所在地は作成時のマスタの写し */
+export interface TenkoFiling {
+  id: string
+  company_id: string
+  kind: FilingKind
+  apply_date: string
+  start_date: string | null
+  offices: { office_id: string, role: number, name: string, address: string | null }[]
+  /** e-Gov の到達番号。無ければ下書き */
+  arrive_id: string | null
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 申請を作る本文。営業所は点呼の営業所の表の id と実施・被実施の別 */
+export interface TenkoFilingInput {
+  company_id: string
+  kind: FilingKind
+  apply_date: string
+  start_date?: string | null
+  offices: { office_id: string, role: number }[]
+  created_by_name?: string
+}
+
+/** 事業者の届出の申請の一覧 (管理者だけ。新しい順) */
+export async function listTenkoFilings(companyId: string): Promise<TenkoFiling[]> {
+  return request<TenkoFiling[]>(`/api/tenko/filings?company_id=${encodeURIComponent(companyId)}`, {}, 'admin')
+}
+
+/** 届出の申請を作る (管理者だけ。営業所はマスタから名称・所在地を写す) */
+export async function createTenkoFiling(body: TenkoFilingInput): Promise<TenkoFiling> {
+  return request<TenkoFiling>('/api/tenko/filings', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }, 'admin')
+}
+
+/** 申請に e-Gov の到達番号を付ける (管理者だけ。別の申請に付いていれば 409) */
+export async function setTenkoFilingArriveId(id: string, arriveId: string): Promise<TenkoFiling> {
+  return request<TenkoFiling>(`/api/tenko/filings/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ arrive_id: arriveId }),
+  }, 'admin')
+}
+
+/** 下書きの申請を消す (管理者だけ。到達番号付きは 409) */
+export async function deleteTenkoFiling(id: string): Promise<void> {
+  await request<void>(`/api/tenko/filings/${encodeURIComponent(id)}`, { method: 'DELETE' }, 'admin')
 }
 
 /** 点呼の事業者の一覧 (管理者だけ。名称順。営業所の振り分け付き) */

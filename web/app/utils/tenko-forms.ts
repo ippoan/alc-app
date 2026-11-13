@@ -17,6 +17,8 @@ export const TENKO_FORMS_RAW = 'https://raw.githubusercontent.com/ippoan/tenko-f
 
 /** 点呼に係る営業所又は車庫。`role` は 1 実施 / 2 被実施 / 3 実施・被実施両方 */
 export interface FilingOffice {
+  /** 点呼の営業所の表の id。無い行は旧形式 (手入力のまま保存された営業所) */
+  office_id?: string | null
   name: string
   address: string | null
   role: number
@@ -28,7 +30,10 @@ export interface FilingPartnerOffice {
   address: string | null
 }
 
-/** 受委託の相手の会社 (事業者間遠隔点呼の受委託の許可申請の委託者・受託者) */
+/**
+ * 受委託の相手の会社 (事業者間遠隔点呼の受委託の許可申請の委託者・受託者)。
+ * 保存では無視され、応答で「選んだ営業所のうち他社のもの」から事業者ごとに作られる
+ */
 export interface FilingPartner {
   name: string
   address: string | null
