@@ -76,6 +76,9 @@ const BUREAUS: [string, string[]][] = [
   ['沖縄総合事務局長', ['沖縄県']],
 ]
 
+/** 延長の許可をする行政庁の選択肢 */
+export const BUREAU_NAMES: string[] = BUREAUS.map(([name]) => name)
+
 /** 住所の都道府県から管轄の運輸局長を引く。読めなければ空 */
 export function bureauOf(address: string | null | undefined): string {
   const a = (address ?? '').replace(/^〒?\s*\d{3}-?\d{4}\s*/, '').trim()

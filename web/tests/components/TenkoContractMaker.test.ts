@@ -72,6 +72,7 @@ describe('TenkoContractMaker', () => {
     expect([val(w, 'tenko-contract-from'), val(w, 'tenko-contract-to'), val(w, 'tenko-contract-bureau')])
       .toEqual(['2027-02-01', '2032-01-31', '北海道運輸局長'])
     expect(t(w, 'tenko-contract-problem').exists()).toBe(false)
+    expect(t(w, 'tenko-contract-bureau').findAll('option').map(o => o.text())).toContain('沖縄総合事務局長')
   })
 
   it('選んだ営業所で雛形を埋めて保存し、足りない値を知らせる。運輸局が空なら乙の住所から', async () => {
