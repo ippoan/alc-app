@@ -91,6 +91,15 @@ describe('TenkoContractMaker', () => {
     expect(contract.buildContract.mock.calls[1]![0].bureau).toBe('九州運輸局長')
   })
 
+  it('開始日を入れると終了日を 5 年にする。終了日は後から直せる', async () => {
+    const w = await mountIt()
+    await t(w, 'tenko-contract-from').setValue('2028-04-01')
+    expect(val(w, 'tenko-contract-to')).toBe('2033-03-31')
+    await t(w, 'tenko-contract-to').setValue('2030-03-31')
+    expect(val(w, 'tenko-contract-to')).toBe('2030-03-31')
+    expect(val(w, 'tenko-contract-from')).toBe('2028-04-01')
+  })
+
   it('作れなければ理由を出す (理由が無ければ決まり文句)', async () => {
     const w = await mountIt()
     contract.buildContract.mockRejectedValueOnce(new Error('契約書の雛形を取得できませんでした (404)'))
