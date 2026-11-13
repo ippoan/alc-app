@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import {
-  DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilledForm, deviceLabel, deviceNameOptions, fetchProductInfo, earliestStartDate, egovCells, egovChecks,
+  BROCHURE_FILENAME, BROCHURE_URL, DocxBody, TENKO_FORMS, TENKO_FORMS_RAW, bessi7OfficeName, buildFilingZip, buildFilledForm, deviceLabel, deviceNameOptions, fetchProductInfo, earliestStartDate, egovCells, egovChecks,
   egovOfficeRow, emptySettings, fillBessi7, fillDocx, fillEgovXlsx, latestFormPath,
   reiwaDate, saveBytes, setXlsxCell, slashDate, xlsxCellText,
   type FilingRequest, type FilingSettings,
@@ -320,6 +320,43 @@ describe('buildFilledForm', () => {
     const byId = Object.fromEntries(TENKO_FORMS.map(f => [f.id, f]))
     expect(byId['remote-kamotsu-bessi7-jisshi']!.fill(docx(BESSI7), settings(), REMOTE)).toBeInstanceOf(Uint8Array)
     expect(TENKO_FORMS.map(f => f.id)).toEqual(['egov-tenko-todokede-sankou', 'remote-kamotsu-bessi7-jisshi'])
+  })
+})
+
+describe('buildFilingZip', () => {
+  const egov = TENKO_FORMS.find(f => f.id === 'egov-tenko-todokede-sankou')!
+  const manifest = { forms: { 'egov-tenko-todokede-sankou': { latest: 'forms/egov-tenko-todokede-sankou/2026-11-03.xlsx' } } }
+  const pdf = strToU8('%PDF-架空')
+
+  function fetcher(brochure: Response = new Response(pdf as BlobPart)) {
+    return vi.fn(async (url: string) => {
+      if (url === BROCHURE_URL) return brochure
+      return url.endsWith('manifest.json') ? new Response(JSON.stringify(manifest)) : new Response(xlsx() as BlobPart)
+    }) as unknown as typeof fetch
+  }
+
+  it('遠隔点呼は記入済みの様式とパンフレット (67_) を 1 つの zip に入れる', async () => {
+    const f = fetcher()
+    const { bytes, filename } = await buildFilingZip([egov], settings(), REMOTE, f)
+    expect(filename).toBe('点呼の届出_遠隔点呼_2026-11-10.zip')
+    const files = unzipSync(bytes)
+    expect(Object.keys(files).sort()).toEqual([BROCHURE_FILENAME, 'egov-tenko-todokede-sankou_remote_2026-11-03_記入済み.xlsx'].sort())
+    expect(BROCHURE_FILENAME.startsWith('67_')).toBe(true)
+    expect(strFromU8(files[BROCHURE_FILENAME]!)).toBe('%PDF-架空')
+    expect(vi.mocked(f).mock.calls.find(c => c[0] === BROCHURE_URL)![1]).toEqual({ cache: 'no-store' })
+  })
+
+  it('自動点呼にはパンフレットを入れない', async () => {
+    const f = fetcher()
+    const { bytes, filename } = await buildFilingZip([egov], settings(), AUTO, f)
+    expect(filename).toBe('点呼の届出_自動点呼_2026-11-10.zip')
+    expect(Object.keys(unzipSync(bytes))).toEqual(['egov-tenko-todokede-sankou_auto_2026-11-03_記入済み.xlsx'])
+    expect(vi.mocked(f).mock.calls.some(c => c[0] === BROCHURE_URL)).toBe(false)
+  })
+
+  it('パンフレットが取れないときは例外', async () => {
+    await expect(buildFilingZip([egov], settings(), REMOTE, fetcher(new Response('', { status: 404 }))))
+      .rejects.toThrow('パンフレットを取得できませんでした (404)')
   })
 })
 

@@ -35,6 +35,7 @@ vi.mock('~/utils/api', async importOriginal => ({
 }))
 const forms = vi.hoisted(() => ({
   buildFilledForm: vi.fn(),
+  buildFilingZip: vi.fn(),
   saveBytes: vi.fn(),
   fetchProductInfo: vi.fn(),
 }))
@@ -80,9 +81,11 @@ describe('TenkoFilingManager', () => {
     const w = await mountIt()
     expect((w.find('[data-testid="tenko-filing-trade-name"]').element as HTMLInputElement).value).toBe('架空屋')
     expect(w.find('[data-testid="tenko-filing-business-number"]').exists()).toBe(false)
-    expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou', 'tenko-filing-dl-remote-kamotsu-bessi7-jisshi'])
+    expect(dlButtons(w)).toEqual(['tenko-filing-dl-zip', 'tenko-filing-dl-egov-tenko-todokede-sankou', 'tenko-filing-dl-remote-kamotsu-bessi7-jisshi'])
+    expect(w.find('[data-testid="tenko-filing-zip-brochure-note"]').text()).toContain('パンフレット')
     await w.find('[data-testid="tenko-filing-kind-auto"]').setValue(true)
-    expect(dlButtons(w)).toEqual(['tenko-filing-dl-egov-tenko-todokede-sankou'])
+    expect(dlButtons(w)).toEqual(['tenko-filing-dl-zip', 'tenko-filing-dl-egov-tenko-todokede-sankou'])
+    expect(w.find('[data-testid="tenko-filing-zip-brochure-note"]').exists()).toBe(false)
     expect(w.text()).toContain('認定番号が要ります')
     expect(w.find('[data-testid="tenko-filing-kind-note"]').text()).toContain('原則 10 日前まで')
   })
@@ -200,6 +203,27 @@ describe('TenkoFilingManager', () => {
     await w.find('[data-testid="tenko-filing-dl-remote-kamotsu-bessi7-jisshi"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="tenko-filing-download-error"]').text()).toBe('様式を作れませんでした')
+  })
+
+  it('まとめて zip でダウンロードする (作成中は他のボタンも押せない、失敗は理由を出す)', async () => {
+    const w = await mountIt()
+    let resolve!: (v: { bytes: Uint8Array, filename: string }) => void
+    forms.buildFilingZip.mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    await w.find('[data-testid="tenko-filing-dl-zip"]').trigger('click')
+    expect(w.find('[data-testid="tenko-filing-dl-zip"]').text()).toBe('作成中…')
+    expect(w.find('[data-testid="tenko-filing-dl-egov-tenko-todokede-sankou"]').attributes('disabled')).toBeDefined()
+    resolve({ bytes: new Uint8Array([2]), filename: '点呼の届出_遠隔点呼_2026-11-10.zip' })
+    await flushPromises()
+    const [list, s, req] = forms.buildFilingZip.mock.calls[0]!
+    expect([list.map((f: { id: string }) => f.id), s.business_number, req.kind])
+      .toEqual([['egov-tenko-todokede-sankou', 'remote-kamotsu-bessi7-jisshi'], '000000000001', 'remote'])
+    expect(forms.saveBytes).toHaveBeenCalledWith(new Uint8Array([2]), '点呼の届出_遠隔点呼_2026-11-10.zip', 'zip')
+    expect(w.find('[data-testid="tenko-filing-dl-zip"]').text()).toBe('まとめて zip でダウンロード')
+
+    forms.buildFilingZip.mockRejectedValueOnce(new Error('パンフレットを取得できませんでした (404)'))
+    await w.find('[data-testid="tenko-filing-dl-zip"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="tenko-filing-download-error"]').text()).toBe('パンフレットを取得できませんでした (404)')
   })
   it('e-Gov の申請データを選ぶと、保存した値と規則に照らした結果を出す (読めないファイルは理由)', async () => {
     const xml = (device: string, start = '2099/1/1', name = '甲') => `<DataRoot><届出報告情報><届出報告種別>実施</届出報告種別><届出報告内容><点呼の種別>遠隔点呼</点呼の種別><西暦>${start}</西暦>`
