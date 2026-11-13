@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import {
-  downloadFilingArchive, fetchFilingArchive, getEgovApplyStatus, getTenkoFilingSettings, listFilingArchives, logoutEgov,
-  listTenkoCompanies, putTenkoFilingSettings, saveFilingArchive, setFilingArchiveCompanies,
-  type EgovApplyStatus, type FilingArchive,
+  createTenkoFiling, deleteTenkoFiling, downloadFilingArchive, fetchFilingArchive, getEgovApplyStatus, getTenkoFilingSettings,
+  getTenkoOffices, listFilingArchives, listTenkoCompanies, listTenkoFilings, logoutEgov, putTenkoFilingSettings, saveFilingArchive,
+  setFilingArchiveCompanies, setTenkoFilingArriveId,
+  type EgovApplyStatus, type FilingArchive, type TenkoFiling,
 } from '~/utils/api'
-import type { TenkoCompany } from '~/types'
+import type { TenkoCompany, TenkoOffice } from '~/types'
 import {
   ARRIVE_FILE, ARRIVE_ID, checkEgovFiling, fillSettingsFromFiling, listEgovZipFiles, parseEgovZip,
   type EgovFiling, type EgovFinding,
@@ -13,7 +14,7 @@ import { jstTodayDate } from '~/utils/jst'
 import {
   BUSINESS_TYPES, EGOV_OFFICE_SLOTS, FALLBACK_DEVICE_NAME, FILING_LEAD_DAYS, OFFICE_ROLES, TENKO_FORMS, buildFilingZip, buildFilledForm,
   deviceNameOptions, earliestStartDate, emptySettings, fetchProductInfo, saveBytes,
-  type FilingKind, type FilingSettings, type ProductInfo, type TenkoForm,
+  type FilingKind, type FilingOffice, type FilingSettings, type ProductInfo, type TenkoForm,
 } from '~/utils/tenko-forms'
 
 /**
@@ -23,6 +24,10 @@ import {
  * 自動点呼機器の認定申請は製作元の手続なので、ここではなく auth.ippoan.org の開発者専用ページで作る。
  *
  * 事業者ごと: 上の事業者の表で選んだ事業者の「書き込む値」と申請済みの控えを出す (事業者は TenkoCompanyManager)。
+ * 点呼に係る営業所は点呼の営業所の表 (全事業者) から選び、名称・所在地はマスタの値を使う。受委託の相手の会社は
+ * 選んだ営業所のうち他社のものからサーバが作る (読み取り専用)。
+ *
+ * 申請 (Refs #676): 「申請を作成」で申請を記録して zip を落とす。e-Gov で出したら到達番号を付け、控えと e-Gov の状況に繋ぐ。
  * どの事業者にも付いていない控えは「振り分けていない控え」として全事業者の画面に出し、付けられるようにする。
  *
  * 申請済みの控え (Refs #676): 行ごとに e-Gov での状況 (e-Gov にログインしたとき) と egov-check の詳細へのリンクを出す。
@@ -36,15 +41,19 @@ const EGOV_CHECK_APPLY = 'https://egov-check.ippoan.org/apply/'
 const ERRORS: Record<string, string> = {
   invalid_business_number: '事業者番号は半角数字 12 桁で入力してください',
   invalid_business_type: '事業種別を選び直してください',
-  invalid_office: '営業所・車庫の名称と、実施・被実施の別を入力してください',
+  invalid_office: '営業所・車庫を点呼の営業所の表から選び直してください (同じ営業所は 1 度だけ)',
   too_many_offices: '営業所・車庫は 20 件までです',
   too_long: '入力が長すぎます (1 欄 500 文字まで)',
   invalid_postal_code: '郵便番号は半角数字 7 桁で入力してください',
   invalid_corporate_number: '法人番号は半角数字 13 桁で入力してください',
-  too_many_partners: '受委託の相手の会社は 10 社までです',
-  invalid_partner: '受委託の相手の会社と、その営業所の名称を入力してください',
   company_required: '事業者を選んでください',
   invalid_company: '事業者を選び直してください',
+  invalid_kind: '届出の種類を選び直してください',
+  invalid_date: '申請日と実施予定日を入れ直してください',
+  invalid_arrive_id: '到達番号は e-Gov の到達番号 (数字と英字 16〜18 桁) を入れてください',
+  duplicate_arrive_id: 'この到達番号は別の申請に付いています',
+  already_submitted: '到達番号を付けた申請は削除できません',
+  not_found: '申請が見つかりません。一覧を読み直してください',
   forbidden: 'システム管理者だけが変更できます',
 }
 
@@ -64,9 +73,22 @@ async function onCompaniesChanged() {
   await loadSettings(companyId.value)
 }
 
-function onOfficesSaved() {
+async function onOfficesSaved() {
   officesRev.value++
-  return loadCompanies()
+  await Promise.all([loadCompanies(), loadMasterOffices()])
+}
+
+/** 点呼の営業所の表 (全事業者)。「点呼に係る営業所・車庫」の選択肢と、所在地の表示に使う */
+const masterOffices = ref<TenkoOffice[]>([])
+const masterError = ref('')
+async function loadMasterOffices() {
+  try {
+    masterOffices.value = (await getTenkoOffices()).offices
+    masterError.value = ''
+  }
+  catch (e) {
+    masterError.value = messageOf(e, '営業所を取得できませんでした')
+  }
 }
 
 /** 一覧を読み、選んでいる事業者が無ければ既定の事業者 (無ければ先頭) を選ぶ */
@@ -109,11 +131,11 @@ function messageOf(e: unknown, fallback: string): string {
 
 onMounted(async () => {
   product.value = await fetchProductInfo()
-  await loadCompanies()
+  await Promise.all([loadCompanies(), loadMasterOffices()])
 })
 
-/** 選んだ事業者の書き込む値を読む (切り替えが早いときは、古い応答を捨てる) */
-watch(companyId, id => loadSettings(id))
+/** 選んだ事業者の書き込む値と申請を読む (切り替えが早いときは、古い応答を捨てる) */
+watch(companyId, id => Promise.all([loadSettings(id), loadFilings(id)]))
 
 async function loadSettings(id: string) {
   loadError.value = ''
@@ -143,20 +165,30 @@ function adopt(s: FilingSettings): FilingSettings {
   }
 }
 
-function addOffice() {
-  settings.value.offices.push({ name: '', address: '', role: settings.value.offices.length ? 2 : 1 })
+/** 選んだ営業所のマスタの行 (無ければ旧形式の行か、表から消えた営業所) */
+function masterOf(o: FilingOffice): TenkoOffice | undefined {
+  return o.office_id ? masterOffices.value.find(m => m.id === o.office_id) : undefined
+}
+
+/** 選択肢の表示: 営業所名 (事業者名) */
+function officeLabel(m: TenkoOffice): string {
+  return m.company_name ? `${m.name} (${m.company_name})` : m.name
+}
+
+/** まだ選んでいない営業所 (同じ営業所は 2 度選べない) */
+const officeChoices = computed(() => masterOffices.value.filter(m => !settings.value.offices.some(o => o.office_id === m.id)))
+
+/** 追加の選択から営業所を足す (1 件目は実施、2 件目からは被実施を既定に) */
+function addOffice(e: Event) {
+  const select = e.target as HTMLSelectElement
+  const m = masterOffices.value.find(x => x.id === select.value)
+  select.value = ''
+  if (!m) return
+  settings.value.offices.push({ office_id: m.id, name: m.name, address: m.address, role: settings.value.offices.length ? 2 : 1 })
 }
 
 function removeOffice(i: number) {
   settings.value.offices.splice(i, 1)
-}
-
-function addPartner() {
-  settings.value.partners.push({ name: '', address: null, representative: null, offices: [] })
-}
-
-function removePartner(i: number) {
-  settings.value.partners.splice(i, 1)
 }
 
 async function save() {
@@ -223,6 +255,98 @@ async function downloadZip() {
   }
 }
 
+/** 申請に載せる営業所 (点呼の営業所の表から選んだもの。旧形式の行は載らない) */
+const filingOffices = computed(() => settings.value.offices.flatMap(o => o.office_id ? [{ office_id: o.office_id, role: o.role }] : []))
+
+const { user } = useAuth()
+
+/** 申請を記録してから、同じ zip をダウンロードする */
+async function createFiling() {
+  busyForm.value = 'create'
+  downloadError.value = ''
+  try {
+    const name = user.value?.name
+    await createTenkoFiling({
+      company_id: companyId.value,
+      kind: kind.value,
+      apply_date: applyDate.value,
+      start_date: startDate.value || null,
+      offices: filingOffices.value,
+      ...(name ? { created_by_name: name } : {}),
+    })
+  }
+  catch (e) {
+    downloadError.value = messageOf(e, '申請を作成できませんでした')
+    busyForm.value = ''
+    return
+  }
+  await loadFilings(companyId.value)
+  await downloadZip()
+}
+
+/** 選んでいる事業者の申請 (新しい順) */
+const filings = ref<TenkoFiling[]>([])
+const filingsError = ref('')
+/** 申請ごとの到達番号の入力と、操作の失敗の文 */
+const arriveInputs = ref<Record<string, string>>({})
+const filingErrors = ref<Record<string, string>>({})
+
+async function loadFilings(id: string) {
+  filingsError.value = ''
+  if (!id) {
+    filings.value = []
+    return
+  }
+  try {
+    const list = await listTenkoFilings(id)
+    if (id !== companyId.value) return
+    filings.value = list
+  }
+  catch (e) {
+    if (id === companyId.value) filingsError.value = messageOf(e, '申請の一覧を取得できませんでした')
+    return
+  }
+  await loadEgovStatuses()
+}
+
+const KIND_LABELS: Record<FilingKind, string> = { remote: '遠隔点呼', auto: '自動点呼' }
+
+function filingOfficesText(f: TenkoFiling): string {
+  return f.offices.map(o => `${o.name} (${OFFICE_ROLES[o.role - 1] ?? ''})`).join('・')
+}
+
+async function attachArriveId(f: TenkoFiling) {
+  filingErrors.value = { ...filingErrors.value, [f.id]: '' }
+  try {
+    await setTenkoFilingArriveId(f.id, (arriveInputs.value[f.id] ?? '').trim())
+  }
+  catch (e) {
+    filingErrors.value = { ...filingErrors.value, [f.id]: messageOf(e, '到達番号を付けられませんでした') }
+    return
+  }
+  await loadFilings(companyId.value)
+}
+
+async function removeFiling(f: TenkoFiling) {
+  if (!confirm(`${f.apply_date} の${KIND_LABELS[f.kind]}の申請 (下書き) を削除しますか？`)) return
+  filingErrors.value = { ...filingErrors.value, [f.id]: '' }
+  try {
+    await deleteTenkoFiling(f.id)
+  }
+  catch (e) {
+    filingErrors.value = { ...filingErrors.value, [f.id]: messageOf(e, '申請を削除できませんでした') }
+    return
+  }
+  await loadFilings(companyId.value)
+}
+
+/** 控えを開くリンク (いまの画面のクエリに arrive を足したもの) */
+function arriveHref(arriveId: string): string {
+  const u = new URL(window.location.href)
+  u.searchParams.set('arrive', arriveId)
+  return `${u.pathname}${u.search}`
+}
+
 /** e-Gov の申請データ (一時保存・申請済みの控えの zip) を読み、保存した値と規則に照らした結果 */
 interface EgovCheck {
   file: string
@@ -259,8 +383,10 @@ async function checkEgovFiles(e: Event) {
 
 /** 申請データの値で「書き込む値」の空の欄を埋める (保存は「保存」で)。照らし直す */
 function adoptFromFiling(c: EgovCheck) {
-  settings.value = fillSettingsFromFiling(c.filing!, settings.value)
+  const { settings: next, missing } = fillSettingsFromFiling(c.filing!, settings.value, masterOffices.value)
+  settings.value = next
   notice.value = '申請データの値を空の欄に入れました。「保存」を押すと残ります'
+    + (missing.length ? `。マスタに無い営業所: ${missing.join('・')} (点呼の営業所の表に足してから選んでください)` : '')
   egovChecks.value = egovChecks.value.map(runCheck)
 }
 
@@ -348,17 +474,19 @@ const egovStatuses = ref<Record<string, EgovApplyStatus | string>>({})
 const egovLoginNeeded = ref(false)
 const egovLoginFailed = ref(false)
 
+/** 控えと、到達番号を付けた申請の e-Gov での状況を取る (同じ到達番号は 1 回) */
 async function loadEgovStatuses() {
   if (!egovEnabled) return
   let needLogin = false
-  const entries = await Promise.all(archives.value.map(async (a): Promise<[string, EgovApplyStatus | string | null]> => {
+  const ids = [...new Set([...archives.value.map(a => a.id), ...filings.value.map(f => f.arrive_id ?? '').filter(Boolean)])]
+  const entries = await Promise.all(ids.map(async (id): Promise<[string, EgovApplyStatus | string | null]> => {
     try {
-      const st = await getEgovApplyStatus(a.id)
+      const st = await getEgovApplyStatus(id)
       if (!st) needLogin = true
-      return [a.id, st]
+      return [id, st]
     }
     catch (e) {
-      return [a.id, messageOf(e, 'e-Gov の状況を取得できませんでした')]
+      return [id, messageOf(e, 'e-Gov の状況を取得できませんでした')]
     }
   }))
   egovLoginNeeded.value = needLogin
@@ -731,18 +859,27 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       </div>
 
       <div class="space-y-2">
-        <div class="flex items-center justify-between">
-          <span class="text-sm text-gray-500">点呼に係る営業所・車庫 (届出の申請 1 件目から順に書きます。車庫は管轄の営業所名も含めて)</span>
-          <button class="text-sm text-blue-600 hover:underline" data-testid="tenko-filing-add-office" @click="addOffice">＋ 追加</button>
+        <span class="text-sm text-gray-500">点呼に係る営業所・車庫 (届出の申請 1 件目から順に書きます。点呼の営業所の表から選びます。他社の営業所も選べます)</span>
+        <div v-for="(o, i) in settings.offices" :key="o.office_id || `legacy-${i}`" class="grid gap-2 sm:grid-cols-[2fr_3fr_1fr_auto] items-center" data-testid="tenko-filing-office">
+          <template v-if="masterOf(o)">
+            <span class="text-sm text-gray-900" data-testid="tenko-filing-office-name">{{ officeLabel(masterOf(o)!) }}</span>
+            <span v-if="masterOf(o)!.address" class="text-sm text-gray-700" data-testid="tenko-filing-office-address">{{ masterOf(o)!.address }}</span>
+            <span v-else class="text-sm text-amber-700" data-testid="tenko-filing-office-address">所在地が未入力です (点呼の営業所の表で入れてください)</span>
+            <select v-model="o.role" :class="inputClass" data-testid="tenko-filing-office-role">
+              <option v-for="(r, j) in OFFICE_ROLES" :key="r" :value="j + 1">{{ r }}</option>
+            </select>
+          </template>
+          <template v-else>
+            <span class="text-sm text-amber-700 sm:col-span-3" data-testid="tenko-filing-office-legacy">マスタに無い営業所: {{ o.name }} (削除して、点呼の営業所の表から選び直してください)</span>
+          </template>
+          <button class="text-sm text-red-600 hover:underline" data-testid="tenko-filing-remove-office" @click="removeOffice(i)">削除</button>
         </div>
-        <div v-for="(o, i) in settings.offices" :key="i" class="grid gap-2 sm:grid-cols-[2fr_3fr_1fr_auto] items-center">
-          <input v-model="o.name" :class="inputClass" placeholder="名称">
-          <input v-model="o.address" :class="inputClass" placeholder="所在地">
-          <select v-model="o.role" :class="inputClass" data-testid="tenko-filing-office-role">
-            <option v-for="(r, j) in OFFICE_ROLES" :key="r" :value="j + 1">{{ r }}</option>
-          </select>
-          <button class="text-sm text-red-600 hover:underline" @click="removeOffice(i)">削除</button>
-        </div>
+        <select v-if="officeChoices.length" :class="inputClass" class="sm:w-1/2" data-testid="tenko-filing-add-office" @change="addOffice">
+          <option value="">＋ 営業所を選んで追加</option>
+          <option v-for="m in officeChoices" :key="m.id" :value="m.id">{{ officeLabel(m) }}</option>
+        </select>
+        <p v-if="masterError" class="text-sm text-red-600" data-testid="tenko-filing-master-error">{{ masterError }}</p>
+        <p v-else-if="!masterOffices.length" class="text-sm text-gray-500" data-testid="tenko-filing-no-master-office">点呼の営業所の表に営業所を足すと、ここで選べます</p>
       </div>
 
       <div class="grid gap-3 sm:grid-cols-3">
@@ -779,23 +916,14 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
       </fieldset>
 
       <fieldset class="space-y-2" data-testid="tenko-filing-partners">
-        <div class="flex items-center justify-between">
-          <legend class="text-sm font-medium text-gray-700">受委託の相手の会社 (事業者間遠隔点呼の受委託の許可申請の委託者・受託者)</legend>
-          <button class="text-sm text-blue-600 hover:underline" data-testid="tenko-filing-add-partner" @click="addPartner">＋ 追加</button>
-        </div>
-        <div v-for="(p, i) in settings.partners" :key="i" class="border rounded-lg p-3 space-y-2" data-testid="tenko-filing-partner">
-          <div class="grid gap-2 sm:grid-cols-[2fr_3fr_2fr_auto] items-center">
-            <input v-model="p.name" :class="inputClass" placeholder="氏名又は名称">
-            <input v-model="p.address" :class="inputClass" placeholder="住所">
-            <input v-model="p.representative" :class="inputClass" placeholder="代表者氏名">
-            <button class="text-sm text-red-600 hover:underline" data-testid="tenko-filing-remove-partner" @click="removePartner(i)">削除</button>
-          </div>
-          <div v-for="(o, j) in p.offices" :key="j" class="grid gap-2 sm:grid-cols-[2fr_3fr_auto] items-center pl-4">
-            <input v-model="o.name" :class="inputClass" placeholder="営業所の名称">
-            <input v-model="o.address" :class="inputClass" placeholder="営業所の所在地">
-            <button class="text-sm text-red-600 hover:underline" data-testid="tenko-filing-remove-partner-office" @click="p.offices.splice(j, 1)">削除</button>
-          </div>
-          <button class="text-sm text-blue-600 hover:underline pl-4" data-testid="tenko-filing-add-partner-office" @click="p.offices.push({ name: '', address: null })">＋ 営業所を追加</button>
+        <legend class="text-sm font-medium text-gray-700">受委託の相手の会社 (事業者間遠隔点呼の受委託の許可申請の委託者・受託者)</legend>
+        <p class="text-xs text-gray-500">他社の営業所を上で選ぶと、その事業者がここに出ます。名称・住所・代表者は事業者の表で入れます。</p>
+        <div v-for="(p, i) in settings.partners" :key="i" class="border rounded-lg p-3 space-y-1 text-sm" data-testid="tenko-filing-partner">
+          <div class="font-medium text-gray-900">{{ p.name }}</div>
+          <div class="text-gray-700">住所: {{ p.address || '未入力' }} / 代表者: {{ p.representative || '未入力' }}</div>
+          <ul class="pl-4 text-gray-600">
+            <li v-for="(o, j) in p.offices" :key="j">{{ o.name }} ({{ o.address || '所在地が未入力' }})</li>
+          </ul>
         </div>
       </fieldset>
 
@@ -840,8 +968,19 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         >
           {{ busyForm === 'zip' ? '作成中…' : 'まとめて zip でダウンロード' }}
         </button>
+        <button
+          class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm disabled:opacity-50"
+          data-testid="tenko-filing-create"
+          :disabled="!!busyForm || !companyId || !filingOffices.length"
+          @click="createFiling"
+        >
+          {{ busyForm === 'create' ? '作成中…' : '申請を作成 (zip を保存して記録)' }}
+        </button>
         <span v-if="kind === 'remote'" class="text-xs text-gray-500" data-testid="tenko-filing-zip-brochure-note">パンフレット (#67 の添付) も入ります</span>
       </div>
+      <p v-if="companyId && !filingOffices.length" class="text-sm text-amber-700" data-testid="tenko-filing-create-blocked">
+        申請を作成するには、「点呼に係る営業所・車庫」で点呼の営業所の表から営業所を選んでください
+      </p>
       <ul class="divide-y">
         <li v-for="form in forms" :key="form.id" class="flex items-center justify-between py-2">
           <span class="text-sm">{{ form.label }}</span>
@@ -865,6 +1004,59 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
         e-Gov の参考様式に書けるのは営業所・車庫 {{ EGOV_OFFICE_SLOTS }} 件までです。6 件目からは別紙にしてください。
       </p>
       <p v-if="downloadError" class="text-sm text-red-600" data-testid="tenko-filing-download-error">{{ downloadError }}</p>
+    </div>
+
+    <!-- 申請 -->
+    <div v-if="companyId" class="bg-white rounded-xl p-4 shadow-sm space-y-3" data-testid="tenko-filing-filings">
+      <h3 class="font-semibold text-gray-800">申請</h3>
+      <p class="text-sm text-gray-600">「申請を作成」で作った申請です。e-Gov アプリで出したら、到達番号を入れて「付ける」を押してください。</p>
+      <p v-if="filingsError" class="text-sm text-red-600" data-testid="tenko-filing-filings-error">{{ filingsError }}</p>
+      <p v-else-if="!filings.length" class="text-sm text-gray-500" data-testid="tenko-filing-filings-empty">まだありません</p>
+      <div v-else class="overflow-x-auto rounded-lg border border-gray-200">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 text-left text-xs font-medium text-gray-500">
+            <tr>
+              <th class="px-3 py-2">種類</th>
+              <th class="px-3 py-2">申請日</th>
+              <th class="px-3 py-2">実施予定日</th>
+              <th class="px-3 py-2">営業所</th>
+              <th class="px-3 py-2">作成者</th>
+              <th class="px-3 py-2">状況</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            <tr v-for="f in filings" :key="f.id" data-testid="tenko-filing-filing-row">
+              <td class="whitespace-nowrap px-3 py-2.5">{{ KIND_LABELS[f.kind] }}</td>
+              <td class="whitespace-nowrap px-3 py-2.5">{{ f.apply_date }}</td>
+              <td class="whitespace-nowrap px-3 py-2.5">{{ f.start_date || '-' }}</td>
+              <td class="px-3 py-2.5 text-xs text-gray-700" data-testid="tenko-filing-filing-offices">{{ filingOfficesText(f) }}</td>
+              <td class="whitespace-nowrap px-3 py-2.5 text-xs text-gray-700">{{ f.created_by_name || '-' }}</td>
+              <td class="px-3 py-2.5">
+                <div v-if="f.arrive_id" class="flex flex-wrap items-center gap-2" data-testid="tenko-filing-filing-submitted">
+                  <span class="font-mono text-xs text-gray-900">{{ f.arrive_id }}</span>
+                  <span
+                    v-if="egovEnabled"
+                    class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset"
+                    :class="egovTone(egovStatuses[f.arrive_id])"
+                    data-testid="tenko-filing-filing-egov"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-current" />
+                    {{ egovLabel(egovStatuses[f.arrive_id]) }}
+                  </span>
+                  <a :href="arriveHref(f.arrive_id)" class="text-xs text-blue-600 hover:underline" data-testid="tenko-filing-filing-open" @click.prevent="openArchive(f.arrive_id)">控えを開く</a>
+                </div>
+                <div v-else class="flex flex-wrap items-center gap-2" data-testid="tenko-filing-filing-draft">
+                  <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">下書き</span>
+                  <input v-model="arriveInputs[f.id]" class="w-44 rounded-lg border px-2 py-1 font-mono text-xs" placeholder="到達番号" data-testid="tenko-filing-filing-arrive-input">
+                  <button class="rounded-lg bg-blue-600 px-2 py-1 text-xs text-white" data-testid="tenko-filing-filing-attach" @click="attachArriveId(f)">付ける</button>
+                  <button class="text-xs text-red-600 hover:underline" data-testid="tenko-filing-filing-delete" @click="removeFiling(f)">削除</button>
+                </div>
+                <p v-if="filingErrors[f.id]" class="mt-1 text-xs text-red-600" data-testid="tenko-filing-filing-error">{{ filingErrors[f.id] }}</p>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- e-Gov の申請データの確認 -->

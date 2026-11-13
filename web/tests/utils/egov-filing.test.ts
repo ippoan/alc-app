@@ -423,12 +423,16 @@ describe('checkEgovFiling (受委託の許可申請)', () => {
 })
 
 describe('fillSettingsFromFiling', () => {
-  it('空の欄だけを申請データの値で埋め、相手の会社と営業所を足す (元は変えない)', () => {
+  const MASTER = [
+    { id: 'off-1', name: '甲営業所', address: '長崎県架空市1-1' },
+    { id: 'off-2', name: '乙 営業所', address: null },
+  ]
+
+  it('空の欄だけを申請データの値で埋める (元は変えない)。受委託の相手の会社は足さない', () => {
     const f = parseEgovZip(entrustZip())
-    const before = settings({ operator_representative: '保存済みの代表者' })
-    const next = fillSettingsFromFiling(f, before)
+    const before = settings({ operator_representative: '保存済みの代表者', offices: [] })
+    const { settings: next, missing } = fillSettingsFromFiling(f, before, MASTER)
     expect(before.operator_name).toBeNull()
-    expect(before.partners).toEqual([])
     expect(next).toMatchObject({
       operator_name: '架空運輸株式会社', operator_kana: 'カクウウンユ', operator_representative: '保存済みの代表者',
       operator_representative_kana: 'カクウ　タロウ', operator_representative_title: '代表取締役', operator_postal_code: '0000001',
@@ -437,27 +441,39 @@ describe('fillSettingsFromFiling', () => {
       operator_contact_phone: '000-0000-0002', operator_contact_email: 'contact@example.com',
       operator_contact_postal_code: null, operator_contact_address: '長崎県架空市1-1', operator_corporate_number: '0000000000001',
     })
-    expect(next.partners).toEqual([{ name: '架空物流株式会社', address: '福岡県架空町2-2', representative: '架空　次郎', offices: [{ name: '本社営業所', address: '福岡県架空町2-2' }] }])
-    // 2 度目は相手の会社も営業所も重ねない。既に在る相手には営業所だけ足す
-    expect(fillSettingsFromFiling(f, next).partners).toEqual(next.partners)
-    const known = settings({ operator_name: '架空運輸株式会社', partners: [{ name: '架空物流株式会社', address: null, representative: null, offices: [] }] })
-    expect(fillSettingsFromFiling(f, known).partners).toEqual([{ name: '架空物流株式会社', address: null, representative: null, offices: [{ name: '本社営業所', address: '福岡県架空町2-2' }] }])
+    expect([next.partners, next.offices, missing]).toEqual([[], [], []])
   })
 
-  it('連絡先情報だけなら、事業者の郵便番号・住所と違うときに担当者の欄へ入れる。所在地の無い営業所は null', () => {
+  it('連絡先情報だけなら、事業者の郵便番号・住所と違うときに担当者の欄へ入れる', () => {
     const contact = egovPerson({ postalCode: '111-1111', address: '福岡県架空町3-3' })
-    expect(fillSettingsFromFiling(filing({ contact }), settings())).toMatchObject({ operator_contact_postal_code: '1111111', operator_contact_address: '福岡県架空町3-3' })
+    expect(fillSettingsFromFiling(filing({ contact, offices: [] }), settings(), []).settings).toMatchObject({ operator_contact_postal_code: '1111111', operator_contact_address: '福岡県架空町3-3' })
     const same = settings({ operator_postal_code: '1111111', operator_address: '福岡県架空町3-3' })
-    expect(fillSettingsFromFiling(filing({ contact }), same)).toMatchObject({ operator_contact_postal_code: null, operator_contact_address: null })
-    const e = entrust({ consignor: { ...entrust().consignor, officeAddress: ' ' } })
-    expect(fillSettingsFromFiling(entrustFiling({ entrust: e }), settings()).partners[0]!.offices).toEqual([{ name: '本社営業所', address: null }])
+    expect(fillSettingsFromFiling(filing({ contact, offices: [] }), same, []).settings).toMatchObject({ operator_contact_postal_code: null, operator_contact_address: null })
   })
 
-  it('申請者情報・連絡先情報・受委託が無ければ埋めない。名称の無い相手・営業所は足さない', () => {
+  it('営業所はマスタに同じ名称のあるものだけ office_id 付きで足す。選んである営業所は重ねず、無い名称は missing に返す', () => {
+    const base = filing().offices
+    const f = filing({ offices: [
+      base[0]!,
+      { ...base[1]!, name: '乙営業所' },
+      { ...base[1]!, name: '丙営業所', role: '実施・被実施両方' },
+      { ...base[1]!, name: '丙営業所' },
+      { ...base[1]!, name: ' ' },
+      { ...base[0]!, name: '甲営業所', role: '不明' },
+    ] })
+    const { settings: next, missing } = fillSettingsFromFiling(f, settings({ offices: [] }), MASTER)
+    expect(next.offices).toEqual([
+      { office_id: 'off-1', name: '甲営業所', address: '長崎県架空市1-1', role: 1 },
+      { office_id: 'off-2', name: '乙 営業所', address: null, role: 2 },
+    ])
+    expect(missing).toEqual(['丙営業所'])
+    const role = fillSettingsFromFiling(filing({ offices: [{ ...base[0]!, role: '不明' }] }), settings({ offices: [] }), MASTER)
+    expect(role.settings.offices[0]!.role).toBe(1)
+  })
+
+  it('申請者情報・連絡先情報が無ければ埋めない', () => {
     const s = settings()
-    expect(fillSettingsFromFiling(filing(), s)).toEqual(s)
-    const e = entrust({ consignor: { name: ' ', address: '', representative: '', officeName: '', officeAddress: '' }, consignee: { name: '架空倉庫', address: '', representative: '', officeName: ' ', officeAddress: '' } })
-    expect(fillSettingsFromFiling(entrustFiling({ applicant: null, contact: null, entrust: e }), s).partners)
-      .toEqual([{ name: '架空倉庫', address: null, representative: null, offices: [] }])
+    expect(fillSettingsFromFiling(filing({ offices: [] }), s, MASTER)).toEqual({ settings: s, missing: [] })
+    expect(fillSettingsFromFiling(entrustFiling({ applicant: null, contact: null }), s, MASTER).settings).toEqual(s)
   })
 })

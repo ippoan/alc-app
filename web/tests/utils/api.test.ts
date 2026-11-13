@@ -104,6 +104,10 @@ import {
   deleteTenkoConsignment,
   setFilingArchiveCompanies,
   putTenkoFilingSettings,
+  listTenkoFilings,
+  createTenkoFiling,
+  setTenkoFilingArriveId,
+  deleteTenkoFiling,
   listFilingArchives,
   saveFilingArchive,
   downloadFilingArchive,
@@ -3409,6 +3413,29 @@ describe.skipIf(isLive)('点呼の届出の設定', () => {
     expect(mockFetch.mock.calls[2][1].method).toBe('PUT')
     mockFetch.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve('') })
     await deleteTenkoConsignment(id)
+    expect(mockFetch.mock.calls[3][1].method).toBe('DELETE')
+  })
+
+  it('届出の申請: 一覧 (company_id 付き)・作成・到達番号の付与・削除', async () => {
+    const co = TEST_EMPLOYEE_ID
+    const f = { id: SEED_GUIDANCE_ID, company_id: co, kind: 'remote', apply_date: '2099-01-01', start_date: null, offices: [], arrive_id: null }
+    mockFetch.mockResolvedValueOnce(okJson([f]))
+    await expect(listTenkoFilings(co)).resolves.toEqual([f])
+    expect(mockFetch.mock.calls[0][0]).toMatch(new RegExp(`/tenko/filings\\?company_id=${co}$`))
+    const input = { company_id: co, kind: 'remote' as const, apply_date: '2099-01-01', start_date: null, offices: [{ office_id: SEED_SESSION_ID, role: 1 }] }
+    mockFetch.mockResolvedValueOnce(okJson(f))
+    await expect(createTenkoFiling(input)).resolves.toEqual(f)
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/tenko\/filings$/)
+    expect(mockFetch.mock.calls[1][1].method).toBe('POST')
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual(input)
+    mockFetch.mockResolvedValueOnce(okJson({ ...f, arrive_id: '20991231235959001e' }))
+    await setTenkoFilingArriveId(f.id, '20991231235959001e')
+    expect(mockFetch.mock.calls[2][0]).toMatch(new RegExp(`/tenko/filings/${f.id}$`))
+    expect(mockFetch.mock.calls[2][1].method).toBe('PATCH')
+    expect(JSON.parse(mockFetch.mock.calls[2][1].body)).toEqual({ arrive_id: '20991231235959001e' })
+    mockFetch.mockResolvedValueOnce(ok204())
+    await deleteTenkoFiling(f.id)
+    expect(mockFetch.mock.calls[3][0]).toMatch(new RegExp(`/tenko/filings/${f.id}$`))
     expect(mockFetch.mock.calls[3][1].method).toBe('DELETE')
   })
 
