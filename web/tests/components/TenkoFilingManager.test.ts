@@ -629,7 +629,8 @@ describe('TenkoFilingManager', () => {
       let slow!: (v: FilingSettings) => void
       api.getTenkoFilingSettings.mockImplementationOnce(() => new Promise<FilingSettings>((r) => { slow = r }))
       const w = await mountIt(null)
-      expect(api.getTenkoFilingSettings).toHaveBeenCalledTimes(1)
+      // 選んだ事業者の値 1 回と、事業者の表 (住所・代表者) の 2 社ぶん
+      expect(api.getTenkoFilingSettings).toHaveBeenCalledTimes(3)
       api.getTenkoFilingSettings.mockResolvedValueOnce(saved({ business_number: '000000000001' }))
       await rows(w)[0]!.trigger('click')
       await flushPromises()
@@ -722,9 +723,12 @@ describe('TenkoFilingManager', () => {
       // 事業者の変更 → 事業者の一覧と、営業所の表 (事業者の候補) を読み直す
       api.listTenkoCompanies.mockClear()
       api.getTenkoOffices.mockClear()
+      api.getTenkoFilingSettings.mockClear()
       w.findComponent(TenkoCompanyManager).vm.$emit('changed')
       await flushPromises()
       expect(api.listTenkoCompanies).toHaveBeenCalledTimes(2)
+      // 事業者の表で名称・住所・代表者を変えたので、選んでいる事業者の書き込む値も読み直す
+      expect(api.getTenkoFilingSettings).toHaveBeenCalled()
       // 営業所の表と契約書の欄の 2 か所
       expect(api.getTenkoOffices).toHaveBeenCalledTimes(2)
     })

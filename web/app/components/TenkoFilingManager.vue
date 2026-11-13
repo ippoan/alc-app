@@ -58,9 +58,10 @@ const companyId = ref('')
 const officesRev = ref(0)
 const companiesRev = ref(0)
 
-function onCompaniesChanged() {
+async function onCompaniesChanged() {
   companiesRev.value++
-  return loadCompanies()
+  await loadCompanies()
+  await loadSettings(companyId.value)
 }
 
 function onOfficesSaved() {
@@ -112,7 +113,9 @@ onMounted(async () => {
 })
 
 /** 選んだ事業者の書き込む値を読む (切り替えが早いときは、古い応答を捨てる) */
-watch(companyId, async (id) => {
+watch(companyId, id => loadSettings(id))
+
+async function loadSettings(id: string) {
   loadError.value = ''
   notice.value = ''
   saveError.value = ''
@@ -127,7 +130,7 @@ watch(companyId, async (id) => {
   catch (e) {
     if (id === companyId.value) loadError.value = messageOf(e, '設定を取得できませんでした')
   }
-})
+}
 
 /** 読んだ値を画面の値にする。機器の名称・認定番号が空なら製品の設定の値を入れる */
 function adopt(s: FilingSettings): FilingSettings {
@@ -540,18 +543,13 @@ function archiveSummary(a: FilingArchive): string {
   return [...parts.filter(Boolean).map(String), offices].filter(Boolean).join(' / ') || String(m.procName ?? '')
 }
 
-/** 文字の欄 (ラベルと欄の名前) */
+/** 文字の欄 (ラベルと欄の名前)。名称・郵便番号・住所・代表者は事業者の表で入れる */
 const OPERATOR_FIELDS = [
-  ['operator_name', '氏名又は名称'],
   ['operator_kana', '氏名又は名称のフリガナ'],
   ['operator_corporate_number', '法人番号 (半角 13 桁)'],
-  ['operator_postal_code', '郵便番号 (半角 7 桁)'],
-  ['operator_address', '住所'],
   ['operator_address_kana', '住所のフリガナ'],
   ['operator_phone', '事業者の電話番号'],
-  ['operator_representative', '代表者氏名'],
   ['operator_representative_kana', '代表者氏名のフリガナ'],
-  ['operator_representative_title', '代表者の役職'],
   ['operator_contact_name', '担当者氏名'],
   ['operator_contact_kana', '担当者氏名のフリガナ'],
   ['operator_contact_dept', '担当者の部門名'],
@@ -759,6 +757,7 @@ const inputClass = 'w-full border rounded-lg px-2 py-1.5 text-sm'
 
       <fieldset class="space-y-2">
         <legend class="text-sm font-medium text-gray-700">届け出る事業者 (別紙7)</legend>
+        <p class="text-xs text-gray-500" data-testid="tenko-filing-identity-note">名称・郵便番号・住所・代表者は、上の事業者の表の編集で入れます。</p>
         <div class="grid gap-3 sm:grid-cols-2">
           <label v-for="[key, label] in OPERATOR_FIELDS" :key="key" class="text-sm">
             <span class="text-gray-500">{{ label }}</span>
