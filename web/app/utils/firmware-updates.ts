@@ -30,6 +30,21 @@ export async function fetchLatestFirmwareVersions(target: string = 'cores3'): Pr
 }
 
 /**
+ * 管理者の一覧「端末のファーム」に並ぶ機体の target (CoreS3 と指静脈端末。Refs ippoan/alc-app-s3#352)。
+ * 警告デバイス (`alarm`) は一覧に報告しないので入れない
+ */
+export const ADMIN_FIRMWARE_TARGETS = ['cores3', 'timecard-station'] as const
+
+/**
+ * {@link ADMIN_FIRMWARE_TARGETS} の最新の版を 1 つの `flavor → 版` にまとめて取る
+ * (flavor の名前は target をまたいで重ならない)。取れなかった flavor は key ごと無い
+ */
+export async function fetchAdminLatestFirmwareVersions(): Promise<Record<string, string>> {
+  const all = await Promise.all(ADMIN_FIRMWARE_TARGETS.map(t => fetchLatestFirmwareVersions(t)))
+  return Object.assign({}, ...all) as Record<string, string>
+}
+
+/**
  * 機体の版が配布中の版と違うか。**文字列の不一致だけで判定する (大小は比べない)。**
  * 版・flavor が取れていない機体と、配布中の版が取れていない flavor は偽。
  * **判定の式はここ 1 か所** (写しを作らない)。

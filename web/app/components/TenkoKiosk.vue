@@ -7,6 +7,7 @@ import { employeeNotFoundByNfc, employeeNotFoundByCode, employeeLookupFailureMes
 import { tenkoTypeLabel, isBpInPersonSession } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 import { reportApiFailure, reportFailure } from '~/utils/equipment-failure-report'
+import { kioskDeviceIdFromJwt } from '~/utils/kiosk-remote'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -499,11 +500,20 @@ watch(step, (s) => {
 const isKioskIdle = computed(() => step.value === 'nfc' && !vein.busy.value)
 const otaWatch = useTimecardWatch({
   getToken: () => useDeviceToken().getDeviceJwt(),
-  onSerialOta: (target) => {
+  onSerialOta: (target, deviceId) => {
     // この画面が預かるのは Vein Station の合図だけ (CoreS3 の合図は FirmwareOtaHost の側。Refs ippoan/alc-app#403)
     if (target !== 'timecard-station') return
-    serialOta.enqueue(target)
-    if (isKioskIdle.value) void serialOta.runQueued()
+    void (async () => {
+      // 1 台指定の合図 (管理者の「端末のファーム」の「更新する」。Refs ippoan/alc-app-s3#352) は全キオスクへ
+      // 届くので、自分の端末の id (端末の token の sub) と一致するときだけ預かる。
+      // device_id の無い合図 (/device/setup の「最新にする」・CI の配信) は今までどおり全台で預かる
+      if (deviceId !== undefined) {
+        const own = kioskDeviceIdFromJwt(await useDeviceToken().getDeviceJwt().catch(() => null))
+        if (own !== deviceId) return
+      }
+      serialOta.enqueue(target)
+      if (isKioskIdle.value) void serialOta.runQueued()
+    })()
   },
 })
 watch(isKioskIdle, (idle) => {

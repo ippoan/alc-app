@@ -1438,7 +1438,7 @@ export async function runDriverMasterSync(): Promise<DriverMasterSyncResult> {
   return bearerRequest<DriverMasterSyncResult>('/api/driver-master/run', jwt, { method: 'POST' })
 }
 
-// --- CoreS3 のファームの更新 (Refs ippoan/alc-app#403) ---
+// --- CoreS3 / 指静脈端末のファームの更新 (Refs ippoan/alc-app#403, ippoan/alc-app-s3#352) ---
 // 3 つとも alc-app 自身の server route (`/api/firmware/*`) を same-origin で叩く
 // (`runDriverMasterSync` と同型。proxy 経由にしない)。tenant_id は route が token から
 // 決めるので、ここからは送らない。
@@ -1447,10 +1447,14 @@ export async function runDriverMasterSync(): Promise<DriverMasterSyncResult> {
 export type FirmwarePhase =
   | 'idle' | 'downloading' | 'writing' | 'rebooting' | 'confirming' | 'done' | 'failed' | 'skipped'
 
-/** キオスクが送る報告 (繋がっている機体の版・更新の状態)。 */
+/**
+ * キオスクが送る報告 (繋がっている機体の版・更新の状態)。
+ * `kind` が `timecard` (指静脈端末、Refs ippoan/alc-app-s3#352) の `device_id` は route が端末の token から
+ * 決め直す (送った値は使われない)。
+ */
 export interface FirmwareReport {
   device_id: string
-  kind: 'cores3'
+  kind: 'cores3' | 'timecard'
   board?: string
   flavor?: string
   version?: string

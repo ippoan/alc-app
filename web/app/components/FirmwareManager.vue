@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { FirmwareDevice } from '~/utils/api'
 import { listFirmwareDevices, updateFirmware } from '~/utils/api'
-import { fetchLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
+import { fetchAdminLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
 
 /** 一覧を引き直す間隔 */
 const LIST_INTERVAL_MS = 10_000
@@ -42,7 +42,7 @@ async function loadList() {
 }
 
 async function loadLatest() {
-  latest.value = await fetchLatestFirmwareVersions()
+  latest.value = await fetchAdminLatestFirmwareVersions()
 }
 
 onMounted(() => {
@@ -63,8 +63,12 @@ function showNotice(text: string) {
   noticeTimer = setTimeout(() => { notice.value = '' }, NOTICE_MS)
 }
 
+/**
+ * 登録簿のラベル。無ければ id — 指静脈端末 (`timecard`) は鍵の id (`alarm-<指紋>`) で登録簿に行が無いことが
+ * 多いので、見分けられるよう全部出す
+ */
 function deviceName(d: FirmwareDevice): string {
-  return d.label ?? d.device_id.slice(0, 8)
+  return d.label ?? (d.kind === 'timecard' ? d.device_id : d.device_id.slice(0, 8))
 }
 
 function latestOf(d: FirmwareDevice): string | undefined {
@@ -138,7 +142,7 @@ async function update(d: FirmwareDevice) {
     <p v-if="notice" class="text-sm text-blue-700" data-testid="firmware-notice">{{ notice }}</p>
 
     <p v-if="devices.length === 0" class="text-center py-8 text-gray-400" data-testid="firmware-empty">
-      報告している端末がありません。キオスクに CoreS3 を USB で繋ぎ、キオスクの画面を開いたままにしてください。
+      報告している端末がありません。キオスクに CoreS3 / 指静脈端末を USB で繋ぎ、キオスクの画面を開いたままにしてください。
     </p>
 
     <div v-else class="overflow-x-auto border rounded-lg">
@@ -157,7 +161,7 @@ async function update(d: FirmwareDevice) {
         <tbody>
           <tr v-for="d in devices" :key="d.device_id" class="border-t" data-testid="firmware-row">
             <td class="px-3 py-2 whitespace-nowrap" data-col="name">{{ deviceName(d) }}</td>
-            <td class="px-3 py-2 whitespace-nowrap" data-col="kind">{{ d.board ?? '-' }} / {{ d.flavor ?? '-' }}</td>
+            <td class="px-3 py-2 whitespace-nowrap" data-col="kind">{{ d.kind }} / {{ d.flavor ?? '-' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="version">{{ d.version ?? '不明 (古い版)' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="latest">{{ latestOf(d) ?? '-' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="status">{{ statusLabel(d) }}</td>

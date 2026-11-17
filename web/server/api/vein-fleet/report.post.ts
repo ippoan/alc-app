@@ -17,12 +17,9 @@
  */
 // setResponseStatus は h3 から明示的に取る (firmware/report.post.ts と同じ理由)
 import { setResponseStatus } from 'h3'
-import { decideFirmwareReportAccess, isFirmwareDeviceId, loadDeviceLabels } from '../../utils/firmware-relay'
+import { decideFirmwareReportAccess, deviceIdFromTokenSub, isFirmwareDeviceId, loadDeviceLabels } from '../../utils/firmware-relay'
 import { introspectCaller } from '../../utils/introspect-route'
 import { buildVeinListForward } from '../../utils/vein-fleet-relay'
-
-/** 鍵で取った端末の token の `sub` (`alarm:<鍵の指紋 16 hex>`、auth-worker の device-alarm-token) */
-const ALARM_SUB_RE = /^alarm:([0-9a-f]{16})$/
 
 export default defineEventHandler(async (event) => {
   const { claims, sharedSecret, authWorker, recorder } = await introspectCaller(event)
@@ -30,8 +27,7 @@ export default defineEventHandler(async (event) => {
   if (!access.ok) {
     throw createError({ statusCode: access.status, statusMessage: access.message })
   }
-  const keyFingerprint = typeof claims.sub === 'string' ? ALARM_SUB_RE.exec(claims.sub)?.[1] : undefined
-  const deviceId = keyFingerprint ? `alarm-${keyFingerprint}` : claims.sub
+  const { deviceId, keyed } = deviceIdFromTokenSub(claims.sub)
   if (!isFirmwareDeviceId(deviceId)) {
     throw createError({ statusCode: 400, statusMessage: '端末の id がありません' })
   }
@@ -41,7 +37,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'body がありません' })
   }
 
-  if (!keyFingerprint) {
+  if (!keyed) {
     const labels = await loadDeviceLabels(authWorker, { sharedSecret, tenantId: access.tenantId })
     if (!labels) {
       throw createError({ statusCode: 503, statusMessage: '端末の一覧を取得できません' })

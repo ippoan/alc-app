@@ -31,6 +31,10 @@ const MANIFESTS: Record<string, string | null> = {
   'manifest.json': '1.2.0',
   'manifest-wifi.json': '1.3.0',
   'manifest-dev.json': null, // 取れない
+  // 指静脈端末 (timecard-station の 3 flavor。Refs ippoan/alc-app-s3#352)
+  'manifest-timecard-station.json': '0.5.0',
+  'manifest-timecard-vein-r12-b.json': '0.6.0',
+  'manifest-timecard-vein-gps.json': null,
 }
 
 function stubFetch() {
@@ -113,10 +117,11 @@ describe('FirmwareManager', () => {
     it('最新の版は 5 分ごとに引き直す', async () => {
       const wrapper = await mountManager()
       const calls = () => (fetch as ReturnType<typeof vi.fn>).mock.calls.length
-      expect(calls()).toBe(3)
+      // CoreS3 の 3 flavor + 指静脈端末の 3 flavor
+      expect(calls()).toBe(6)
       expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]![1]).toEqual({ cache: 'no-store' })
       await vi.advanceTimersByTimeAsync(5 * MIN)
-      expect(calls()).toBe(6)
+      expect(calls()).toBe(12)
       wrapper.unmount()
     })
   })
@@ -132,13 +137,34 @@ describe('FirmwareManager', () => {
       wrapper.unmount()
     })
 
-    it('種類は board / flavor (無ければ -)', async () => {
+    it('種類は報告の kind / flavor (flavor が無ければ -)', async () => {
       const wrapper = await mountManager([
         dev({ device_id: 'a1' }),
         dev({ device_id: 'a2', board: undefined, flavor: undefined }),
+        dev({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', board: undefined, flavor: 'timecard-vein' }),
       ])
       expect(col(rows(wrapper)[0], 'kind')).toBe('cores3 / cores3')
-      expect(col(rows(wrapper)[1], 'kind')).toBe('- / -')
+      expect(col(rows(wrapper)[1], 'kind')).toBe('cores3 / -')
+      expect(col(rows(wrapper)[2], 'kind')).toBe('timecard / timecard-vein')
+      wrapper.unmount()
+    })
+
+    it('★ 指静脈端末 (kind: timecard): label が無ければ id を全部出し、最新の版は timecard-station の manifest から引き、更新は id 1 台宛て (Refs ippoan/alc-app-s3#352)', async () => {
+      vi.stubGlobal('confirm', vi.fn(() => true))
+      updateFirmware.mockResolvedValue({ sent: 1 })
+      const wrapper = await mountManager([
+        dev({ device_id: 'alarm-0123456789abcdef', label: null, kind: 'timecard', board: undefined, flavor: 'timecard-vein', version: '0.5.9' }),
+        dev({ device_id: 'alarm-fedcba9876543210', label: '事務所の指静脈', kind: 'timecard', board: undefined, flavor: 'timecard-station', version: '0.5.0' }),
+      ])
+      expect(col(rows(wrapper)[0], 'name')).toBe('alarm-0123456789abcdef')
+      expect(col(rows(wrapper)[1], 'name')).toBe('事務所の指静脈')
+      expect(col(rows(wrapper)[0], 'latest')).toBe('0.6.0')
+      expect(col(rows(wrapper)[1], 'latest')).toBe('0.5.0')
+      // 版が同じ行は押せない
+      expect(button(rows(wrapper)[1]).attributes('disabled')).toBeDefined()
+      await button(rows(wrapper)[0]).trigger('click')
+      expect(updateFirmware).toHaveBeenCalledTimes(1)
+      expect(updateFirmware).toHaveBeenCalledWith('alarm-0123456789abcdef')
       wrapper.unmount()
     })
 
@@ -394,7 +420,7 @@ describe('FirmwareManager', () => {
 
     it('0 件の文言と、注意書き 2 行', async () => {
       const wrapper = await mountManager([])
-      expect(wrapper.find('[data-testid="firmware-empty"]').text()).toBe('報告している端末がありません。キオスクに CoreS3 を USB で繋ぎ、キオスクの画面を開いたままにしてください。')
+      expect(wrapper.find('[data-testid="firmware-empty"]').text()).toBe('報告している端末がありません。キオスクに CoreS3 / 指静脈端末を USB で繋ぎ、キオスクの画面を開いたままにしてください。')
       expect(wrapper.text()).toContain('更新は、その端末を USB で繋いでいるキオスクの画面が開いているときだけ始まります。')
       expect(wrapper.text()).toContain('更新中 (1〜2 分) は、キオスクの画面に「端末を更新しています」と表示され、操作できません。')
       wrapper.unmount()
@@ -452,6 +478,13 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
 
     await wrapper.findAll('button').find(b => b.text() === TAB)!.trigger('click')
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ 指静脈端末だけでも、版が違えば出る (Refs ippoan/alc-app-s3#352)', async () => {
+    listFirmwareDevices.mockResolvedValue({ devices: [dev({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', flavor: 'timecard-station', version: '0.4.0' })] })
+    const wrapper = await mountAdmin()
+    expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
     wrapper.unmount()
   })
 

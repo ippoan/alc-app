@@ -5,6 +5,9 @@ import {
   buildOtaReportForward,
   buildOtaStatusForward,
   buildSerialOtaForward,
+  deviceIdFromTokenSub,
+  firmwareTargetForDevice,
+  isFirmwareKind,
   decideFirmwareAdminAccess,
   decideFirmwareReportAccess,
   isFirmwareDeviceId,
@@ -194,12 +197,45 @@ describe('recorder への forward (Refs #403)', () => {
     expect(fwd.init).toEqual({ method: 'GET', headers: { Authorization: SECRET } })
   })
 
-  it('★ buildSerialOtaForward: body は {"target":"cores3","device_id":"…"} と完全一致', () => {
-    const fwd = buildSerialOtaForward({ sharedSecret: SECRET, tenantId: 't1', deviceId: 'd-1' })
+  it('★ buildSerialOtaForward: body は {"target":…,"device_id":"…"} と完全一致', () => {
+    const fwd = buildSerialOtaForward({ sharedSecret: SECRET, tenantId: 't1', deviceId: 'd-1', target: 'cores3' })
     expect(fwd.url).toBe(`${RECORDER_BASE}/tenants/t1/serial-ota`)
     expect(fwd.init.method).toBe('POST')
     expect(fwd.init.headers).toEqual({ Authorization: SECRET, 'Content-Type': 'application/json' })
     expect(fwd.init.body).toBe('{"target":"cores3","device_id":"d-1"}')
+    expect(buildSerialOtaForward({ sharedSecret: SECRET, tenantId: 't1', deviceId: 'd-2', target: 'timecard-station' }).init.body)
+      .toBe('{"target":"timecard-station","device_id":"d-2"}')
+  })
+})
+
+describe('指静脈端末の報告と 1 台宛ての更新 (Refs ippoan/alc-app-s3#352)', () => {
+  it('isFirmwareKind: cores3 と timecard だけ', () => {
+    expect(isFirmwareKind('cores3')).toBe(true)
+    expect(isFirmwareKind('timecard')).toBe(true)
+    for (const v of ['timecard-station', 'alarm', 'toString', '__proto__', '', undefined, 1]) expect(isFirmwareKind(v)).toBe(false)
+  })
+
+  it('deviceIdFromTokenSub: 鍵の token は alarm-<指紋> (keyed)、それ以外は sub のまま', () => {
+    expect(deviceIdFromTokenSub('alarm:0123456789abcdef')).toEqual({ deviceId: 'alarm-0123456789abcdef', keyed: true })
+    expect(deviceIdFromTokenSub('k1')).toEqual({ deviceId: 'k1', keyed: false })
+    // 形の違う alarm: は鍵として扱わない (sub のまま。id の検査で落ちる)
+    expect(deviceIdFromTokenSub('alarm:XYZ')).toEqual({ deviceId: 'alarm:XYZ', keyed: false })
+    expect(deviceIdFromTokenSub(undefined)).toEqual({ deviceId: undefined, keyed: false })
+  })
+
+  it('★ firmwareTargetForDevice: 最後の報告の kind から target を引く', () => {
+    const status = { devices: [
+      { device_id: 'c1', kind: 'cores3' },
+      { device_id: 'v1', kind: 'timecard' },
+      { device_id: 'a1', kind: 'alarm' },
+      null,
+    ] }
+    expect(firmwareTargetForDevice(status, 'c1')).toEqual({ ok: true, target: 'cores3' })
+    expect(firmwareTargetForDevice(status, 'v1')).toEqual({ ok: true, target: 'timecard-station' })
+    expect(firmwareTargetForDevice(status, 'a1')).toEqual({ ok: false, error: 'unknown_kind' })
+    expect(firmwareTargetForDevice(status, 'zz')).toEqual({ ok: false, error: 'no_report' })
+    expect(firmwareTargetForDevice(null, 'c1')).toEqual({ ok: false, error: 'no_report' })
+    expect(firmwareTargetForDevice({ devices: 'x' }, 'c1')).toEqual({ ok: false, error: 'no_report' })
   })
 })
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { listFirmwareDevices } from '~/utils/api'
-import { fetchLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
+import { fetchAdminLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
 
 const config = useRuntimeConfig()
 const { user, logout } = useAuth()
@@ -86,7 +86,7 @@ async function checkFirmwareUpdate() {
   if (firmwareChecking) return
   firmwareChecking = true
   try {
-    const [{ devices }, latest] = await Promise.all([listFirmwareDevices(), fetchLatestFirmwareVersions()])
+    const [{ devices }, latest] = await Promise.all([listFirmwareDevices(), fetchAdminLatestFirmwareVersions()])
     firmwareUpdateAvailable.value = devices.some(d => hasFirmwareUpdate(d, latest))
   } catch (e) {
     console.warn('ファームの更新の有無を確認できませんでした:', e)

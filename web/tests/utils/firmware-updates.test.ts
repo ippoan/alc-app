@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { FirmwareDevice } from '~/utils/api'
-import { fetchLatestFirmwareVersions, hasFirmwareUpdate, isFirmwareDifferent } from '~/utils/firmware-updates'
+import { ADMIN_FIRMWARE_TARGETS, fetchAdminLatestFirmwareVersions, fetchLatestFirmwareVersions, hasFirmwareUpdate, isFirmwareDifferent } from '~/utils/firmware-updates'
 
 const dev = (over: Partial<FirmwareDevice> = {}): FirmwareDevice => ({
   device_id: 'devaaaaa-bbbb',
@@ -111,5 +111,29 @@ describe('fetchLatestFirmwareVersions', () => {
       .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
       .mockRejectedValueOnce(new Error('x')))
     expect(await fetchLatestFirmwareVersions()).toEqual({ cores3: '1.0.0' })
+  })
+})
+
+describe('fetchAdminLatestFirmwareVersions (管理者の一覧。Refs ippoan/alc-app-s3#352)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('★ CoreS3 と指静脈端末の 3 flavor ずつを 1 つにまとめる (警告デバイスは引かない)', async () => {
+    expect(ADMIN_FIRMWARE_TARGETS).toEqual(['cores3', 'timecard-station'])
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: !url.endsWith('/manifest-dev.json'),
+      json: async () => ({ version: url.split('/').pop() }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchAdminLatestFirmwareVersions()).toEqual({
+      'cores3': 'manifest.json',
+      'cores3-wifi': 'manifest-wifi.json',
+      'timecard-station': 'manifest-timecard-station.json',
+      'timecard-vein': 'manifest-timecard-vein-r12-b.json',
+      'timecard-vein-gps': 'manifest-timecard-vein-gps.json',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(fetchMock.mock.calls.some(c => (c[0] as string).includes('alarm'))).toBe(false)
   })
 })

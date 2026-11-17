@@ -318,6 +318,8 @@ export function useSerialOta() {
   const coreS3 = useCoreS3Serial()
   const alarmDevice = useAlarmDevice()
   const firmware = useFirmwareReport()
+  /** Vein Station の報告 (管理者の一覧「端末のファーム」。Refs ippoan/alc-app-s3#352) */
+  const veinFirmware = useVeinFirmwareReport()
   const hubPort: OtaPort = { isConnected: coreS3.isConnected, onEvent: coreS3.onEvent, request: coreS3.ota.request }
   const alarmPort: OtaPort = { isConnected: alarmDevice.isConnected, onEvent: alarmDevice.ota.onEvent, request: alarmDevice.ota.request }
   const veinPort: OtaPort = { isConnected: vein.isConnected, onEvent: vein.onEvent, request: vein.ota.request }
@@ -391,22 +393,37 @@ export function useSerialOta() {
 
   /**
    * 書き込みを始めずに引き返す: 機体が「いまは受けられない」(`busy`)、または画面からの更新を
-   * 受けられない版 (`unsupported`)。失敗の幕にしない。CoreS3 は錠を解いてから一覧へ `skipped` を
-   * 出す (報告は端末の token を取りに行くので、錠より後)。警告デバイスの錠は `run` の finally が解く。
-   * 一覧の理由の語は、`busy` はそのまま、`unsupported` は {@link REFLASH_NEEDED}
+   * 受けられない版 (`unsupported`)。失敗の幕にしない。CoreS3 と Vein Station は錠を解いてから一覧へ
+   * `skipped` を出す (報告は端末の token を取りに行くので、錠より後)。警告デバイスの錠は `run` の
+   * finally が解く。一覧の理由の語は、`busy` はそのまま、`unsupported` は {@link REFLASH_NEEDED}
    */
-  function decline(hub: boolean, result: 'busy' | 'unsupported'): SerialOtaResult {
+  function decline(target: string, result: 'busy' | 'unsupported'): SerialOtaResult {
     state.value = { kind: 'idle' }
-    if (hub) {
-      coreS3.ota.end()
-      void firmware.report('skipped', { reason: result === 'busy' ? result : REFLASH_NEEDED })
+    const reporter = reporterFor(target)
+    if (reporter) {
+      endLock(target)
+      void reporter.report('skipped', { reason: result === 'busy' ? result : REFLASH_NEEDED })
     }
     return result
   }
 
+  /** 管理者の一覧へ報告する口。CoreS3 と Vein Station だけ (警告デバイスは一覧に出ない) */
+  function reporterFor(target: string): Pick<typeof firmware, 'report' | 'hold' | 'release'> | null {
+    return target === HUB_TARGET ? firmware : target === ALARM_TARGET ? null : veinFirmware
+  }
+
+  /** target のポートの錠を解く (掛かっていなければ何もしない) */
+  function endLock(target: string): void {
+    if (target === HUB_TARGET) coreS3.ota.end()
+    else if (target === ALARM_TARGET) alarmDevice.ota.end()
+    else vein.ota.end()
+  }
+
   /**
    * `hubId` は CoreS3 のときだけ、書き込みを始める機体の id (合図の `device_id` と照合済み)。
-   * Vein Station と警告デバイスは null — 報告も id の確認もしない (錠はどちらにも在る)
+   * Vein Station と警告デバイスは null — id の確認はしない (錠はどちらにも在る)。
+   * 管理者の一覧への報告は CoreS3 と Vein Station (`reporterFor`)。Vein Station の宛先の照合は
+   * 合図の受け (`TenkoKiosk.vue`) が持つ
    */
   async function flash(
     target: string,
@@ -419,9 +436,10 @@ export function useSerialOta() {
     const alarm = target === ALARM_TARGET
     /** Vein Station (station 版・vein 版) */
     const station = !hub && !alarm
-    /** 管理者の一覧へ遷移を出す (CoreS3 だけ)。**await しない** */
+    const reporter = reporterFor(target)
+    /** 管理者の一覧へ遷移を出す (CoreS3 と Vein Station)。**await しない** */
     const tell = (phase: FirmwarePhase, extra: FirmwareReportExtra): void => {
-      if (hub) void firmware.report(phase, extra)
+      if (reporter) void reporter.report(phase, extra)
     }
 
     // 更新が要るかは画面に出さずに調べる (最新のキオスクで毎回画面が点滅しないように)
@@ -447,7 +465,7 @@ export function useSerialOta() {
     const progress = { target_version: manifest.version }
 
     // ここから終わりまで、待機の報告 (idle) で一覧の「更新中」を上書きしない
-    if (hub) firmware.hold()
+    reporter?.hold()
     // 警告デバイスは、受信リングの探りが通るまで幕を出さない (下)
     if (!alarm) state.value = { kind: 'downloading' }
     tell('downloading', progress)
@@ -459,7 +477,7 @@ export function useSerialOta() {
       queued = { target, opts }
       state.value = { kind: 'idle' }
       // 結果の報告が無い経路なので、一覧の「更新中」(downloading) を待機へ戻しておく
-      firmware.release()
+      reporter?.release()
       tell('idle', {})
       return 'busy'
     }
@@ -476,19 +494,19 @@ export function useSerialOta() {
     }
     catch (e) {
       const reason = (e as Error).message
-      if (reason.includes(ERR_UNSUPPORTED)) return decline(hub, 'unsupported')
+      if (reason.includes(ERR_UNSUPPORTED)) return decline(target, 'unsupported')
       // 時間切れ・「既に応答待ち」・ポートを失った。機体には何も書いていない
       console.warn(`[SERIAL_OTA] skipped: ${reason}`)
-      return decline(hub, 'busy')
+      return decline(target, 'busy')
     }
-    if (rx < MIN_RX_RING_BYTES) return decline(hub, 'unsupported')
+    if (rx < MIN_RX_RING_BYTES) return decline(target, 'unsupported')
 
     if (hub) {
       try {
         await port.request('HB OFF', 'OK HB OFF', HB_OFF_TIMEOUT_MS)
       }
       catch (e) {
-        if (isPortBusy(e)) return decline(hub, 'busy')
+        if (isPortBusy(e)) return decline(target, 'busy')
         // `ERR …`・無応答は先へ進む (次の `OTA SERIAL` で分かる)
       }
     }
@@ -504,7 +522,7 @@ export function useSerialOta() {
     }
     catch (e) {
       // 機体が測定の画面の間・別の OTA 中
-      if (hub && (e as Error).message.startsWith(`${OTA_ERR} busy`)) return decline(hub, 'busy')
+      if (hub && (e as Error).message.startsWith(`${OTA_ERR} busy`)) return decline(target, 'busy')
       throw e
     }
     state.value = { kind: 'writing', pct: 0 }
@@ -546,6 +564,13 @@ export function useSerialOta() {
 
     state.value = { kind: 'confirming' }
     let ask: (line: string, matchPrefix: string, timeoutMs: number, errPrefix?: string) => Promise<string> = port.request
+    if (station) {
+      // CoreS3 と同じ理由で、機体へ聞く前に報告 (中の端末の token の取り直しの署名) を待ち切る
+      await Promise.race([
+        veinFirmware.report('confirming', progress),
+        new Promise(resolve => setTimeout(resolve, CONFIRMING_REPORT_TIMEOUT_MS)),
+      ])
+    }
     if (hub) {
       // 機体へ聞く前に待ち切る: 再起動で端末の token は捨てられており、報告の中の取り直しが
       // 機体への署名の要求を走らせる。先に聞くと、こちらの応答待ちが署名を reject させる。
@@ -630,10 +655,11 @@ export function useSerialOta() {
       const at = state.value
       console.warn(`[SERIAL_OTA] failed: target=${target} stage=${at.kind}${at.kind === 'writing' ? ` pct=${at.pct}` : ''} word=${failureWord(e)} reason=${reason}`)
       settle({ kind: 'failed', reason })
-      if (hub) {
+      const reporter = reporterFor(target)
+      if (reporter) {
         // 報告は端末の token を取りに行くので、錠を解いてから
-        coreS3.ota.end()
-        void firmware.report('failed', { reason: failureWord(e) })
+        endLock(target)
+        void reporter.report('failed', { reason: failureWord(e) })
       }
       return 'failed'
     }
@@ -645,6 +671,7 @@ export function useSerialOta() {
       alarmDevice.ota.end()
       vein.ota.end()
       firmware.release()
+      veinFirmware.release()
     }
   }
 

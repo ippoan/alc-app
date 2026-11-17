@@ -170,6 +170,57 @@ describe('TenkoKiosk — 端末のシリアル OTA (Refs ippoan/alc-app-s3#279)'
     wrapper.unmount()
   })
 
+  describe('1 台指定の合図 (管理者の「端末のファーム」。Refs ippoan/alc-app-s3#352)', () => {
+    /** sub だけ持つ JWT (署名は見ない。宛先の見分けにだけ使う) */
+    const jwtWithSub = (sub: string) => `h.${btoa(JSON.stringify({ sub })).replace(/=+$/, '')}.s`
+
+    it('★ device_id が自分の端末の id (鍵の token は alarm-<指紋>) と一致すれば預かって走らせる', async () => {
+      getDeviceJwt.mockResolvedValue(jwtWithSub('alarm:0123456789abcdef'))
+      const wrapper = await mountKiosk()
+      watchMock.options!.onSerialOta!('timecard-station', 'alarm-0123456789abcdef')
+      await flushPromises()
+      expect(ota.enqueue).toHaveBeenCalledWith('timecard-station')
+      expect(ota.runQueued).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+    })
+
+    it('★ ほかの端末宛て・自分の id が取れない (token が無い / 取得の例外) なら預からない', async () => {
+      const wrapper = await mountKiosk()
+      getDeviceJwt.mockResolvedValue(jwtWithSub('alarm:fedcba9876543210'))
+      watchMock.options!.onSerialOta!('timecard-station', 'alarm-0123456789abcdef')
+      await flushPromises()
+      getDeviceJwt.mockResolvedValue(null as unknown as string)
+      watchMock.options!.onSerialOta!('timecard-station', 'alarm-0123456789abcdef')
+      await flushPromises()
+      getDeviceJwt.mockRejectedValue(new Error('no key'))
+      watchMock.options!.onSerialOta!('timecard-station', 'alarm-0123456789abcdef')
+      await flushPromises()
+      expect(ota.enqueue).not.toHaveBeenCalled()
+      expect(ota.runQueued).not.toHaveBeenCalled()
+      wrapper.unmount()
+      getDeviceJwt.mockResolvedValue('device-jwt')
+    })
+
+    it('device_id の無い合図 (/device/setup・CI の配信) は今までどおり、id を聞かずに全台で預かる', async () => {
+      const wrapper = await mountKiosk()
+      getDeviceJwt.mockClear()
+      watchMock.options!.onSerialOta!('timecard-station')
+      expect(ota.enqueue).toHaveBeenCalledWith('timecard-station')
+      expect(getDeviceJwt).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('device_id 付きでも cores3 の合図は預からない (FirmwareOtaHost の側)', async () => {
+      getDeviceJwt.mockResolvedValue(jwtWithSub('alarm:0123456789abcdef'))
+      const wrapper = await mountKiosk()
+      watchMock.options!.onSerialOta!('cores3', 'alarm-0123456789abcdef')
+      await flushPromises()
+      expect(ota.enqueue).not.toHaveBeenCalled()
+      wrapper.unmount()
+      getDeviceJwt.mockResolvedValue('device-jwt')
+    })
+  })
+
   it.each(['cores3', 'unknown-target'])('Vein Station 以外の合図 (%s) は預からない (Refs ippoan/alc-app#403)', async (target) => {
     const wrapper = await mountKiosk()
     watchMock.options!.onSerialOta!(target, 'test-device-1')

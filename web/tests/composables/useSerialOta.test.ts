@@ -57,6 +57,14 @@ const fw = vi.hoisted(() => ({
 }))
 mockNuxtImport('useFirmwareReport', () => () => fw)
 
+/** Vein Station の報告 (useVeinFirmwareReport。Refs ippoan/alc-app-s3#352) の偽物 */
+const vfw = vi.hoisted(() => ({
+  report: null as unknown as ReturnType<typeof vi.fn>,
+  hold: null as unknown as ReturnType<typeof vi.fn>,
+  release: null as unknown as ReturnType<typeof vi.fn>,
+}))
+mockNuxtImport('useVeinFirmwareReport', () => () => vfw)
+
 /** 呼ばれた順 (錠・保留・報告・機体へ送った行・取得・接続の変化) を 1 本に記録する */
 let events: string[]
 
@@ -103,6 +111,9 @@ function resetHubMocks(): void {
   fw.report = vi.fn(async (phase: string) => { events.push(`report:${phase}`) })
   fw.hold = vi.fn(() => { events.push('hold') })
   fw.release = vi.fn(() => { events.push('release') })
+  vfw.report = vi.fn(async (phase: string) => { events.push(`vein-report:${phase}`) })
+  vfw.hold = vi.fn(() => { events.push('vein-hold') })
+  vfw.release = vi.fn(() => { events.push('vein-release') })
 }
 
 /** `fetch` の 2 つ目の引数 (取得の時間切れ付き) */
@@ -621,15 +632,60 @@ describe('useSerialOta', () => {
     expect(ota.state.value).toEqual({ kind: 'idle' })
   })
 
-  it('Vein Station の更新は CoreS3 のポートにも報告にも触らない (終わりの end / release は空振りで呼ぶだけ)', async () => {
+  it('Vein Station の更新は CoreS3 のポートにも CoreS3 の報告にも触らない (終わりの end / release は空振りで呼ぶだけ)', async () => {
     await runToEnd()
     expect(ota.state.value.kind).toBe('done')
     expect(hub.ota.request).not.toHaveBeenCalled()
     expect(hub.ota.begin).not.toHaveBeenCalled()
     expect(fw.hold).not.toHaveBeenCalled()
     expect(fw.report).not.toHaveBeenCalled()
-    // 錠も保留も掛けていないので、本物はどちらも何もしない
-    expect(events).toEqual(['end', 'alarm:end', 'release'])
+    // CoreS3 の錠も保留も掛けていないので、本物はどちらも何もしない
+    expect(events.filter(e => !e.startsWith('vein-'))).toEqual(['end', 'alarm:end', 'release'])
+  })
+
+  it('★ Vein Station の更新は、管理者の一覧へ Vein の報告で遷移を出す (保留 → 遷移 → done → 保留を解く。Refs ippoan/alc-app-s3#352)', async () => {
+    await runToEnd()
+    expect(events.filter(e => e.startsWith('vein-'))).toEqual([
+      'vein-hold',
+      'vein-report:downloading',
+      'vein-report:writing',
+      'vein-report:rebooting',
+      'vein-report:confirming',
+      'vein-report:done',
+      'vein-release',
+    ])
+    // done の後に idle を送らない (release は報告しない)
+    expect(vfw.report).toHaveBeenLastCalledWith('done', { target_version: manifest.version })
+  })
+
+  it('★ Vein Station の再起動後は、report(confirming) が解決するまで機体へ名乗りを聞かない', async () => {
+    let resolveConfirming!: () => void
+    vfw.report = vi.fn((phase: string) => {
+      events.push(`vein-report:${phase}`)
+      return phase === 'confirming' ? new Promise<void>((r) => { resolveConfirming = r }) : Promise.resolve()
+    })
+    const p = runToEnd()
+    await vi.waitFor(() => expect(vfw.report).toHaveBeenCalledWith('confirming', expect.anything()))
+    const devicesBefore = link.ota.request.mock.calls.filter(c => c[0] === 'DEVICE').length
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(link.ota.request.mock.calls.filter(c => c[0] === 'DEVICE').length).toBe(devicesBefore)
+    resolveConfirming()
+    expect(await p).toBe('updated')
+  })
+
+  it('Vein Station の書き込みが失敗したら、錠を解いてから failed を Vein の報告で出す', async () => {
+    dev.finalLine = 'OTA ERR verify'
+    expect(await runToEnd()).toBe('failed')
+    expect(vfw.report).toHaveBeenLastCalledWith('failed', { reason: 'verify' })
+    expect(link.ota.end.mock.invocationCallOrder[0]!).toBeLessThan(vfw.report.mock.invocationCallOrder.at(-1)!)
+    expect(fw.report).not.toHaveBeenCalled()
+  })
+
+  it('Vein Station の探りが断られたら、錠を解いてから skipped: reflash_needed を Vein の報告で出す', async () => {
+    dev.probeLine = 'ERR UNSUPPORTED'
+    expect(await runToEnd()).toBe('unsupported')
+    expect(vfw.report).toHaveBeenLastCalledWith('skipped', { reason: 'reflash_needed' })
+    expect(link.ota.end.mock.invocationCallOrder[0]!).toBeLessThan(vfw.report.mock.invocationCallOrder.at(-1)!)
   })
 
   it('Vein Station の錠は探りの前に掛け、再起動を待つ前と終わりで解く (Refs ippoan/alc-app#436)', async () => {
@@ -653,7 +709,8 @@ describe('useSerialOta', () => {
     dev.finalLine = 'OTA ERR verify'
     expect(await runToEnd()).toBe('failed')
     expect(link.ota.begin).toHaveBeenCalledTimes(1)
-    expect(link.ota.end).toHaveBeenCalledTimes(1)
+    // 報告の前に 1 回、finally で 1 回 (錠が掛かっていなければ本物は何もしない)
+    expect(link.ota.end).toHaveBeenCalledTimes(2)
     expect(link.ota.end.mock.invocationCallOrder[0]!).toBeGreaterThan(link.ota.begin.mock.invocationCallOrder[0]!)
   })
 
@@ -661,7 +718,8 @@ describe('useSerialOta', () => {
     dev.probeLine = 'ERR UNSUPPORTED'
     expect(await runToEnd()).toBe('unsupported')
     expect(link.ota.begin).toHaveBeenCalledTimes(1)
-    expect(link.ota.end).toHaveBeenCalledTimes(1)
+    // 報告の前に 1 回、finally で 1 回 (錠が掛かっていなければ本物は何もしない)
+    expect(link.ota.end).toHaveBeenCalledTimes(2)
   })
 
   it('Vein Station 版 (FLAVOR=timecard-vein) は vein 版のイメージを取り、同じ FLAVOR で確定する', async () => {
@@ -1060,6 +1118,7 @@ describe('useSerialOta (cores3)', () => {
       'end', // finally (錠は解けているので本物は何もしない)
       'alarm:end', // 警告デバイスの錠は掛けていない (空振り)
       'release',
+      'vein-release', // Vein の保留も空振りで解く
     ])
     // チャンクは `OTA SERIAL` の後・1 回目の `end` の前
     expect(chunks()).toBe(Math.ceil(imageBytes / 65536))
@@ -1215,7 +1274,7 @@ describe('useSerialOta (cores3)', () => {
     expect(ota.state.value).toEqual({ kind: 'idle' })
     expect(reports()).toEqual(['downloading', 'idle'])
     expect(fw.report).toHaveBeenLastCalledWith('idle', {})
-    expect(order().slice(-5)).toEqual(['release', 'report:idle', 'end', 'alarm:end', 'release'])
+    expect(order().slice(-6)).toEqual(['release', 'report:idle', 'end', 'alarm:end', 'release', 'vein-release'])
 
     // 空いた → 受けが runQueued を呼ぶ
     busy = false
@@ -1718,6 +1777,7 @@ describe('useSerialOta (alarm)', () => {
       'tx:OTA CONFIRM',
       'alarm:end', // finally (錠は解けているので本物は何もしない)
       'release',
+      'vein-release', // Vein の保留も空振りで解く
     ])
     expect(chunks()).toBe(Math.ceil(imageBytes / 65536))
     expect(events.indexOf('tx:<chunk>')).toBeGreaterThan(events.indexOf('alarm:rest'))
@@ -1837,6 +1897,7 @@ describe('useSerialOta (alarm)', () => {
       'tx:OTA CONFIRM',
       'alarm:end',
       'release',
+      'vein-release', // Vein の保留も空振りで解く
     ])
     expect(curtains()).toEqual([])
     expect(warnSpy).not.toHaveBeenCalled()
