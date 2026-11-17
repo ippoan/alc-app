@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { FirmwareDevice } from '~/utils/api'
-import { listFirmwareDevices, updateFirmware } from '~/utils/api'
+import { listFirmwareDevices, renameDevice, updateFirmware } from '~/utils/api'
 import { fetchAdminLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
 import { veinDeviceLabel } from '~/utils/vein-device-label'
 
@@ -65,6 +65,54 @@ function showNotice(text: string) {
 }
 
 const { keyLabelOf } = useDeviceNames()
+
+/** 名前を変えている行の device_id (一度に 1 行だけ)。無ければ null */
+const editingId = ref<string | null>(null)
+/** 入力中の新しい名前 */
+const editLabel = ref('')
+/** 保存を送っている最中か (二重送信しない) */
+const renaming = ref(false)
+/** 名前の変更に失敗した行とその文言 (行の下に出す) */
+const renameError = ref<{ deviceId: string, text: string } | null>(null)
+
+function startRename(d: FirmwareDevice) {
+  if (renaming.value) return
+  editingId.value = d.device_id
+  // 今の名前を入れておく (鍵のラベルに付く「(失効)」は名前ではないので外す)
+  editLabel.value = d.label ?? keyLabelOf(d.device_id)?.replace(/ \(失効\)$/, '') ?? ''
+  renameError.value = null
+}
+
+function cancelRename() {
+  if (renaming.value) return
+  editingId.value = null
+  renameError.value = null
+}
+
+function renameErrorText(e: unknown): string {
+  const err = e as Error & { status?: number }
+  if (err.status === 409 && err.message.includes('duplicate_label')) return '同じ名前の端末があります'
+  if (err.status === 409 && err.message.includes('revoked')) return '失効した端末は変えられません'
+  if (err.status === 403 && err.message.includes('dev_token_write_forbidden')) return '確認用のログインでは名前を変えられません'
+  return '名前を変えられませんでした'
+}
+
+async function saveRename(d: FirmwareDevice) {
+  const label = editLabel.value.trim()
+  if (renaming.value || editingId.value !== d.device_id || !label) return
+  renaming.value = true
+  renameError.value = null
+  try {
+    await renameDevice(d.device_id, label)
+    editingId.value = null
+    // 鍵のラベルは名前の表、登録簿のラベルは一覧の label に載るので両方引き直す
+    await Promise.all([loadDeviceNames(true), loadList()])
+  } catch (e) {
+    renameError.value = { deviceId: d.device_id, text: renameErrorText(e) }
+  } finally {
+    renaming.value = false
+  }
+}
 
 /**
  * 登録簿のラベル。無ければ、指静脈端末など鍵の id (`alarm-<指紋>`) の行は機体の鍵のラベル
@@ -166,7 +214,54 @@ async function update(d: FirmwareDevice) {
         </thead>
         <tbody>
           <tr v-for="d in devices" :key="d.device_id" class="border-t" data-testid="firmware-row">
-            <td class="px-3 py-2 whitespace-nowrap" data-col="name" :title="d.device_id">{{ deviceName(d) }}</td>
+            <td class="px-3 py-2 whitespace-nowrap" data-col="name" :title="d.device_id">
+              <form
+                v-if="editingId === d.device_id"
+                class="flex items-center gap-1"
+                data-testid="firmware-rename-form"
+                @submit.prevent="saveRename(d)"
+              >
+                <input
+                  v-model="editLabel"
+                  class="px-2 py-1 border rounded text-sm w-40"
+                  data-testid="firmware-rename-input"
+                  maxlength="64"
+                  :disabled="renaming"
+                >
+                <button
+                  type="submit"
+                  class="px-2 py-1 text-xs bg-blue-600 text-white rounded disabled:opacity-50"
+                  data-testid="firmware-rename-save"
+                  :disabled="renaming || !editLabel.trim()"
+                >
+                  保存
+                </button>
+                <button
+                  type="button"
+                  class="px-2 py-1 text-xs border rounded disabled:opacity-50"
+                  data-testid="firmware-rename-cancel"
+                  :disabled="renaming"
+                  @click="cancelRename"
+                >
+                  やめる
+                </button>
+              </form>
+              <span v-else class="inline-flex items-center gap-2">
+                <span data-testid="firmware-name">{{ deviceName(d) }}</span>
+                <button
+                  type="button"
+                  class="px-2 py-0.5 text-xs text-blue-700 border border-blue-300 rounded hover:bg-blue-50 disabled:opacity-50"
+                  data-testid="firmware-rename"
+                  :disabled="renaming"
+                  @click="startRename(d)"
+                >
+                  名前を変える
+                </button>
+              </span>
+              <p v-if="renameError?.deviceId === d.device_id" class="text-xs text-red-600 mt-1" data-testid="firmware-rename-error">
+                {{ renameError.text }}
+              </p>
+            </td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="kind">{{ d.kind }} / {{ d.flavor ?? '-' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="version">{{ d.version ?? '不明 (古い版)' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="latest">{{ latestOf(d) ?? '-' }}</td>

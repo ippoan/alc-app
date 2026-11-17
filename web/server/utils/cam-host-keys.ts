@@ -68,3 +68,19 @@ export function parseCamHostKeys(json: unknown): CamHostKey[] {
     .filter(k => CAM_HOST_SIGNER_USAGES.includes(k.usage))
     .map(({ device_id, label }) => ({ device_id, label }))
 }
+
+/**
+ * auth-worker `POST /device/setup/alarm-key/rename` (鍵のラベルを変える) への forward request を組む
+ * (Refs ippoan/alc-app-s3#352)。一覧 ({@link buildAlarmKeysForward}) と同じく、管理者の JWT を
+ * cookie に載せる (shared secret は載せない)。
+ */
+export function buildAlarmKeyRenameForward(token: string, input: { fingerprint: string, label: string }): { url: string, init: RequestInit } {
+  return {
+    url: `${AUTH_WORKER_BASE}/device/setup/alarm-key/rename`,
+    init: {
+      method: 'POST',
+      headers: { Cookie: `${AUTH_COOKIE_NAME}=${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fingerprint: input.fingerprint, label: input.label }),
+    },
+  }
+}
