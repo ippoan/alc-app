@@ -6,18 +6,23 @@ import AdminDashboard from '~/components/AdminDashboard.vue'
 import BpNotifyManager from '~/components/BpNotifyManager.vue'
 import TenkoFilingManager from '~/components/TenkoFilingManager.vue'
 import TenkoOfficeManager from '~/components/TenkoOfficeManager.vue'
+import { resetDeviceNames } from '~/composables/useDeviceNames'
 
 // 管理者の画面のタブ「端末のファーム」(Refs ippoan/alc-app#403)。
 // api の 2 関数は mock、manifest の fetch と confirm は stubGlobal。
 
-const { listFirmwareDevices, updateFirmware } = vi.hoisted(() => ({
+const { listFirmwareDevices, updateFirmware, listCamHostKeys, listDeviceLabels } = vi.hoisted(() => ({
   listFirmwareDevices: vi.fn(),
   updateFirmware: vi.fn(),
+  listCamHostKeys: vi.fn(),
+  listDeviceLabels: vi.fn(),
 }))
 vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   listFirmwareDevices,
   updateFirmware,
+  listCamHostKeys,
+  listDeviceLabels,
   getBpNotifySettings: vi.fn(async () => ({ employees: [] })),
   getLineworksUsers: vi.fn(async () => ({ users: [] })),
   getTenkoOffices: vi.fn(async () => ({ offices: [], vehicles: [], carins_bases: [] })),
@@ -81,6 +86,10 @@ describe('FirmwareManager', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
     vi.setSystemTime(NOW)
     vi.clearAllMocks()
+    // 名前の表 (useDeviceNames) は module に覚えるので、テストごとに捨てて引き直させる
+    resetDeviceNames()
+    listCamHostKeys.mockResolvedValue({ keys: [], names: [] })
+    listDeviceLabels.mockResolvedValue({ devices: [] })
     stubFetch()
     vi.stubGlobal('confirm', vi.fn(() => true))
   })
@@ -149,15 +158,17 @@ describe('FirmwareManager', () => {
       wrapper.unmount()
     })
 
-    it('★ 指静脈端末 (kind: timecard): label が無ければ id を全部出し、最新の版は timecard-station の manifest から引き、更新は id 1 台宛て (Refs ippoan/alc-app-s3#352)', async () => {
+    it('★ 指静脈端末 (kind: timecard): label も鍵のラベルも無ければ「Vein Station <指紋 8 字>」、最新の版は timecard-station の manifest から引き、更新は id 1 台宛て (Refs ippoan/alc-app-s3#352)', async () => {
       vi.stubGlobal('confirm', vi.fn(() => true))
       updateFirmware.mockResolvedValue({ sent: 1 })
       const wrapper = await mountManager([
         dev({ device_id: 'alarm-0123456789abcdef', label: null, kind: 'timecard', board: undefined, flavor: 'timecard-vein', version: '0.5.9' }),
         dev({ device_id: 'alarm-fedcba9876543210', label: '事務所の指静脈', kind: 'timecard', board: undefined, flavor: 'timecard-station', version: '0.5.0' }),
       ])
-      expect(col(rows(wrapper)[0], 'name')).toBe('alarm-0123456789abcdef')
+      expect(col(rows(wrapper)[0], 'name')).toBe('Vein Station 01234567')
       expect(col(rows(wrapper)[1], 'name')).toBe('事務所の指静脈')
+      // 見分け用に id 全体を title に残す
+      expect(rows(wrapper)[0]!.find('[data-col="name"]').attributes('title')).toBe('alarm-0123456789abcdef')
       expect(col(rows(wrapper)[0], 'latest')).toBe('0.6.0')
       expect(col(rows(wrapper)[1], 'latest')).toBe('0.5.0')
       // 版が同じ行は押せない
@@ -165,6 +176,26 @@ describe('FirmwareManager', () => {
       await button(rows(wrapper)[0]).trigger('click')
       expect(updateFirmware).toHaveBeenCalledTimes(1)
       expect(updateFirmware).toHaveBeenCalledWith('alarm-0123456789abcdef')
+      wrapper.unmount()
+    })
+
+    it('端末の名前: label が在ればそれ / 無ければ機体の鍵のラベル (失効は「(失効)」付き) / どちらも無ければ Vein Station <指紋 8 字> (Refs ippoan/alc-app-s3#352)', async () => {
+      listCamHostKeys.mockResolvedValue({ keys: [], names: [
+        { device_id: 'alarm:1111111111111111', label: '鍵のラベル (無視される)' },
+        { device_id: 'alarm:2222222222222222', label: '2 階の指静脈' },
+        { device_id: 'alarm:3333333333333333', label: '旧事務所', revoked: true },
+      ] })
+      const vein = (device_id: string, label: string | null) => dev({ device_id, label, kind: 'timecard', board: undefined, flavor: 'timecard-station' })
+      const wrapper = await mountManager([
+        vein('alarm-1111111111111111', '登録簿のラベル'),
+        vein('alarm-2222222222222222', null),
+        vein('alarm-3333333333333333', null),
+        vein('alarm-4444444444444444', null),
+        dev({ device_id: 'timecard-no-key', label: null, kind: 'timecard' }),
+      ])
+      expect(rows(wrapper).map(r => col(r, 'name'))).toEqual([
+        '登録簿のラベル', '2 階の指静脈', '旧事務所 (失効)', 'Vein Station 44444444', 'timecard-no-key',
+      ])
       wrapper.unmount()
     })
 
@@ -429,9 +460,9 @@ describe('FirmwareManager', () => {
 })
 
 // AdminDashboard のタブ。専用のテストが無かったので、このタブの分だけ小さく見る。
-// 「端末のファーム」は更新できる端末が在るときだけ並びに出す (`?tab=firmware` では直接開ける)。
+// 「端末のファーム」は更新の有無に関係なく常に並びに出す (更新状況を見に行けるように。Refs ippoan/alc-app-s3#352)。
 describe('AdminDashboard — 端末のファームのタブ', () => {
-  // 変更前のタブの並び (17 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436、点呼の届出は届出の様式のダウンロード、
+  // ファーム以外のタブの並び (17 個。端末の指静脈・血圧の通知は Refs ippoan/alc-app#436、点呼の届出は届出の様式のダウンロード、
   // 点呼の営業所は対面点呼の判定で使う所属)
   const TABS_BEFORE = [
     '乗務員', '免許証', '送信キュー', 'Webhook', '中間点呼', 'リモートカメラ',
@@ -444,6 +475,9 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
     vi.setSystemTime(NOW)
     vi.clearAllMocks()
+    resetDeviceNames()
+    listCamHostKeys.mockResolvedValue({ keys: [], names: [] })
+    listDeviceLabels.mockResolvedValue({ devices: [] })
     listFirmwareDevices.mockResolvedValue({ devices: [] })
     stubFetch()
   })
@@ -460,48 +494,17 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
     return wrapper
   }
   const labels = (w: Awaited<ReturnType<typeof mountAdmin>>) => w.findAll('button').map(b => b.text())
-  // 「端末の鍵の状態」は常に出るタブ (ファームの隣)。ここはファームのタブの出入りを見るので並びから除く
-  // (専用のテストは DeviceKeyStatus.test.ts)
+  // 「端末の鍵の状態」は常に出るタブ (ファームの隣。専用のテストは DeviceKeyStatus.test.ts) なので並びから除く
   const tabLabels = (w: Awaited<ReturnType<typeof mountAdmin>>) => labels(w).slice(0, labels(w).indexOf('ログアウト')).filter(l => l !== '端末の鍵の状態')
 
-  it('更新できる端末が無いとき、並びに無い。既存の 16 個の並びは変わらない', async () => {
-    const wrapper = await mountAdmin()
-    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
-    wrapper.unmount()
-  })
-
-  it('更新できる端末が在るとき、一番最後に出て、押すと FirmwareManager が描画される', async () => {
-    listFirmwareDevices.mockResolvedValue({ devices: [dev()] })
+  it('★ 更新できる端末が 1 台も無くても、一番最後に常に出る。開くまで一覧は引かない (Refs ippoan/alc-app-s3#352)', async () => {
     const wrapper = await mountAdmin()
     expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
+    expect(listFirmwareDevices).not.toHaveBeenCalled()
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(false)
 
     await wrapper.findAll('button').find(b => b.text() === TAB)!.trigger('click')
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('★ 指静脈端末だけでも、版が違えば出る (Refs ippoan/alc-app-s3#352)', async () => {
-    listFirmwareDevices.mockResolvedValue({ devices: [dev({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', flavor: 'timecard-station', version: '0.4.0' })] })
-    const wrapper = await mountAdmin()
-    expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
-    wrapper.unmount()
-  })
-
-  it('版が同じ端末だけなら出ない', async () => {
-    listFirmwareDevices.mockResolvedValue({ devices: [dev({ version: '1.2.0' })] })
-    const wrapper = await mountAdmin()
-    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
-    wrapper.unmount()
-  })
-
-  it('一覧の取得が失敗したら出ない (例外も出ない)', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    listFirmwareDevices.mockRejectedValue(new Error('API エラー (500): x'))
-    const wrapper = await mountAdmin()
-    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
-    expect(warn).toHaveBeenCalledTimes(1)
-    warn.mockRestore()
     wrapper.unmount()
   })
 
@@ -538,54 +541,12 @@ describe('AdminDashboard — 端末のファームのタブ', () => {
     direct.unmount()
   })
 
-  it('?tab=firmware (initialTab) で開いたら、更新が無くてもタブが出ていて FirmwareManager が描画される', async () => {
+  it('?tab=firmware (initialTab) で開くと FirmwareManager が描画され、ほかのタブへ移ってもタブは残る', async () => {
     const wrapper = await mountAdmin('firmware')
-    expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
     expect(wrapper.findComponent(FirmwareManager).exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('開いている間は更新が無くなってもタブを消さず、ほかのタブへ移ると消える', async () => {
-    listFirmwareDevices.mockResolvedValue({ devices: [dev()] })
-    const wrapper = await mountAdmin('firmware')
-    listFirmwareDevices.mockResolvedValue({ devices: [] })
-    await vi.advanceTimersByTimeAsync(5 * MIN)
-    await wrapper.vm.$nextTick()
-    expect(tabLabels(wrapper)).toContain(TAB)
-
     await wrapper.findAll('button').find(b => b.text() === '乗務員')!.trigger('click')
-    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
+    expect(wrapper.findComponent(FirmwareManager).exists()).toBe(false)
+    expect(tabLabels(wrapper)).toEqual([...TABS_BEFORE, TAB])
     wrapper.unmount()
-  })
-
-  it('5 分ごとに再判定して、出る・消える。前の回が返っていない間は重ねない。unmount で止まる', async () => {
-    const wrapper = await mountAdmin()
-    expect(listFirmwareDevices).toHaveBeenCalledTimes(1)
-    expect(tabLabels(wrapper)).toEqual(TABS_BEFORE)
-
-    listFirmwareDevices.mockResolvedValue({ devices: [dev()] })
-    await vi.advanceTimersByTimeAsync(5 * MIN)
-    await wrapper.vm.$nextTick()
-    expect(listFirmwareDevices).toHaveBeenCalledTimes(2)
-    expect(tabLabels(wrapper)).toContain(TAB)
-
-    listFirmwareDevices.mockResolvedValue({ devices: [] })
-    await vi.advanceTimersByTimeAsync(5 * MIN)
-    await wrapper.vm.$nextTick()
-    expect(tabLabels(wrapper)).not.toContain(TAB)
-
-    let resolve!: (v: { devices: FirmwareDevice[] }) => void
-    listFirmwareDevices.mockReturnValue(new Promise((r) => { resolve = r }))
-    await vi.advanceTimersByTimeAsync(5 * MIN)
-    const callsBefore = listFirmwareDevices.mock.calls.length
-    await vi.advanceTimersByTimeAsync(5 * MIN)
-    expect(listFirmwareDevices).toHaveBeenCalledTimes(callsBefore) // 返っていない間は呼ばない
-    resolve({ devices: [] })
-    await flush()
-
-    wrapper.unmount()
-    const calls = listFirmwareDevices.mock.calls.length
-    await vi.advanceTimersByTimeAsync(20 * MIN)
-    expect(listFirmwareDevices).toHaveBeenCalledTimes(calls)
   })
 })
