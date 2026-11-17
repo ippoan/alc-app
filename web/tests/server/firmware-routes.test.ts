@@ -522,6 +522,9 @@ describe('POST /api/firmware/update', () => {
     await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 503, statusMessage: '端末の報告を取得できません' })
     statusRes = { json: { devices: 'x' }, status: 200 }
     await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 404 })
+    // 本文が JSON でない 200 も「報告の無い端末」(合図を出さない)
+    recorderFetch.mockImplementationOnce(async () => new Response('not json', { status: 200 }))
+    await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 404 })
     expect(serialOtaCalls()).toHaveLength(0)
   })
 

@@ -412,10 +412,12 @@ export function useSerialOta() {
     return target === HUB_TARGET ? firmware : target === ALARM_TARGET ? null : veinFirmware
   }
 
-  /** target のポートの錠を解く (掛かっていなければ何もしない) */
+  /**
+   * 報告の前に target のポートの錠を解く (掛かっていなければ何もしない)。呼ぶのは {@link reporterFor} が
+   * 口を返す target (CoreS3 / Vein Station) だけ — 警告デバイスの錠は `run` の finally が解く
+   */
   function endLock(target: string): void {
     if (target === HUB_TARGET) coreS3.ota.end()
-    else if (target === ALARM_TARGET) alarmDevice.ota.end()
     else vein.ota.end()
   }
 

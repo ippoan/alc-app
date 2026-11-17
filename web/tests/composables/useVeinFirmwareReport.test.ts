@@ -130,6 +130,15 @@ describe('useVeinFirmwareReport', () => {
     expect(reportFirmware).not.toHaveBeenCalled()
   })
 
+  it('名乗りに BOARD があれば board も載せる', async () => {
+    vein.isConnected.value = true
+    vein.deviceInfo.value = { ver: '0.6.0', board: 'atoms3r', flavor: 'timecard-station' }
+    await fw.report('idle')
+    expect(reportFirmware).toHaveBeenCalledWith({
+      device_id: 'alarm-0123456789abcdef', kind: 'timecard', board: 'atoms3r', flavor: 'timecard-station', version: '0.6.0', phase: 'idle',
+    })
+  })
+
   it('名乗りに無い値は key ごと載せない', async () => {
     vein.isConnected.value = true
     vein.deviceInfo.value = { ver: null, board: null, flavor: null }
