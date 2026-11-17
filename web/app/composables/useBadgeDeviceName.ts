@@ -1,5 +1,5 @@
 /**
- * 右下の版の表示 (`app.vue` の `VersionBadge`) に出す「このページがつかんでいる機体の名前」
+ * 右下の版の表示 (`app.vue` の `VersionBadge`) に出す「このページがつかんでいる機体の名前と id」
  * (Refs ippoan/alc-app-s3#352)。どの PC にどの端末が繋がっているかを画面で見分けるため。
  *
  * - 指静脈端末: 版の報告 (`useVeinFirmwareReport`) が送った端末の id (キオスクの鍵、無ければ運行管理者席の鍵の
@@ -11,12 +11,32 @@
  * (どちらも無い画面では名前の API を叩かない。前に失敗していれば読み直す — `loadDeviceNames`)。
  */
 import { reportedCoreS3DeviceId, reportedVeinDeviceId } from '~/utils/reported-device-id'
+import { shortDeviceId } from '~/utils/short-device-id'
 import { veinDeviceLabel } from '~/utils/vein-device-label'
 
-/** 指静脈端末と CoreS3 の名前を 1 行にする。どちらも無ければ null (項目ごと出さない) */
-export function badgeDeviceText(veinName: string | null, coreS3Name: string | null): string | null {
-  const names = [veinName, coreS3Name].filter((n): n is string => !!n)
-  return names.length > 0 ? names.join(' / ') : null
+/** 版の表示に出す機体 1 台 (名前と id) */
+export interface BadgeDevice {
+  name: string
+  id: string
+}
+
+/** 版の表示の「端末: …」の中身。`text` は id を短縮した表示、`title` は id の全文 (ホバー) */
+export interface BadgeDeviceText {
+  text: string
+  title: string
+}
+
+/**
+ * 指静脈端末と CoreS3 を 1 行にする (各名前の後ろに id を括弧で。短縮は「端末のファーム」一覧と同じ
+ * `shortDeviceId`)。どちらも無ければ null (項目ごと出さない)
+ */
+export function badgeDeviceText(vein: BadgeDevice | null, coreS3: BadgeDevice | null): BadgeDeviceText | null {
+  const devices = [vein, coreS3].filter((d): d is BadgeDevice => !!d)
+  if (devices.length === 0) return null
+  return {
+    text: devices.map(d => `${d.name} (${shortDeviceId(d.id)})`).join(' / '),
+    title: devices.map(d => `${d.name} (${d.id})`).join(' / '),
+  }
 }
 
 export function useBadgeDeviceName() {
@@ -39,8 +59,8 @@ export function useBadgeDeviceName() {
     const v = veinId.value
     const c = coreS3Id.value
     return badgeDeviceText(
-      v ? veinDeviceLabel(v, n.keyLabelOf(v)) : null,
-      c ? n.nameOf(c) : null,
+      v ? { name: veinDeviceLabel(v, n.keyLabelOf(v)), id: v } : null,
+      c ? { name: n.nameOf(c), id: c } : null,
     )
   })
 }

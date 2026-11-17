@@ -28,10 +28,23 @@ beforeEach(() => {
 })
 
 describe('badgeDeviceText', () => {
-  it('両方なら「指静脈 / CoreS3」、片方ならそれだけ、どちらも無ければ null', () => {
-    expect(badgeDeviceText('vein-a', 'cores3-b')).toBe('vein-a / cores3-b')
-    expect(badgeDeviceText('vein-a', null)).toBe('vein-a')
-    expect(badgeDeviceText(null, 'cores3-b')).toBe('cores3-b')
+  const vein = { name: 'vein-a', id: 'alarm-0123456789abcdef' }
+  const coreS3 = { name: 'cores3-b', id: 'cores3-test' }
+
+  it('名前の後ろに id の短縮形を括弧で付け、title には id の全文を入れる', () => {
+    expect(badgeDeviceText(vein, null)).toEqual({
+      text: 'vein-a (alarm-012345…)',
+      title: 'vein-a (alarm-0123456789abcdef)',
+    })
+    // 12 文字以下の id は省略しない
+    expect(badgeDeviceText(null, coreS3)).toEqual({ text: 'cores3-b (cores3-test)', title: 'cores3-b (cores3-test)' })
+  })
+
+  it('両方なら「指静脈 / CoreS3」で各名前の後ろに付け、どちらも無ければ null', () => {
+    expect(badgeDeviceText(vein, coreS3)).toEqual({
+      text: 'vein-a (alarm-012345…) / cores3-b (cores3-test)',
+      title: 'vein-a (alarm-0123456789abcdef) / cores3-b (cores3-test)',
+    })
     expect(badgeDeviceText(null, null)).toBeNull()
   })
 })
@@ -48,7 +61,7 @@ describe('useBadgeDeviceName', () => {
     ids.vein.value = VEIN_ID
     const text = useBadgeDeviceName()
     await flushPromises()
-    expect(text.value).toBe('vein-事務所')
+    expect(text.value?.text).toBe('vein-事務所 (alarm-012345…)')
   })
 
   it('指静脈端末: 鍵のラベルが無ければ Vein Station <指紋 8 字>', async () => {
@@ -56,28 +69,29 @@ describe('useBadgeDeviceName', () => {
     ids.vein.value = VEIN_ID
     const text = useBadgeDeviceName()
     await flushPromises()
-    expect(text.value).toBe('Vein Station 01234567')
+    expect(text.value?.text).toBe('Vein Station 01234567 (alarm-012345…)')
   })
 
   it('CoreS3 だけ: 端末の表示名を出す', async () => {
     ids.coreS3.value = 'cores3-test'
     const text = useBadgeDeviceName()
     await flushPromises()
-    expect(text.value).toBe('事務所の CoreS3 (鍵の ID 未登録)')
+    expect(text.value?.text).toBe('事務所の CoreS3 (鍵の ID 未登録) (cores3-test)')
   })
 
   it('両方: 「指静脈 / CoreS3」。後から繋がった機体も足し、外れたら消える', async () => {
     ids.vein.value = VEIN_ID
     const text = useBadgeDeviceName()
     await flushPromises()
-    expect(text.value).toBe('vein-事務所')
+    expect(text.value?.text).toBe('vein-事務所 (alarm-012345…)')
     ids.coreS3.value = 'cores3-test'
     await nextTick()
     await flushPromises()
-    expect(text.value).toBe('vein-事務所 / 事務所の CoreS3 (鍵の ID 未登録)')
+    expect(text.value?.text).toBe('vein-事務所 (alarm-012345…) / 事務所の CoreS3 (鍵の ID 未登録) (cores3-test)')
+    expect(text.value?.title).toBe('vein-事務所 (alarm-0123456789abcdef) / 事務所の CoreS3 (鍵の ID 未登録) (cores3-test)')
     ids.vein.value = null
     await nextTick()
-    expect(text.value).toBe('事務所の CoreS3 (鍵の ID 未登録)')
+    expect(text.value?.text).toBe('事務所の CoreS3 (鍵の ID 未登録) (cores3-test)')
     ids.coreS3.value = null
     await nextTick()
     expect(text.value).toBeNull()
@@ -89,13 +103,13 @@ describe('useBadgeDeviceName', () => {
     ids.vein.value = VEIN_ID
     const text = useBadgeDeviceName()
     await flushPromises()
-    expect(text.value).toBe('Vein Station 01234567')
+    expect(text.value?.text).toBe('Vein Station 01234567 (alarm-012345…)')
     api.listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0123456789abcdef', label: 'vein-事務所' }] })
     api.listDeviceLabels.mockResolvedValue({ devices: [] })
     ids.coreS3.value = 'cores3-test'
     await nextTick()
     await flushPromises()
     expect(api.listCamHostKeys).toHaveBeenCalledTimes(2)
-    expect(text.value).toBe('vein-事務所 / 名前未登録の端末')
+    expect(text.value?.text).toBe('vein-事務所 (alarm-012345…) / 名前未登録の端末 (cores3-test)')
   })
 })
