@@ -2826,6 +2826,13 @@ describe.skipIf(isLive)('ファームの更新 (#403)', () => {
     expect(h.get('Content-Type')).toBe('application/json')
   })
 
+  it('★ reportFirmware: 運行管理者席 (manager-device) は席の鍵で送る (Refs ippoan/alc-app-s3#352)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt', async () => 'seat-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ ok: true }))
+    await reportFirmware({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', phase: 'idle' }, 'manager-device')
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer seat-jwt')
+  })
+
   it('reportFirmware: 端末の token が取れなければ (getter 無し / null) fetch せずに throw', async () => {
     initApi(API_BASE, () => 'admin-jwt', () => 'tid')
     await expect(reportFirmware({ device_id: 'd1', kind: 'cores3', phase: 'idle' })).rejects.toThrow('端末の登録が必要です')

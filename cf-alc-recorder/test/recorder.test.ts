@@ -1684,6 +1684,37 @@ describe("serial-ota の合図: 端末の指定", () => {
     expect(kiosk.pending()).toBe(0);
   });
 
+  it("★ 指静脈端末 (timecard-station) を 1 台指定した合図だけ運行管理者席にも届く。一斉配信と cores3 は席に届かない (Refs ippoan/alc-app-s3#352)", async () => {
+    const { ws: kioskWs } = await connectWatcher("kiosk-token-ota-5");
+    expect(kioskWs).not.toBeNull();
+    openSockets.push(kioskWs!);
+    const kiosk = messageQueue(kioskWs!);
+    const { ws: seatWs } = await connectWatcher("manager-seat-token-ota-5");
+    expect(seatWs).not.toBeNull();
+    openSockets.push(seatWs!);
+    const seat = messageQueue(seatWs!);
+
+    // 1 台指定の timecard-station: キオスクと席の両方へ同じ合図
+    const toOne = await serialOtaViaHttp("tenant-ota-5", { target: "timecard-station", device_id: "alarm-0123456789abcdef" });
+    expect(toOne.status).toBe(200);
+    expect(await toOne.json()).toEqual({ sent: 2 });
+    const expected = { type: "serial_ota", target: "timecard-station", device_id: "alarm-0123456789abcdef" };
+    expect(await kiosk.next()).toStrictEqual(expected);
+    expect(await seat.next()).toStrictEqual(expected);
+
+    // device_id 無しの一斉配信と cores3 (device_id 付きでも) はキオスクだけ
+    const all = await serialOtaViaHttp("tenant-ota-5", { target: "timecard-station" });
+    expect(await all.json()).toEqual({ sent: 1 });
+    expect(await kiosk.next()).toStrictEqual({ type: "serial_ota", target: "timecard-station" });
+    const hub = await serialOtaViaHttp("tenant-ota-5", { target: "cores3", device_id: "hub_A-01" });
+    expect(await hub.json()).toEqual({ sent: 1 });
+    expect(await kiosk.next()).toStrictEqual({ type: "serial_ota", target: "cores3", device_id: "hub_A-01" });
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seat.pending()).toBe(0);
+    expect(kiosk.pending()).toBe(0);
+  });
+
   it("isOtaDeviceId は英数字・`-`・`_` の 1〜64 文字だけを通す", () => {
     expect(isOtaDeviceId("hub_A-01")).toBe(true);
     expect(isOtaDeviceId("a")).toBe(true);
@@ -2681,7 +2712,7 @@ describe("kiosk-command の命令・返事", () => {
     expect((await kioskCommandViaHttp("tenant-vein", { device_id: "k", op: "hello" }, null)).status).toBe(401);
   });
 
-  it("★ 運行管理者席の購読は命令だけを受け、シリアル OTA と対応表の合図は受けない", async () => {
+  it("★ 運行管理者席の購読は命令だけを受け、対応表の合図は受けない (シリアル OTA は 1 台指定の指静脈端末だけ。下の serial-ota の describe)", async () => {
     const { ws } = await connectWatcher("manager-seat-token");
     expect(ws).not.toBeNull();
     openSockets.push(ws!);

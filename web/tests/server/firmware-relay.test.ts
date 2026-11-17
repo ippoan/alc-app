@@ -10,6 +10,7 @@ import {
   isFirmwareKind,
   decideFirmwareAdminAccess,
   decideFirmwareReportAccess,
+  VEIN_FIRMWARE_REPORT_ROLES,
   isFirmwareDeviceId,
   loadDeviceLabels,
   loadDeviceLabelRows,
@@ -49,6 +50,18 @@ describe('decideFirmwareReportAccess (報告 = キオスクの端末の token �
     expect(decideFirmwareReportAccess({ active: true, role: 'device-kiosk' })).toEqual(denied)
     expect(decideFirmwareReportAccess({ active: true, tenant_id: '', role: 'device-kiosk' })).toEqual(denied)
     expect(decideFirmwareReportAccess({})).toEqual(denied)
+  })
+})
+
+describe('VEIN_FIRMWARE_REPORT_ROLES (指静脈端末の報告は運行管理者席も、Refs ippoan/alc-app-s3#352)', () => {
+  it('★ 渡すとキオスクと運行管理者席の token が ok。ほかの端末・利用者は 403。既定 (渡さない) は席を通さない', () => {
+    for (const role of ['device-kiosk', 'device-tenko-manager']) {
+      expect(decideFirmwareReportAccess({ active: true, tenant_id: 't1', role }, VEIN_FIRMWARE_REPORT_ROLES)).toEqual({ ok: true, tenantId: 't1' })
+    }
+    for (const role of ['device-hub', 'admin', 'device-bp-station', undefined]) {
+      expect(decideFirmwareReportAccess({ active: true, tenant_id: 't1', role }, VEIN_FIRMWARE_REPORT_ROLES)).toMatchObject({ ok: false, status: 403 })
+    }
+    expect(decideFirmwareReportAccess({ active: true, tenant_id: 't1', role: 'device-tenko-manager' })).toMatchObject({ ok: false, status: 403 })
   })
 })
 

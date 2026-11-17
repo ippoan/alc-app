@@ -190,6 +190,10 @@ const vein = useVeinEmployeeIdentify({
   },
 })
 
+// 照合・指の追加・登録し直しの間は「機体を使用中」と申告する — 指静脈端末のファームの更新を
+// その間は始めない (運行管理者席の 1 台指定の更新。Refs ippoan/alc-app-s3#352)
+useKioskScreen().declareDeviceBusy(() => vein.busy.value || fingerAdd.adding.value || refresh.adding.value)
+
 // 手動入力
 async function onManualSubmit() {
   const input = manualIdInput.value.trim()

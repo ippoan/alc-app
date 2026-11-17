@@ -46,17 +46,27 @@ export type FirmwareAccess =
   | { ok: false, status: 401 | 403, message: string }
 
 /**
- * 報告を送ってよいか (pure)。**キオスクの端末の token だけ。**
+ * 指静脈端末 (kind `timecard`) の版を報告してよい端末の role (Refs ippoan/alc-app-s3#352)。
+ * キオスクの鍵に加えて、**運行管理者席の鍵** (`device-tenko-manager`。席の Vein Base は
+ * 「運行管理者席」の用途で登録され、キオスクの鍵は取れない) も通す。CoreS3 の報告はキオスクだけ
+ */
+export const VEIN_FIRMWARE_REPORT_ROLES: ReadonlySet<string> = new Set([...PUNCH_DEVICE_ROLES, 'device-tenko-manager'])
+
+/**
+ * 報告を送ってよいか (pure)。**端末の token だけ** — 既定はキオスクの端末 (`roles` で広げる)。
  *
  * 利用者の token (admin / member / viewer) を通さないのは、報告が「この端末に
  * 繋がっている機体の状態」で、利用者の画面からは作れないものだから
  * (`decideTimecardPunchAccess` は利用者を通すので流用しない)。
  */
-export function decideFirmwareReportAccess(claims: IntrospectClaims): FirmwareAccess {
+export function decideFirmwareReportAccess(
+  claims: IntrospectClaims,
+  roles: ReadonlySet<string> = PUNCH_DEVICE_ROLES,
+): FirmwareAccess {
   if (!claims.active || !claims.tenant_id) {
     return { ok: false, status: 401, message: 'token が無効です' }
   }
-  if (typeof claims.role !== 'string' || !PUNCH_DEVICE_ROLES.has(claims.role)) {
+  if (typeof claims.role !== 'string' || !roles.has(claims.role)) {
     return { ok: false, status: 403, message: 'この端末からは報告できません' }
   }
   return { ok: true, tenantId: claims.tenant_id }
