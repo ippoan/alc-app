@@ -13,6 +13,12 @@
  *   送る値は宛先の見分け ({@link useVeinFirmwareReport} の `deviceId`) と同じになる
  * - 版と flavor は接続時の名乗り (`useVeinSerial().deviceInfo`)
  *
+ * **運行管理者席の Vein Base も報告する** (Refs ippoan/alc-app-s3#352)。席の Vein は「運行管理者席」の用途で
+ * 登録され (1 つの鍵は 1 つの用途だけ)、キオスクの鍵は取れない。キオスクの鍵が取れなかったときだけ席の鍵
+ * (`useManagerDeviceToken`) で取り、`scope: 'manager-device'` で送る。同じ機体で両方が取れることは無いので、
+ * 同じ機体を 2 つの id で報告することは無い。席に VoiceS3R も繋がっていれば席の鍵は VoiceS3R の鍵で、id は
+ * その鍵の id になる — 合図の受け (`ManagerSeatRemoteHost`) も同じ getter で自分の id を作るので食い違わない。
+ *
  * **ここは機体に何も送らない** (署名の要求は端末の token の取得が持つ)。
  */
 
@@ -32,6 +38,7 @@ let stopWatch: (() => void) | null = null
 export function useVeinFirmwareReport() {
   const vein = useVeinSerial()
   const { getDeviceJwt } = useDeviceToken()
+  const { getManagerJwt } = useManagerDeviceToken()
 
   /**
    * 報告を 1 回送る。未接続・端末の token が取れないブラウザでは何もしない。
@@ -40,7 +47,8 @@ export function useVeinFirmwareReport() {
   async function report(phase: FirmwarePhase, extra: FirmwareReportExtra = {}): Promise<void> {
     if (!vein.isConnected.value) return
     try {
-      const id = kioskDeviceIdFromJwt(await getDeviceJwt())
+      const kioskId = kioskDeviceIdFromJwt(await getDeviceJwt())
+      const id = kioskId ?? kioskDeviceIdFromJwt(await getManagerJwt())
       if (id === null) return
       deviceId.value = id
       const info = vein.deviceInfo.value
@@ -52,7 +60,7 @@ export function useVeinFirmwareReport() {
         ...(info?.ver ? { version: info.ver } : {}),
         phase,
         ...extra,
-      })
+      }, kioskId ? 'default' : 'manager-device')
     }
     catch (e) {
       console.warn('[firmware] 指静脈端末の報告を送れませんでした:', e)

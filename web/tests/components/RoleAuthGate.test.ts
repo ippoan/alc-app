@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { resetReloadContext, useKioskScreen } from '~/composables/useKioskScreen'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
 
 // 運行管理者の入口は顔認証が必須。顔が未登録でもスキップは認めない
@@ -603,5 +604,26 @@ describe('RoleAuthGate — NFC ではログインせず、この端末の指を�
     expect(admin.findComponent({ name: 'FaceAuth' }).exists()).toBe(true)
     expect(admin.find('[data-testid="vein-add-device-card"]').exists()).toBe(false)
     admin.unmount()
+  })
+})
+
+describe('RoleAuthGate — 照合・指の追加の間は「機体を使用中」と申告する (Refs ippoan/alc-app-s3#352)', () => {
+  beforeEach(() => {
+    resetReloadContext()
+    addState.adding.value = false
+  })
+
+  it('★ 指静脈の照合中・この端末の指の追加中だけ isDeviceBusy が真 (ファームの更新を待たせる)', async () => {
+    const wrapper = await mountGate('manager')
+    const { isDeviceBusy } = useKioskScreen()
+    expect(isDeviceBusy.value).toBe(false)
+    veinState.busy.value = true
+    expect(isDeviceBusy.value).toBe(true)
+    veinState.busy.value = false
+    addState.adding.value = true
+    expect(isDeviceBusy.value).toBe(true)
+    addState.adding.value = false
+    expect(isDeviceBusy.value).toBe(false)
+    wrapper.unmount()
   })
 })

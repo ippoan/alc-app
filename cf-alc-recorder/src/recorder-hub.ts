@@ -177,6 +177,12 @@ const KIOSK_TAG = "watch:kiosk";
  */
 const MANAGER_SEAT_TAG = "watch:manager-seat";
 
+/**
+ * 運行管理者席の購読にも届けるシリアル OTA の合図の target (Refs ippoan/alc-app-s3#352)。
+ * **`device_id` 付きのときだけ** — 席の Vein Base を管理者の一覧から 1 台指定で更新する。
+ */
+const SEAT_SERIAL_OTA_TARGET = "timecard-station";
+
 /** ファームの配信の合図の購読 (`/watch-firmware`) だけの tag。テナントに依らない部屋の DO で使う */
 const FIRMWARE_TAG = "watch:firmware";
 
@@ -638,6 +644,11 @@ export class RecorderHub extends DurableObject<Env> {
    * 載せる。**宛先はここでは絞らない** — 購読の attachment は端末を持たないので、
    * キオスクの側が「自分に繋がっている端末か」を見て実行する。`device_id` が無い
    * 合図は今までどおりの形で、key ごと足さない。
+   *
+   * **指静脈端末 (`timecard-station`) を 1 台指定した合図だけは `MANAGER_SEAT_TAG` にも送る**
+   * (Refs ippoan/alc-app-s3#352)。運行管理者席に繋がる Vein Base も管理者の一覧から 1 台ずつ
+   * 更新するため。席の側も `device_id` が自分の端末と一致したときだけ実行する。
+   * `device_id` の無い一斉配信と `cores3` は今までどおりキオスクだけ。
    */
   private async handleSerialOta(request: Request): Promise<Response> {
     let body: { target?: unknown; device_id?: unknown } = {};
@@ -649,7 +660,11 @@ export class RecorderHub extends DurableObject<Env> {
     }
     const target = typeof body.target === "string" ? body.target : "";
     const deviceId = body.device_id;
-    const sockets = this.ctx.getWebSockets(KIOSK_TAG);
+    const toSeats = target === SEAT_SERIAL_OTA_TARGET && isOtaDeviceId(deviceId);
+    const sockets = [
+      ...this.ctx.getWebSockets(KIOSK_TAG),
+      ...(toSeats ? this.ctx.getWebSockets(MANAGER_SEAT_TAG) : []),
+    ];
     for (const ws of sockets) {
       this.send(ws, {
         type: "serial_ota",

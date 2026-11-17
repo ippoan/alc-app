@@ -3,7 +3,8 @@
  * (Refs ippoan/alc-app#403, ippoan/alc-app-s3#352)。
  *
  * 経路: キオスク (端末の token を Bearer + 報告の object)
- *   → 本 route: introspect → **role が `device-kiosk` の token だけ**通す
+ *   → 本 route: introspect → **端末の token だけ**通す。`cores3` はキオスク (`device-kiosk`) だけ、
+ *     `timecard` (指静脈端末) は運行管理者席 (`device-tenko-manager`) も (Refs ippoan/alc-app-s3#352)
  *   → `kind` で端末の id の決め方が分かれる:
  *     - `cores3` … body の `device_id` (機体の `AUTH STATUS`) を auth-worker の登録簿と照合
  *       (このテナントの未失効の端末か)
@@ -27,6 +28,7 @@ import {
   buildOtaReportForward,
   decideFirmwareReportAccess,
   deviceIdFromTokenSub,
+  VEIN_FIRMWARE_REPORT_ROLES,
   isFirmwareDeviceId,
   loadDeviceLabels,
 } from '../../utils/firmware-relay'
@@ -34,7 +36,8 @@ import { introspectCaller } from '../../utils/introspect-route'
 
 export default defineEventHandler(async (event) => {
   const { claims, sharedSecret, authWorker, recorder } = await introspectCaller(event)
-  const access = decideFirmwareReportAccess(claims)
+  // 席の token も一旦通し、CoreS3 の報告では下でキオスクの token か見直す
+  const access = decideFirmwareReportAccess(claims, VEIN_FIRMWARE_REPORT_ROLES)
   if (!access.ok) {
     throw createError({ statusCode: access.status, statusMessage: access.message })
   }
@@ -53,6 +56,11 @@ export default defineEventHandler(async (event) => {
     forwarded = { ...report, device_id: deviceId }
   }
   else if (report.kind === 'cores3') {
+    // CoreS3 はキオスクに繋がる機体。席の token からは受けない
+    const kioskOnly = decideFirmwareReportAccess(claims)
+    if (!kioskOnly.ok) {
+      throw createError({ statusCode: kioskOnly.status, statusMessage: kioskOnly.message })
+    }
     const deviceId = report.device_id
     if (!isFirmwareDeviceId(deviceId)) {
       throw createError({ statusCode: 400, statusMessage: 'device_id がありません' })

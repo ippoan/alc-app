@@ -24,6 +24,12 @@ const deviceToken = vi.hoisted(() => ({
 }))
 mockNuxtImport('useDeviceToken', () => () => deviceToken)
 
+/** 運行管理者席の鍵 (useManagerDeviceToken。Refs ippoan/alc-app-s3#352) */
+const managerToken = vi.hoisted(() => ({
+  getManagerJwt: null as unknown as ReturnType<typeof vi.fn>,
+}))
+mockNuxtImport('useManagerDeviceToken', () => () => managerToken)
+
 const reportFirmware = vi.hoisted(() => vi.fn())
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
@@ -56,6 +62,7 @@ describe('useVeinFirmwareReport', () => {
     vein.isConnected = ref(false)
     vein.deviceInfo = ref(null)
     deviceToken.getDeviceJwt = vi.fn(async () => jwtWithSub('alarm:0123456789abcdef'))
+    managerToken.getManagerJwt = vi.fn(async () => null)
     reportFirmware.mockReset()
     reportFirmware.mockResolvedValue(undefined)
     warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -82,8 +89,10 @@ describe('useVeinFirmwareReport', () => {
       flavor: 'timecard-vein',
       version: '0.6.0+abc1234',
       phase: 'idle',
-    })
+    }, 'default')
     expect(fw.deviceId.value).toBe('alarm-0123456789abcdef')
+    // キオスクの鍵が取れたら席の鍵は取りに行かない
+    expect(managerToken.getManagerJwt).not.toHaveBeenCalled()
   })
 
   it('5 分ごとに idle を送り直し、stop で止まる。二重の start は 1 回分', async () => {
@@ -119,13 +128,41 @@ describe('useVeinFirmwareReport', () => {
     expect(phases()).toEqual(['idle', 'writing', 'done', 'idle'])
   })
 
+  it('★ 運行管理者席: キオスクの鍵が取れなければ席の鍵で取り、その id で scope manager-device で送る (Refs ippoan/alc-app-s3#352)', async () => {
+    deviceToken.getDeviceJwt.mockResolvedValue(null)
+    managerToken.getManagerJwt.mockResolvedValue(jwtWithSub('alarm:fedcba9876543210'))
+    vein.isConnected.value = true
+    vein.deviceInfo.value = INFO
+    await fw.report('idle')
+    expect(reportFirmware).toHaveBeenCalledWith({
+      device_id: 'alarm-fedcba9876543210',
+      kind: 'timecard',
+      flavor: 'timecard-vein',
+      version: '0.6.0+abc1234',
+      phase: 'idle',
+    }, 'manager-device')
+    expect(fw.deviceId.value).toBe('alarm-fedcba9876543210')
+  })
+
+  it('★ 同じ機体でキオスクの鍵と席の鍵の両方が取れても、キオスクの鍵の 1 つだけで報告する (2 つの id で送らない)', async () => {
+    managerToken.getManagerJwt.mockResolvedValue(jwtWithSub('alarm:fedcba9876543210'))
+    vein.isConnected.value = true
+    await fw.report('idle')
+    expect(reportFirmware).toHaveBeenCalledTimes(1)
+    expect(reportFirmware.mock.calls[0]![0]).toMatchObject({ device_id: 'alarm-0123456789abcdef' })
+    expect(reportFirmware.mock.calls[0]![1]).toBe('default')
+    expect(managerToken.getManagerJwt).not.toHaveBeenCalled()
+  })
+
   it('未接続・端末の token が無い・id の取れない token では送らない', async () => {
     await fw.report('idle')
     vein.isConnected.value = true
     // composable は作った時点の getDeviceJwt を握るので、差し替えは同じ関数の実装で
+    // キオスクの鍵も席の鍵も取れない
     deviceToken.getDeviceJwt.mockResolvedValue(null)
     await fw.report('idle')
     deviceToken.getDeviceJwt.mockResolvedValue('not-a-jwt')
+    managerToken.getManagerJwt.mockResolvedValue('not-a-jwt')
     await fw.report('idle')
     expect(reportFirmware).not.toHaveBeenCalled()
   })
@@ -136,14 +173,14 @@ describe('useVeinFirmwareReport', () => {
     await fw.report('idle')
     expect(reportFirmware).toHaveBeenCalledWith({
       device_id: 'alarm-0123456789abcdef', kind: 'timecard', board: 'atoms3r', flavor: 'timecard-station', version: '0.6.0', phase: 'idle',
-    })
+    }, 'default')
   })
 
   it('名乗りに無い値は key ごと載せない', async () => {
     vein.isConnected.value = true
     vein.deviceInfo.value = { ver: null, board: null, flavor: null }
     await fw.report('idle')
-    expect(reportFirmware).toHaveBeenCalledWith({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', phase: 'idle' })
+    expect(reportFirmware).toHaveBeenCalledWith({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', phase: 'idle' }, 'default')
   })
 
   it('送信の失敗・token の取得の例外は握る (外へ出さない)', async () => {

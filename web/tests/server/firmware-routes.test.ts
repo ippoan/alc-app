@@ -309,6 +309,21 @@ describe('POST /api/firmware/report', () => {
     expect(recorderFetch).not.toHaveBeenCalled()
   })
 
+  it('★ kind: timecard は運行管理者席の鍵 (device-tenko-manager) でも通り、id は token の sub から (Refs ippoan/alc-app-s3#352)', async () => {
+    introspect = { claims: { active: true, tenant_id: 't1', role: 'device-tenko-manager', sub: 'alarm:fedcba9876543210' }, status: 200 }
+    body = { kind: 'timecard', phase: 'idle', flavor: 'timecard-vein' }
+    await report(reportEvent())
+    expect(JSON.parse(forwarded().body!)).toEqual({ device_id: 'alarm-fedcba9876543210', kind: 'timecard', phase: 'idle', flavor: 'timecard-vein' })
+    expect(labelsCalls()).toHaveLength(0)
+  })
+
+  it('★ 運行管理者席の鍵では cores3 の報告は 403 (CoreS3 はキオスクの機体)。登録簿も recorder も呼ばない', async () => {
+    introspect = { claims: { active: true, tenant_id: 't1', role: 'device-tenko-manager', sub: 'alarm:fedcba9876543210' }, status: 200 }
+    await expect(report(reportEvent())).rejects.toMatchObject({ statusCode: 403, statusMessage: 'この端末からは報告できません' })
+    expect(labelsCalls()).toHaveLength(0)
+    expect(recorderFetch).not.toHaveBeenCalled()
+  })
+
   it('★ kind: timecard も利用者の token は 403 (端末の token だけ)', async () => {
     introspect = { claims: ADMIN_CLAIMS, status: 200 }
     body = { kind: 'timecard', phase: 'idle' }

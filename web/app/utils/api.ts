@@ -1512,8 +1512,12 @@ export async function updateFirmware(deviceId: string): Promise<{ sent: number }
  * **キオスクの端末の token だけで送る** (`selectSendToken` を通さない)。利用者が
  * ログインしていると利用者の token が選ばれることがあり、route はそれを 403 にする。
  */
-export async function reportFirmware(report: FirmwareReport): Promise<void> {
-  const jwt = await getKioskDeviceJwt?.()
+export async function reportFirmware(
+  report: FirmwareReport,
+  scope: 'default' | 'manager-device' = 'default',
+): Promise<void> {
+  // 運行管理者席の Vein Base は席の鍵で送る (Refs ippoan/alc-app-s3#352。route は timecard だけ席を通す)
+  const jwt = await (scope === 'manager-device' ? getManagerDeviceJwt : getKioskDeviceJwt)?.()
   if (!jwt) throw new Error('端末の登録が必要です')
   await bearerRequest<unknown>('/api/firmware/report', jwt, {
     method: 'POST',

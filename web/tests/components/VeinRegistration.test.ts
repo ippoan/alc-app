@@ -6,6 +6,7 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import VeinRegistration from '~/components/VeinRegistration.vue'
 import { BP_STATION_DEVICE_AUTH_FAILED_MESSAGE } from '~/utils/api'
 import { employeeNotFoundByCode, employeeNotFoundByNfc } from '~/utils/employee-lookup-messages'
+import { resetReloadContext, useKioskScreen } from '~/composables/useKioskScreen'
 
 /**
  * 血圧測定タブの指静脈登録 (Refs ippoan/vein-match#20)。
@@ -129,6 +130,22 @@ describe('VeinRegistration (Refs ippoan/vein-match#20)', () => {
     expect(wrapper.text()).toContain('管理者の承認後に使えます')
     await button(wrapper, '次の人へ').trigger('click')
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+  })
+
+  it('★ 読み取り中だけ「機体を使用中」と申告する (指静脈端末のファームの更新を待たせる。Refs ippoan/alc-app-s3#352)', async () => {
+    resetReloadContext()
+    let release!: (v: string) => void
+    veinCapture.mockImplementationOnce(() => new Promise<string>((r) => { release = r }))
+    const wrapper = await mountVein()
+    const { isDeviceBusy } = useKioskScreen()
+    await tapCard(wrapper)
+    expect(isDeviceBusy.value).toBe(false)
+    await button(wrapper, '指静脈を登録').trigger('click')
+    await flushPromises()
+    expect(isDeviceBusy.value).toBe(true)
+    release('HEX-FIRST')
+    wrapper.unmount()
+    expect(isDeviceBusy.value).toBe(false)
   })
 
   it('読み取り中は「読み取り中」を出し、戻るボタンを隠す', async () => {

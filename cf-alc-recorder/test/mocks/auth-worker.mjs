@@ -185,6 +185,24 @@ const TOKENS = {
     exp: 9999999999,
     dev_device: "true",
   },
+  // 端末を指定した合図が運行管理者席にも届くか (Refs ippoan/alc-app-s3#352) 専用。
+  // 席とキオスクの購読の数を数えるので、他 test の購読を混ぜない別テナント。
+  "kiosk-token-ota-5": {
+    active: true,
+    tenant_id: "tenant-ota-5",
+    role: "device-kiosk",
+    sub: "device-kiosk-ota-5",
+    email: "",
+    exp: 9999999999,
+  },
+  "manager-seat-token-ota-5": {
+    active: true,
+    tenant_id: "tenant-ota-5",
+    role: "device-tenko-manager",
+    sub: "alarm:seat-ota-5",
+    email: "",
+    exp: 9999999999,
+  },
   // 運行管理者席の鍵 (POST /device-log で席の Vein Base の行を上げる)
   "manager-seat-token": {
     active: true,
