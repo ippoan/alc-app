@@ -66,6 +66,7 @@ import {
   listFirmwareDevices,
   listCamHostKeys,
   listDeviceLabels,
+  renameDevice,
   updateFirmware,
   listVeinFleet,
   getPendingVeinModuleTemplates,
@@ -2778,6 +2779,34 @@ describe.skipIf(isLive)('ファームの更新 (#403)', () => {
     initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
     await expect(listDeviceLabels()).rejects.toThrow('ログインが必要です')
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('renameDevice: admin JWT で /api/device-labels/rename に {device_id, label} を POST。JWT が無ければ fetch せずに throw (Refs ippoan/alc-app-s3#352)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    const payload = { ok: true, device_id: 'alarm-0123456789abcdef', label: '事務所' }
+    mockFetch.mockResolvedValueOnce(okJson(payload))
+    expect(await renameDevice('alarm-0123456789abcdef', '事務所')).toEqual(payload)
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/device-labels/rename')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe('{"device_id":"alarm-0123456789abcdef","label":"事務所"}')
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer admin-jwt')
+    expect(h.get('Content-Type')).toBe('application/json')
+
+    mockFetch.mockReset()
+    initApi(API_BASE, () => null, () => 'tid', undefined, async () => 'kiosk-jwt')
+    await expect(renameDevice('d1', 'x')).rejects.toThrow('ログインが必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('renameDevice: route の 409 は status と本文の error 付きで throw', async () => {
+    initApi(API_BASE, () => 'admin-jwt')
+    mockFetch.mockResolvedValueOnce(errResponse(409, '{"error":"duplicate_label"}'))
+    await expect(renameDevice('d1', '事務所')).rejects.toMatchObject({
+      message: 'API エラー (409): {"error":"duplicate_label"}',
+      status: 409,
+    })
   })
 
   it('updateFirmware: admin JWT で /api/firmware/update に {device_id} だけを POST', async () => {

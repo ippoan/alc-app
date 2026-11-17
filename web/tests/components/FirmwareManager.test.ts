@@ -11,9 +11,10 @@ import { resetDeviceNames } from '~/composables/useDeviceNames'
 // 管理者の画面のタブ「端末のファーム」(Refs ippoan/alc-app#403)。
 // api の 2 関数は mock、manifest の fetch と confirm は stubGlobal。
 
-const { listFirmwareDevices, updateFirmware, listCamHostKeys, listDeviceLabels } = vi.hoisted(() => ({
+const { listFirmwareDevices, updateFirmware, renameDevice, listCamHostKeys, listDeviceLabels } = vi.hoisted(() => ({
   listFirmwareDevices: vi.fn(),
   updateFirmware: vi.fn(),
+  renameDevice: vi.fn(),
   listCamHostKeys: vi.fn(),
   listDeviceLabels: vi.fn(),
 }))
@@ -21,6 +22,7 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   listFirmwareDevices,
   updateFirmware,
+  renameDevice,
   listCamHostKeys,
   listDeviceLabels,
   getBpNotifySettings: vi.fn(async () => ({ employees: [] })),
@@ -78,7 +80,9 @@ async function mountManager(devices: FirmwareDevice[] = [dev()]) {
 }
 
 const rows = (w: Awaited<ReturnType<typeof mountManager>>) => w.findAll('[data-testid="firmware-row"]')
-const col = (row: ReturnType<ReturnType<typeof rows>['at']>, name: string) => row!.find(`[data-col="${name}"]`).text()
+// 端末名の欄は「名前を変える」ボタンも持つので、名前の部分だけを読む
+const col = (row: ReturnType<ReturnType<typeof rows>['at']>, name: string) =>
+  (name === 'name' ? row!.find('[data-testid="firmware-name"]') : row!.find(`[data-col="${name}"]`)).text()
 const button = (row: ReturnType<ReturnType<typeof rows>['at']>) => row!.find('[data-testid="firmware-update"]')
 
 describe('FirmwareManager', () => {
@@ -420,6 +424,105 @@ describe('FirmwareManager', () => {
       expect(notice(wrapper).exists()).toBe(true)
       await vi.advanceTimersByTimeAsync(4_000)
       expect(notice(wrapper).exists()).toBe(false)
+      wrapper.unmount()
+    })
+  })
+
+  describe('「名前を変える」(Refs ippoan/alc-app-s3#352)', () => {
+    const q = (row: ReturnType<ReturnType<typeof rows>['at']>, id: string) => row!.find(`[data-testid="${id}"]`)
+
+    it('★ 押すとその行だけ入力になり、今の名前が入る。保存で renameDevice → 名前の表と一覧を引き直す', async () => {
+      renameDevice.mockResolvedValue({ ok: true, device_id: 'a1', label: '倉庫' })
+      const wrapper = await mountManager([dev({ device_id: 'a1', label: 'ロビー' }), dev({ device_id: 'a2', label: '事務所' })])
+      await q(rows(wrapper)[0], 'firmware-rename').trigger('click')
+      expect(q(rows(wrapper)[0], 'firmware-rename-form').exists()).toBe(true)
+      expect(q(rows(wrapper)[1], 'firmware-rename-form').exists()).toBe(false)
+      const input = q(rows(wrapper)[0], 'firmware-rename-input')
+      expect((input.element as HTMLInputElement).value).toBe('ロビー')
+      await input.setValue('  倉庫 ')
+      const listCalls = listFirmwareDevices.mock.calls.length
+      const labelCalls = listDeviceLabels.mock.calls.length
+      listFirmwareDevices.mockResolvedValue({ devices: [dev({ device_id: 'a1', label: '倉庫' }), dev({ device_id: 'a2', label: '事務所' })] })
+      await q(rows(wrapper)[0], 'firmware-rename-form').trigger('submit')
+      await flush()
+      expect(renameDevice).toHaveBeenCalledWith('a1', '倉庫')
+      expect(listFirmwareDevices.mock.calls.length).toBe(listCalls + 1)
+      expect(listDeviceLabels.mock.calls.length).toBe(labelCalls + 1)
+      await wrapper.vm.$nextTick()
+      expect(q(rows(wrapper)[0], 'firmware-rename-form').exists()).toBe(false)
+      expect(col(rows(wrapper)[0], 'name')).toBe('倉庫')
+      wrapper.unmount()
+    })
+
+    it('鍵の端末 (alarm-) は鍵のラベルを「(失効)」抜きで入れる。名前が無ければ空', async () => {
+      listCamHostKeys.mockResolvedValue({ keys: [], names: [{ device_id: 'alarm:0123456789abcdef', label: '事務所の指静脈', revoked: true }] })
+      const wrapper = await mountManager([
+        dev({ device_id: 'alarm-0123456789abcdef', label: null, kind: 'timecard' }),
+        dev({ device_id: 'zzzzzzzz-1', label: null }),
+      ])
+      await q(rows(wrapper)[0], 'firmware-rename').trigger('click')
+      expect((q(rows(wrapper)[0], 'firmware-rename-input').element as HTMLInputElement).value).toBe('事務所の指静脈')
+      await q(rows(wrapper)[0], 'firmware-rename-cancel').trigger('click')
+      await q(rows(wrapper)[1], 'firmware-rename').trigger('click')
+      expect((q(rows(wrapper)[1], 'firmware-rename-input').element as HTMLInputElement).value).toBe('')
+      // 空のままでは保存できない (押しても送らない)
+      expect(q(rows(wrapper)[1], 'firmware-rename-save').attributes('disabled')).toBeDefined()
+      await q(rows(wrapper)[1], 'firmware-rename-form').trigger('submit')
+      expect(renameDevice).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('★ やめるで元の表示に戻り、送らない', async () => {
+      const wrapper = await mountManager([dev({ device_id: 'a1', label: 'ロビー' })])
+      await q(rows(wrapper)[0], 'firmware-rename').trigger('click')
+      await q(rows(wrapper)[0], 'firmware-rename-input').setValue('別の名前')
+      await q(rows(wrapper)[0], 'firmware-rename-cancel').trigger('click')
+      expect(q(rows(wrapper)[0], 'firmware-rename-form').exists()).toBe(false)
+      expect(col(rows(wrapper)[0], 'name')).toBe('ロビー')
+      expect(renameDevice).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('★ 保存中は二重に送らず、やめる・別の行の編集も効かない', async () => {
+      let resolve!: (v: unknown) => void
+      renameDevice.mockReturnValue(new Promise((r) => { resolve = r }))
+      const wrapper = await mountManager([dev({ device_id: 'a1', label: 'ロビー' }), dev({ device_id: 'a2', label: '事務所' })])
+      await q(rows(wrapper)[0], 'firmware-rename').trigger('click')
+      await q(rows(wrapper)[0], 'firmware-rename-input').setValue('倉庫')
+      await q(rows(wrapper)[0], 'firmware-rename-form').trigger('submit')
+      await q(rows(wrapper)[0], 'firmware-rename-form').trigger('submit')
+      expect(renameDevice).toHaveBeenCalledTimes(1)
+      expect(q(rows(wrapper)[0], 'firmware-rename-save').attributes('disabled')).toBeDefined()
+      await q(rows(wrapper)[0], 'firmware-rename-cancel').trigger('click')
+      expect(q(rows(wrapper)[0], 'firmware-rename-form').exists()).toBe(true)
+      // disabled を外して押されても編集を始めない
+      ;(wrapper.vm as unknown as { startRename(d: FirmwareDevice): void }).startRename(dev({ device_id: 'a2' }))
+      expect(q(rows(wrapper)[1], 'firmware-rename-form').exists()).toBe(false)
+      resolve({ ok: true, device_id: 'a1', label: '倉庫' })
+      await flush()
+      expect(renameDevice).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+    })
+
+    it.each([
+      ['duplicate_label の 409', Object.assign(new Error('API エラー (409): {"error":"duplicate_label"}'), { status: 409 }), '同じ名前の端末があります'],
+      ['revoked の 409', Object.assign(new Error('API エラー (409): {"error":"revoked"}'), { status: 409 }), '失効した端末は変えられません'],
+      ['確認用ログインの 403', Object.assign(new Error('API エラー (403): dev_token_write_forbidden'), { status: 403 }), '確認用のログインでは名前を変えられません'],
+      ['ほかの 409', Object.assign(new Error('API エラー (409): {"error":"conflict"}'), { status: 409 }), '名前を変えられませんでした'],
+      ['502', Object.assign(new Error('API エラー (502): x'), { status: 502 }), '名前を変えられませんでした'],
+      ['Error でない失敗', 'boom', '名前を変えられませんでした'],
+    ])('★ %s は行の下に文言を出し、入力は残す。やめるで消える', async (_name, err, text) => {
+      renameDevice.mockRejectedValue(err)
+      const wrapper = await mountManager([dev({ device_id: 'a1', label: 'ロビー' }), dev({ device_id: 'a2', label: '事務所' })])
+      await q(rows(wrapper)[0], 'firmware-rename').trigger('click')
+      await q(rows(wrapper)[0], 'firmware-rename-input').setValue('事務所')
+      await q(rows(wrapper)[0], 'firmware-rename-form').trigger('submit')
+      await flush()
+      expect(q(rows(wrapper)[0], 'firmware-rename-error').text()).toBe(text)
+      expect(q(rows(wrapper)[1], 'firmware-rename-error').exists()).toBe(false)
+      expect(q(rows(wrapper)[0], 'firmware-rename-form').exists()).toBe(true)
+      await q(rows(wrapper)[0], 'firmware-rename-cancel').trigger('click')
+      expect(q(rows(wrapper)[0], 'firmware-rename-error').exists()).toBe(false)
       wrapper.unmount()
     })
   })

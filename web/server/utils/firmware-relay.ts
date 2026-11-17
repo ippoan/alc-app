@@ -115,6 +115,47 @@ export function buildDeviceLabelsForward(input: { sharedSecret: string, tenantId
 }
 
 /**
+ * auth-worker の登録簿の名前を変える `POST /internal/device-labels/rename` への forward request を組む
+ * (Refs ippoan/alc-app-s3#352)。一覧と同じく shared secret の生の値で叩く。tenant は introspect の値。
+ */
+export function buildDeviceLabelRenameForward(input: { sharedSecret: string, tenantId: string, deviceId: string, label: string }): Forward {
+  return {
+    url: `${AUTH_WORKER_BASE}/internal/device-labels/rename`,
+    init: {
+      method: 'POST',
+      headers: { Authorization: input.sharedSecret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: input.tenantId, device_id: input.deviceId, label: input.label }),
+    },
+  }
+}
+
+/** 端末の名前の最大文字数 (auth-worker の検査と揃える) */
+export const DEVICE_LABEL_MAX = 64
+
+/**
+ * 端末の新しい名前 (pure): 前後の空白を落として 1〜{@link DEVICE_LABEL_MAX} 字。だめなら null。
+ * 字数は UTF-16 の長さで数える (入力欄の maxlength と同じ。code point で数える相手より緩くならない)。
+ */
+export function normalizeDeviceLabel(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const label = v.trim()
+  return label.length >= 1 && label.length <= DEVICE_LABEL_MAX ? label : null
+}
+
+/**
+ * 名前を変える相手を device_id から決める (pure)。
+ * - `alarm-<16 hex>` / `alarm:<16 hex>` … 機体の鍵 (指紋を返す)
+ * - `alarm-` / `alarm:` で始まるが指紋の形でない … null (400)
+ * - それ以外 … 登録簿の端末 (英数字 `-` `_` の 1〜64 字)。形が違えば null
+ */
+export function renameTargetOf(deviceId: unknown): { kind: 'key', fingerprint: string } | { kind: 'registry', deviceId: string } | null {
+  if (typeof deviceId !== 'string') return null
+  const m = /^alarm[-:](.*)$/.exec(deviceId)
+  if (m) return /^[0-9a-f]{16}$/.test(m[1]!) ? { kind: 'key', fingerprint: m[1]! } : null
+  return isFirmwareDeviceId(deviceId) ? { kind: 'registry', deviceId } : null
+}
+
+/**
  * 登録簿の応答 `{devices:[{device_id, label}]}` を `device_id → label` にする。
  * 形が違えば null (呼び元が「取れなかった」と区別できるように、空の Map にしない)。
  */

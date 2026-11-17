@@ -1494,6 +1494,20 @@ export async function listDeviceLabels(): Promise<{ devices: { device_id: string
 }
 
 /**
+ * 端末の名前を変える (Refs ippoan/alc-app-s3#352)。admin の token が要る。
+ * `alarm-<指紋>` の端末は鍵のラベル、それ以外は登録簿のラベルが変わる (振り分けは server route)。
+ * 409 (`duplicate_label` / `revoked`) は status 付きの Error で投げる (本文に `error` が入る)。
+ */
+export async function renameDevice(deviceId: string, label: string): Promise<{ ok: true, device_id: string, label: string }> {
+  const jwt = getAccessToken?.()
+  if (!jwt) throw new Error('ログインが必要です')
+  return bearerRequest<{ ok: true, device_id: string, label: string }>('/api/device-labels/rename', jwt, {
+    method: 'POST',
+    body: JSON.stringify({ device_id: deviceId, label }),
+  })
+}
+
+/**
  * 指定した 1 台を更新する合図を出す。admin の token が要る。
  * `sent` は合図を送ったキオスクの数 (0 でも成功 — 購読中のキオスクが居ないだけ)。
  */
