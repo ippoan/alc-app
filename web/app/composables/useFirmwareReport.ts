@@ -21,6 +21,7 @@
 
 import type { FirmwarePhase, FirmwareReport } from '~/utils/api'
 import { reportFirmware } from '~/utils/api'
+import { reportedCoreS3DeviceId } from '~/utils/reported-device-id'
 
 /** `idle` を送り直す周期 */
 export const FIRMWARE_REPORT_INTERVAL_MS = 5 * 60 * 1000
@@ -34,7 +35,8 @@ const DEVICE_ID_PATTERN = /^[\w-]{1,64}$/
 export type FirmwareReportExtra = Pick<FirmwareReport, 'pct' | 'reason' | 'target_version'>
 
 // シングルトン: 1 台の PC につながる CoreS3 は 1 台
-const deviceId = ref<string | null>(null)
+// 版の表示からも読む (`~/utils/reported-device-id`)
+const deviceId = reportedCoreS3DeviceId
 let timer: ReturnType<typeof setInterval> | null = null
 /** CoreS3 の onOpen / onClose は解除の口を持たないので、登録は起動から 1 回だけ */
 let hooked = false

@@ -105,6 +105,17 @@ describe('useVeinFirmwareReport', () => {
     expect(managerToken.getManagerJwt).not.toHaveBeenCalled()
   })
 
+  it('切断したら id を捨てる (右下の版の表示に外れた機体を残さない)。繋がり直したら報告で入れ直す', async () => {
+    fw.start()
+    await open()
+    expect(fw.deviceId.value).toBe('alarm-0123456789abcdef')
+    vein.isConnected.value = false
+    await flushPromises()
+    expect(fw.deviceId.value).toBeNull()
+    await open()
+    expect(fw.deviceId.value).toBe('alarm-0123456789abcdef')
+  })
+
   describe('繋がったら周期を待たずに送る (ユーザー指示「更新時に読み込む報告にして」)', () => {
     it('★ 画面を読み込んだ時点で既に繋がって名乗っていれば、start の直後に 1 回送る (機体には何も聞かない)', async () => {
       await open()
