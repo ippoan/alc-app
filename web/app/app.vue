@@ -157,7 +157,7 @@ useHead({
     <!-- 開発用の端末だけ: 指静脈の置いた指と登録の平面 (Refs ippoan/alc-app-s3#352) -->
     <ClientOnly><VeinShiftView /></ClientOnly>
     <StagingFooter :api-base="apiBase" :tenant-id="stagingTenantId" :staging-api-key="stagingApiKey" />
-    <VersionBadge :api-base="apiBase" :frontend-version="appVersion">
+    <VersionBadge :api-base="apiBase" health-url="/api/health" :frontend-version="appVersion">
       <span v-if="fwWatch" data-testid="dev-firmware-watch-badge">
         / <span :class="fwWatch.on ? 'text-green-400' : 'text-gray-400'">{{ fwWatch.on ? '●' : '○' }}</span>
         合図 {{ fwWatch.text }}<template v-if="fwWatch.lastSignalAt"> ({{ fwWatch.lastSignalAt }})</template>

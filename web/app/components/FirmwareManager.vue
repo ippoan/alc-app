@@ -2,6 +2,7 @@
 import type { FirmwareDevice } from '~/utils/api'
 import { listFirmwareDevices, renameDevice, updateFirmware } from '~/utils/api'
 import { fetchAdminLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
+import { shortDeviceId } from '~/utils/short-device-id'
 import { veinDeviceLabel } from '~/utils/vein-device-label'
 
 /** 一覧を引き直す間隔 */
@@ -123,13 +124,6 @@ function deviceName(d: FirmwareDevice): string {
   if (d.label) return d.label
   if (d.device_id.startsWith('alarm-')) return veinDeviceLabel(d.device_id, keyLabelOf(d.device_id))
   return d.kind === 'timecard' ? d.device_id : d.device_id.slice(0, 8)
-}
-
-const SHORT_ID_LEN = 12
-
-/** 名前の下に出す id (同じ名前の端末の見分け用)。先頭 12 字、長ければ末尾に「…」。全文は title に出す */
-function shortId(id: string): string {
-  return id.length > SHORT_ID_LEN ? `${id.slice(0, SHORT_ID_LEN)}…` : id
 }
 
 function latestOf(d: FirmwareDevice): string | undefined {
@@ -266,7 +260,7 @@ async function update(d: FirmwareDevice) {
                 </button>
               </span>
               <p class="text-xs text-gray-500 font-mono mt-0.5" data-testid="firmware-device-id" :title="d.device_id">
-                {{ shortId(d.device_id) }}
+                {{ shortDeviceId(d.device_id) }}
               </p>
               <p v-if="renameError?.deviceId === d.device_id" class="text-xs text-red-600 mt-1" data-testid="firmware-rename-error">
                 {{ renameError.text }}
