@@ -560,6 +560,45 @@ describe('FirmwareManager', () => {
       wrapper.unmount()
     })
   })
+
+  describe('名前の下の id (同じ名前の見分け。Refs ippoan/alc-app-s3#352)', () => {
+    const idOf = (row: ReturnType<ReturnType<typeof rows>['at']>) => row!.find('[data-testid="firmware-device-id"]')
+
+    it('同じ名前の 2 行は、名前の下の id で見分けられる', async () => {
+      const wrapper = await mountManager([
+        dev({ device_id: 'alarm-0000aaaa', label: 'vein-base', kind: 'timecard', flavor: 'timecard-vein-gps' }),
+        dev({ device_id: 'alarm-1111bbbb', label: 'vein-base', kind: 'timecard', flavor: 'timecard-vein-gps' }),
+      ])
+      const [a, b] = [rows(wrapper).at(0), rows(wrapper).at(1)]
+      expect(col(a, 'name')).toBe('vein-base')
+      expect(col(b, 'name')).toBe('vein-base')
+      expect(idOf(a).text()).toBe('alarm-0000aa…')
+      expect(idOf(b).text()).toBe('alarm-1111bb…')
+      wrapper.unmount()
+    })
+
+    it('12 字を超える id は先頭 12 字 + 「…」、title に全文。12 字以下はそのまま', async () => {
+      const wrapper = await mountManager([
+        dev({ device_id: 'cores3-dummy-0123456789' }),
+        dev({ device_id: 'cores3-dummy' }),
+      ])
+      const long = idOf(rows(wrapper).at(0))
+      expect(long.text()).toBe('cores3-dummy…')
+      expect(long.attributes('title')).toBe('cores3-dummy-0123456789')
+      const short = idOf(rows(wrapper).at(1))
+      expect(short.text()).toBe('cores3-dummy')
+      expect(short.attributes('title')).toBe('cores3-dummy')
+      wrapper.unmount()
+    })
+
+    it('名前が無い行も、いつもの表示に加えて id の行を出す', async () => {
+      const wrapper = await mountManager([dev({ device_id: 'devaaaaa-bbbb-cccc', label: null })])
+      const row = rows(wrapper).at(0)
+      expect(col(row, 'name')).toBe('devaaaaa')
+      expect(idOf(row).text()).toBe('devaaaaa-bbb…')
+      wrapper.unmount()
+    })
+  })
 })
 
 // AdminDashboard のタブ。専用のテストが無かったので、このタブの分だけ小さく見る。
