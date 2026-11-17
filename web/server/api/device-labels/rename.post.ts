@@ -5,8 +5,7 @@
  *   → 本 route: introspect → **role が `admin` の token だけ**通す → dev ログインの token は 403
  *   → device_id で相手を分ける:
  *     - `alarm-<指紋>` / `alarm:<指紋>` (指静脈端末など鍵で取った端末) … 鍵のラベル。
- *       auth-worker `POST /device/setup/alarm-key/rename` (同じ JWT を cookie に載せる。一覧の
- *       `/api/cam-host-keys` と同じ方式)
+ *       auth-worker `POST /internal/alarm-keys/rename` (shared secret + introspect の tenant_id)
  *     - それ以外 (CoreS3 など登録簿の端末) … auth-worker `POST /internal/device-labels/rename`
  *       (shared secret + introspect の tenant_id)
  *
@@ -18,8 +17,8 @@
  *   firmware/update.post.ts と同じ)。
  */
 import { setResponseStatus } from 'h3'
-import { buildAlarmKeyRenameForward } from '../../utils/cam-host-keys'
 import {
+  buildAlarmKeyRenameForward,
   buildDeviceLabelRenameForward,
   decideFirmwareAdminAccess,
   normalizeDeviceLabel,
@@ -53,7 +52,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const fwd = target.kind === 'key'
-    ? buildAlarmKeyRenameForward(token, { fingerprint: target.fingerprint, label })
+    ? buildAlarmKeyRenameForward({ sharedSecret, tenantId: access.tenantId, fingerprint: target.fingerprint, label })
     : buildDeviceLabelRenameForward({ sharedSecret, tenantId: access.tenantId, deviceId: target.deviceId, label })
   const res = await authWorker.fetch(fwd.url, fwd.init).catch(() => null)
 
