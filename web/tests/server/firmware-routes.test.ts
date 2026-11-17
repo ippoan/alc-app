@@ -3,7 +3,8 @@
 //
 // - report  … キオスクの端末の token だけ + 登録簿との照合 (fail-closed)
 // - devices … admin だけ (dev ログインの token は読める)
-// - update  … admin だけ + dev ログインの token は 403 + device_id 必須 + target は定数
+// - update  … admin だけ + dev ログインの token は 403 + device_id 必須 + target は最後の報告の kind から引く
+//   (cores3 → cores3、timecard → timecard-station。Refs ippoan/alc-app-s3#352)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest'
 import { IncomingMessage, ServerResponse } from 'node:http'
 import { Socket } from 'node:net'
@@ -270,12 +271,48 @@ describe('POST /api/firmware/report', () => {
     expect(recorderFetch).not.toHaveBeenCalled()
   })
 
-  it('kind が cores3 以外 → 400', async () => {
-    for (const kind of [undefined, 'timecard-station', 'CoreS3', 1]) {
+  it('kind が cores3 / timecard 以外 → 400', async () => {
+    for (const kind of [undefined, 'timecard-station', 'CoreS3', 'Timecard', 1]) {
       body = { ...REPORT, kind }
       await expect(report(reportEvent())).rejects.toMatchObject({ statusCode: 400, statusMessage: 'kind が不正です' })
     }
     expect(labelsCalls()).toHaveLength(0)
+    expect(recorderFetch).not.toHaveBeenCalled()
+  })
+
+  it('★ kind: timecard (指静脈端末) → device_id は token の sub から決めて上書きし、登録簿は引かない (Refs ippoan/alc-app-s3#352)', async () => {
+    // 鍵で取った token (`alarm:<指紋>`) は `alarm-<指紋>`。body の device_id (ほかの端末) は使わない
+    introspect = { claims: { ...KIOSK_CLAIMS, sub: 'alarm:0123456789abcdef' }, status: 200 }
+    body = { device_id: 'd1', kind: 'timecard', phase: 'idle', flavor: 'timecard-vein', version: '0.3.0' }
+    const event = reportEvent()
+    expect(await report(event)).toBe(JSON.stringify({ ok: true }))
+    const fwd = forwarded()
+    expect(fwd.pathname).toBe('/tenants/t1/ota-report')
+    expect(JSON.parse(fwd.body!)).toEqual({ device_id: 'alarm-0123456789abcdef', kind: 'timecard', phase: 'idle', flavor: 'timecard-vein', version: '0.3.0' })
+    expect(labelsCalls()).toHaveLength(0)
+  })
+
+  it('kind: timecard で鍵でない token (sub が端末の id) は sub をそのまま id にする。登録簿に無くても、登録簿が落ちていても通す', async () => {
+    labels = () => { throw new Error('down') }
+    body = { kind: 'timecard', phase: 'idle' }
+    await report(reportEvent())
+    expect(JSON.parse(forwarded().body!)).toEqual({ device_id: 'k1', kind: 'timecard', phase: 'idle' })
+    expect(labelsCalls()).toHaveLength(0)
+  })
+
+  it('kind: timecard で token の sub が id の形でなければ 400 で recorder を呼ばない', async () => {
+    for (const sub of [undefined, '', 'a b', 'alarm:XYZ']) {
+      introspect = { claims: { ...KIOSK_CLAIMS, sub }, status: 200 }
+      body = { device_id: 'd1', kind: 'timecard', phase: 'idle' }
+      await expect(report(reportEvent())).rejects.toMatchObject({ statusCode: 400, statusMessage: '端末の id がありません' })
+    }
+    expect(recorderFetch).not.toHaveBeenCalled()
+  })
+
+  it('★ kind: timecard も利用者の token は 403 (端末の token だけ)', async () => {
+    introspect = { claims: ADMIN_CLAIMS, status: 200 }
+    body = { kind: 'timecard', phase: 'idle' }
+    await expect(report(reportEvent({ bearer: ADMIN_JWT }))).rejects.toMatchObject({ statusCode: 403 })
     expect(recorderFetch).not.toHaveBeenCalled()
   })
 
@@ -412,28 +449,83 @@ describe('GET /api/firmware/devices', () => {
 })
 
 describe('POST /api/firmware/update', () => {
+  /** recorder の一覧 (`ota-status`) の応答。報告の kind で target が決まる */
+  let statusRes: { json: unknown, status: number }
+  /** recorder の合図 (`serial-ota`) の応答 */
+  let serialOtaRes: () => Response
+
   beforeEach(() => {
     introspect = { claims: ADMIN_CLAIMS, status: 200 }
-    recorderFetch = vi.fn(async () => new Response(JSON.stringify({ sent: 1 }), { status: 200 }))
+    statusRes = {
+      json: { devices: [
+        { device_id: 'd1', kind: 'cores3', phase: 'idle', reported_at_ms: 1 },
+        { device_id: 'alarm-0123456789abcdef', kind: 'timecard', phase: 'idle', reported_at_ms: 2 },
+        { device_id: 'x9', kind: 'alarm', phase: 'idle', reported_at_ms: 3 },
+      ] },
+      status: 200,
+    }
+    serialOtaRes = () => new Response(JSON.stringify({ sent: 1 }), { status: 200 })
+    recorderFetch = vi.fn(async (url: string) => new URL(url).pathname.endsWith('/ota-status')
+      ? new Response(JSON.stringify(statusRes.json), { status: statusRes.status })
+      : serialOtaRes())
     body = { device_id: 'd1' }
   })
 
-  it('★ admin + device_id → recorder へ行く body は {"target":"cores3","device_id":"…"} と完全一致', async () => {
+  /** recorder の合図 (`serial-ota`) へ届いた要求 */
+  function serialOtaCalls(): Array<[string, { method: string, headers: Record<string, string>, body?: string }]> {
+    return (recorderFetch.mock.calls as Array<[string, { method: string, headers: Record<string, string>, body?: string }]>)
+      .filter(([url]) => new URL(url).pathname.endsWith('/serial-ota'))
+  }
+
+  it('★ admin + cores3 の端末 → recorder へ行く body は {"target":"cores3","device_id":"…"} と完全一致', async () => {
     // body に target や url や tenant を混ぜても無視される
     body = { device_id: 'd1', target: 'timecard-station', url: 'https://example.test/fw.bin', version: '9', tenant_id: 'other' }
     const event = updateEvent()
     const res = await update(event)
 
-    const fwd = forwarded()
-    expect(fwd.method).toBe('POST')
-    expect(fwd.pathname).toBe('/tenants/t1/serial-ota')
-    expect(fwd.headers).toEqual({ Authorization: SECRET, 'Content-Type': 'application/json' })
-    expect(fwd.body).toBe('{"target":"cores3","device_id":"d1"}')
+    // 一覧を introspect の tenant で引いてから、合図を 1 本だけ出す
+    const [statusUrl, statusInit] = recorderFetch.mock.calls[0] as [string, RequestInit]
+    expect(new URL(statusUrl).pathname).toBe('/tenants/t1/ota-status')
+    expect(statusInit).toEqual({ method: 'GET', headers: { Authorization: SECRET } })
+    const calls = serialOtaCalls()
+    expect(calls).toHaveLength(1)
+    const [url, init] = calls[0]!
+    expect(init.method).toBe('POST')
+    expect(new URL(url).pathname).toBe('/tenants/t1/serial-ota')
+    expect(init.headers).toEqual({ Authorization: SECRET, 'Content-Type': 'application/json' })
+    expect(init.body).toBe('{"target":"cores3","device_id":"d1"}')
     expect(res).toBe(JSON.stringify({ sent: 1 }))
     expect(getResponseStatus(event)).toBe(200)
     expectNoStore(event)
-    // 登録簿も状態も見ない
+    // 登録簿は見ない
     expect(labelsCalls()).toHaveLength(0)
+  })
+
+  it('★ 指静脈端末 (報告の kind: timecard) → target は timecard-station、device_id 付きの 1 台宛て (Refs ippoan/alc-app-s3#352)', async () => {
+    body = { device_id: 'alarm-0123456789abcdef', target: 'cores3' }
+    await update(updateEvent())
+    const calls = serialOtaCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]![1].body).toBe('{"target":"timecard-station","device_id":"alarm-0123456789abcdef"}')
+  })
+
+  it('★ 報告の無い端末は 404、更新できない kind の端末は 400 で、合図を出さない', async () => {
+    body = { device_id: 'nope' }
+    await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 404, statusMessage: '報告の無い端末です' })
+    body = { device_id: 'x9' }
+    await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 400, statusMessage: '更新できない種類の端末です' })
+    expect(serialOtaCalls()).toHaveLength(0)
+  })
+
+  it('★ 一覧が取れない (非 200・形違い) なら 503 / 404 で合図を出さない', async () => {
+    statusRes = { json: { error: 'x' }, status: 500 }
+    await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 503, statusMessage: '端末の報告を取得できません' })
+    statusRes = { json: { devices: 'x' }, status: 200 }
+    await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 404 })
+    // 本文が JSON でない 200 も「報告の無い端末」(合図を出さない)
+    recorderFetch.mockImplementationOnce(async () => new Response('not json', { status: 200 }))
+    await expect(update(updateEvent())).rejects.toMatchObject({ statusCode: 404 })
+    expect(serialOtaCalls()).toHaveLength(0)
   })
 
   it('★ admin 以外 (member / viewer / キオスクの端末) は 403 で recorder を呼ばない', async () => {
@@ -466,10 +558,10 @@ describe('POST /api/firmware/update', () => {
   })
 
   it('recorder の応答 (sent: 0 / 400) は status と本文がそのまま返る', async () => {
-    recorderFetch.mockResolvedValueOnce(new Response(JSON.stringify({ sent: 0 }), { status: 200 }))
+    serialOtaRes = () => new Response(JSON.stringify({ sent: 0 }), { status: 200 })
     expect(await update(updateEvent())).toBe(JSON.stringify({ sent: 0 }))
 
-    recorderFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'invalid_device_id' }), { status: 400 }))
+    serialOtaRes = () => new Response(JSON.stringify({ error: 'invalid_device_id' }), { status: 400 })
     const event = updateEvent()
     expect(await update(event)).toBe(JSON.stringify({ error: 'invalid_device_id' }))
     expect(getResponseStatus(event)).toBe(400)

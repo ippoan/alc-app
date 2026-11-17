@@ -14,6 +14,10 @@
  * 切り替えたブラウザでは Station が繋がらず、その鍵で端末の token も取れない
  * (CoreS3 の無い PC では Vein Station が端末の鍵。`useDeviceToken` の vein の署名)。
  *
+ * **ファームの版の報告もここ** (Refs ippoan/alc-app-s3#352)。繋がったときと 5 分ごとに管理者の一覧
+ * 「端末のファーム」へ版を報告する (`useVeinFirmwareReport`。更新中の遷移は `useSerialOta` が送る)。
+ * 1 台指定の更新の合図の受けは `TenkoKiosk.vue` (自分の端末の id と照合してから預かる)。
+ *
  * **開発用の遠隔操作もここで受ける** (Refs ippoan/alc-app-s3#352)。端末設定でオンにしたキオスクだけが、
  * 自分宛て (か全キオスク宛て) の `kiosk_command` を実行して返事を送る (`utils/kiosk-remote`)。
  */
@@ -71,7 +75,14 @@ const fleetWatch = useTimecardWatch({
   onKioskCommand,
 })
 
-onMounted(() => { void veinSerial.connect() })
+const veinFirmwareReport = useVeinFirmwareReport()
+
+onMounted(() => {
+  void veinSerial.connect()
+  // デモのタブでも機体は本物なので報告する (版の報告は合図への応答ではない)
+  veinFirmwareReport.start()
+})
+onBeforeUnmount(() => { veinFirmwareReport.stop() })
 
 let subscribed = false
 watch(veinSerial.isConnected, (connected) => {

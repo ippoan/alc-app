@@ -37,6 +37,10 @@ mockNuxtImport('useSerialOta', () => () => serialOta)
 const deviceToken = vi.hoisted(() => ({ getDeviceJwt: vi.fn(async (): Promise<string> => 'kiosk-jwt') }))
 mockNuxtImport('useDeviceToken', () => () => deviceToken)
 
+/** 版の報告 (useVeinFirmwareReport。中身は tests/composables/useVeinFirmwareReport.test.ts) */
+const veinFirmwareReport = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn() }))
+mockNuxtImport('useVeinFirmwareReport', () => () => veinFirmwareReport)
+
 const watchHandle = vi.hoisted(() => ({ connect: vi.fn(async () => {}), stop: vi.fn() }))
 interface WatchOptions { getToken: () => unknown, onVeinListRequest: () => void, onKioskCommand: (data: unknown) => void }
 const watchOptions = (): WatchOptions => timecardWatch.mock.calls[0]![0] as WatchOptions
@@ -56,6 +60,14 @@ describe('VeinFleetHost', () => {
   it('★ mount で Vein Station を掴みに行く (管理者の画面に切り替えても Station の鍵で端末の token を取れるように)', async () => {
     await mountSuspended(VeinFleetHost)
     expect(vein.connect).toHaveBeenCalledTimes(1)
+  })
+
+  it('★ mount で版の報告 (管理者の「端末のファーム」) を始め、unmount で止める (Refs ippoan/alc-app-s3#352)', async () => {
+    const wrapper = await mountSuspended(VeinFleetHost)
+    expect(veinFirmwareReport.start).toHaveBeenCalledTimes(1)
+    expect(veinFirmwareReport.stop).not.toHaveBeenCalled()
+    wrapper.unmount()
+    expect(veinFirmwareReport.stop).toHaveBeenCalledTimes(1)
   })
 
   it('描くものは無く、Vein Station が最初に繋がったときに 1 回だけ購読を張る', async () => {

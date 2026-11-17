@@ -1,5 +1,6 @@
 /**
- * CoreS3 のファームを管理者の画面から 1 台ずつ更新する (Refs ippoan/alc-app#403) の
+ * CoreS3 と指静脈端末 (Vein Station) のファームを管理者の画面から 1 台ずつ更新する
+ * (Refs ippoan/alc-app#403, ippoan/alc-app-s3#352) の
  * 純粋ロジック。副作用 (introspect / fetch) は server/api/firmware/* と
  * server/utils/introspect-route.ts。
  *
@@ -23,8 +24,19 @@ const AUTH_WORKER_BASE = 'https://auth-worker.internal'
 /** 一覧を見る・更新を指示してよい利用者の role。 */
 const FIRMWARE_ADMIN_ROLE = 'admin'
 
-/** 更新の合図の target。**呼び元から受け取らない** (この経路が更新するのは CoreS3 だけ)。 */
-const FIRMWARE_TARGET = 'cores3'
+/**
+ * 報告の `kind` → 更新の合図の target (Refs ippoan/alc-app-s3#352)。
+ * **target は呼び元から受け取らない** — 更新する端末の最後の報告の `kind` から引く。
+ * - `cores3` … キオスクが USB で繋いだ CoreS3
+ * - `timecard` … キオスクが USB で繋いだ指静脈端末 (Vein Station。機体の FLAVOR で中身を引き分ける)
+ */
+const FIRMWARE_KIND_TARGETS: Readonly<Record<string, string>> = {
+  cores3: 'cores3',
+  timecard: 'timecard-station',
+}
+
+/** 鍵で取った端末の token の `sub` (`alarm:<鍵の指紋 16 hex>`、auth-worker の device-alarm-token) */
+const ALARM_SUB_RE = /^alarm:([0-9a-f]{16})$/
 
 /** 端末の id の形 (recorder の検査と同じ: 英数字 `-` `_` の 1〜64 文字)。 */
 const FIRMWARE_DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -63,6 +75,22 @@ export function decideFirmwareAdminAccess(claims: IntrospectClaims): FirmwareAcc
 
 export function isFirmwareDeviceId(v: unknown): v is string {
   return typeof v === 'string' && FIRMWARE_DEVICE_ID_RE.test(v)
+}
+
+/** 報告で受け付ける `kind` か */
+export function isFirmwareKind(v: unknown): v is keyof typeof FIRMWARE_KIND_TARGETS {
+  return typeof v === 'string' && Object.hasOwn(FIRMWARE_KIND_TARGETS, v)
+}
+
+/**
+ * 端末の token の `sub` から recorder の端末の id を作る (pure)。
+ * 鍵で取った token (`alarm:<16 hex>`) は `alarm-<16 hex>` (recorder の id の字種に `:` が無いため)、
+ * それ以外は `sub` のまま。`keyed` は鍵で取った token か (登録簿 (devices) に行が無い)。
+ * クライアントの宛先の見分け (`app/utils/kiosk-remote.ts` の `kioskDeviceIdFromSub`) と同じ決め方。
+ */
+export function deviceIdFromTokenSub(sub: unknown): { deviceId: unknown, keyed: boolean } {
+  const fingerprint = typeof sub === 'string' ? ALARM_SUB_RE.exec(sub)?.[1] : undefined
+  return fingerprint ? { deviceId: `alarm-${fingerprint}`, keyed: true } : { deviceId: sub, keyed: false }
 }
 
 /**
@@ -162,18 +190,34 @@ export function buildOtaStatusForward(input: { sharedSecret: string, tenantId: s
 }
 
 /**
+ * recorder の一覧 `{devices:[…]}` から、指定した端末の最後の報告の `kind` に対応する
+ * 更新の target を引く (pure)。報告が無い端末は `no_report`、知らない kind は `unknown_kind`。
+ */
+export function firmwareTargetForDevice(
+  status: unknown,
+  deviceId: string,
+): { ok: true, target: string } | { ok: false, error: 'no_report' | 'unknown_kind' } {
+  const devices = (status as { devices?: unknown } | null | undefined)?.devices
+  const row = Array.isArray(devices)
+    ? (devices as Array<{ device_id?: unknown, kind?: unknown } | null>).find(d => d?.device_id === deviceId)
+    : undefined
+  if (!row) return { ok: false, error: 'no_report' }
+  return isFirmwareKind(row.kind) ? { ok: true, target: FIRMWARE_KIND_TARGETS[row.kind]! } : { ok: false, error: 'unknown_kind' }
+}
+
+/**
  * recorder `POST /tenants/:t/serial-ota` への forward request を組む。
  *
- * **`device_id` は必須。** recorder は `cores3` で device_id 無しを弾かないので、
- * 無しで送ると合図が端末の指定なしで全キオスクへ出る。
+ * **`device_id` は必須。** recorder は device_id 無しを弾かないので、無しで送ると合図が
+ * 端末の指定なしで全キオスクへ出る。`target` は {@link firmwareTargetForDevice} で引いたもの。
  */
-export function buildSerialOtaForward(input: { sharedSecret: string, tenantId: string, deviceId: string }): Forward {
+export function buildSerialOtaForward(input: { sharedSecret: string, tenantId: string, deviceId: string, target: string }): Forward {
   return {
     url: recorderTenantUrl(input.tenantId, 'serial-ota'),
     init: {
       method: 'POST',
       headers: { Authorization: input.sharedSecret, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: FIRMWARE_TARGET, device_id: input.deviceId }),
+      body: JSON.stringify({ target: input.target, device_id: input.deviceId }),
     },
   }
 }
