@@ -2,6 +2,7 @@
 import type { FirmwareDevice } from '~/utils/api'
 import { listFirmwareDevices, updateFirmware } from '~/utils/api'
 import { fetchAdminLatestFirmwareVersions, hasFirmwareUpdate } from '~/utils/firmware-updates'
+import { veinDeviceLabel } from '~/utils/vein-device-label'
 
 /** 一覧を引き直す間隔 */
 const LIST_INTERVAL_MS = 10_000
@@ -63,12 +64,17 @@ function showNotice(text: string) {
   noticeTimer = setTimeout(() => { notice.value = '' }, NOTICE_MS)
 }
 
+const { keyLabelOf } = useDeviceNames()
+
 /**
- * 登録簿のラベル。無ければ id — 指静脈端末 (`timecard`) は鍵の id (`alarm-<指紋>`) で登録簿に行が無いことが
- * 多いので、見分けられるよう全部出す
+ * 登録簿のラベル。無ければ、指静脈端末など鍵の id (`alarm-<指紋>`) の行は機体の鍵のラベル
+ * (失効は「(失効)」付き)、それも無ければ `Vein Station <指紋 8 字>`。どれでもなければ id
+ * (`timecard` は全部、それ以外は先頭 8 字)。id 全体は行の title に出す (見分け用)
  */
 function deviceName(d: FirmwareDevice): string {
-  return d.label ?? (d.kind === 'timecard' ? d.device_id : d.device_id.slice(0, 8))
+  if (d.label) return d.label
+  if (d.device_id.startsWith('alarm-')) return veinDeviceLabel(d.device_id, keyLabelOf(d.device_id))
+  return d.kind === 'timecard' ? d.device_id : d.device_id.slice(0, 8)
 }
 
 function latestOf(d: FirmwareDevice): string | undefined {
@@ -160,7 +166,7 @@ async function update(d: FirmwareDevice) {
         </thead>
         <tbody>
           <tr v-for="d in devices" :key="d.device_id" class="border-t" data-testid="firmware-row">
-            <td class="px-3 py-2 whitespace-nowrap" data-col="name">{{ deviceName(d) }}</td>
+            <td class="px-3 py-2 whitespace-nowrap" data-col="name" :title="d.device_id">{{ deviceName(d) }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="kind">{{ d.kind }} / {{ d.flavor ?? '-' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="version">{{ d.version ?? '不明 (古い版)' }}</td>
             <td class="px-3 py-2 whitespace-nowrap" data-col="latest">{{ latestOf(d) ?? '-' }}</td>
