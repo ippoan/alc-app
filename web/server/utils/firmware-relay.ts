@@ -129,6 +129,23 @@ export function buildDeviceLabelRenameForward(input: { sharedSecret: string, ten
   }
 }
 
+/**
+ * auth-worker の機体の鍵の名前を変える `POST /internal/alarm-keys/rename` への forward request を組む
+ * (Refs ippoan/alc-app-s3#352)。{@link buildDeviceLabelRenameForward} と同じく shared secret の生の値で叩き、
+ * tenant は introspect の値。cookie 版の `/device/setup/alarm-key/rename` は非 GET で Origin を検査するため、
+ * Origin の無いサーバー間の転送では通らない。
+ */
+export function buildAlarmKeyRenameForward(input: { sharedSecret: string, tenantId: string, fingerprint: string, label: string }): Forward {
+  return {
+    url: `${AUTH_WORKER_BASE}/internal/alarm-keys/rename`,
+    init: {
+      method: 'POST',
+      headers: { Authorization: input.sharedSecret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenant_id: input.tenantId, fingerprint: input.fingerprint, label: input.label }),
+    },
+  }
+}
+
 /** 端末の名前の最大文字数 (auth-worker の検査と揃える) */
 export const DEVICE_LABEL_MAX = 64
 

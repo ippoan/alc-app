@@ -2,7 +2,8 @@
 // auth-worker へ **実際に何を送るか**を固定する。
 //
 // - admin だけ・dev ログインの token は 403 (読み取りの /api/device-labels とは分ける)
-// - `alarm-<指紋>` / `alarm:<指紋>` → 鍵のラベル: JWT を cookie に載せて /device/setup/alarm-key/rename
+// - `alarm-<指紋>` / `alarm:<指紋>` → 鍵のラベル: shared secret + introspect の tenant で /internal/alarm-keys/rename
+//   (cookie は載せない。cookie 版の口は Origin 検査でサーバー間の転送を 403 にするため)
 // - それ以外 → 登録簿のラベル: shared secret + introspect の tenant で /internal/device-labels/rename
 // - label は trim して 1〜64 字 (だめなら auth-worker を呼ばずに 400)
 // - auth-worker の 404 → 404、409 → 409 + error 素通し、それ以外 → 502
@@ -13,8 +14,7 @@ import {
   createError, createEvent, defineEventHandler, getHeader, getRequestURL, getResponseHeader,
   getResponseStatus, setResponseHeader, type H3Event,
 } from 'h3'
-import { buildAlarmKeyRenameForward } from '../../server/utils/cam-host-keys'
-import { buildDeviceLabelRenameForward, normalizeDeviceLabel, renameTargetOf } from '../../server/utils/firmware-relay'
+import { buildAlarmKeyRenameForward, buildDeviceLabelRenameForward, normalizeDeviceLabel, renameTargetOf } from '../../server/utils/firmware-relay'
 
 const SECRET = 'test-internal-shared-secret-32!!'
 const FP = '0123456789abcdef'
@@ -83,23 +83,26 @@ function renameCalls(): Array<[string, { method: string, headers: Record<string,
 }
 
 describe('POST /api/device-labels/rename', () => {
-  it('★ alarm-<指紋> → 鍵のラベル: 同じ JWT を cookie に載せ、{fingerprint, label} だけを送る (shared secret は載せない)', async () => {
+  it('★ alarm-<指紋> → 鍵のラベル: shared secret + introspect の tenant で {tenant_id, fingerprint, label} (cookie は載せない)', async () => {
+    body = { device_id: `alarm-${FP}`, label: '事務所の指静脈', tenant_id: 'evil' }
     const ev = event()
     expect(await route(ev)).toEqual({ ok: true, device_id: `alarm-${FP}`, label: '事務所の指静脈' })
     const calls = renameCalls()
     expect(calls).toHaveLength(1)
     const [url, init] = calls[0]!
-    expect(new URL(url).pathname).toBe('/device/setup/alarm-key/rename')
+    expect(new URL(url).pathname).toBe('/internal/alarm-keys/rename')
     expect(init.method).toBe('POST')
-    expect(init.headers).toEqual({ Cookie: `logi_auth_token=${ADMIN_JWT}`, 'Content-Type': 'application/json' })
-    expect(JSON.parse(init.body)).toEqual({ fingerprint: FP, label: '事務所の指静脈' })
+    expect(init.headers).toEqual({ Authorization: SECRET, 'Content-Type': 'application/json' })
+    expect(init.headers).not.toHaveProperty('Cookie')
+    // tenant は body から受けない
+    expect(JSON.parse(init.body)).toEqual({ tenant_id: 't1', fingerprint: FP, label: '事務所の指静脈' })
     expect(getResponseHeader(ev, 'Cache-Control')).toBe('no-store')
   })
 
   it('alarm:<指紋> (token の sub の形) も鍵の rename に行く', async () => {
     body = { device_id: `alarm:${FP}`, label: 'x' }
     await route(event())
-    expect(new URL(renameCalls()[0]![0]).pathname).toBe('/device/setup/alarm-key/rename')
+    expect(new URL(renameCalls()[0]![0]).pathname).toBe('/internal/alarm-keys/rename')
   })
 
   it('★ それ以外 → 登録簿のラベル: shared secret の生の値 + introspect の tenant で {tenant_id, device_id, label}', async () => {
@@ -161,9 +164,24 @@ describe('POST /api/device-labels/rename', () => {
     expect(await route(event())).toEqual({ error: 'conflict' })
   })
 
-  it('auth-worker の 404 は 404', async () => {
+  it.each([`alarm-${FP}`, 'cores3-aaaa'])('auth-worker の 404 は 404 (%s)', async (device_id) => {
+    body = { device_id, label: 'x' }
     renamed = { status: 404, body: '{"error":"not_found"}' }
     await expect(route(event())).rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it.each(['revoked', 'duplicate_label'])('★ 登録簿の端末でも 409 {error:%s} は 409 と error をそのまま返す', async (error) => {
+    body = { device_id: 'cores3-aaaa', label: 'x' }
+    renamed = { status: 409, body: JSON.stringify({ error }) }
+    const ev = event()
+    expect(await route(ev)).toEqual({ error })
+    expect(getResponseStatus(ev)).toBe(409)
+  })
+
+  it('★ 登録簿の端末でも auth-worker の 500 は 502', async () => {
+    body = { device_id: 'cores3-aaaa', label: 'x' }
+    renamed = { status: 500, body: 'boom' }
+    await expect(route(event())).rejects.toMatchObject({ statusCode: 502, statusMessage: '名前を変えられませんでした' })
   })
 
   it.each([
@@ -178,10 +196,10 @@ describe('POST /api/device-labels/rename', () => {
 })
 
 describe('rename の純関数', () => {
-  it('鍵の forward は cookie と JSON だけ', () => {
-    expect(buildAlarmKeyRenameForward('t', { fingerprint: FP, label: 'x' })).toEqual({
-      url: 'https://auth-worker.internal/device/setup/alarm-key/rename',
-      init: { method: 'POST', headers: { Cookie: 'logi_auth_token=t', 'Content-Type': 'application/json' }, body: `{"fingerprint":"${FP}","label":"x"}` },
+  it('鍵の forward は shared secret の生の値 (cookie は載せない)', () => {
+    expect(buildAlarmKeyRenameForward({ sharedSecret: 's', tenantId: 't/1', fingerprint: FP, label: 'x' })).toEqual({
+      url: 'https://auth-worker.internal/internal/alarm-keys/rename',
+      init: { method: 'POST', headers: { Authorization: 's', 'Content-Type': 'application/json' }, body: `{"tenant_id":"t/1","fingerprint":"${FP}","label":"x"}` },
     })
   })
   it('登録簿の forward は shared secret の生の値', () => {
