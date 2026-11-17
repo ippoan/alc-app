@@ -33,7 +33,6 @@ import type { VeinModuleEntry } from '~/utils/vein-db'
 import type { VeinIdentifyOutcome } from '~/utils/vein-identify'
 import { readVeinAddedFingerMode } from '~/utils/vein-added-finger-mode'
 import { recordVeinLine } from '~/utils/vein-line-log'
-import { isDevDevice } from '~/utils/token-selection'
 
 export const VEIN_MODULE_ID_MIN = 10
 export const VEIN_MODULE_ID_MAX = 100
@@ -365,10 +364,9 @@ async function verifyOnServer(employeeId: string, shot: Uint8Array, scope: Reque
 /**
  * 本人が決まっていない 1:N の照合 (血圧測定台・キオスクの指だけの入口・運行管理者の入口)。当たった ID (不一致は null) を返し、
  * 不一致は {@link VEIN_NOMATCH_RETRIES} 回までやり直す (やり直す前に `onRetry`)。認証ログを送るテナントだけ、置いた 1 回の指を
- * 撮ってから照合し (`VEIN IDENTIFY KEEP ALL`)、承認済みの枠に当たった回を、当たった人の撮影として裏で送る ({@link scheduleVeinAuthShot})。
+ * 照合の後に撮り (`VEIN IDENTIFY KEEP LATE`。結果はすぐ返り、撮影は届いてから)、承認済みの枠に当たった回を、当たった人の撮影として
+ * 裏で送る ({@link scheduleVeinAuthShot})。KEEP LATE を知らない古いファームは撮ってから照合する形 (`KEEP ALL`) に戻る。
  * 不一致の回は乗務員が決まらないので送らない。送らないテナントは今までどおりの照合 (`VEIN IDENTIFY`、記録の読み出しで遅くしない)。
- * **開発用の端末 (キオスク・運行管理者席の鍵が dev) だけ**、撮るのを照合の後に回す (`VEIN IDENTIFY KEEP LATE`): 結果はすぐ返り、
- * 撮影は届いてから送る。本番の端末は `KEEP ALL` のまま (照合の後に乗ったままの指を撮れるかが実機で未確認のため)
  */
 export async function identifyVeinModuleAnyone(
   port: VeinMatchPort,
@@ -377,10 +375,9 @@ export async function identifyVeinModuleAnyone(
   scope: RequestTokenScope = 'default',
 ): Promise<number | null> {
   const keep = await isAuthLogEnabled(scope)
-  const late = isDevDevice('kiosk') || isDevDevice('manager-device')
   const read = async (): Promise<number | null> => {
     if (!keep) return await port.identify(onAgain)
-    const got = late ? await readKeepingLate(port, onAgain) : await readKeeping(port, onAgain)
+    const got = await readKeepingLate(port, onAgain)
     if (got.id === null) return null
     const entry = (await loadVeinModuleEntries()).find(e => e.moduleId === got.id)
     if (entry?.approved) scheduleVeinAuthShot(entry.employeeId, got, 'self', scope)
