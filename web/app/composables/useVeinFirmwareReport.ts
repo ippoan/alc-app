@@ -34,6 +34,7 @@
 
 import type { FirmwarePhase } from '~/utils/api'
 import { reportFirmware } from '~/utils/api'
+import { reportedVeinDeviceId } from '~/utils/reported-device-id'
 import { kioskDeviceIdFromJwt } from '~/utils/kiosk-remote'
 import type { FirmwareReportExtra } from '~/composables/useFirmwareReport'
 import { FIRMWARE_REPORT_INTERVAL_MS } from '~/composables/useFirmwareReport'
@@ -51,7 +52,8 @@ const DEVICE_RETRY_INTERVAL_MS = 2_000
 const DEVICE_RETRY_TOTAL_MS = 30_000
 
 // シングルトン: 1 台の PC につながる Vein Station は 1 台
-const deviceId = ref<string | null>(null)
+// 版の表示からも読む (`~/utils/reported-device-id`)
+const deviceId = reportedVeinDeviceId
 let timer: ReturnType<typeof setInterval> | null = null
 /** 保留中 (ファームの更新中)。待機の報告 (周期・繋がったとき) を送らない */
 let onHold = false
@@ -165,6 +167,8 @@ export function useVeinFirmwareReport() {
           void announce()
           return
         }
+        // 外れた機体の id を版の表示に残さない (CoreS3 の onClose と同じ。次に繋がったら報告で入れ直す)
+        deviceId.value = null
         askedInfo.value = null
         pendingIdle = false
         infoMissingAtConnect = false
@@ -203,7 +207,7 @@ export function useVeinFirmwareReport() {
   }
 
   return {
-    /** 最後に報告した端末の id (宛先の見分け用)。まだ送っていなければ null */
+    /** 最後に報告した端末の id (宛先の見分け用)。まだ送っていない・切断したら null */
     deviceId: readonly(deviceId),
     start,
     stop,

@@ -162,6 +162,8 @@ useHead({
         / <span :class="fwWatch.on ? 'text-green-400' : 'text-gray-400'">{{ fwWatch.on ? '●' : '○' }}</span>
         合図 {{ fwWatch.text }}<template v-if="fwWatch.lastSignalAt"> ({{ fwWatch.lastSignalAt }})</template>
       </span>
+      <!-- このページがつかんでいる機体の名前 (全端末。Refs ippoan/alc-app-s3#352) -->
+      <ClientOnly><BadgeDeviceName /></ClientOnly>
     </VersionBadge>
   </div>
 </template>
