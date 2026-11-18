@@ -758,8 +758,10 @@ function onRoleTabClick(role: RoleTab) {
     <ManagerAlarmBar v-if="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
     <!-- 警告デバイスの版が配布中のものと違うときの帯 (Refs ippoan/alc-app#425) -->
     <AlarmDeviceFirmwareNotice v-if="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
-    <!-- 開発用の遠隔操作の受け答え (運行管理者席の鍵。描くものは無い。Refs ippoan/alc-app-s3#352) -->
-    <ManagerSeatRemoteHost v-if="activeRole === 'manager'" />
+    <!-- 開発用の遠隔操作と 1 台指定の更新の受け答え (運行管理者席の鍵。描くものは無い。Refs ippoan/alc-app-s3#352)。
+         席の PC が IT点呼・点呼受付の画面にいる間も受ける (合図は recorder に残らず、受け手がいないと消える)。
+         3 つの役割の間の切り替えでは式が真のままなので作り直されず、購読は張ったまま続く -->
+    <ManagerSeatRemoteHost v-if="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
     <!-- 運行管理者の画面の間は席の Vein Base に体温計へつながせない (キオスクに体温を譲る)。
          それ以外の画面ではつながるたびに体温計を探させる (再読み込みで OFF が残らないように)。描くものは無い -->
     <ManagerSeatThermoPause :pause="activeRole === 'manager' || activeRole === 'it_tenko' || activeRole === 'tenko_desk'" />
