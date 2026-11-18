@@ -137,7 +137,7 @@ function finishItOffer() {
   const id = activeMeasurementId.value
   stopItOfferTimer()
   if (id) confirmAsNormal(id)
-  reset()
+  reset('finish')
 }
 
 /** 「IT点呼」: IT点呼 で確定し、返った点呼の記録で運行管理者との通話を始める */
@@ -183,7 +183,7 @@ watch(() => itCall?.state.value === 'judged', (judged) => {
   itJudgedResetLeft.value = IT_JUDGED_RESET_S
   itJudgedResetTimer = setInterval(() => {
     itJudgedResetLeft.value = (itJudgedResetLeft.value ?? 1) - 1
-    if (itJudgedResetLeft.value <= 0) reset()
+    if (itJudgedResetLeft.value <= 0) reset('it-judged-timeout')
   }, 1000)
 })
 onUnmounted(stopItJudgedReset)
@@ -866,11 +866,43 @@ async function onMeasurementResult(result: MeasurementResult) {
 /**
  * IT点呼 で運行管理者の判定を待っているあいだか。**このあいだは `ResultCard` を出さない** —
  * あの中の「次の測定へ」は「点呼が済んだ」と読める。判定前に出る口は、未完了であることを
- * 明示した「未完了のまま終了」だけにする。
- * 保存中も含める (保存が終わる前に戻ると、戻ったあとの画面で通話が始まる)。
+ * 明示した「未完了のまま終了」と、通話のつなぎ直しだけにする。
+ *
+ * **IT点呼 に進むと決まった時点から判定が付くまでずっと** (保存中・通話を開いている途中・
+ * 通話中・通話を開けなかった `unavailable` のどれでも)。以前は `connecting` / `calling` と
+ * 保存中だけを見ていたため、それ以外の瞬間に「次の測定へ」が出うる形だった
+ * (判定待ちのまま残った IT点呼 の調査。Refs ippoan/alc-app-s3#352)。
+ * 点呼の記録が無く通話に進めなかった回 (`itCallNotStarted`) は判定を待つものが無いので含めない
+ * (オフライン・保存失敗の測定は通常点呼として記録される)。
  */
 const itAwaitingJudgment = computed(() => itActive.value
-  && (isSaving.value || itCallState.value === 'connecting' || itCallState.value === 'calling'))
+  && itCallState.value !== 'judged'
+  && !itCallNotStarted.value)
+/**
+ * 「未完了のまま終了」の確認を出しているか。判定待ちの画面のボタンはこれ 1 つだけなので、
+ * 「終わり」と読んで押され、通話の直後に部屋が消えて判定待ちのまま残っていた
+ * (Refs ippoan/alc-app-s3#352)。押したら確認を挟み、既定は「戻る」
+ */
+const itCallEndConfirming = ref(false)
+function askItCallEnd() {
+  itCallEndConfirming.value = true
+  console.info('[Measurement] it-call-end confirm shown')
+}
+function cancelItCallEnd() {
+  itCallEndConfirming.value = false
+  console.info('[Measurement] it-call-end confirm: back')
+}
+function confirmItCallEnd() {
+  itCallEndConfirming.value = false
+  console.info('[Measurement] it-call-end confirm: end')
+  reset('it-call-end')
+}
+// 確認を出している間に判定が付いた・判定待ちでなくなったら、確認は閉じる
+watch(() => itAwaitingJudgment.value, (awaiting) => { if (!awaiting) itCallEndConfirming.value = false })
+
+/** IT点呼 の通話を開いている途中か通話中 (ボタン由来の reset を受けない) */
+const itCallLive = computed(() => itActive.value
+  && (itCallState.value === 'connecting' || itCallState.value === 'calling'))
 /** 通話が切れた / signaling に断られた (再接続のボタンを出す。`TenkoKiosk.vue` と同じ) */
 const itCallBroken = computed(() => itCall !== null
   && (itCall.isDisconnected.value || itCall.error.value !== null))
@@ -887,9 +919,24 @@ const itCallBroken = computed(() => itCall !== null
  */
 const showCancel = computed(() => step.value !== 'nfc' && step.value !== 'result')
 
+/**
+ * 待機画面へ戻る口がどこから呼ばれたか (診断ログに出す)。
+ * - `next`: 結果の画面の「次の測定へ」 / `finish`: 「IT点呼 / 終了」の「終了」 /
+ *   `cancel`: 測定途中の「キャンセル」 — **ボタン由来**。IT点呼 の通話中は受けない
+ * - `it-call-end`: 判定待ちの画面の「未完了のまま終了」 / `it-judged-timeout`: 判定の後の自動戻り
+ */
+type ResetBy = 'next' | 'finish' | 'cancel' | 'it-call-end' | 'it-judged-timeout'
+const RESET_BLOCKED_DURING_IT_CALL: ReadonlySet<ResetBy> = new Set(['next', 'finish', 'cancel'])
+
 // リセット
-function reset() {
+function reset(by: ResetBy) {
+  // IT点呼 の判定待ちで戻る回は 1 行残す (端末のログは R2 に上がるので、判定待ちのまま残った
+  // 点呼がどの口から戻ったかを後から追える。Refs ippoan/alc-app-s3#352)
+  if (itAwaitingJudgment.value) console.warn(`[Measurement] reset during IT call by ${by}`)
+  // 通話中に「次の測定へ」等が届いても切らない (判定待ちの画面には出していない口。念のための守り)
+  if (itCallLive.value && RESET_BLOCKED_DURING_IT_CALL.has(by)) return
   stopItJudgedReset()
+  itCallEndConfirming.value = false
   itCall?.stop()
   itCallNotStarted.value = false
   stopItOfferTimer()
@@ -1034,7 +1081,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             v-if="showCancel"
             data-testid="footer-cancel-landscape"
             class="text-gray-500 hover:text-gray-700 text-sm"
-            @click="reset"
+            @click="reset('cancel')"
           >
             キャンセル
           </button>
@@ -1265,7 +1312,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
           <button
             data-testid="medical-cancel"
             class="w-full mt-4 px-4 py-3 text-gray-500 hover:text-gray-700 text-sm"
-            @click="reset"
+            @click="reset('cancel')"
           >
             キャンセル
           </button>
@@ -1319,7 +1366,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
           </p>
           <ClientOnly>
             <TenkoVideoCall
-              v-if="!isSaving"
+              v-if="!isSaving && itCallState !== 'unavailable'"
               :local-stream="itCall.localStream.value"
               :remote-stream="itCall.remoteStream.value"
               :is-peer-connected="itCall.isPeerConnected.value"
@@ -1348,11 +1395,38 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             <button
               data-testid="it-call-end"
               class="w-full py-1.5 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium"
-              @click="reset"
+              @click="askItCallEnd"
             >
               未完了のまま終了
             </button>
           </template>
+          <!-- 「未完了のまま終了」の確認。既定は「戻る」(外側を押しても戻る)。window.confirm は
+               キオスクの全画面で出ないことがあるので画面内に出す -->
+          <div
+            v-if="itCallEndConfirming"
+            data-testid="it-call-end-confirm"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+            @click.self="cancelItCallEnd"
+          >
+            <div class="bg-white rounded-2xl shadow-xl p-8 text-center max-w-sm flex flex-col gap-4">
+              <p class="text-lg font-semibold text-gray-800">運行管理者の判定がまだです。終了しますか？</p>
+              <button
+                data-testid="it-call-end-back"
+                class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700"
+                autofocus
+                @click="cancelItCallEnd"
+              >
+                戻る
+              </button>
+              <button
+                data-testid="it-call-end-ok"
+                class="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300"
+                @click="confirmItCallEnd"
+              >
+                終了する
+              </button>
+            </div>
+          </div>
         </div>
         <ResultCard
           v-else
@@ -1360,7 +1434,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
           :face-photo-blob="resultFacePhoto"
           :employee-name="employeeName"
           :it-offer="tenkoPending ? { secondsLeft: itOfferSecondsLeft, busy: tenkoConfirming } : null"
-          @reset="reset"
+          @reset="reset('next')"
           @it="chooseIt"
           @finish="finishItOffer"
         />
@@ -1463,7 +1537,7 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
           v-if="showCancel"
           data-testid="footer-cancel"
           class="text-gray-500 hover:text-gray-700 text-sm"
-          @click="reset"
+          @click="reset('cancel')"
         >
           キャンセル
         </button>

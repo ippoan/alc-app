@@ -941,6 +941,8 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
     await flush(wrapper)
     await wrapper.find('[data-testid="it-call-end"]').trigger('click')
     await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     updateMeasurementMock.mockClear()
     itCall.start.mockClear()
@@ -954,6 +956,224 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
     expect(itCall.start).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
     expect(nextButton(wrapper)).toBeTruthy()
+    wrapper.unmount()
+  })
+})
+
+// 判定待ちのまま残った IT点呼 の調査 (Refs ippoan/alc-app-s3#352)。端末が IT点呼 の通話を始めた
+// 直後に待機画面へ戻り、通話の部屋が消えていた。IT点呼 に進むと決まってから判定が付くまで、
+// 「次の測定へ」「終了」で通話を切れないことを、通話の composable の状態の移り変わりごとに見る
+describe('NormalMeasurement — itSelectable: IT点呼 に進んだら判定まで「次の測定へ」を出さない', () => {
+  const resetButton = (wrapper: Wrapper) => wrapper.find('[data-testid="result-reset"]')
+
+  // `realisticStart` で差し替えた start を、次のテストへ持ち込まない
+  afterEach(() => {
+    itCall.start.mockImplementation(async (_id: string) => { itCall.state.value = 'calling' })
+  })
+
+  /** 実物の useItTenkoCall と同じ順 — start() は同期で connecting、開けたら calling */
+  function realisticStart() {
+    let opened!: () => void
+    itCall.start.mockImplementation(async () => {
+      itCall.state.value = 'connecting'
+      await new Promise<void>((resolve) => { opened = resolve })
+      itCall.state.value = 'calling'
+    })
+    return () => opened()
+  }
+
+  it('★ IT点呼 を押してから判定が付くまで、どの瞬間も result-reset / result-finish を描かない', async () => {
+    const open = realisticStart()
+    let resolveConfirm!: (v: unknown) => void
+    confirmTenkoMock.mockImplementation(() => new Promise((resolve) => { resolveConfirm = resolve }))
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+
+    await itButton(wrapper).trigger('click')
+    // 確定の応答待ち: 「終了」は押せない
+    expect(resetButton(wrapper).exists()).toBe(false)
+    expect(finishButton(wrapper).attributes('disabled')).toBeDefined()
+
+    resolveConfirm({ tenko_session_id: 'session-it', tenko_method: 'IT点呼' })
+    await Promise.resolve()
+    await wrapper.vm.$nextTick()
+    // connecting
+    expect(resetButton(wrapper).exists()).toBe(false)
+    expect(finishButton(wrapper).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
+
+    await flush(wrapper)
+    expect(resetButton(wrapper).exists()).toBe(false)
+
+    open()
+    await flush(wrapper)
+    expect(itCall.state.value).toBe('calling')
+    expect(resetButton(wrapper).exists()).toBe(false)
+    expect(finishButton(wrapper).exists()).toBe(false)
+
+    // 通話を開けなかった / つなぎ直し中も同じ
+    for (const s of ['unavailable', 'connecting', 'calling'] as const) {
+      itCall.state.value = s
+      await wrapper.vm.$nextTick()
+      expect(resetButton(wrapper).exists(), s).toBe(false)
+      expect(finishButton(wrapper).exists(), s).toBe(false)
+      expect(wrapper.find('[data-testid="it-call-end"]').exists(), s).toBe(true)
+    }
+
+    // 判定が付いて初めて「次の測定へ」
+    itCall.state.value = 'judged'
+    itCall.judgment.value = { judgment: 'ok', reason: null }
+    await wrapper.vm.$nextTick()
+    expect(resetButton(wrapper).exists()).toBe(true)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('★ 通話を開いている途中・通話中に結果の画面の「次の測定へ」「終了」が届いても通話を切らない', async () => {
+    realisticStart()
+    let resolveConfirm!: (v: unknown) => void
+    confirmTenkoMock.mockImplementation(() => new Promise((resolve) => { resolveConfirm = resolve }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => warn.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    const card = wrapper.findComponent({ name: 'ResultCard' })
+
+    await itButton(wrapper).trigger('click')
+    resolveConfirm({ tenko_session_id: 'session-it', tenko_method: 'IT点呼' })
+    // 確定が返って通話を開き始めた瞬間 (結果の画面の描き直しより前) に押された
+    await Promise.resolve()
+    expect(itCall.state.value).toBe('connecting')
+    expect(card.vm.$.isUnmounted).toBe(false)
+    card.vm.$emit('reset')
+    card.vm.$emit('finish')
+    await flush(wrapper)
+
+    expect(itCall.stop).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
+    expect(warn).toHaveBeenCalledWith('[Measurement] reset during IT call by next')
+    expect(warn).toHaveBeenCalledWith('[Measurement] reset during IT call by finish')
+    wrapper.unmount()
+  })
+
+  it('★ 「未完了のまま終了」は通話中でも待機へ戻り、どの口から戻ったかを警告に 1 行残す', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => warn.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(itCall.state.value).toBe('calling')
+
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(warn).toHaveBeenCalledWith('[Measurement] reset during IT call by it-call-end')
+    wrapper.unmount()
+  })
+
+  it('★ 判定の後の自動戻りは今どおり戻る (判定待ちではないので警告は出さない)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => warn.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    itCall.state.value = 'judged'
+    await wrapper.vm.$nextTick()
+
+    vi.advanceTimersByTime(30_000)
+    await wrapper.vm.$nextTick()
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(warn.mock.calls.some(c => String(c[0]).includes('reset during IT call'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 「未完了のまま終了」を押すと確認を出し、「戻る」なら通話を続ける (stop しない)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    onTestFinished(() => info.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const confirm = wrapper.find('[data-testid="it-call-end-confirm"]')
+    expect(confirm.text()).toContain('運行管理者の判定がまだです。終了しますか？')
+    expect(wrapper.find('[data-testid="it-call-end-back"]').text()).toBe('戻る')
+    expect(wrapper.find('[data-testid="it-call-end-ok"]').text()).toBe('終了する')
+    expect(info).toHaveBeenCalledWith('[Measurement] it-call-end confirm shown')
+
+    await wrapper.find('[data-testid="it-call-end-back"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
+    expect(info).toHaveBeenCalledWith('[Measurement] it-call-end confirm: back')
+
+    // 確認の外 (背景) を押しても戻る扱い
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-confirm"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(itCall.stop).not.toHaveBeenCalled()
+
+    // 確認を出している間に判定が付いたら確認は閉じる
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    itCall.state.value = 'judged'
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('★ 確認の「終了する」で今どおり待機画面へ戻る (確認・終了を console.info に残す)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    onTestFinished(() => info.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(info).toHaveBeenCalledWith('[Measurement] it-call-end confirm: end')
+    wrapper.unmount()
+  })
+
+  it('★ IT点呼 を選ばない回 (「終了」・「次の測定へ」) は今どおり戻り、警告も出さない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => warn.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await finishButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+
+    await touch(wrapper, 'other')
+    await measure(wrapper)
+    await nextButton(wrapper)!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(itCall.start).not.toHaveBeenCalled()
+    expect(warn.mock.calls.some(c => String(c[0]).includes('reset during IT call'))).toBe(false)
     wrapper.unmount()
   })
 })

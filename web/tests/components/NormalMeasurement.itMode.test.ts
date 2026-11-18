@@ -480,7 +480,7 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     wrapper.unmount()
   })
 
-  it('★ 判定待ちのあいだは常に「未完了のまま終了」が出て、押すと通話と判定待ちを止めて待機へ戻る', async () => {
+  it('★ 判定待ちのあいだは常に「未完了のまま終了」が出て、確認の「終了する」で通話と判定待ちを止めて待機へ戻る', async () => {
     const wrapper = await mountIt(true)
     await runToResult(wrapper)
 
@@ -491,6 +491,10 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     expect(wrapper.find('[data-testid="it-call-panel"]').text()).toContain('運行管理者の確認が済むまで、この点呼は未完了です')
 
     await end.trigger('click')
+    await wrapper.vm.$nextTick()
+    // 押しただけでは戻らない (確認を挟む。Refs ippoan/alc-app-s3#352)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(itCall.stop).toHaveBeenCalledTimes(1)
@@ -661,14 +665,17 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     wrapper.unmount()
   })
 
-  it('通話を開けなかった (カメラ・signaling) ときも案内と「次の測定へ」を出し、つなぎ直せる', async () => {
+  it('★ 通話を開けなかった (カメラ・signaling) ときは案内を出してつなぎ直せる。判定待ちなので「次の測定へ」は出さず、出口は「未完了のまま終了」 (Refs ippoan/alc-app-s3#352)', async () => {
     itCall.start.mockImplementationOnce(async () => { itCall.state.value = 'unavailable' })
     const wrapper = await mountIt(true)
     await runToResult(wrapper)
 
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="it-call-not-started"]').text()).toContain(IT_CALL_NOT_STARTED)
-    expect(nextButton(wrapper)).toBeTruthy()
+    expect(nextButton(wrapper)).toBeUndefined()
+    expect(wrapper.find('[data-testid="it-call-end"]').exists()).toBe(true)
+    // 通話の映像は出さない (開けていない)
+    expect(wrapper.find('[data-testid="video-call-stub"]').exists()).toBe(false)
 
     await wrapper.find('[data-testid="it-call-retry"]').trigger('click')
     expect(itCall.reconnect).toHaveBeenCalledTimes(1)
@@ -685,6 +692,8 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     expect(itCall.reconnect).toHaveBeenCalledTimes(1)
 
     await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
     await wrapper.vm.$nextTick()
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
