@@ -1494,6 +1494,18 @@ export async function listDeviceLabels(): Promise<{ devices: { device_id: string
 }
 
 /**
+ * 端末 1 台の名前 (Refs ippoan/alc-app-s3#352。右下の版の表示用)。名前が無ければ `name: null`。
+ * token は版の報告 (`reportFirmware`) と同じ順: キオスクの鍵 → 運行管理者席の鍵。どちらも無ければ利用者の token
+ * (route は端末の token と管理者だけ通す)
+ */
+export async function getDeviceName(deviceId: string): Promise<{ device_id: string, name: string | null }> {
+  const jwt = (await getKioskDeviceJwt?.()) ?? (await getManagerDeviceJwt?.()) ?? getAccessToken?.()
+  if (!jwt) throw new Error('端末の登録が必要です')
+  return bearerRequest<{ device_id: string, name: string | null }>(
+    `/api/device-name?device_id=${encodeURIComponent(deviceId)}`, jwt, { method: 'GET' })
+}
+
+/**
  * 端末の名前を変える (Refs ippoan/alc-app-s3#352)。admin の token が要る。
  * `alarm-<指紋>` の端末は鍵のラベル、それ以外は登録簿のラベルが変わる (振り分けは server route)。
  * 409 (`duplicate_label` / `revoked`) は status 付きの Error で投げる (本文に `error` が入る)。

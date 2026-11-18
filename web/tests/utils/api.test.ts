@@ -75,6 +75,7 @@ import {
   reportVeinFleet,
   reportKioskCommandResult,
   reportFirmware,
+  getDeviceName,
   // Vein templates (指静脈、Refs ippoan/vein-match#20, ippoan/rust-alc-api#678)
   putVeinTemplate,
   putVeinModuleRecord,
@@ -2877,6 +2878,34 @@ describe.skipIf(isLive)('ファームの更新 (#403)', () => {
       message: 'API エラー (503): 端末の一覧を取得できません',
       status: 503,
     })
+  })
+
+  it('★ getDeviceName: 版の報告と同じ順 (キオスクの鍵 → 席の鍵 → 利用者) の token で 1 台ぶん引く (Refs ippoan/alc-app-s3#352)', async () => {
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => 'kiosk-jwt', async () => 'seat-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ device_id: 'alarm:0123456789abcdef', name: 'vein-a' }))
+    expect(await getDeviceName('alarm:0123456789abcdef')).toEqual({ device_id: 'alarm:0123456789abcdef', name: 'vein-a' })
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe('/api/device-name?device_id=alarm%3A0123456789abcdef')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer kiosk-jwt')
+
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid', undefined, async () => null, async () => 'seat-jwt')
+    mockFetch.mockResolvedValueOnce(okJson({ device_id: 'd1', name: null }))
+    await getDeviceName('d1')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer seat-jwt')
+
+    initApi(API_BASE, () => 'admin-jwt', () => 'tid')
+    mockFetch.mockResolvedValueOnce(okJson({ device_id: 'd1', name: null }))
+    await getDeviceName('d1')
+    expect(new Headers(mockFetch.mock.calls[2][1].headers).get('Authorization')).toBe('Bearer admin-jwt')
+  })
+
+  it('getDeviceName: token が 1 つも無ければ fetch せずに throw', async () => {
+    initApi(API_BASE, () => null, () => 'tid', undefined, async () => null, async () => null)
+    await expect(getDeviceName('d1')).rejects.toThrow('端末の登録が必要です')
+    initApi(API_BASE)
+    await expect(getDeviceName('d1')).rejects.toThrow('端末の登録が必要です')
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })
 

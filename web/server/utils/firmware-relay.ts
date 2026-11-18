@@ -146,6 +146,35 @@ export function buildAlarmKeyRenameForward(input: { sharedSecret: string, tenant
   }
 }
 
+/**
+ * auth-worker の機体の鍵 1 本の名前を読む `GET /internal/alarm-keys/label` への forward request を組む
+ * (Refs ippoan/alc-app-s3#352。右下の版の表示が「自分の端末の名前だけ」を読む口 `/api/device-name` 用)。
+ * shared secret の生の値で叩き、tenant は introspect の値。応答は `{fingerprint, label, revoked}` / 404。
+ */
+export function buildAlarmKeyLabelForward(input: { sharedSecret: string, tenantId: string, fingerprint: string }): Forward {
+  const q = new URLSearchParams({ tenant_id: input.tenantId, fingerprint: input.fingerprint })
+  return {
+    url: `${AUTH_WORKER_BASE}/internal/alarm-keys/label?${q}`,
+    init: { method: 'GET', headers: { Authorization: input.sharedSecret } },
+  }
+}
+
+/**
+ * 端末の名前を 1 台ぶん読んでよい token の role (Refs ippoan/alc-app-s3#352)。
+ * 版の報告と同じ端末の token (キオスク・運行管理者席) に、管理者を足したもの。一覧全体は管理者だけのまま
+ */
+export const DEVICE_NAME_READ_ROLES: ReadonlySet<string> = new Set([...VEIN_FIRMWARE_REPORT_ROLES, FIRMWARE_ADMIN_ROLE])
+
+/**
+ * `/internal/alarm-keys/label` の 200 の本文から表示名を作る (pure)。失効は「 (失効)」付き
+ * (画面の `keyDeviceLabel` と同じ表記)。label が無い・形違いは null
+ */
+export function alarmKeyLabelName(json: unknown): string | null {
+  const j = json as { label?: unknown, revoked?: unknown } | null | undefined
+  if (typeof j?.label !== 'string' || !j.label) return null
+  return j.revoked === true ? `${j.label} (失効)` : j.label
+}
+
 /** 端末の名前の最大文字数 (auth-worker の検査と揃える) */
 export const DEVICE_LABEL_MAX = 64
 
