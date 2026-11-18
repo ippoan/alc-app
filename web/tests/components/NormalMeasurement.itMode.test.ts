@@ -661,14 +661,17 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     wrapper.unmount()
   })
 
-  it('通話を開けなかった (カメラ・signaling) ときも案内と「次の測定へ」を出し、つなぎ直せる', async () => {
+  it('★ 通話を開けなかった (カメラ・signaling) ときは案内を出してつなぎ直せる。判定待ちなので「次の測定へ」は出さず、出口は「未完了のまま終了」 (Refs ippoan/alc-app-s3#352)', async () => {
     itCall.start.mockImplementationOnce(async () => { itCall.state.value = 'unavailable' })
     const wrapper = await mountIt(true)
     await runToResult(wrapper)
 
-    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="it-call-not-started"]').text()).toContain(IT_CALL_NOT_STARTED)
-    expect(nextButton(wrapper)).toBeTruthy()
+    expect(nextButton(wrapper)).toBeUndefined()
+    expect(wrapper.find('[data-testid="it-call-end"]').exists()).toBe(true)
+    // 通話の映像は出さない (開けていない)
+    expect(wrapper.find('[data-testid="video-call-stub"]').exists()).toBe(false)
 
     await wrapper.find('[data-testid="it-call-retry"]').trigger('click')
     expect(itCall.reconnect).toHaveBeenCalledTimes(1)
