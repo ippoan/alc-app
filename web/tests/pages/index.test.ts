@@ -25,6 +25,7 @@ import TenkoDeskView from '~/components/TenkoDeskView.vue'
 import RoleAuthGate from '~/components/RoleAuthGate.vue'
 import ManagerAlarmBar from '~/components/ManagerAlarmBar.vue'
 import AlarmDeviceFirmwareNotice from '~/components/AlarmDeviceFirmwareNotice.vue'
+import ManagerSeatRemoteHost from '~/components/ManagerSeatRemoteHost.vue'
 import FirmwareOtaOverlay from '~/components/FirmwareOtaOverlay.vue'
 import VeinFleetHost from '~/components/VeinFleetHost.vue'
 import ManagerDashboard from '~/components/ManagerDashboard.vue'
@@ -1537,6 +1538,27 @@ describe('pages/index — 役割タブ「IT点呼」(運行管理者側の受け
 
       await clickRole(wrapper, 'システム管理者')
       expect(wrapper.findComponent(AlarmDeviceFirmwareNotice).exists()).toBe(false)
+    })
+
+    it('★ 席の遠隔操作・1 台指定の更新の受け手は、運行管理者・IT点呼・点呼受付の画面に 1 つ在り、その間の切り替えで作り直されない (Refs ippoan/alc-app-s3#352)', async () => {
+      wrapper = await mountIndex('/?role=driver')
+      expect(wrapper.findComponent(ManagerSeatRemoteHost).exists()).toBe(false)
+
+      await clickRole(wrapper, '運行管理者')
+      expect(wrapper.findAllComponents(ManagerSeatRemoteHost)).toHaveLength(1)
+      // 同じインスタンスのまま残る = 購読を張り直さない (二重にも切れっぱなしにもならない)
+      const uid = wrapper.findComponent(ManagerSeatRemoteHost).vm.$.uid
+
+      for (const role of [LABEL, '点呼受付', '運行管理者']) {
+        await clickRole(wrapper, role)
+        expect(wrapper.findAllComponents(ManagerSeatRemoteHost)).toHaveLength(1)
+        expect(wrapper.findComponent(ManagerSeatRemoteHost).vm.$.uid).toBe(uid)
+      }
+
+      for (const role of ['システム管理者', '汎用管理', '運行者']) {
+        await clickRole(wrapper, role)
+        expect(wrapper.findComponent(ManagerSeatRemoteHost).exists()).toBe(false)
+      }
     })
 
     it('★ 「更新中」の幕は、どの役割タブでも 1 つだけ在る (運行者の機体にも席の警告デバイスにも出す。Refs ippoan/alc-app#425)', async () => {

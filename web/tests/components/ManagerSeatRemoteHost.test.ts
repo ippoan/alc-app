@@ -60,6 +60,31 @@ describe('ManagerSeatRemoteHost', () => {
     expect(watchHandle.stop).toHaveBeenCalled()
   })
 
+  it('★ 席の鍵が無い端末 (キオスクで IT点呼を開いた等) では、鍵が取れなくても例外を出さず何も描かない', async () => {
+    // 本物の購読で確かめる (鍵が null・失敗なら WS を張らない)
+    const { useTimecardWatch: realWatch } = await vi.importActual<typeof import('~/composables/useTimecardWatch')>('~/composables/useTimecardWatch')
+    timecardWatch.mockImplementation(realWatch)
+    const sockets = vi.fn()
+    vi.stubGlobal('WebSocket', sockets)
+    try {
+      for (const noKey of [() => managerToken.getManagerJwt.mockResolvedValue(null), () => managerToken.getManagerJwt.mockRejectedValue(new Error('no key'))]) {
+        noKey()
+        vein.isConnected.value = true
+        const wrapper = await mountSuspended(ManagerSeatRemoteHost)
+        await flushPromises()
+        expect(managerToken.getManagerJwt).toHaveBeenCalled()
+        expect(sockets).not.toHaveBeenCalled()
+        expect(wrapper.text()).toBe('')
+        wrapper.unmount()
+        managerToken.getManagerJwt.mockClear()
+      }
+    }
+    finally {
+      vi.unstubAllGlobals()
+      timecardWatch.mockReset()
+    }
+  })
+
   it('★ 自分宛ての命令に、席の鍵で答える', async () => {
     vein.isConnected.value = true
     await mountSuspended(ManagerSeatRemoteHost)
