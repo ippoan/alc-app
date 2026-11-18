@@ -480,7 +480,7 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     wrapper.unmount()
   })
 
-  it('★ 判定待ちのあいだは常に「未完了のまま終了」が出て、押すと通話と判定待ちを止めて待機へ戻る', async () => {
+  it('★ 判定待ちのあいだは常に「未完了のまま終了」が出て、確認の「終了する」で通話と判定待ちを止めて待機へ戻る', async () => {
     const wrapper = await mountIt(true)
     await runToResult(wrapper)
 
@@ -491,6 +491,10 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     expect(wrapper.find('[data-testid="it-call-panel"]').text()).toContain('運行管理者の確認が済むまで、この点呼は未完了です')
 
     await end.trigger('click')
+    await wrapper.vm.$nextTick()
+    // 押しただけでは戻らない (確認を挟む。Refs ippoan/alc-app-s3#352)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(itCall.stop).toHaveBeenCalledTimes(1)
@@ -688,6 +692,8 @@ describe('NormalMeasurement — itMode: 保存と通話', () => {
     expect(itCall.reconnect).toHaveBeenCalledTimes(1)
 
     await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
     await wrapper.vm.$nextTick()
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)

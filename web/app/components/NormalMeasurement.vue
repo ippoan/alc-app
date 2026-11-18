@@ -878,6 +878,28 @@ async function onMeasurementResult(result: MeasurementResult) {
 const itAwaitingJudgment = computed(() => itActive.value
   && itCallState.value !== 'judged'
   && !itCallNotStarted.value)
+/**
+ * 「未完了のまま終了」の確認を出しているか。判定待ちの画面のボタンはこれ 1 つだけなので、
+ * 「終わり」と読んで押され、通話の直後に部屋が消えて判定待ちのまま残っていた
+ * (Refs ippoan/alc-app-s3#352)。押したら確認を挟み、既定は「戻る」
+ */
+const itCallEndConfirming = ref(false)
+function askItCallEnd() {
+  itCallEndConfirming.value = true
+  console.info('[Measurement] it-call-end confirm shown')
+}
+function cancelItCallEnd() {
+  itCallEndConfirming.value = false
+  console.info('[Measurement] it-call-end confirm: back')
+}
+function confirmItCallEnd() {
+  itCallEndConfirming.value = false
+  console.info('[Measurement] it-call-end confirm: end')
+  reset('it-call-end')
+}
+// 確認を出している間に判定が付いた・判定待ちでなくなったら、確認は閉じる
+watch(() => itAwaitingJudgment.value, (awaiting) => { if (!awaiting) itCallEndConfirming.value = false })
+
 /** IT点呼 の通話を開いている途中か通話中 (ボタン由来の reset を受けない) */
 const itCallLive = computed(() => itActive.value
   && (itCallState.value === 'connecting' || itCallState.value === 'calling'))
@@ -914,6 +936,7 @@ function reset(by: ResetBy) {
   // 通話中に「次の測定へ」等が届いても切らない (判定待ちの画面には出していない口。念のための守り)
   if (itCallLive.value && RESET_BLOCKED_DURING_IT_CALL.has(by)) return
   stopItJudgedReset()
+  itCallEndConfirming.value = false
   itCall?.stop()
   itCallNotStarted.value = false
   stopItOfferTimer()
@@ -1372,11 +1395,38 @@ const currentStepIndex = computed(() => stepKeys.value.indexOf(step.value === 'c
             <button
               data-testid="it-call-end"
               class="w-full py-1.5 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium"
-              @click="reset('it-call-end')"
+              @click="askItCallEnd"
             >
               未完了のまま終了
             </button>
           </template>
+          <!-- 「未完了のまま終了」の確認。既定は「戻る」(外側を押しても戻る)。window.confirm は
+               キオスクの全画面で出ないことがあるので画面内に出す -->
+          <div
+            v-if="itCallEndConfirming"
+            data-testid="it-call-end-confirm"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+            @click.self="cancelItCallEnd"
+          >
+            <div class="bg-white rounded-2xl shadow-xl p-8 text-center max-w-sm flex flex-col gap-4">
+              <p class="text-lg font-semibold text-gray-800">運行管理者の判定がまだです。終了しますか？</p>
+              <button
+                data-testid="it-call-end-back"
+                class="w-full px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700"
+                autofocus
+                @click="cancelItCallEnd"
+              >
+                戻る
+              </button>
+              <button
+                data-testid="it-call-end-ok"
+                class="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300"
+                @click="confirmItCallEnd"
+              >
+                終了する
+              </button>
+            </div>
+          </div>
         </div>
         <ResultCard
           v-else

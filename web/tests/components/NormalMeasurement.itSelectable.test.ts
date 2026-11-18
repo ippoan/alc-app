@@ -941,6 +941,8 @@ describe('NormalMeasurement — itSelectable: 「IT点呼」', () => {
     await flush(wrapper)
     await wrapper.find('[data-testid="it-call-end"]').trigger('click')
     await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     updateMeasurementMock.mockClear()
     itCall.start.mockClear()
@@ -1066,6 +1068,8 @@ describe('NormalMeasurement — itSelectable: IT点呼 に進んだら判定ま�
 
     await wrapper.find('[data-testid="it-call-end"]').trigger('click')
     await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
     expect(warn).toHaveBeenCalledWith('[Measurement] reset during IT call by it-call-end')
@@ -1089,6 +1093,68 @@ describe('NormalMeasurement — itSelectable: IT点呼 に進んだら判定ま�
     expect(itCall.stop).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
     expect(warn.mock.calls.some(c => String(c[0]).includes('reset during IT call'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 「未完了のまま終了」を押すと確認を出し、「戻る」なら通話を続ける (stop しない)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    onTestFinished(() => info.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    const confirm = wrapper.find('[data-testid="it-call-end-confirm"]')
+    expect(confirm.text()).toContain('運行管理者の判定がまだです。終了しますか？')
+    expect(wrapper.find('[data-testid="it-call-end-back"]').text()).toBe('戻る')
+    expect(wrapper.find('[data-testid="it-call-end-ok"]').text()).toBe('終了する')
+    expect(info).toHaveBeenCalledWith('[Measurement] it-call-end confirm shown')
+
+    await wrapper.find('[data-testid="it-call-end-back"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="it-call-panel"]').exists()).toBe(true)
+    expect(info).toHaveBeenCalledWith('[Measurement] it-call-end confirm: back')
+
+    // 確認の外 (背景) を押しても戻る扱い
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-confirm"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(itCall.stop).not.toHaveBeenCalled()
+
+    // 確認を出している間に判定が付いたら確認は閉じる
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    itCall.state.value = 'judged'
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(itCall.stop).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('★ 確認の「終了する」で今どおり待機画面へ戻る (確認・終了を console.info に残す)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    onTestFinished(() => info.mockRestore())
+    const wrapper = await mountNm({ itSelectable: true })
+    await runToResult(wrapper)
+    await itButton(wrapper).trigger('click')
+    await flush(wrapper)
+
+    await wrapper.find('[data-testid="it-call-end"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="it-call-end-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(itCall.stop).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(NfcStatusStub).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="it-call-end-confirm"]').exists()).toBe(false)
+    expect(info).toHaveBeenCalledWith('[Measurement] it-call-end confirm: end')
     wrapper.unmount()
   })
 
