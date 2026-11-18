@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { RECORDER_BASE } from '../../server/utils/print-relay'
 import {
+  alarmKeyLabelName,
+  buildAlarmKeyLabelForward,
+  DEVICE_NAME_READ_ROLES,
   buildDeviceLabelsForward,
   buildOtaReportForward,
   buildOtaStatusForward,
@@ -288,5 +291,29 @@ describe('mergeFirmwareDevices', () => {
     for (const v of [null, undefined, 'x', [], {}, { devices: {} }, { error: 'server_error' }]) {
       expect(mergeFirmwareDevices(v, new Map())).toEqual({ devices: [] })
     }
+  })
+})
+
+describe('buildAlarmKeyLabelForward / alarmKeyLabelName / DEVICE_NAME_READ_ROLES (Refs ippoan/alc-app-s3#352)', () => {
+  it('鍵 1 本の名前の口を tenant_id と指紋付きの GET で叩く。Authorization は secret の生の値', () => {
+    const fwd = buildAlarmKeyLabelForward({ sharedSecret: SECRET, tenantId: 't 1', fingerprint: '0123456789abcdef' })
+    const url = new URL(fwd.url)
+    expect(url.pathname).toBe('/internal/alarm-keys/label')
+    expect(url.searchParams.get('tenant_id')).toBe('t 1')
+    expect(url.searchParams.get('fingerprint')).toBe('0123456789abcdef')
+    expect(fwd.init).toEqual({ method: 'GET', headers: { Authorization: SECRET } })
+  })
+
+  it('label を名前にし、失効は「 (失効)」付き。無い・空・形違いは null', () => {
+    expect(alarmKeyLabelName({ label: 'a', revoked: false })).toBe('a')
+    expect(alarmKeyLabelName({ label: 'a', revoked: true })).toBe('a (失効)')
+    expect(alarmKeyLabelName({ label: '' })).toBeNull()
+    expect(alarmKeyLabelName({ label: null })).toBeNull()
+    expect(alarmKeyLabelName(null)).toBeNull()
+  })
+
+  it('報告の端末 (キオスク・運行管理者席) と管理者だけ', () => {
+    expect([...DEVICE_NAME_READ_ROLES].sort()).toEqual([...VEIN_FIRMWARE_REPORT_ROLES, 'admin'].sort())
+    expect(DEVICE_NAME_READ_ROLES.has('viewer')).toBe(false)
   })
 })
