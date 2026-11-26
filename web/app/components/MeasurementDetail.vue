@@ -1,15 +1,54 @@
 <script setup lang="ts">
 import type { ApiMeasurement } from '~/types'
 import { alcoholResultClass, alcoholResultLabel } from '~/utils/alcohol'
+import { excludeMeasurementBp } from '~/utils/api'
 
-defineProps<{
+const props = defineProps<{
   measurement: ApiMeasurement
   employeeName: string
 }>()
 
 const emit = defineEmits<{
   close: []
+  /** 血圧を外した後の測定 (親が表示中の測定を差し替える) */
+  updated: [measurement: ApiMeasurement]
 }>()
+
+// --- 血圧を外す (測定台で人が入れ替わった血圧。Refs ippoan/alc-app#676) ---
+const excludeOpen = ref(false)
+const excludeReason = ref('')
+const excludeByName = ref('')
+const excluding = ref(false)
+const excludeError = ref<string | null>(null)
+
+function openExclude() {
+  excludeOpen.value = true
+  excludeReason.value = ''
+  excludeByName.value = ''
+  excludeError.value = null
+}
+
+async function submitExclude() {
+  const reason = excludeReason.value.trim()
+  if (!reason || excluding.value) return
+  excluding.value = true
+  excludeError.value = null
+  try {
+    const byName = excludeByName.value.trim()
+    const updated = await excludeMeasurementBp(props.measurement.id, byName ? { reason, excluded_by_name: byName } : { reason })
+    excludeOpen.value = false
+    emit('updated', updated)
+  }
+  catch (e) {
+    const err = e as { status?: number, message?: string } | null
+    excludeError.value = err?.status === 409
+      ? 'この血圧はすでに外されています'
+      : (err?.message || '血圧を外せませんでした')
+  }
+  finally {
+    excluding.value = false
+  }
+}
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
@@ -132,8 +171,71 @@ function statusColor(m: ApiMeasurement) {
           </div>
           <div v-if="measurement.systolic != null" class="flex justify-between items-center">
             <span class="text-sm text-gray-500">血圧</span>
-            <span class="font-mono font-medium text-gray-700">{{ measurement.systolic }}/{{ measurement.diastolic }}</span>
+            <span
+              class="font-mono font-medium"
+              :class="measurement.bp_excluded_at ? 'text-gray-400 line-through' : 'text-gray-700'"
+            >{{ measurement.systolic }}/{{ measurement.diastolic }}</span>
           </div>
+          <template v-if="measurement.systolic != null">
+            <p
+              v-if="measurement.bp_excluded_at"
+              data-testid="bp-excluded"
+              class="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2"
+            >
+              外した ({{ measurement.bp_excluded_reason }}・{{ measurement.bp_excluded_by_name }}・{{ formatDate(measurement.bp_excluded_at) }})
+            </p>
+            <button
+              v-else-if="!excludeOpen"
+              data-testid="bp-exclude-open"
+              class="text-xs text-red-600 underline"
+              @click="openExclude"
+            >
+              本人の測定ではない (外す)
+            </button>
+            <div v-else data-testid="bp-exclude-form" class="space-y-2 border-t border-gray-200 pt-3">
+              <p class="text-xs text-gray-500">
+                外した血圧は回数にも点呼にも入りません。測定の記録は残ります。
+              </p>
+              <label class="block text-xs text-gray-600">
+                理由 (必須)
+                <input
+                  v-model="excludeReason"
+                  data-testid="bp-exclude-reason"
+                  type="text"
+                  class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  placeholder="例: 別の人が測った"
+                >
+              </label>
+              <label class="block text-xs text-gray-600">
+                外した人の氏名 (空ならログインの名前)
+                <input
+                  v-model="excludeByName"
+                  data-testid="bp-exclude-by-name"
+                  type="text"
+                  class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+              </label>
+              <p v-if="excludeError" data-testid="bp-exclude-error" class="text-xs text-red-600">{{ excludeError }}</p>
+              <div class="flex gap-2">
+                <button
+                  data-testid="bp-exclude-submit"
+                  class="flex-1 px-3 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-50"
+                  :disabled="!excludeReason.trim() || excluding"
+                  @click="submitExclude"
+                >
+                  {{ excluding ? '外しています...' : '外す' }}
+                </button>
+                <button
+                  data-testid="bp-exclude-cancel"
+                  class="flex-1 px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm"
+                  :disabled="excluding"
+                  @click="excludeOpen = false"
+                >
+                  やめる
+                </button>
+              </div>
+            </div>
+          </template>
           <div v-if="measurement.pulse != null" class="flex justify-between items-center">
             <span class="text-sm text-gray-500">脈拍</span>
             <span class="font-mono font-medium text-gray-700">{{ measurement.pulse }} bpm</span>

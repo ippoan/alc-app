@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import type { DriverInfo } from '~/types'
-import { getDriverInfo, type RequestTokenScope } from '~/utils/api'
+import { ref, computed, onMounted, watch } from 'vue'
+import type { ApiMeasurement, DriverInfo } from '~/types'
+import { getDriverInfo, getMeasurement, type RequestTokenScope } from '~/utils/api'
 import { tenkoTypeLabel } from '~/utils/tenko-type'
 
 const props = withDefaults(defineProps<{
@@ -44,6 +44,28 @@ async function load() {
 
 watch(() => props.employeeId, load)
 onMounted(load)
+
+// --- 血圧の測定を開く (外す操作のため。Refs ippoan/alc-app#676) ---
+// 外す口は運行管理者のログインだけなので、ログインの画面 (scope 'default') でだけ開ける
+const canOpenMeasurement = computed(() => props.scope === 'default')
+const openedMeasurement = ref<ApiMeasurement | null>(null)
+const openError = ref<string | null>(null)
+
+async function openMeasurement(id: string) {
+  openError.value = null
+  try {
+    openedMeasurement.value = await getMeasurement(id)
+  }
+  catch {
+    openError.value = '測定を取得できませんでした'
+  }
+}
+
+/** 外した後の測定で開き直し、一覧の値も読み直す */
+function onMeasurementUpdated(m: ApiMeasurement) {
+  openedMeasurement.value = m
+  void load()
+}
 
 function formatDate(d: string | null) {
   if (!d) return '-'
@@ -102,12 +124,26 @@ function minutesToHM(m: number | null) {
             <tr v-for="m in info.recent_measurements" :key="m.id" class="border-t">
               <td>{{ formatDate(m.measured_at) }}</td>
               <td>{{ m.temperature ? `${m.temperature}°C` : '-' }}</td>
-              <td>{{ m.systolic && m.diastolic ? `${m.systolic}/${m.diastolic}` : '-' }}</td>
+              <td>
+                <button
+                  v-if="canOpenMeasurement && m.systolic && m.diastolic"
+                  data-testid="open-bp-measurement"
+                  class="text-blue-700 underline"
+                  @click="openMeasurement(m.id)"
+                >
+                  {{ m.systolic }}/{{ m.diastolic }}
+                </button>
+                <template v-else>{{ m.systolic && m.diastolic ? `${m.systolic}/${m.diastolic}` : '-' }}</template>
+              </td>
               <td>{{ m.pulse ?? '-' }}</td>
             </tr>
           </tbody>
         </table>
         <div v-if="info.recent_measurements.length === 0" class="text-xs text-gray-400">測定履歴なし</div>
+        <p v-if="openError" data-testid="open-bp-error" class="text-xs text-red-600">{{ openError }}</p>
+        <p v-if="canOpenMeasurement && info.recent_measurements.some(m => m.systolic)" class="text-xs text-gray-400">
+          血圧を押すと測定の詳細を開きます (本人の測定でない血圧はそこで外せます)
+        </p>
       </div>
 
       <!-- ロ 労働時間: alc_api.dtako_daily_work_hours (デジタコ連携) 由来。
@@ -202,5 +238,13 @@ function minutesToHM(m: number | null) {
         <div v-if="info.equipment_failures.length === 0" class="text-xs text-green-600">未解決の故障なし</div>
       </div>
     </div>
+
+    <MeasurementDetail
+      v-if="openedMeasurement"
+      :measurement="openedMeasurement"
+      :employee-name="info?.employee?.name ?? ''"
+      @close="openedMeasurement = null"
+      @updated="onMeasurementUpdated"
+    />
   </div>
 </template>

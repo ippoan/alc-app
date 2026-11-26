@@ -101,6 +101,13 @@ const employeeName = ref('')
 const measureNotice = ref<string | null>(null)
 const isSaving = ref(false)
 const saveError = ref<string | null>(null)
+/**
+ * 有効時間内の血圧が上限 (最初 + 測り直し 1 回) に達して保存を断られた (worker が本文なしの 422)。
+ * もう一度保存しても同じく断られるので「もう一度保存」は出さず、運行管理者への連絡を促す (Refs ippoan/alc-app#676)
+ */
+const saveLimited = ref(false)
+/** 血圧の保存が上限で断られたときの案内 */
+const BP_LIMIT_MESSAGE = '有効時間内の血圧の測定は 2 回までです。運行管理者に連絡してください'
 const savedReading = ref<{ systolic: number; diastolic: number; pulse?: number } | null>(null)
 
 /** 乗務員を控える */
@@ -201,6 +208,7 @@ let saveJob: SaveJob | null = null
 async function save(job: SaveJob) {
   isSaving.value = true
   saveError.value = null
+  saveLimited.value = false
   const t0 = Date.now()
   devTiming('bp.save.begin')
   try {
@@ -218,7 +226,13 @@ async function save(job: SaveJob) {
     devTiming('bp.save.update-done', { ms: Date.now() - t0 })
   } catch (e) {
     devTiming('bp.save.failed', { ms: Date.now() - t0 })
-    saveError.value = e instanceof Error ? e.message : '血圧の保存に失敗しました'
+    if ((e as { status?: number } | null)?.status === 422) {
+      saveLimited.value = true
+      saveError.value = BP_LIMIT_MESSAGE
+    }
+    else {
+      saveError.value = e instanceof Error ? e.message : '血圧の保存に失敗しました'
+    }
   } finally {
     isSaving.value = false
   }
@@ -317,6 +331,7 @@ function reset() {
   vein.error.value = null
   measureNotice.value = null
   saveError.value = null
+  saveLimited.value = false
   saveJob = null
   savedReading.value = null
 }
@@ -433,8 +448,9 @@ function reset() {
         </p>
         <p v-if="isSaving" class="mt-3 text-sm text-gray-500">保存中...</p>
         <template v-else-if="saveError">
-          <p class="mt-3 text-sm text-red-600">{{ saveError }}</p>
+          <p data-testid="save-error" class="mt-3 text-sm text-red-600">{{ saveError }}</p>
           <button
+            v-if="!saveLimited"
             data-testid="retry-save"
             class="w-full mt-3 px-4 py-3 bg-white border border-blue-600 text-blue-700 rounded-xl font-medium hover:bg-blue-50 transition-colors"
             @click="onRetrySave"

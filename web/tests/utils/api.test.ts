@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi, afterEach } from 'vite
 import {
   initApi, KIOSK_DEVICE_AUTH_FAILED_MESSAGE, MANAGER_DEVICE_AUTH_FAILED_MESSAGE, BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
   // Measurements
-  saveMeasurement, startMeasurement, updateMeasurement, confirmMeasurementTenko, getMeasurements, getMeasurement,
+  saveMeasurement, startMeasurement, updateMeasurement, confirmMeasurementTenko, excludeMeasurementBp, getMeasurements, getMeasurement,
   // Employees
   getEmployees, getEmployeeByNfcId, getEmployeeByCode, getEmployeeById,
   createEmployee, updateEmployee, deleteEmployee,
@@ -3061,6 +3061,17 @@ describe.skipIf(isLive)('device JWT proxy 経路 (#434 3b)', () => {
     expect(url).toBe(`/api/proxy/measurements/${UUID1}`)
     expect(init.method).toBe('PUT')
     expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+  })
+
+  it('血圧を外す (Refs ippoan/alc-app#676) → 測定の proxy の /exclude-bp に POST し、理由と氏名を body に載せる', async () => {
+    initApi(API_BASE, undefined, undefined, undefined, () => Promise.resolve('dev-jwt'))
+    mockFetch.mockResolvedValueOnce(okJson({ id: UUID1, bp_excluded_reason: 'テレコ' }))
+    const m = await excludeMeasurementBp(UUID1, { reason: 'テレコ', excluded_by_name: '運行 太郎' })
+    expect(m).toEqual({ id: UUID1, bp_excluded_reason: 'テレコ' })
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toBe(`/api/proxy/measurements/${UUID1}/exclude-bp`)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ reason: 'テレコ', excluded_by_name: '運行 太郎' })
   })
 
   it('点呼の確定 (Refs ippoan/alc-app#436) → 測定と同じ proxy に POST し、tenko_method を body に載せる', async () => {

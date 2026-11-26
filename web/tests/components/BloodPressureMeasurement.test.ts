@@ -492,6 +492,40 @@ describe('BloodPressureMeasurement (Refs ippoan/alc-app-s3#135)', () => {
       wrapper.unmount()
     })
 
+    it('有効時間内の上限で断られた (422) ら、2 回までの案内を出し「もう一度保存」は出さない。次の人には持ち越さない', async () => {
+      updateMeasurementMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (422): '), { status: 422 }))
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(wrapper.find('[data-testid="save-error"]').text()).toBe('有効時間内の血圧の測定は 2 回までです。運行管理者に連絡してください')
+      expect(wrapper.text()).not.toContain('API エラー')
+      expect(retryBtn(wrapper).exists()).toBe(false)
+      expect(nextBtn(wrapper).attributes('disabled')).toBeUndefined()
+
+      await nextBtn(wrapper).trigger('click')
+      await flush(wrapper)
+      expect(wrapper.find('[data-testid="save-error"]').exists()).toBe(false)
+
+      // 次の人の保存は普通に通り、上限の印は残っていない
+      await identifyByFinger(wrapper)
+      updateMeasurementMock.mockRejectedValueOnce(new Error('保存に失敗'))
+      latestBloodPressure.value = { ...reading, systolic: 130 }
+      await flush(wrapper)
+      expect(wrapper.find('[data-testid="save-error"]').text()).toBe('保存に失敗')
+      expect(retryBtn(wrapper).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('422 以外の status 付きの失敗は、これまでどおり文言と「もう一度保存」を出す', async () => {
+      updateMeasurementMock.mockRejectedValueOnce(Object.assign(new Error('API エラー (500): x'), { status: 500 }))
+      const wrapper = await toMeasure()
+      latestBloodPressure.value = reading
+      await flush(wrapper)
+      expect(wrapper.find('[data-testid="save-error"]').text()).toBe('API エラー (500): x')
+      expect(retryBtn(wrapper).exists()).toBe(true)
+      wrapper.unmount()
+    })
+
     it('Error 以外で落ちた文言と、「次の人へ」で捨てた id は次の人に持ち越さない', async () => {
       updateMeasurementMock.mockRejectedValueOnce('boom')
       const wrapper = await toMeasure()
