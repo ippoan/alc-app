@@ -14,6 +14,7 @@ const fetchFacePhotoMock = vi.fn(async () => null as string | null)
 const fetchMeasurementVideoMock = vi.fn(async () => null as string | null)
 const listCamHostKeysMock = vi.fn(async () => ({ keys: [] as any[], names: [] as any[] }))
 const listDeviceLabelsMock = vi.fn(async () => ({ devices: [] as any[] }))
+const excludeMeasurementBpMock = vi.fn(async (..._args: any[]) => ({}) as any)
 
 vi.mock('~/utils/api', () => ({
   listHubMeasurements: (...args: any[]) => listHubMeasurementsMock(...args),
@@ -23,6 +24,7 @@ vi.mock('~/utils/api', () => ({
   fetchMeasurementVideo: (...args: any[]) => fetchMeasurementVideoMock(...args),
   listCamHostKeys: () => listCamHostKeysMock(),
   listDeviceLabels: () => listDeviceLabelsMock(),
+  excludeMeasurementBp: (...args: any[]) => excludeMeasurementBpMock(...args),
 }))
 
 /** onMounted の await 群を流し切る */
@@ -109,6 +111,29 @@ describe('HubMeasurementsViewer — 点呼タブから測定詳細を開く', ()
     // いちばん近い (誤差 3 分) 側の測定値が開く
     expect(wrapper.text()).toContain('0.111')
     expect(wrapper.text()).not.toContain('0.222')
+    wrapper.unmount()
+  })
+
+  it('詳細で血圧を外すと、開いている測定を外した後の測定に差し替える (Refs ippoan/alc-app#676)', async () => {
+    const m = apiMeasurement({ systolic: 150, diastolic: 90 })
+    getMeasurementsMock.mockResolvedValueOnce({ measurements: [m], total: 1, page: 1, per_page: 20 })
+    excludeMeasurementBpMock.mockResolvedValueOnce({
+      ...m, bp_excluded_at: '2026-09-12T01:00:00.000Z', bp_excluded_reason: 'テレコ', bp_excluded_by_name: '運行 太郎',
+    })
+
+    const wrapper = await mountViewer()
+    const rows = wrapper.findAll('tbody > tr').filter(tr => !tr.text().includes('端末計時'))
+    await rows[0]!.findAll('button').find(b => b.text() === '測定詳細')!.trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="bp-exclude-open"]').trigger('click')
+    await wrapper.find('[data-testid="bp-exclude-reason"]').setValue('テレコ')
+    await wrapper.find('[data-testid="bp-exclude-submit"]').trigger('click')
+    await flush()
+    await wrapper.vm.$nextTick()
+
+    expect(excludeMeasurementBpMock).toHaveBeenCalledWith('m-near', { reason: 'テレコ' })
+    expect(wrapper.find('[data-testid="bp-excluded"]').text()).toContain('テレコ・運行 太郎')
     wrapper.unmount()
   })
 

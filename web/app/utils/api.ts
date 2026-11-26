@@ -595,6 +595,21 @@ export async function getMeasurement(id: string, scope: RequestTokenScope = 'def
   return request<ApiMeasurement>(`/api/measurements/${id}`, {}, scope)
 }
 
+/**
+ * 測定台の血圧を「本人の測定ではない」(テレコ) として外す (運行管理者のログインだけ。Refs ippoan/alc-app#676)。
+ * 理由は必須。`excluded_by_name` を省くと backend がログインの氏名 (無ければメール) を入れる。
+ * 外した後の測定を返す。二度外すと 409 (`already_excluded`)、血圧の無い測定は 400
+ */
+export async function excludeMeasurementBp(
+  id: string,
+  body: { reason: string, excluded_by_name?: string },
+): Promise<ApiMeasurement> {
+  return request<ApiMeasurement>(`/api/measurements/${id}/exclude-bp`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 /** 乗務員一覧を取得 */
 export async function getEmployees(scope: RequestTokenScope = 'default'): Promise<ApiEmployee[]> {
   return request<ApiEmployee[]>('/api/employees', {}, scope)

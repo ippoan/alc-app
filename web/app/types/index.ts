@@ -195,6 +195,14 @@ export interface ApiMeasurement {
    * 同じ乗務員・同じ時刻の別の測定)。この欄を返さない backend では undefined
    */
   tenko_session_id?: string | null
+  /**
+   * 測定台の血圧を「本人の測定ではない」(テレコ) として運行管理者が外した時刻・理由・外した人の氏名
+   * (Refs ippoan/alc-app#676)。外した血圧は回数にも点呼にも入らない。測定そのものは残る。
+   * 外していなければ null、この欄を返さない backend では undefined
+   */
+  bp_excluded_at?: string | null
+  bp_excluded_reason?: string | null
+  bp_excluded_by_name?: string | null
 }
 
 /** API: 乗務員 */

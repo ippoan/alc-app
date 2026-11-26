@@ -586,6 +586,7 @@ onMounted(() => {
       :measurement="selectedMeasurement"
       :employee-name="selectedEmployeeName"
       @close="selectedMeasurement = null"
+      @updated="selectedMeasurement = $event"
     />
   </div>
 </template>
