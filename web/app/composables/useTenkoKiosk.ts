@@ -84,6 +84,23 @@ export const SESSION_NOT_RESUMABLE_MESSAGE
   = 'この点呼は再開できません (すでに終了または中断されています)。新しく点呼をやり直してください'
 
 /**
+ * 運行管理者が再開していない点呼を続けようとしたときの文言 (サーバの 400 `manager_resume_required`)。
+ * 運転者が自分で止めた点呼は途中から続けられない (業務前 十二・2025/10/6 FAQ)。候補は先に絞ってあるので、
+ * 一覧を引いた後に別の端末で続けられた、といった行き違いでだけ起きる
+ */
+export const MANAGER_RESUME_REQUIRED_MESSAGE
+  = 'この点呼は続きから再開できません (運行管理者が再開した点呼だけ続けられます)。新しく点呼をやり直してください'
+
+/**
+ * 「続きから再開」の候補にするか: 運行管理者が再開した点呼 (`resumed_by_name` は管理者の再開だけが埋める) で、
+ * まだ運転者が本人確認して続けていないもの (`resume_identity_method` が空)。運転者が自分で止めた点呼
+ * (「最初からやり直す」や画面の閉じ忘れ) は途中から続けさせず、最初からやり直す (業務前 十二・2025/10/6 FAQ)
+ */
+export function isManagerResumed(s: TenkoSession): boolean {
+  return Boolean(s.resumed_by_name) && !s.resume_identity_method
+}
+
+/**
  * 「続きから再開」の対象にする status (Refs ippoan/alc-app#343)。
  *
  * **`alcohol_tested_at IS NULL` と同値。** アルコールの段は `identity_verified` の
@@ -94,8 +111,8 @@ export const SESSION_NOT_RESUMABLE_MESSAGE
  * - **`interrupted`** — 管理者が中断したものの再開は `AuthUser` 必須の `resume` API の
  *   領分で、キオスクの鍵 (`auth-worker` の `KIOSK_ROUTES`) では通らない。管理者が再開した
  *   後の点呼は `self_declaration_pending` / `daily_inspection_pending` になる (上の 5 つに
- *   含まれる) ので、**管理者が再開済み (`resumed_at` あり) でも候補に出す** — キオスクの
- *   self-resume はそれを受ける (再開の時刻・理由は上書きしない)。
+ *   含まれる) ので、**候補に出すのは管理者が再開した点呼だけ** ([`isManagerResumed`]) — キオスクの
+ *   self-resume はそれを 1 回だけ受ける (再開の時刻・理由は上書きしない)。
  * - **`completed` / `cancelled` / `judgment_pending`** — 終わっている (判定待ちは運行管理者が閉じる)。
  * - **`instruction_pending` / `report_pending`** — アルコール測定済み。続きを埋めること
  *   自体はできるが、**何時間も前に測った値のまま点呼記録が閉じる**ので入れない
@@ -294,11 +311,10 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     }
     // status は上の 5 つに絞ってあるが、**オーナー要件そのもの (アルコール未測定) を
     // ここでも直接確かめる** — 判定を別 repo の不変条件だけに預けない。
-    // `resumed_at` では落とさない — self-resume は管理者が再開済みの点呼も受ける
-    // (再開の時刻・理由は上書きしない)。管理者が再開した点呼こそ、キオスクで続きを実施する対象
+    // 候補は運行管理者が再開した点呼だけ (`isManagerResumed`)。運転者が自分で止めた点呼は最初からやり直す
     // タブと点呼の方法を合わせる (自動点呼のタブで遠隔点呼の途中の点呼を拾わない。`isResumableInAutoTab`)
     return found
-      .filter(s => s.alcohol_tested_at === null && isResumableInAutoTab(s))
+      .filter(s => s.alcohol_tested_at === null && isManagerResumed(s) && isResumableInAutoTab(s))
       .sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''))
   }
 
@@ -329,7 +345,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
    *
    * **無言では止めない** — 失敗の種類ごとに、理由と次の行動を必ず画面に出す:
    *
-   * - `session_not_resumable` — **押し直しても永久に通らない**ので、
+   * - `session_not_resumable` / `manager_resume_required` — **押し直しても永久に通らない**ので、
    *   文言を出して `reset()` で最初の画面 (乗務員 ID) へ戻す。新しい点呼としてやり直す
    * - それ以外 (通信断・上流の不調など) — 本人確認の段に留めて**もう一度指を置かせる**
    *   (`pendingResume` は残す)。ここで黙って続きへ通すと、直そうとしている #351 の症状
@@ -358,6 +374,11 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
         // reset() が error も畳むので、文言は**戻した後**に載せる
         reset()
         error.value = SESSION_NOT_RESUMABLE_MESSAGE
+        return
+      }
+      if (apiErrorCode(e) === 'manager_resume_required') {
+        reset()
+        error.value = MANAGER_RESUME_REQUIRED_MESSAGE
         return
       }
       _fail(e, '点呼の再開に失敗しました', '点呼の再開')

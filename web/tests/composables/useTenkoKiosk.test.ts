@@ -39,7 +39,7 @@ vi.mock('~/utils/equipment-failure-report', async () => ({
 
 import {
   useTenkoKiosk, RESUMABLE_TENKO_STATUSES,
-  KIOSK_SELF_RESUME_REASON, MEDICAL_EXPIRED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE, STAND_BP_MISSING_REASON,
+  KIOSK_SELF_RESUME_REASON, MANAGER_RESUME_REQUIRED_MESSAGE, MEDICAL_EXPIRED_MESSAGE, SESSION_NOT_RESUMABLE_MESSAGE, STAND_BP_MISSING_REASON,
 } from '~/composables/useTenkoKiosk'
 import {
   getPendingSchedules,
@@ -1582,6 +1582,10 @@ describe('useTenkoKiosk', () => {
     let held: TenkoSession | null = null
     /** サーバが返す「再開済みにした行」 (Refs ippoan/alc-app#351) */
     const RESUMED_AT = '2026-03-31T23:05:00Z'
+    /** 運行管理者が再開した行 (候補に出るのはこれだけ。業務前 十二・2025/10/6 FAQ) */
+    function managedSession(overrides: Partial<TenkoSession>): TenkoSession {
+      return makeSession({ resumed_at: RESUMED_AT, resume_reason: '管理者の再開', resumed_by_name: '運行管理者', ...overrides })
+    }
 
     beforeEach(() => {
       vi.mocked(getPendingSchedules).mockResolvedValue([])
@@ -1612,7 +1616,7 @@ describe('useTenkoKiosk', () => {
     })
 
     it('★ アルコール未測定の status だけを、status ごとに 1 回ずつ引く', async () => {
-      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending', started_at: '2026-03-31T22:52:00Z' })
+      const stuck = managedSession({ id: 'sess-stuck', status: 'medical_pending', started_at: '2026-03-31T22:52:00Z' })
       serveByStatus([stuck])
 
       const k = useTenkoKiosk({ allowResume: true })
@@ -1628,10 +1632,10 @@ describe('useTenkoKiosk', () => {
     it('★ interrupted / completed / cancelled は再開候補に出ない', async () => {
       // サーバが返し得る全 status を用意しても、問い合わせる status に無いものは出ない
       const rows = [
-        makeSession({ id: 'a', status: 'interrupted' }),
-        makeSession({ id: 'b', status: 'completed' }),
-        makeSession({ id: 'c', status: 'cancelled' }),
-        makeSession({ id: 'd', status: 'medical_pending' }),
+        managedSession({ id: 'a', status: 'interrupted' }),
+        managedSession({ id: 'b', status: 'completed' }),
+        managedSession({ id: 'c', status: 'cancelled' }),
+        managedSession({ id: 'd', status: 'medical_pending' }),
       ]
       serveByStatus(rows)
 
@@ -1646,8 +1650,8 @@ describe('useTenkoKiosk', () => {
 
     it('★ 自動点呼のタブは、遠隔点呼で始めた途中の点呼を候補に出さない', async () => {
       serveByStatus([
-        makeSession({ id: 'auto', status: 'medical_pending', tenko_method: '自動点呼' }),
-        makeSession({ id: 'remote', status: 'medical_pending', tenko_method: '遠隔点呼', schedule_id: null }),
+        managedSession({ id: 'auto', status: 'medical_pending', tenko_method: '自動点呼' }),
+        managedSession({ id: 'remote', status: 'medical_pending', tenko_method: '遠隔点呼', schedule_id: null }),
       ])
       const k = useTenkoKiosk({ allowResume: true })
       await k.identifyEmployee('emp-1', '田中')
@@ -1661,8 +1665,8 @@ describe('useTenkoKiosk', () => {
 
     it('status は合っていても alcohol_tested_at が入っている行は落とす', async () => {
       serveByStatus([
-        makeSession({ id: 'measured', status: 'medical_pending', alcohol_tested_at: '2026-03-31T22:00:00Z' }),
-        makeSession({ id: 'clean', status: 'medical_pending' }),
+        managedSession({ id: 'measured', status: 'medical_pending', alcohol_tested_at: '2026-03-31T22:00:00Z' }),
+        managedSession({ id: 'clean', status: 'medical_pending' }),
       ])
 
       const k = useTenkoKiosk({ allowResume: true })
@@ -1673,9 +1677,9 @@ describe('useTenkoKiosk', () => {
 
     it('新しいものから並ぶ (started_at が無い行は最後)', async () => {
       serveByStatus([
-        makeSession({ id: 'old', status: 'medical_pending', started_at: '2026-03-30T08:00:00Z' }),
-        makeSession({ id: 'none', status: 'self_declaration_pending', started_at: null }),
-        makeSession({ id: 'new', status: 'daily_inspection_pending', started_at: '2026-03-31T22:52:00Z' }),
+        managedSession({ id: 'old', status: 'medical_pending', started_at: '2026-03-30T08:00:00Z' }),
+        managedSession({ id: 'none', status: 'self_declaration_pending', started_at: null }),
+        managedSession({ id: 'new', status: 'daily_inspection_pending', started_at: '2026-03-31T22:52:00Z' }),
       ])
 
       const k = useTenkoKiosk({ allowResume: true })
@@ -1698,7 +1702,7 @@ describe('useTenkoKiosk', () => {
     })
 
     it('一部の status だけ落ちたら、取れた分だけ出す', async () => {
-      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const stuck = managedSession({ id: 'sess-stuck', status: 'medical_pending' })
       vi.mocked(listTenkoSessions).mockImplementation(async (filter) => {
         if (filter?.status === 'medical_pending') return page([stuck])
         throw new Error('network')
@@ -1721,7 +1725,7 @@ describe('useTenkoKiosk', () => {
     })
 
     it('次の乗務員に前の候補を引きずらない', async () => {
-      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const stuck = managedSession({ id: 'sess-stuck', status: 'medical_pending' })
       serveByStatus([stuck])
       const k = useTenkoKiosk({ allowResume: true })
       await k.identifyEmployee('emp-1', '田中')
@@ -1898,6 +1902,19 @@ describe('useTenkoKiosk', () => {
       expect(k.pendingResume.value).toBeNull()
     })
 
+    it('★ manager_resume_required (運行管理者が再開していない) も文言を出して最初の画面へ戻す', async () => {
+      vi.mocked(selfResumeTenkoSession).mockRejectedValue(
+        badRequest('manager_resume_required', '運行管理者が再開した点呼だけ続きから再開できます'),
+      )
+      const k = useTenkoKiosk({ allowResume: true })
+      await resume(k, makeSession({ status: 'medical_pending' }))
+      await k.onFaceAuthComplete(VEIN_OK)
+
+      expect(k.error.value).toBe(MANAGER_RESUME_REQUIRED_MESSAGE)
+      expect(k.step.value).toBe('nfc')
+      expect(k.pendingResume.value).toBeNull()
+    })
+
     it('★ 通信が落ちたときは続きへ通さない — 本人確認の段に留めて、もう一度置かせる', async () => {
       vi.mocked(selfResumeTenkoSession).mockRejectedValueOnce(new Error('Failed to fetch'))
       const stuck = makeSession({ status: 'medical_pending' })
@@ -1955,16 +1972,20 @@ describe('useTenkoKiosk', () => {
       expect(k.error.value).toBeNull()
     })
 
-    it('★ 管理者が再開済みでも候補に出す (resumed_at で落とさない)', async () => {
+    it('★ 運行管理者が再開した点呼だけ候補に出す (運転者が自分で止めた点呼は最初からやり直す)', async () => {
       serveByStatus([
-        makeSession({ id: 'resumed', status: 'daily_inspection_pending', resumed_at: RESUMED_AT }),
+        managedSession({ id: 'resumed', status: 'daily_inspection_pending' }),
         makeSession({ id: 'fresh', status: 'medical_pending' }),
+        // resumed_at だけあって氏名が無い = 管理者の再開ではない (古いキオスクの自己再開)
+        makeSession({ id: 'self', status: 'medical_pending', resumed_at: RESUMED_AT }),
+        // 管理者の再開のあと、もう本人確認して続けた点呼 (続けた後に止めたらやり直し)
+        managedSession({ id: 'continued', status: 'self_declaration_pending', resume_identity_method: 'vein' }),
       ])
 
       const k = useTenkoKiosk({ allowResume: true })
       await k.identifyEmployee('emp-1', '田中')
 
-      expect(k.resumableSessions.value.map(s => s.id).sort()).toEqual(['fresh', 'resumed'])
+      expect(k.resumableSessions.value.map(s => s.id)).toEqual(['resumed'])
     })
 
     it('アルコール測定済みの行は、再開済みかどうかに関わらず候補に出さない', async () => {
