@@ -85,6 +85,20 @@ export interface CamClipsEventClip {
   error: string | null
 }
 
+/** 点呼の本人確認 1 件 (`GET /tenko-identity?session_id=` の 1 件。Refs ippoan/alc-app#720) */
+export interface TenkoIdentityClips {
+  id: string
+  /** `start` = 点呼の開始 / `resume` = 運行管理者が再開した点呼を運転者が続けたとき */
+  phase: 'start' | 'resume'
+  /** `vein` / `face` (無ければ null) */
+  method: string | null
+  /** `+09:00` 付き */
+  occurred_at: string
+  device_id: string | null
+  /** 切り出し (カメラごと)。監視カメラを結び付けていない・まだ切っていなければ空 */
+  clips: { clip_id: string, key: string, status: string, error: string | null, camera_name: string | null }[]
+}
+
 /** `GET /events?camera_id=&date=` の 1 件 (応答は配列そのもの・時刻順) */
 export interface CamClipsEvent {
   /** `measurements` = PC・測定台のアルコール、`measurements_bp` = 同じ行の血圧 (同じ source_id が 2 イベントになりうる) */
