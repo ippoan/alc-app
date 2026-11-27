@@ -572,6 +572,8 @@ export interface StartTenkoSession {
   employee_id: string
   identity_face_photo_url?: string
   location?: string
+  /** 開始の前に行った本人確認の方法 (サーバーが本人確認の記録に残す。自己点検表 ト①) */
+  identity_method?: ResumeIdentityMethod
 }
 
 export interface SubmitMedicalData {
@@ -747,6 +749,8 @@ export interface ResumeSession {
    * self-resume では必須 (無ければ 400 `identity_required`、点呼の乗務員と違えば 403 `identity_mismatch`)
    */
   identity?: ResumeIdentity
+  /** 自己再開の本人確認のとき端末のカメラで撮った顔写真 (サーバーが本人確認の記録に残す。自己点検表 ト①) */
+  identity_face_photo_url?: string
 }
 
 /** 本人確認の方法: 指静脈 / 顔認証 (デモの端末) */

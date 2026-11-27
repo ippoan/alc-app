@@ -394,6 +394,28 @@ describe('DeviceSettings — CoreS3 で動く端末に合わせた表示 (Refs #
     })
   })
 
+  describe('本人確認のときの顔の記録 (自己点検表 ト①。Refs ippoan/alc-app#720)', () => {
+    beforeEach(() => localStorage.removeItem('alc-identity-face'))
+
+    it('既定は「この端末のカメラで撮る」で、監視カメラに切り替えるとこの端末に保存する', async () => {
+      const wrapper = await mountDeviceSettings()
+      const select = wrapper.find<HTMLSelectElement>('[data-testid="identity-face-source"]')
+      expect(select.element.value).toBe('kiosk')
+      expect(select.text()).toContain('監視カメラの録画で残す')
+
+      await select.setValue('cam')
+      expect(localStorage.getItem('alc-identity-face')).toBe('cam')
+      await select.setValue('kiosk')
+      expect(localStorage.getItem('alc-identity-face')).toBeNull()
+    })
+
+    it('保存済みの値で開く', async () => {
+      localStorage.setItem('alc-identity-face', 'cam')
+      const wrapper = await mountDeviceSettings()
+      expect(wrapper.find<HTMLSelectElement>('[data-testid="identity-face-source"]').element.value).toBe('cam')
+    })
+  })
+
   describe('開発用の遠隔操作 (Refs ippoan/alc-app-s3#352)', () => {
     beforeEach(() => localStorage.removeItem('alc-kiosk-remote'))
 
