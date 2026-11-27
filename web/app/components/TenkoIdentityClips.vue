@@ -2,9 +2,9 @@
 /**
  * 点呼の詳細の「本人確認のときの録画」(自己点検表 ト①「生体認証をする時の顔の画像」。Refs ippoan/alc-app#720)。
  * 点呼の本人確認 (指静脈の照合。開始と再開) ごとに、そのときの監視カメラの切り出しを再生する。
- * 監視カメラを結び付けていない端末・まだ切っていない本人確認は「録画なし」。端末のカメラで撮った顔写真はここには出さない
+ * 監視カメラを結び付けていない端末・まだ切っていない本人確認は「録画なし」。端末のカメラで撮った顔写真があれば並べて出す
  */
-import { fetchCamClip, listTenkoIdentityClips, type RequestTokenScope } from '~/utils/api'
+import { fetchCamClip, fetchIdentityFacePhoto, listTenkoIdentityClips, type RequestTokenScope } from '~/utils/api'
 import { formatJst, type TenkoIdentityClips } from '~/utils/cam-clips'
 
 const props = withDefaults(defineProps<{
@@ -22,11 +22,28 @@ const playingSrc = ref('')
 const playError = ref('')
 let playSeq = 0
 
+/** 本人確認ごとの顔写真の object URL (写真が無ければ入れない) */
+const facePhotos = ref<Record<string, string>>({})
+let unmounted = false
+
+async function loadFacePhotos(list: TenkoIdentityClips[]) {
+  for (const it of list) {
+    const url = await fetchIdentityFacePhoto(it.id, props.scope)
+    if (!url) continue
+    if (unmounted) {
+      URL.revokeObjectURL(url)
+      return
+    }
+    facePhotos.value = { ...facePhotos.value, [it.id]: url }
+  }
+}
+
 const PHASE_LABEL: Record<TenkoIdentityClips['phase'], string> = { start: '開始', resume: '再開' }
 
 onMounted(async () => {
   try {
     items.value = await listTenkoIdentityClips(props.sessionId, props.scope)
+    void loadFacePhotos(items.value)
   }
   catch {
     loadError.value = true
@@ -58,7 +75,11 @@ function closePlayer() {
   playingKey.value = null
 }
 
-onUnmounted(closePlayer)
+onUnmounted(() => {
+  unmounted = true
+  closePlayer()
+  for (const url of Object.values(facePhotos.value)) URL.revokeObjectURL(url)
+})
 </script>
 
 <template>
@@ -85,6 +106,13 @@ onUnmounted(closePlayer)
           </template>
         </template>
         <span v-else class="ml-2 text-gray-400">録画なし</span>
+        <img
+          v-if="facePhotos[it.id]"
+          :src="facePhotos[it.id]"
+          alt="本人確認のときの顔写真"
+          data-testid="identity-clips-face"
+          class="mt-1 w-24 h-24 rounded-lg object-cover"
+        >
       </li>
     </ul>
     <div v-if="playingKey" class="mt-2" data-testid="identity-clips-player">
