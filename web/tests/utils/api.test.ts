@@ -130,6 +130,7 @@ import {
   updateCamClipsCamera,
   listCamClipsDeviceCandidates,
   listCamClipsEvents,
+  listTenkoIdentityClips,
   createCamClipsClip,
   runCamClipsAuto,
 } from '~/utils/api'
@@ -3760,6 +3761,13 @@ describe.skipIf(isLive)('拠点カメラの録画 (alc-cam#2)', () => {
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toMatch(/\/cam-clips\/events\?camera_id=c%2F1&date=2026-10-23$/)
     expect(init.method).toBeUndefined()
+  })
+
+  it('点呼の本人確認の録画は session_id を encode して GET する (Refs ippoan/alc-app#720)', async () => {
+    const items = [{ id: 'i1', phase: 'start', clips: [] }]
+    mockFetch.mockResolvedValueOnce(okJson(items))
+    await expect(listTenkoIdentityClips('s/1', 'default')).resolves.toEqual(items)
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/cam-clips\/tenko-identity\?session_id=s%2F1$/)
   })
 
   it('切り出しは POST で、120 秒の上限を自分で持つ', async () => {

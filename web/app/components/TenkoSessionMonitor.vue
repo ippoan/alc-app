@@ -641,6 +641,9 @@ onMounted(() => { loadEmployees(); fetchData() })
             <div v-if="selectedSession.resumed_by_name" data-testid="detail-resumed-by"><span class="text-gray-500">再開の判断を行った運行管理者:</span> {{ selectedSession.resumed_by_name }}</div>
           </div>
 
+          <!-- 本人確認のときの録画 (自己点検表 ト①。監視カメラの切り出し。Refs ippoan/alc-app#720) -->
+          <TenkoIdentityClips :key="selectedSession.id" :session-id="selectedSession.id" />
+
           <!-- 代替措置 (従事できない・中止としたとき) -->
           <div v-if="selectedSession.alternative_measure" class="bg-gray-50 rounded-lg p-3" data-testid="detail-alternative">
             <h4 class="font-medium text-gray-700 mb-1">代替措置の内容</h4>

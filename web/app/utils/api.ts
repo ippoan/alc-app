@@ -30,6 +30,7 @@ import type {
 } from '~/types'
 import type {
   CamClipsCameraList, CamClipsCameraSummaryList, CamClipsCamera, CamClipsCreateBody, CamClipsPatchBody, CamClipsDeviceCandidate, CamClipsClip, CamClipsEvent, CamClipsAutoRun, CamHostKey,
+  TenkoIdentityClips,
 } from '~/utils/cam-clips'
 import type { KnownDeviceName } from '~/utils/device-name'
 import type { DeviceKeyStatus } from '~/utils/device-key-status'
@@ -2721,8 +2722,21 @@ export async function listCamClipsEvents(
  * `<video src>` は Bearer を付けられないので、管理者ログインの無い運行管理者席はこちらで再生する。
  * 取り終えるまで再生できないので上限は UPLOAD と同じ 120 秒。取れなければ null。使い終えたら revokeObjectURL する
  */
-export async function fetchCamClip(key: string): Promise<string | null> {
-  return fetchObjectUrl(`/api/cam-clips/${key}`, 'manager-device', UPLOAD_FETCH_TIMEOUT_MS)
+export async function fetchCamClip(key: string, scope: RequestTokenScope = 'manager-device'): Promise<string | null> {
+  return fetchObjectUrl(`/api/cam-clips/${key}`, scope, UPLOAD_FETCH_TIMEOUT_MS)
+}
+
+/**
+ * 点呼 1 件の本人確認 (指静脈の照合) と、そのときの監視カメラの切り出し (自己点検表 ト①。Refs ippoan/alc-app#720)。
+ * 口は alc-cam ingest の `GET /tenko-identity?session_id=`。点呼の詳細 (遠隔点呼モニター) から `'tenko-monitor'` で引く
+ */
+export async function listTenkoIdentityClips(
+  sessionId: string,
+  scope: RequestTokenScope = 'tenko-monitor',
+): Promise<TenkoIdentityClips[]> {
+  return request<TenkoIdentityClips[]>(
+    `/api/cam-clips/tenko-identity?session_id=${encodeURIComponent(sessionId)}`, {}, scope,
+  )
 }
 
 /** 手動の切り出し。カメラから元ファイルを取り込むので、通常の 30 秒では足りない (上限は UPLOAD と同じ 120 秒) */
