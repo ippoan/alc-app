@@ -40,6 +40,12 @@ async function mountPanel(session: any = SESSION_UNJUDGED, managerId: string | n
   return wrapper
 }
 
+/** NG の入力欄 (理由・代替措置) を埋める。NG は両方が必須 (Refs ippoan/alc-app#723) */
+async function fillNg(wrapper: any, reason = '体調不良', alt = '別の乗務員に交代') {
+  await wrapper.find('[data-testid="judgment-reason"]').setValue(reason)
+  await wrapper.find('[data-testid="judgment-alternative"]').setValue(alt)
+}
+
 describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
   beforeEach(() => {
     submitManagerJudgmentMock.mockClear()
@@ -93,7 +99,7 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     const ngButton = wrapper.findAll('button').find(b => b.text() === 'NG')
     await ngButton!.trigger('click')
     await wrapper.vm.$nextTick()
-    await wrapper.find('textarea').setValue('体調不良の申告あり')
+    await fillNg(wrapper, '体調不良の申告あり')
     const confirmButton = wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))
     await confirmButton!.trigger('click')
     await flush()
@@ -102,18 +108,21 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     wrapper.unmount()
   })
 
-  it('NG で理由が空でも送信できる (任意入力なので reason を省く)', async () => {
+  it('★ NG は理由と代替措置の両方が入るまで記録できない (空白だけも不可。業務前 二十 タ)', async () => {
     const wrapper = await mountPanel()
-    const ngButton = wrapper.findAll('button').find(b => b.text() === 'NG')
-    await ngButton!.trigger('click')
+    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
     await wrapper.vm.$nextTick()
-    const confirmButton = wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))
-    await confirmButton!.trigger('click')
+    const submitButton = () => wrapper.find('[data-testid="judgment-ng-submit"]')
+    expect(submitButton().attributes('disabled')).toBeDefined()
+    await fillNg(wrapper, '体調不良', '  ')
+    expect(submitButton().attributes('disabled')).toBeDefined()
+    await fillNg(wrapper, ' ', '交代')
+    expect(submitButton().attributes('disabled')).toBeDefined()
+    await fillNg(wrapper, ' 体調不良 ', ' 交代 ')
+    expect(submitButton().attributes('disabled')).toBeUndefined()
+    await submitButton().trigger('click')
     await flush()
-    expect(submitManagerJudgmentMock).toHaveBeenCalledTimes(1)
-    const body = submitManagerJudgmentMock.mock.calls[0][1]
-    expect(body.judgment).toBe('ng')
-    expect(body.reason).toBeUndefined()
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ng', reason: '体調不良', alternative_measure: '交代' })
     wrapper.unmount()
   })
 
@@ -142,6 +151,7 @@ describe('TenkoManagerJudgmentPanel — OK/NG 判定', () => {
     expect(ngButton).toBeTruthy()
     await ngButton!.trigger('click')
     await wrapper.vm.$nextTick()
+    await fillNg(wrapper)
     const confirmButton = wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))
     await confirmButton!.trigger('click')
     await flush()
@@ -215,6 +225,7 @@ describe('TenkoManagerJudgmentPanel — 判定を保存できた部屋は着信�
     const wrapper = await mountPanel()
     await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
     await wrapper.vm.$nextTick()
+    await fillNg(wrapper)
     await wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))!.trigger('click')
     await flush()
 
@@ -325,10 +336,11 @@ describe('TenkoManagerJudgmentPanel — 確認の方法 (defaultMethod)', () => 
     await wrapper.find('input[type="radio"][value="in_person"]').setValue(true)
     await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
     await wrapper.vm.$nextTick()
+    await fillNg(wrapper)
     await wrapper.findAll('button').find(b => b.text().includes('NG として記録する'))!.trigger('click')
     await flush()
     expect(submitManagerJudgmentMock.mock.calls[0][1]).toEqual({
-      judgment: 'ng', judged_by_employee_id: MANAGER_ID, method: 'in_person',
+      judgment: 'ng', judged_by_employee_id: MANAGER_ID, method: 'in_person', reason: '体調不良', alternative_measure: '別の乗務員に交代',
     })
     wrapper.unmount()
   })
@@ -434,25 +446,21 @@ describe('TenkoManagerJudgmentPanel — 代替措置', () => {
   it('NG のとき代替措置の内容が alternative_measure で送られる', async () => {
     const wrapper = await mountPanel()
     await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
-    await wrapper.find('[data-testid="judgment-alternative"]').setValue(' 別の乗務員に交代 ')
+    await fillNg(wrapper, '酒気', ' 別の乗務員に交代 ')
     await wrapper.findAll('button').find(b => b.text().includes('NG として記録'))!.trigger('click')
     await flush()
     expect(submitManagerJudgmentMock.mock.calls[0][1]).toMatchObject({ judgment: 'ng', alternative_measure: '別の乗務員に交代' })
     wrapper.unmount()
   })
 
-  it('NG で代替措置が空なら載せず、OK は入力があっても載せない', async () => {
+  it('OK は理由・代替措置の入力があっても載せない', async () => {
     const wrapper = await mountPanel()
     await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
-    await wrapper.findAll('button').find(b => b.text().includes('NG として記録'))!.trigger('click')
-    await flush()
-    expect(submitManagerJudgmentMock.mock.calls[0][1]).not.toHaveProperty('alternative_measure')
-
-    await wrapper.findAll('button').find(b => b.text() === 'NG')!.trigger('click')
-    await wrapper.find('[data-testid="judgment-alternative"]').setValue('x')
+    await fillNg(wrapper, 'x', 'y')
     await wrapper.findAll('button').find(b => b.text() === 'OK')!.trigger('click')
     await flush()
-    expect(submitManagerJudgmentMock.mock.calls[1][1]).not.toHaveProperty('alternative_measure')
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).not.toHaveProperty('alternative_measure')
+    expect(submitManagerJudgmentMock.mock.calls[0][1]).not.toHaveProperty('reason')
     wrapper.unmount()
   })
 

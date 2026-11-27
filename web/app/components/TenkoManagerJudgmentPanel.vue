@@ -14,6 +14,9 @@
  *
  * 判定を送る口は prop `scope` (既定は遠隔点呼モニターの `'tenko-monitor'`)。IT点呼 の受け画面だけが
  * `'manager-device'` (運行管理者席の鍵) を渡す。
+ *
+ * **NG (従事できない) は理由と代替措置の内容が必須** (自己点検表 業務前 二十 タ。サーバも無ければ 400)。両方が入るまで
+ * 「NG として記録する」を押せない (Refs ippoan/alc-app#723)。
  */
 import type { TenkoSession, SubmitManagerJudgment, InPersonScope } from '~/types'
 import { getInPersonScope, submitManagerJudgment, type RequestTokenScope } from '~/utils/api'
@@ -54,6 +57,8 @@ const reason = ref('')
 const alternativeMeasure = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
+/** NG の理由と代替措置の両方が入っている */
+const ngReady = computed(() => reason.value.trim() !== '' && alternativeMeasure.value.trim() !== '')
 
 const METHOD_OPTIONS: { value: ManagerJudgmentMethod, label: string }[] = [
   { value: MANAGER_JUDGMENT_METHOD.IT, label: 'IT点呼 (通話で確認)' },
@@ -124,10 +129,10 @@ async function submit(judgment: 'ok' | 'ng') {
   error.value = null
   try {
     const body: SubmitManagerJudgment = { judgment, judged_by_employee_id: props.managerId }
-    const trimmed = reason.value.trim()
-    if (judgment === 'ng' && trimmed) body.reason = trimmed
-    const alt = alternativeMeasure.value.trim()
-    if (judgment === 'ng' && alt) body.alternative_measure = alt
+    if (judgment === 'ng') {
+      body.reason = reason.value.trim()
+      body.alternative_measure = alternativeMeasure.value.trim()
+    }
     if (method.value) body.method = method.value
     const updated = await submitManagerJudgment(props.session.id, body, props.scope)
     // 判定が付いた点呼の部屋は、相手が閉じて消えるまで着信として数えない (警告デバイスを
@@ -223,23 +228,26 @@ async function submit(judgment: 'ok' | 'ng') {
     </div>
 
     <div v-if="ngMode" class="mt-2">
+      <p class="mb-1 text-xs text-gray-600">従事できないと判断した理由と、代替措置の内容を入れてください (どちらも必須)</p>
       <textarea
         v-model="reason"
         rows="2"
-        placeholder="理由 (任意)"
+        placeholder="理由 (必須)"
+        data-testid="judgment-reason"
         class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400"
       />
       <textarea
         v-model="alternativeMeasure"
         rows="2"
-        placeholder="代替措置の内容 (任意)"
+        placeholder="代替措置の内容 (必須)"
         data-testid="judgment-alternative"
         class="mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400"
       />
       <div class="mt-1 flex gap-2">
         <button
           class="px-4 py-1.5 text-sm rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium transition-colors disabled:opacity-50"
-          :disabled="submitting"
+          :disabled="submitting || !ngReady"
+          data-testid="judgment-ng-submit"
           @click="submit('ng')"
         >
           NG として記録する
