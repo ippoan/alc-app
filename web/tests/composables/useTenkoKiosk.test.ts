@@ -23,6 +23,7 @@ vi.mock('~/utils/api', async () => ({
   confirmInstruction: vi.fn(),
   submitReport: vi.fn(),
   cancelTenkoSession: vi.fn(),
+  interruptTenkoSession: vi.fn(),
   escalateTenkoSessionToRemote: vi.fn(),
   uploadFacePhoto: vi.fn(),
   getCarryingItems: vi.fn(),
@@ -51,6 +52,7 @@ import {
   confirmInstruction,
   submitReport,
   cancelTenkoSession,
+  interruptTenkoSession,
   escalateTenkoSessionToRemote,
   uploadFacePhoto,
   getCarryingItems,
@@ -1262,6 +1264,45 @@ describe('useTenkoKiosk', () => {
   })
 
   // ---------- cancel ----------
+
+  // ---------- interrupt (機器が使えず続けられない。Refs ippoan/alc-app#724) ----------
+  describe('interrupt', () => {
+    it('session なし → 何もしない', async () => {
+      const k = useTenkoKiosk()
+      await k.interrupt('カメラ故障')
+      expect(interruptTenkoSession).not.toHaveBeenCalled()
+      expect(k.step.value).not.toBe('interrupted')
+    })
+
+    it('正常 → 中断を送り、interrupted にして返った点呼に差し替える', async () => {
+      const sess = makeSession({ status: 'interrupted', cancel_reason: 'カメラ故障' })
+      vi.mocked(interruptTenkoSession).mockResolvedValue(sess)
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await k.interrupt('カメラ故障')
+      expect(interruptTenkoSession).toHaveBeenCalledWith('sess-1', { reason: 'カメラ故障' })
+      expect(k.step.value).toBe('interrupted')
+      expect(k.session.value).toEqual(sess)
+    })
+
+    it('★ 送れなくても画面は中断のまま (測定へ進ませない)。理由を出し、故障として残す', async () => {
+      vi.mocked(interruptTenkoSession).mockRejectedValue(new Error('Failed to fetch'))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await k.interrupt('カメラ故障')
+      expect(k.step.value).toBe('interrupted')
+      expect(k.error.value).toBe('Failed to fetch')
+      expect(reportApiFailure).toHaveBeenCalledWith(expect.any(Error), '点呼の中断の送信', expect.objectContaining({ sessionId: 'sess-1' }))
+    })
+
+    it('API エラー (非Error) は既定の文言', async () => {
+      vi.mocked(interruptTenkoSession).mockRejectedValue(Symbol('x'))
+      const k = useTenkoKiosk()
+      k.session.value = makeSession()
+      await k.interrupt('カメラ故障')
+      expect(k.error.value).toBe('点呼の中断を送れませんでした')
+    })
+  })
 
   describe('cancel', () => {
     it('session なし → 何もしない', async () => {
