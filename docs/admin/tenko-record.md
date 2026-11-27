@@ -113,7 +113,9 @@ CSV でダウンロードできます。CSV には次の列が含まれます。
 | report_no_report | 報告なし |
 | self_declaration_illness / self_declaration_fatigue / self_declaration_sleep | 自己申告（疾病・疲労・睡眠不足） |
 | safety_judgment_status / safety_judgment_failed_items | 安全運転判定・不合格の項目 |
-| manager_judgment / manager_judgment_reason / manager_judgment_by_name | 運行管理者の判定・理由・判定した運行管理者（遠隔点呼・対面点呼） |
+| manager_judgment / manager_judgment_reason / manager_judgment_by_name | 運行管理者の判定・理由・判定した運行管理者（遠隔点呼・対面点呼。判定し直したときは最新の判定） |
+| manager_judged_at | 最新の判定の日時 |
+| first_manager_judgment / first_manager_judgment_reason / first_manager_judgment_by_name / first_manager_judged_at | 最初の判定・理由・判定した運行管理者・日時（判定し直しても最初の判定が残る） |
 | daily_inspection_status | 日常点検の結果 |
 | interrupted_at | 中断の日時 |
 | resumed_at / resume_reason / resumed_by_name | 再開の日時・理由・判断した運行管理者 |
