@@ -92,14 +92,43 @@ function missingInstructionRows(rows: typeof newRows.value) {
   return rows.filter(r => r.tenko_type === 'pre_operation' && !r.instruction.trim())
 }
 
-const hasMissingRequiredInstruction = computed(() => {
-  const candidates = newRows.value.filter(r => r.employee_id && r.scheduled_at && r.responsible_manager_name)
-  return candidates.length > 0 && missingInstructionRows(candidates).length > 0
-})
+/** 行に欠けている必須の欄の名前 (空なら登録できる行) */
+function missingFields(r: (typeof newRows.value)[number]): string[] {
+  const missing: string[] = []
+  if (!r.employee_id) missing.push('乗務員')
+  if (!r.scheduled_at) missing.push('予定日時')
+  if (!r.responsible_manager_name) missing.push('管理者')
+  return missing
+}
+const validRows = computed(() => newRows.value.filter(r => missingFields(r).length === 0))
+/** 欄が欠けていて登録しない行 (確認の段で行番号と理由を見せる。黙って捨てない) */
+const skippedRows = computed(() => newRows.value
+  .map((r, i) => ({ no: i + 1, missing: missingFields(r) }))
+  .filter(x => x.missing.length > 0))
+
+const hasMissingRequiredInstruction = computed(() =>
+  validRows.value.length > 0 && missingInstructionRows(validRows.value).length > 0)
+
+/**
+ * 登録の前に、登録する予定 (日時・乗務員・責任者・指示事項) を一覧で確かめる段
+ * (一括登録は登録前に確認できること — 10月 FAQ。Refs #721)
+ */
+const confirming = ref(false)
+function openConfirm() {
+  instructionError.value = null
+  if (validRows.value.length === 0) return
+  if (missingInstructionRows(validRows.value).length > 0) {
+    instructionError.value = '業務前は指示事項の入力が必須です'
+    return
+  }
+  confirming.value = true
+}
+// フォームを閉じたら確認の段も畳む (次に開いたときは入力から)
+watch(showForm, (open) => { if (!open) confirming.value = false })
 
 async function handleCreate() {
   instructionError.value = null
-  const valid = newRows.value.filter(r => r.employee_id && r.scheduled_at && r.responsible_manager_name)
+  const valid = validRows.value
   if (valid.length === 0) return
   if (missingInstructionRows(valid).length > 0) {
     instructionError.value = '業務前は指示事項の入力が必須です'
@@ -122,6 +151,7 @@ async function handleCreate() {
       await batchCreateSchedules(data)
     }
     newRows.value = []
+    confirming.value = false
     showForm.value = false
     await fetchData()
   } catch (e) {
@@ -331,6 +361,55 @@ watch(managerJwtRecoveredCount, () => {
     <!-- 新規作成フォーム -->
     <div v-if="showForm" class="bg-white rounded-xl p-4 shadow-sm mb-4">
       <h3 class="text-sm font-medium text-gray-700 mb-3">スケジュール作成</h3>
+      <!-- 登録前の確認 (Refs #721) -->
+      <div v-if="confirming" data-testid="schedule-confirm">
+        <p class="text-sm text-gray-700 mb-2">次の {{ validRows.length }} 件を登録します。日時・乗務員・責任者・指示事項を確かめてください。</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm mb-3">
+            <thead class="bg-gray-50 text-gray-600">
+              <tr>
+                <th class="px-3 py-2 text-left font-medium">予定日時</th>
+                <th class="px-3 py-2 text-left font-medium">乗務員</th>
+                <th class="px-3 py-2 text-center font-medium">種別</th>
+                <th class="px-3 py-2 text-left font-medium">責任者</th>
+                <th class="px-3 py-2 text-left font-medium">指示事項</th>
+                <th class="px-3 py-2 text-left font-medium">車両番号</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <tr v-for="(r, i) in validRows" :key="i" data-testid="schedule-confirm-row">
+                <td class="px-3 py-2 text-gray-700">{{ formatDate(r.scheduled_at) }}</td>
+                <td class="px-3 py-2 text-gray-700">{{ employeeName(r.employee_id) }}</td>
+                <td class="px-3 py-2 text-center text-gray-700">{{ tenkoTypeLabel(r.tenko_type) }}</td>
+                <td class="px-3 py-2 text-gray-700">{{ r.responsible_manager_name }}</td>
+                <td class="px-3 py-2 text-gray-700">{{ r.instruction.trim() || '-' }}</td>
+                <td class="px-3 py-2 text-gray-700">{{ r.vehicle_number.trim() || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="skippedRows.length > 0" data-testid="schedule-confirm-skipped" class="bg-amber-50 text-amber-800 text-xs rounded-lg px-3 py-2 mb-3">
+          <p class="font-medium">次の行は欄が欠けているので登録しません。</p>
+          <p v-for="x in skippedRows" :key="x.no">{{ x.no }} 行目: {{ x.missing.join('・') }}が未入力</p>
+        </div>
+        <div class="flex gap-2">
+          <button
+            :disabled="isSaving"
+            data-testid="schedule-confirm-submit"
+            class="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
+            @click="handleCreate"
+          >
+            {{ isSaving ? '登録中...' : `この内容で登録 (${validRows.length} 件)` }}
+          </button>
+          <button
+            :disabled="isSaving"
+            data-testid="schedule-confirm-back"
+            class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+            @click="confirming = false"
+          >戻って直す</button>
+        </div>
+      </div>
+      <template v-else>
       <div v-for="(row, i) in newRows" :key="i" class="grid grid-cols-1 sm:grid-cols-7 gap-2 mb-2">
         <EmployeeSearchSelect v-model="row.employee_id" :employees="employees" placeholder="乗務員を選択 (名前・社員番号で検索)" />
         <select v-model="row.tenko_type" class="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -349,14 +428,16 @@ watch(managerJwtRecoveredCount, () => {
       <div class="flex gap-2 mt-2">
         <button class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50" @click="addRow">+ 行追加</button>
         <button
-          :disabled="isSaving || newRows.every(r => !r.employee_id || !r.scheduled_at || !r.responsible_manager_name) || hasMissingRequiredInstruction"
+          :disabled="validRows.length === 0 || hasMissingRequiredInstruction"
+          data-testid="schedule-confirm-open"
           class="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
-          @click="handleCreate"
+          @click="openConfirm"
         >
-          {{ isSaving ? '作成中...' : '作成' }}
+          確認へ
         </button>
       </div>
       <p v-if="instructionError" class="text-red-600 text-xs mt-2">{{ instructionError }}</p>
+      </template>
       <!-- 指示事項の候補 (作成と編集の欄で共有) -->
       <datalist id="instruction-options" data-testid="instruction-options">
         <option v-for="t in instructionOptions" :key="t" :value="t" />

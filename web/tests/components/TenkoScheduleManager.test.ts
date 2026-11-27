@@ -20,7 +20,7 @@ vi.mock('~/utils/api', async importOriginal => ({
   updateTenkoSettings: vi.fn(async (d: { overdue_minutes: number }) => d),
 }))
 
-import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, createSchedule, deleteSchedule, listSchedules, updateSchedule, getTenkoSettings, updateTenkoSettings } from '~/utils/api'
+import { MANAGER_DEVICE_AUTH_FAILED_MESSAGE, batchCreateSchedules, createSchedule, deleteSchedule, listSchedules, updateSchedule, getTenkoSettings, updateTenkoSettings } from '~/utils/api'
 
 // 席の鍵のトークンが、失敗の後に取れた回数 (実物は useManagerDeviceToken が数える module の ref)
 const recoveredCountRef = ref(0)
@@ -84,8 +84,8 @@ describe('TenkoScheduleManager — #321 業務前の指示事項', () => {
     fillRequiredFields(wrapper)
     await wrapper.vm.$nextTick()
 
-    const createButton = wrapper.findAll('button').find(b => b.text().includes('作成') && !b.text().includes('行追加'))
-    expect(createButton?.attributes('disabled')).toBeDefined()
+    const createButton = wrapper.find('[data-testid="schedule-confirm-open"]')
+    expect(createButton.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -485,5 +485,100 @@ describe('TenkoScheduleManager — 管理者名と指示事項の選択', () => 
     expect(wrapper.find('[data-testid="instruction-options"]').findAll('option')).toHaveLength(0)
     vi.mocked(listSchedules).mockReset()
     vi.mocked(listSchedules).mockResolvedValue({ schedules: [], total: 0, page: 1, per_page: 20 } as never)
+  })
+})
+
+describe('TenkoScheduleManager — 登録前の確認 (#721)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  function setRow(wrapper: Awaited<ReturnType<typeof mountSuspended>>, i: number, row: Record<string, string>) {
+    Object.assign((wrapper.vm as any).newRows[i], row)
+  }
+
+  it('★ 「確認へ」で登録する予定の一覧と欠けた行の理由が出て、まだ送らない。「この内容で登録」で送る', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    ;(wrapper.vm as any).addRow()
+    ;(wrapper.vm as any).addRow()
+    setRow(wrapper, 0, { employee_id: 'emp-1', scheduled_at: '2026-12-09T08:30', responsible_manager_name: '鈴木一郎', instruction: '  安全運転  ', vehicle_number: '品川 100 あ 12-34' })
+    setRow(wrapper, 1, { employee_id: 'emp-1', scheduled_at: '' })
+    setRow(wrapper, 2, { employee_id: 'emp-9', tenko_type: 'post_operation', scheduled_at: '2026-12-09T18:00', responsible_manager_name: '鈴木一郎' })
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-testid="schedule-confirm-open"]').trigger('click')
+    expect(createSchedule).not.toHaveBeenCalled()
+    const rows = wrapper.findAll('[data-testid="schedule-confirm-row"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.text()).toContain('山田太郎')
+    expect(rows[0]!.text()).toContain('2026/12/09 08:30')
+    expect(rows[0]!.text()).toContain('鈴木一郎')
+    expect(rows[0]!.text()).toContain('安全運転')
+    expect(rows[0]!.text()).toContain('品川 100 あ 12-34')
+    // 業務後で指示事項・車両番号が空 → 「-」。社員一覧に無い id は先頭 8 文字
+    expect(rows[1]!.text()).toContain('emp-9')
+    expect(rows[1]!.text()).toContain('-')
+    expect(wrapper.find('[data-testid="schedule-confirm-skipped"]').text()).toContain('2 行目: 予定日時・管理者が未入力')
+
+    await wrapper.find('[data-testid="schedule-confirm-submit"]').trigger('click')
+    await flush()
+    expect(batchCreateSchedules).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(batchCreateSchedules).mock.calls[0]![0]).toHaveLength(2)
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('欠けた行が無ければ理由の欄は出ない。「戻って直す」で入力に戻る', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    fillRequiredFields(wrapper)
+    ;(wrapper.vm as any).newRows[0].instruction = '点検'
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-testid="schedule-confirm-open"]').trigger('click')
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="schedule-confirm-skipped"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="schedule-confirm-submit"]').text()).toContain('1 件')
+
+    await wrapper.find('[data-testid="schedule-confirm-back"]').trigger('click')
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="schedule-confirm-open"]').exists()).toBe(true)
+    expect(createSchedule).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('登録できる行が無い・業務前で指示事項が空なら確認に進まない', async () => {
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    ;(wrapper.vm as any).openConfirm()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(false)
+
+    fillRequiredFields(wrapper)
+    ;(wrapper.vm as any).openConfirm()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('業務前は指示事項の入力が必須です')
+    wrapper.unmount()
+  })
+
+  it('登録に失敗したら確認の段に留まって理由を出す。フォームを閉じると確認の段も畳む', async () => {
+    vi.mocked(createSchedule).mockRejectedValueOnce(new Error('登録できませんでした'))
+    const wrapper = await mountSuspended(TenkoScheduleManager)
+    await openFormWithRow(wrapper)
+    fillRequiredFields(wrapper)
+    ;(wrapper.vm as any).newRows[0].instruction = '点検'
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-testid="schedule-confirm-open"]').trigger('click')
+    await wrapper.find('[data-testid="schedule-confirm-submit"]').trigger('click')
+    await flush()
+    expect(wrapper.text()).toContain('登録できませんでした')
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(true)
+
+    ;(wrapper.vm as any).showForm = false
+    await wrapper.vm.$nextTick()
+    ;(wrapper.vm as any).showForm = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="schedule-confirm"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })
