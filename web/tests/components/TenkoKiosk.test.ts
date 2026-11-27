@@ -52,6 +52,8 @@ const resetMock = vi.fn()
 const vehicleInput = ref('')
 const vehicleManualRequired = ref(false)
 const onVehicleSubmitMock = vi.fn()
+// 機器が使えず続けられないときの中断 (Refs ippoan/alc-app#724)
+const interruptMock = vi.fn(async () => {})
 mockNuxtImport('useTenkoKiosk', () => () => ({
   step,
   employeeId,
@@ -88,6 +90,7 @@ mockNuxtImport('useTenkoKiosk', () => () => ({
   onCarryingItemsSubmit: vi.fn(),
   onInstructionConfirm: onInstructionConfirmMock,
   onReportSubmit: onReportSubmitMock,
+  interrupt: interruptMock,
   reset: resetMock,
 }))
 
@@ -952,6 +955,36 @@ describe('TenkoKiosk — 故障の自動記録の配線', () => {
       type: 'photo_storage_error', device: 'カメラ', sessionId: 'sess-1',
     }))
     wrapper2.unmount()
+  })
+
+  it('★ 録画カメラを起こせない → 点呼を中断し、測定の記録は作らない (要件 18。Refs ippoan/alc-app#724)', async () => {
+    const { startMeasurement } = await import('~/utils/api')
+    const wrapper = await mountKiosk()
+    step.value = 'alcohol'
+    await flushPromises()
+    expect(interruptMock).not.toHaveBeenCalled()
+    expect(startMeasurement).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+
+    vi.mocked(startMeasurement).mockClear()
+    cameraStartMock.mockRejectedValueOnce(new Error('NotAllowedError'))
+    const wrapper2 = await mountKiosk()
+    step.value = 'nfc'
+    await wrapper2.vm.$nextTick()
+    step.value = 'alcohol'
+    await flushPromises()
+    expect(interruptMock).toHaveBeenCalledWith('カメラ故障 (吹きかけ録画を撮れない)')
+    expect(startMeasurement).not.toHaveBeenCalled()
+    wrapper2.unmount()
+  })
+
+  it('中断の画面には中断の理由を出す', async () => {
+    const wrapper = await mountKiosk()
+    session.value = { id: 'sess-1', cancel_reason: 'カメラ故障 (吹きかけ録画を撮れない)' }
+    step.value = 'interrupted'
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'TenkoInterrupted' }).props('reason')).toBe('カメラ故障 (吹きかけ録画を撮れない)')
+    wrapper.unmount()
   })
 
   it('★ 測定レコードを作れない(通信・サーバー)→ measurement_recording_failed として reportApiFailure に渡す', async () => {

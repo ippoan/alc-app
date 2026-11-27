@@ -9,7 +9,7 @@ import {
   getPendingSchedules, startTenkoSession,
   updateMeasurement, submitMedical, submitSelfDeclaration,
   submitDailyInspection, confirmInstruction, submitReport,
-  cancelTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
+  cancelTenkoSession, interruptTenkoSession, uploadFacePhoto, escalateTenkoSessionToRemote,
   getCarryingItems, submitCarryingItemChecks, listTenkoSessions,
   selfResumeTenkoSession, updateTenkoSessionVehicle, apiErrorCode, apiErrorMessage,
   getMeasurements,
@@ -745,6 +745,22 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     }
   }
 
+  // --- 中断 (機器が使えず続けられない。Refs ippoan/alc-app#724) ---
+  /**
+   * キオスクから点呼を中断する。運行管理者が直して再開するか、中止するかを決める (要件 18: 確認・記録が欠けたまま
+   * 完了させない)。**画面を先に中断へ移してから**サーバへ知らせる — 送れなくても測定へは進ませない
+   */
+  async function interrupt(reason: string) {
+    if (!session.value) return
+    error.value = null
+    step.value = 'interrupted'
+    try {
+      session.value = await interruptTenkoSession(session.value.id, { reason })
+    } catch (e) {
+      _fail(e, '点呼の中断を送れませんでした', '点呼の中断の送信')
+    }
+  }
+
   // --- バックエンド status → UI step マッピング ---
   function _advanceByStatus(status: TenkoSessionStatus) {
     switch (status) {
@@ -892,6 +908,7 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     onReportSubmit,
     escalateToRemote,
     cancel,
+    interrupt,
     reset,
   }
 }

@@ -51,7 +51,7 @@ const {
   onAlcoholMeasured, onMedicalSubmit, onSelfDeclarationSubmit,
   onDailyInspectionSubmit, carryingItems, loadCarryingItems, onCarryingItemsSubmit,
   onInstructionConfirm, onReportSubmit,
-  reset,
+  interrupt, reset,
 } = useTenkoKiosk({ remoteMode: props.remoteMode, allowResume: true })
 
 // carrying_items ステップに入ったら携行品マスタをロード
@@ -148,15 +148,19 @@ function completedMeasurementFields(result: MeasurementResult): Record<string, u
 watch(step, async (s) => {
   if (s !== 'alcohol') return
   // デモモードは FC-1200 の state 変化が来ないので即録画
-  await openBlowCamera()
+  if (!(await openBlowCamera())) return
   await startAlcoholMeasurement()
 })
 
+/** カメラが起きないときの中断の理由 (運行管理者の画面・記録に出る) */
+const CAMERA_FAILURE_INTERRUPT_REASON = 'カメラ故障 (吹きかけ録画を撮れない)'
+
 /**
- * 録画カメラを起こす。起こせなかったときは (測定は続けるが) 機器の故障として残す —
- * 吹きかけ録画・顔写真が残らない点呼になるため
+ * 録画カメラを起こす。起こせなかったときは機器の故障として残し、**点呼を中断する** — 吹きかけ録画・顔写真が
+ * 残らないまま完了させない (要件 18。運行管理者が直して再開するか中止する。Refs ippoan/alc-app#724)。
+ * 起きたかを返す
  */
-async function openBlowCamera() {
+async function openBlowCamera(): Promise<boolean> {
   const ok = await startBlowCamera({ recordImmediately: isDemoMode.value })
   if (!ok) {
     reportFailure({
@@ -165,7 +169,9 @@ async function openBlowCamera() {
       device: 'カメラ',
       sessionId: session.value?.id,
     })
+    await interrupt(CAMERA_FAILURE_INTERRUPT_REASON)
   }
+  return ok
 }
 
 // 録画のアップロードに失敗したら故障として残す (録画はローカルに残り、次回起動時にリトライされる)
@@ -1089,6 +1095,7 @@ onUnmounted(() => {
           <TenkoInterrupted
             :employee-name="employeeName"
             :safety-judgment="safetyJudgment"
+            :reason="session?.cancel_reason ?? undefined"
             @reset="handleReset"
           />
         </div>
