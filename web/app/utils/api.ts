@@ -1658,6 +1658,14 @@ export async function fetchFacePhoto(measurementId: string, scope: RequestTokenS
   return fetchObjectUrl(`/api/measurements/${measurementId}/face-photo`, scope)
 }
 
+/**
+ * 点呼の本人確認 (指静脈の照合) のとき端末のカメラで撮った顔写真 (自己点検表 ト①。Refs ippoan/alc-app#720)。
+ * 写真が無い本人確認は null (口は 404)。使い終えたら revokeObjectURL する
+ */
+export async function fetchIdentityFacePhoto(identityId: string, scope: RequestTokenScope = 'tenko-monitor'): Promise<string | null> {
+  return fetchObjectUrl(`/api/tenko/identity-events/${identityId}/face-photo`, scope)
+}
+
 /** 測定の録画動画を取得 (認証付きプロキシ経由) */
 export async function fetchMeasurementVideo(measurementId: string, scope: RequestTokenScope = 'default'): Promise<string | null> {
   return fetchObjectUrl(`/api/measurements/${measurementId}/video`, scope)

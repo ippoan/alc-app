@@ -131,6 +131,7 @@ import {
   listCamClipsDeviceCandidates,
   listCamClipsEvents,
   listTenkoIdentityClips,
+  fetchIdentityFacePhoto,
   createCamClipsClip,
   runCamClipsAuto,
 } from '~/utils/api'
@@ -3761,6 +3762,13 @@ describe.skipIf(isLive)('拠点カメラの録画 (alc-cam#2)', () => {
     const [url, init] = mockFetch.mock.calls[0]
     expect(url).toMatch(/\/cam-clips\/events\?camera_id=c%2F1&date=2026-10-23$/)
     expect(init.method).toBeUndefined()
+  })
+
+  it('点呼の本人確認の顔写真は identity-events の face-photo を取る (Refs ippoan/alc-app#720)', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(new Blob(['x']), { status: 200 }))
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:face')
+    await expect(fetchIdentityFacePhoto('i1', 'default')).resolves.toBe('blob:face')
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/tenko\/identity-events\/i1\/face-photo$/)
   })
 
   it('点呼の本人確認の録画は session_id を encode して GET する (Refs ippoan/alc-app#720)', async () => {

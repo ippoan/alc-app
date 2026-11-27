@@ -5,7 +5,7 @@ import TenkoIdentityClips from '~/components/TenkoIdentityClips.vue'
 
 // 点呼の詳細の「本人確認のときの録画」(自己点検表 ト①。Refs ippoan/alc-app#720)
 
-const api = vi.hoisted(() => ({ listTenkoIdentityClips: vi.fn(), fetchCamClip: vi.fn() }))
+const api = vi.hoisted(() => ({ listTenkoIdentityClips: vi.fn(), fetchCamClip: vi.fn(), fetchIdentityFacePhoto: vi.fn() }))
 vi.mock('~/utils/api', async importOriginal => ({
   ...(await importOriginal<typeof import('~/utils/api')>()),
   ...api,
@@ -28,6 +28,32 @@ describe('TenkoIdentityClips', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     globalThis.URL.revokeObjectURL = vi.fn()
+    api.fetchIdentityFacePhoto.mockResolvedValue(null)
+  })
+
+  it('★ 端末のカメラで撮った顔写真があれば本人確認の横に出す (無ければ出さない)。閉じると URL を捨てる', async () => {
+    api.listTenkoIdentityClips.mockResolvedValue(ITEMS)
+    api.fetchIdentityFacePhoto.mockImplementation(async (id: string) => (id === 'i1' ? 'blob:face-i1' : null))
+    const w = await mountIt()
+    expect(api.fetchIdentityFacePhoto).toHaveBeenCalledWith('i1', 'tenko-monitor')
+    expect(api.fetchIdentityFacePhoto).toHaveBeenCalledWith('i2', 'tenko-monitor')
+    const faces = w.findAll('[data-testid="identity-clips-face"]')
+    expect(faces).toHaveLength(1)
+    expect(faces[0]!.attributes('src')).toBe('blob:face-i1')
+    w.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:face-i1')
+  })
+
+  it('写真を取り終える前に閉じたら、後から届いた URL は捨てて残りは取らない', async () => {
+    api.listTenkoIdentityClips.mockResolvedValue(ITEMS)
+    let resolve!: (v: string | null) => void
+    api.fetchIdentityFacePhoto.mockReturnValueOnce(new Promise(r => { resolve = r }))
+    const w = await mountIt()
+    w.unmount()
+    resolve('blob:late-face')
+    await flushPromises()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:late-face')
+    expect(api.fetchIdentityFacePhoto).toHaveBeenCalledTimes(1)
   })
 
   it('★ 本人確認ごとに開始/再開・時刻・方法と、切り出しの再生ボタンを出す (切っていなければ「録画なし」)', async () => {
