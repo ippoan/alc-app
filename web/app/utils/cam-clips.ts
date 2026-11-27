@@ -88,10 +88,10 @@ export interface CamClipsEventClip {
 /** `GET /events?camera_id=&date=` の 1 件 (応答は配列そのもの・時刻順) */
 export interface CamClipsEvent {
   /** `measurements` = PC・測定台のアルコール、`measurements_bp` = 同じ行の血圧 (同じ source_id が 2 イベントになりうる) */
-  source_table: 'hub_measurements' | 'vein_enroll_events' | 'measurements' | 'measurements_bp'
+  source_table: 'hub_measurements' | 'vein_enroll_events' | 'measurements' | 'measurements_bp' | 'tenko_identity_events'
   source_id: string
   /** `test` = MCP で機体に作らせた開発用の試験記録 (いつも is_dev = true) */
-  kind: 'alcohol' | 'blood_pressure' | 'timecard' | 'license' | 'vein_enroll' | 'test'
+  kind: 'alcohol' | 'blood_pressure' | 'timecard' | 'license' | 'vein_enroll' | 'test' | 'tenko_identity'
   /** `+09:00` 付き */
   occurred_at: string
   device_id: string
@@ -350,6 +350,8 @@ export function summarizeCounts(c: CamClipsDeviceCounts): string {
 export function eventKindLabel(kind: string): string {
   // 試験記録は候補の件数 (KIND_LABELS) には数えないので、表示名だけここで持つ
   if (kind === 'test') return '試験'
+  // 点呼の本人確認 (指静脈の照合。自己点検表 ト①。Refs ippoan/alc-app#720)。候補の件数には数えない
+  if (kind === 'tenko_identity') return '点呼の本人確認'
   return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind as keyof CamClipsDeviceCounts] : kind
 }
 

@@ -8,6 +8,7 @@ import { tenkoTypeLabel, isBpInPersonSession } from '~/utils/tenko-type'
 import { VEIN_NO_MATCH_MESSAGE, VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 import { reportApiFailure, reportFailure } from '~/utils/equipment-failure-report'
 import { kioskDeviceIdFromJwt } from '~/utils/kiosk-remote'
+import { readIdentityFaceSource } from '~/utils/identity-face-setting'
 
 const props = defineProps<{
   demoMode?: boolean
@@ -37,6 +38,10 @@ async function roomToken(): Promise<string | undefined> {
   }
 }
 const camera = useCamera()
+// 本人確認 (指静脈の照合) のときの顔を撮るカメラ (自己点検表 ト①。Refs ippoan/alc-app#720)。端末の設定で
+// 「この端末のカメラで撮る」のときだけ、本人確認の段で起こす (「監視カメラの録画で残す」なら起こさない)
+const identityCamera = useCamera()
+const identityVideoRef = identityCamera.videoRef
 let audioStream: MediaStream | null = null  // マイク音声 (WebRTC用)
 const combinedStream = ref<MediaStream | null>(null)  // 映像+音声 (TenkoVideoCall用)
 
@@ -450,12 +455,14 @@ const vein = useVeinEmployeeIdentify({
   label: 'kiosk',
   missMessage: VEIN_NO_MATCH_MESSAGE,
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。血圧測定の画面の「未承認の指静脈」から運行管理者が承認してください`,
-  // 最初の段で特定した人と同じなら本人確認 (顔写真は撮らない)。別の人なら理由を出して置き直させる
+  // 最初の段で特定した人と同じなら本人確認 (端末のカメラで撮る設定なら、その瞬間の顔を 1 枚撮る)。
+  // 別の人なら理由を出して置き直させる
   onEmployee: (emp) => {
     if (emp.id !== employeeId.value) {
       return `${employeeName.value || '最初に確認した人'}さんの指静脈と一致しません。本人の指を置いてください`
     }
-    onFaceAuthResult({ verified: true, similarity: 0, skipped: true, method: 'vein' })
+    if (identityFaceByKiosk.value) void captureIdentityFaceAndAuth()
+    else onFaceAuthResult({ verified: true, similarity: 0, skipped: true, method: 'vein' })
     return null
   },
   // 指が置かれた合図で照合を始めるのは、顔認証の段で指静脈を使っているときだけ
@@ -536,6 +543,42 @@ useKioskScreen().declareDeviceBusy(() => !isKioskIdle.value)
 // --- 顔認証結果 ---
 function onFaceAuthResult(result: FaceAuthResult) {
   if (result.verified) onFaceAuthComplete(result)
+}
+
+// --- 本人確認のときの顔 (自己点検表 ト①「生体認証をする時の顔の画像」。Refs ippoan/alc-app#720) ---
+/** この端末のカメラで撮るか (端末の設定。デモは顔認証の画面なので撮らない) */
+const identityFaceByKiosk = computed(() => !isDemoMode.value && readIdentityFaceSource() === 'kiosk')
+/** 撮れなかったときの案内 (撮れなければ点呼を始めない) */
+const identityFaceError = ref<string | null>(null)
+const IDENTITY_FACE_FAILED_MESSAGE = 'カメラで顔を撮れなかったため点呼を始められません。運行管理者に連絡してください'
+
+// 本人確認の段に入ったらカメラを起こし、出たら止める
+watch(step, async (s, prev) => {
+  if (prev === 'face_auth' && s !== 'face_auth') identityCamera.stop()
+  if (s !== 'face_auth' || !identityFaceByKiosk.value) return
+  identityFaceError.value = null
+  try {
+    await identityCamera.start('user')
+  }
+  catch {
+    // 起きなくても照合は続けられる (撮る時点で撮れなければ止める)。故障は撮れなかったときに残す
+  }
+})
+
+/** 照合が一致した瞬間の顔を撮り、本人確認として渡す。撮れなければ故障として残して止める */
+async function captureIdentityFaceAndAuth() {
+  const snapshot = await identityCamera.takeSnapshotAsync()
+  if (!snapshot) {
+    identityFaceError.value = IDENTITY_FACE_FAILED_MESSAGE
+    reportFailure({
+      type: 'photo_storage_error',
+      description: '本人確認 (指静脈の照合) のときの顔をカメラで撮れませんでした',
+      device: 'カメラ',
+      sessionId: session.value?.id,
+    })
+    return
+  }
+  onFaceAuthResult({ verified: true, similarity: 0, skipped: true, method: 'vein', snapshot })
 }
 
 // --- アルコール測定結果 ---
@@ -867,6 +910,17 @@ onUnmounted(() => {
                 {{ vein.busy.value ? (vein.again.value ? 'もう一度置いてください…' : '指を置いてください…') : '指静脈で本人確認' }}
               </button>
               <p v-if="vein.error.value" data-testid="vein-error" class="mt-2 text-sm text-red-600">{{ vein.error.value }}</p>
+              <p v-if="identityFaceError" data-testid="identity-face-error" class="mt-2 text-sm text-red-600">{{ identityFaceError }}</p>
+              <!-- 本人確認のときの顔を撮るカメラのプレビュー (v-show: start の時点で video が在る必要がある) -->
+              <video
+                v-show="identityFaceByKiosk"
+                ref="identityVideoRef"
+                data-testid="identity-face-preview"
+                autoplay
+                playsinline
+                muted
+                class="mt-4 w-40 mx-auto aspect-video rounded-lg object-cover border border-gray-200"
+              />
             </template>
           </template>
         </div>

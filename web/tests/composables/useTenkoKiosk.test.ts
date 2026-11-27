@@ -517,6 +517,21 @@ describe('useTenkoKiosk', () => {
       expect(k.isLoading.value).toBe(false)
     })
 
+    it('★ 本人確認の方法を開始の本文に載せる (サーバーが本人確認の記録に残す。Refs ippoan/alc-app#720)', async () => {
+      vi.mocked(startTenkoSession).mockResolvedValue(makeSession({ status: 'medical_pending' }))
+      vi.mocked(uploadFacePhoto).mockResolvedValue('https://photo.url')
+      const k = useTenkoKiosk()
+      k.employeeId.value = 'emp-1'
+      k.selectedSchedule.value = makeSchedule()
+      await k.onFaceAuthComplete({ verified: true, similarity: 0, skipped: true, method: 'vein', snapshot: new Blob(['f']) })
+      expect(startTenkoSession).toHaveBeenCalledWith({
+        schedule_id: 'sched-1',
+        employee_id: 'emp-1',
+        identity_face_photo_url: 'https://photo.url',
+        identity_method: 'vein',
+      })
+    })
+
     it('remoteMode: schedule なしで tenko_type 指定', async () => {
       const sess = makeSession({ status: 'medical_pending' })
       vi.mocked(startTenkoSession).mockResolvedValue(sess)
@@ -1885,6 +1900,35 @@ describe('useTenkoKiosk', () => {
       // `started_at` は送らない — 記録は書き換えず、再開の事実を足す
       expect(Object.keys(vi.mocked(selfResumeTenkoSession).mock.calls[0]![1])).toEqual(['reason', 'identity'])
       expect(k.step.value).toBe('medical')
+    })
+
+    it('★ 本人確認のとき撮った顔は保存して再開の本文に添える (自己点検表 ト①。Refs ippoan/alc-app#720)', async () => {
+      vi.mocked(uploadFacePhoto).mockResolvedValue('https://photo.url/resume')
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+      k.employeeId.value = 'emp-1'
+      await resume(k, stuck)
+      const blob = new Blob(['face'])
+      await k.onFaceAuthComplete({ ...VEIN_OK, snapshot: blob })
+      expect(uploadFacePhoto).toHaveBeenCalledWith(blob)
+      expect(selfResumeTenkoSession).toHaveBeenCalledWith('sess-stuck', {
+        reason: KIOSK_SELF_RESUME_REASON,
+        identity: { employee_id: 'emp-1', method: 'vein' },
+        identity_face_photo_url: 'https://photo.url/resume',
+      })
+    })
+
+    it('★ 顔を保存できなければ再開しない (故障として残し、本人確認の段に留める)', async () => {
+      vi.mocked(uploadFacePhoto).mockRejectedValue(new Error('Failed to fetch'))
+      const stuck = makeSession({ id: 'sess-stuck', status: 'medical_pending' })
+      const k = useTenkoKiosk({ allowResume: true })
+      k.employeeId.value = 'emp-1'
+      await resume(k, stuck)
+      await k.onFaceAuthComplete({ ...VEIN_OK, snapshot: new Blob(['face']) })
+      expect(selfResumeTenkoSession).not.toHaveBeenCalled()
+      expect(k.error.value).toBe('Failed to fetch')
+      expect(reportApiFailure).toHaveBeenCalledWith(expect.any(Error), '顔写真の保存', expect.objectContaining({ type: 'photo_storage_error' }))
+      expect(k.isLoading.value).toBe(false)
     })
 
     it('顔認証 (デモの端末) で通ったときは方法を face で送る', async () => {

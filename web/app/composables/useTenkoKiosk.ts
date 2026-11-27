@@ -355,10 +355,22 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
     error.value = null
     isLoading.value = true
     try {
+      // 本人確認のとき撮った顔 (自己点検表 ト①)。保存できなければ再開しない (開始と同じ)
+      let photoUrl: string | undefined
+      if (auth.snapshot) {
+        try {
+          photoUrl = await uploadFacePhoto(auth.snapshot)
+        }
+        catch (e) {
+          _fail(e, '再開に失敗しました', '顔写真の保存', 'photo_storage_error')
+          return
+        }
+      }
       // 照合で決まった人と方法をサーバーへ渡す (サーバーが点呼の乗務員と突き合わせる。業務前 十三)
       const resumed = await selfResumeTenkoSession(s.id, {
         reason: KIOSK_SELF_RESUME_REASON,
         identity: { employee_id: employeeId.value, method: auth.method ?? 'face' },
+        ...(photoUrl ? { identity_face_photo_url: photoUrl } : {}),
       })
       pendingResume.value = null
       medicalSentBack.value = _sentBackToMedical(s.status, resumed)
@@ -517,6 +529,8 @@ export function useTenkoKiosk(options?: { remoteMode?: boolean, allowResume?: bo
       const body: StartTenkoSession = selectedSchedule.value
         ? { schedule_id: selectedSchedule.value.id, employee_id: employeeId.value, identity_face_photo_url: photoUrl }
         : { tenko_type: selectedTenkoType.value ?? 'pre_operation', employee_id: employeeId.value, identity_face_photo_url: photoUrl }
+      // 本人確認の方法 (サーバーが本人確認の記録に残す。自己点検表 ト①)
+      if (result.method) body.identity_method = result.method
       // GPS 版の機体をつないでいれば位置を付ける (NOFIX でも止めない。Refs ippoan/alc-app#514)
       const location = currentLocation()
       if (location !== undefined) body.location = location

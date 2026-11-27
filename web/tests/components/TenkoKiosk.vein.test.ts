@@ -134,8 +134,10 @@ mockNuxtImport('useWebRtc', () => () => ({
   startStreaming: vi.fn(async () => {}),
   disconnect: vi.fn(),
 }))
+// 本人確認のときの顔を撮るカメラ (Refs ippoan/alc-app#720)。撮った 1 枚は snap.fn が返す
+const snap = vi.hoisted(() => ({ fn: vi.fn(), start: vi.fn(), stop: vi.fn() }))
 mockNuxtImport('useCamera', () => () => ({
-  stream: ref(null), videoRef: ref(null), isActive: ref(false), start: vi.fn(async () => {}), stop: vi.fn(),
+  stream: ref(null), videoRef: ref(null), isActive: ref(false), start: snap.start, stop: snap.stop, takeSnapshotAsync: snap.fn,
 }))
 mockNuxtImport('useVideoRecorder', () => () => ({
   isRecording: ref(false), recordedBlob: ref(null), error: ref(null), startRecording: vi.fn(), stopRecording: vi.fn(async () => null),
@@ -188,9 +190,71 @@ describe('TenkoKiosk — 指静脈で本人確認 (Refs ippoan/vein-match#20)', 
     db.loadVeinTemplates.mockResolvedValue({ logicVersion: '0.1.1', fetchedAt: 1, templates: [] })
     match.loadVeinWasm.mockResolvedValue(undefined)
     viaModule.on = false
+    // 照合そのものを見るテストは、端末では撮らない設定 (監視カメラ) で通す。撮る設定は下の describe
+    localStorage.setItem('alc-identity-face', 'cam')
   })
 
-  afterEach(() => setOnline(true))
+  afterEach(() => {
+    setOnline(true)
+    localStorage.clear()
+  })
+
+  describe('本人確認のときの顔 (この端末のカメラで撮る設定。自己点検表 ト①、Refs ippoan/alc-app#720)', () => {
+    beforeEach(() => {
+      localStorage.clear()
+      snap.start.mockResolvedValue(undefined)
+      api.identifyVein.mockResolvedValue({ employee_id: 'emp-1', name: '山田 太郎' })
+      api.getEmployeeById.mockResolvedValue(EMP)
+    })
+
+    it('★ 照合が一致した瞬間の顔を撮り、本人確認に添える', async () => {
+      const blob = new Blob(['face'], { type: 'image/jpeg' })
+      snap.fn.mockResolvedValue(blob)
+      const wrapper = await mountKiosk()
+      expect(wrapper.find('[data-testid="identity-face-preview"]').exists()).toBe(true)
+      await pressVein(wrapper)
+      expect(snap.fn).toHaveBeenCalled()
+      expect(onFaceAuthCompleteMock).toHaveBeenCalledWith({ ...VEIN_OK, snapshot: blob })
+      wrapper.unmount()
+    })
+
+    it('★ 撮れなければ点呼を始めず、理由を出して故障として残す', async () => {
+      snap.fn.mockResolvedValue(null)
+      const wrapper = await mountKiosk()
+      await pressVein(wrapper)
+      expect(onFaceAuthCompleteMock).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="identity-face-error"]').text()).toContain('カメラで顔を撮れなかった')
+      expect(failureReport.reportFailure).toHaveBeenCalledWith(expect.objectContaining({ type: 'photo_storage_error', device: 'カメラ' }))
+      wrapper.unmount()
+    })
+
+    it('本人確認の段に入るとカメラを起こし、出ると止める。起きなくても照合の画面は出す', async () => {
+      step.value = 'nfc'
+      snap.start.mockRejectedValueOnce(new Error('NotAllowedError'))
+      const wrapper = await mountKiosk()
+      step.value = 'face_auth'
+      await flushPromises()
+      expect(snap.start).toHaveBeenCalledWith('user')
+      expect(wrapper.find('[data-testid="vein-identify"]').exists()).toBe(true)
+      step.value = 'alcohol'
+      await flushPromises()
+      expect(snap.stop).toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('監視カメラの設定ではカメラを起こさず、撮らない', async () => {
+      localStorage.setItem('alc-identity-face', 'cam')
+      step.value = 'nfc'
+      const wrapper = await mountKiosk()
+      step.value = 'face_auth'
+      await flushPromises()
+      expect(snap.start).not.toHaveBeenCalled()
+      await pressVein(wrapper)
+      expect(snap.fn).not.toHaveBeenCalled()
+      expect(onFaceAuthCompleteMock).toHaveBeenCalledWith(VEIN_OK)
+      wrapper.unmount()
+    })
+  })
 
   it('起動時に端末へ接続し、照合データを同期する', async () => {
     const wrapper = await mountKiosk()

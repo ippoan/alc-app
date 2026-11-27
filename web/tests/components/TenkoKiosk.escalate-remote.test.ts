@@ -190,6 +190,8 @@ describe('TenkoKiosk — 血圧が測れないとき遠隔点呼に切り替え�
     getPendingSchedules.mockResolvedValue([makeSchedule()])
     startTenkoSession.mockResolvedValue(makeSession())
     escalateTenkoSessionToRemote.mockResolvedValue({ ...makeSession(), escalated_to_remote_at: '2026-09-16T08:05:00Z' })
+    // 本人確認のときの顔は監視カメラで残す設定 (端末では撮らない。撮る流れは TenkoKiosk.vein.test.ts)
+    localStorage.setItem('alc-identity-face', 'cam')
   })
 
   it('切り替えの理由は選択肢から選ばせる (自由入力にしない)', async () => {

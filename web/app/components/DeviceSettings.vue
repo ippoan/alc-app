@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { readVeinRotateEnabled, writeVeinRotateEnabled } from '~/utils/vein-rotate-setting'
+import { readIdentityFaceSource, writeIdentityFaceSource, type IdentityFaceSource } from '~/utils/identity-face-setting'
 import type { DeviceSettingsResponse } from '~/types'
 import { BLE_GW_DEVICES } from '~/composables/useSerialArbiter'
 import { alcoholResultLabel } from '~/utils/alcohol'
@@ -27,6 +28,12 @@ const veinRotate = ref(readVeinRotateEnabled())
 function setVeinRotate(on: boolean): void {
   veinRotate.value = on
   writeVeinRotateEnabled(on)
+}
+// 点呼の本人確認のときの顔を何で残すか (端末のカメラ / 監視カメラ。Refs ippoan/alc-app#720)
+const identityFaceSource = ref<IdentityFaceSource>(readIdentityFaceSource())
+function setIdentityFaceSource(v: IdentityFaceSource): void {
+  identityFaceSource.value = v
+  writeIdentityFaceSource(v)
 }
 const { setting: veinSecuritySetting, moduleLevel: veinModuleLevel, setSetting: setVeinSecuritySetting } = useVeinSecurityLevel()
 
@@ -741,6 +748,21 @@ async function syncFc1200Date() {
           >
             <option value="on">一番古い 1 本を入れ替える</option>
             <option value="off">入れ替えない (登録のまま、既定)</option>
+          </select>
+        </label>
+
+        <!-- 点呼の本人確認 (指静脈の照合) のときの顔を何で残すか (自己点検表 ト①。Refs ippoan/alc-app#720)。
+             監視カメラが付いていても配置で顔が映らない拠点があるので、拠点ごとに選ぶ -->
+        <label class="flex flex-col gap-1 text-xs text-gray-700">
+          <span>本人確認のときの顔の記録</span>
+          <select
+            data-testid="identity-face-source"
+            class="rounded-lg border border-gray-300 px-2 py-1.5 text-xs"
+            :value="identityFaceSource"
+            @change="setIdentityFaceSource(($event.target as HTMLSelectElement).value === 'cam' ? 'cam' : 'kiosk')"
+          >
+            <option value="kiosk">この端末のカメラで撮る (既定)</option>
+            <option value="cam">監視カメラの録画で残す</option>
           </select>
         </label>
 
