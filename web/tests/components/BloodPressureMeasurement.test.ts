@@ -16,8 +16,9 @@ import { VEIN_TEMPLATE_SYNC_INTERVAL_MS } from '~/utils/vein-identify'
 
 // vi.mock はファイル先頭へ巻き上がるので、factory から触る mock は vi.hoisted で作る。
 // 他の export (useAuth が使う rePairDevice 等) は本物のまま残す
-const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock, lookupEmployeeByCardMock }
+const { startMeasurementMock, updateMeasurementMock, saveMeasurementMock, startTenkoSessionMock, getEmployeeByNfcIdMock, getEmployeeByCodeMock, lookupEmployeeByCardMock, getBpCountMock }
   = vi.hoisted(() => ({
+    getBpCountMock: vi.fn(),
     getEmployeeByNfcIdMock: vi.fn(),
     getEmployeeByCodeMock: vi.fn(),
     lookupEmployeeByCardMock: vi.fn(),
@@ -36,7 +37,15 @@ vi.mock('~/utils/api', async (importOriginal) => ({
   getEmployeeByNfcId: getEmployeeByNfcIdMock,
   getEmployeeByCode: getEmployeeByCodeMock,
   lookupEmployeeByCard: lookupEmployeeByCardMock,
+  getBpCount: getBpCountMock,
 }))
+
+// 静脈認証が通った直後の血圧の回数の問い合わせ (Refs ippoan/alc-app#676)。既定はまだ測れる (0 回)
+const BP_COUNT_OPEN = { count: 0, limit: 2, validity_minutes: 30, reached: false }
+beforeEach(() => {
+  getBpCountMock.mockReset()
+  getBpCountMock.mockResolvedValue(BP_COUNT_OPEN)
+})
 
 // USB の機体 (Vein Base) の行の受け口。画面が登録した cb を控え、行はテストが流す
 type HubEventHandler = (name: string, args: string[], source: string) => void
@@ -1438,5 +1447,93 @@ describe('BloodPressureMeasurement — カード・社員番号で人を選ん�
       expect(wrapper.findComponent(VeinRegistrationStub).props('employee')).toBeNull()
       wrapper.unmount()
     })
+  })
+})
+
+describe('BloodPressureMeasurement — 静脈認証が通った時点で血圧の回数を問う (Refs ippoan/alc-app#676)', () => {
+  const LIMIT = '有効時間内の血圧の測定は 2 回までです。運行管理者に連絡してください'
+  const REACHED = { count: 2, limit: 2, validity_minutes: 30, reached: true }
+
+  beforeEach(() => {
+    arrangeVein()
+    bpUiState.value = 'show'
+    latestBloodPressure.value = null
+    startMeasurementMock.mockReset()
+    startMeasurementMock.mockResolvedValue({ id: 'meas-test-1' })
+  })
+
+  it('★ 上限なら静脈の段で 2 回までの案内を出し、測定に進ませない (測定を作らない)', async () => {
+    getBpCountMock.mockResolvedValue(REACHED)
+    const wrapper = await mountBp()
+    await identifyByFinger(wrapper)
+
+    expect(getBpCountMock).toHaveBeenCalledWith('emp-vein-1')
+    expect(wrapper.find('[data-testid="vein-error"]').text()).toBe(LIMIT)
+    expect(vein.say).toHaveBeenCalledWith('FAILED')
+    expect(wrapper.find('[data-testid="bp-entry"]').exists()).toBe(true)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+    expect(startMeasurementMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('上限に達していなければ、これまでどおり測定へ進む', async () => {
+    getBpCountMock.mockResolvedValue({ count: 1, limit: 2, validity_minutes: 30, reached: false })
+    const wrapper = await mountBp()
+    await identifyByFinger(wrapper)
+
+    expect(getBpCountMock).toHaveBeenCalledWith('emp-vein-1')
+    expect(wrapper.find('[data-testid="vein-error"]').exists()).toBe(false)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('問い合わせが落ちたら測定へ進ませる (保存の 422 が保険)', async () => {
+    getBpCountMock.mockRejectedValue(Object.assign(new Error('API エラー (500): '), { status: 500 }))
+    const wrapper = await mountBp()
+    await identifyByFinger(wrapper)
+
+    expect(wrapper.find('[data-testid="vein-error"]').exists()).toBe(false)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('問い合わせの応答待ちの間は照合中のまま (指を置き直しても次の照合を始めない)', async () => {
+    let answer!: (v: typeof REACHED) => void
+    getBpCountMock.mockReturnValue(new Promise(r => { answer = r }))
+    const wrapper = await mountBp()
+    await identifyByFinger(wrapper)
+    expect(wrapper.find('[data-testid="vein-identify"]').attributes('disabled')).toBeDefined()
+    vein.capture.mockClear()
+    finger.cb!()
+    await flush(wrapper)
+    expect(vein.capture).not.toHaveBeenCalled()
+
+    answer(REACHED)
+    await flush(wrapper)
+    expect(wrapper.find('[data-testid="vein-error"]').text()).toBe(LIMIT)
+    expect(wrapper.find('[data-testid="vein-identify"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('カードで選んだ人も、指静脈が一致した時点で問い、上限なら測定に進ませない。別の人の指なら問わない', async () => {
+    veinModule.usesVeinModule.mockReset().mockReturnValue(false)
+    getEmployeeByNfcIdMock.mockReset().mockResolvedValue({ id: 'emp-vein-1', name: 'テスト花子' })
+    getBpCountMock.mockResolvedValue(REACHED)
+    const wrapper = await mountBp()
+    await wrapper.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-1')
+    await flush(wrapper)
+    expect(getBpCountMock).toHaveBeenCalledWith('emp-vein-1')
+    expect(wrapper.find('[data-testid="vein-error"]').text()).toBe(LIMIT)
+    expect(wrapper.findComponent(BleStatusStub).exists()).toBe(false)
+    wrapper.unmount()
+
+    getBpCountMock.mockClear()
+    getEmployeeByNfcIdMock.mockResolvedValue({ id: 'emp-card-2', name: 'テスト太郎' })
+    const other = await mountBp()
+    await other.findComponent(NfcStatusStub).vm.$emit('read', 'nfc-test-2')
+    await flush(other)
+    expect(getBpCountMock).not.toHaveBeenCalled()
+    expect(other.find('[data-testid="vein-error"]').text()).toBe('テスト太郎さんの指静脈と一致しません。本人の指を置いてください')
+    other.unmount()
   })
 })

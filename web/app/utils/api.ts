@@ -541,6 +541,26 @@ export async function startMeasurement(employeeId: string): Promise<ApiMeasureme
   }, 'measurement-bp')
 }
 
+/** 測定台の血圧の回数 (`GET /api/measurements/bp-count`) の応答 */
+export interface BpCount {
+  /** 有効時間内の血圧の数 (外した血圧は数えない。同じ時刻は 1 回) */
+  count: number
+  /** 有効時間内に測れる数 (最初 + 測り直し 1 回) */
+  limit: number
+  /** 有効時間 (分。基準値の行が無ければ 30) */
+  validity_minutes: number
+  /** `count >= limit`。もう測れない */
+  reached: boolean
+}
+
+/**
+ * 乗務員の有効時間内の測定台の血圧の数 (Refs ippoan/alc-app#676)。静脈認証が通った直後に問い、上限に達していれば
+ * 測定に進ませない。数え方は保存 (`updateMeasurement`) の 422 と同じ。鍵は `startMeasurement` と同じ (測定台の鍵)
+ */
+export async function getBpCount(employeeId: string): Promise<BpCount> {
+  return request<BpCount>(`/api/measurements/bp-count?employee_id=${encodeURIComponent(employeeId)}`, {}, 'measurement-bp')
+}
+
 /** 測定レコードを更新 (血圧測定台の 4 本のうちの 1 本、Refs #353) */
 export async function updateMeasurement(id: string, data: Record<string, unknown>): Promise<UpdatedMeasurement> {
   return request<UpdatedMeasurement>(`/api/measurements/${id}`, {
