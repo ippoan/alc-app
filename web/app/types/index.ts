@@ -895,9 +895,12 @@ export interface EmployeeHealthBaseline {
   systolic_tolerance: number
   diastolic_tolerance: number
   temperature_tolerance: number
+  /** 体温の有効時間 (分) */
   measurement_validity_minutes: number
   created_at: string
   updated_at: string
+  /** 血圧の有効時間 (分)。null = 当日中 (日本時間。alc-migrations 222)。古い backend では無い */
+  bp_validity_minutes?: number | null
 }
 
 export interface CreateHealthBaseline {
@@ -909,6 +912,8 @@ export interface CreateHealthBaseline {
   diastolic_tolerance?: number
   temperature_tolerance?: number
   measurement_validity_minutes?: number
+  /** 血圧の有効時間 (分)。null・省略 = 当日中 */
+  bp_validity_minutes?: number | null
 }
 
 export interface UpdateHealthBaseline {
@@ -919,6 +924,8 @@ export interface UpdateHealthBaseline {
   diastolic_tolerance?: number
   temperature_tolerance?: number
   measurement_validity_minutes?: number
+  /** 血圧の有効時間 (分)。null = 当日中へ戻す。省略 = 変えない */
+  bp_validity_minutes?: number | null
 }
 
 /** 機器故障記録 */
