@@ -38,6 +38,26 @@ async function fetchData() {
   }
 }
 
+/**
+ * 血圧の有効時間の選び方 (Refs ippoan/alc-app#676)。当日中 (日本時間。既定) か分。体温の有効時間 (分) とは別。
+ * サーバーの `bp_validity_minutes` は null = 当日中、数 = 分
+ */
+type BpMode = 'same_day' | 'minutes'
+const DEFAULT_BP_MINUTES = 30
+function bpModeOf(v: number | null | undefined): BpMode {
+  return v == null ? 'same_day' : 'minutes'
+}
+function bpValue(mode: BpMode, minutes: number): number | null {
+  return mode === 'same_day' ? null : minutes
+}
+function bpLabel(v: number | null | undefined): string {
+  return v == null ? '当日中' : `${v} 分`
+}
+const newBpMode = ref<BpMode>('same_day')
+const newBpMinutes = ref(DEFAULT_BP_MINUTES)
+const editBpMode = ref<BpMode>('same_day')
+const editBpMinutes = ref(DEFAULT_BP_MINUTES)
+
 // 新規作成フォーム
 const showForm = ref(false)
 const isSaving = ref(false)
@@ -63,6 +83,8 @@ function resetForm() {
     temperature_tolerance: 0.5,
     measurement_validity_minutes: 30,
   }
+  newBpMode.value = 'same_day'
+  newBpMinutes.value = DEFAULT_BP_MINUTES
 }
 
 async function handleCreate() {
@@ -70,7 +92,7 @@ async function handleCreate() {
   isSaving.value = true
   error.value = null
   try {
-    await createBaseline(newForm.value)
+    await createBaseline({ ...newForm.value, bp_validity_minutes: bpValue(newBpMode.value, newBpMinutes.value) })
     resetForm()
     showForm.value = false
     await fetchData()
@@ -97,6 +119,8 @@ function startEdit(b: EmployeeHealthBaseline) {
     temperature_tolerance: b.temperature_tolerance,
     measurement_validity_minutes: b.measurement_validity_minutes,
   }
+  editBpMode.value = bpModeOf(b.bp_validity_minutes)
+  editBpMinutes.value = b.bp_validity_minutes ?? DEFAULT_BP_MINUTES
   deletingId.value = null
 }
 
@@ -107,7 +131,7 @@ async function handleUpdate() {
   isUpdating.value = true
   error.value = null
   try {
-    await updateBaseline(editingId.value, editForm.value)
+    await updateBaseline(editingId.value, { ...editForm.value, bp_validity_minutes: bpValue(editBpMode.value, editBpMinutes.value) })
     editingId.value = null
     await fetchData()
   } catch (e) {
@@ -189,8 +213,18 @@ onMounted(() => { loadEmployees(); fetchData() })
           <input v-model.number="newForm.temperature_tolerance" type="number" step="0.1" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">有効時間 (分)</label>
+          <label class="block text-xs text-gray-500 mb-1">体温の有効時間 (分)</label>
           <input v-model.number="newForm.measurement_validity_minutes" type="number" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">血圧の有効時間</label>
+          <div class="flex gap-2">
+            <select v-model="newBpMode" data-testid="new-bp-mode" class="px-2 py-2 border border-gray-300 rounded-lg text-sm">
+              <option value="same_day">当日中</option>
+              <option value="minutes">分で決める</option>
+            </select>
+            <input v-if="newBpMode === 'minutes'" v-model.number="newBpMinutes" data-testid="new-bp-minutes" type="number" min="1" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
         </div>
       </div>
       <button
@@ -219,7 +253,8 @@ onMounted(() => { loadEmployees(); fetchData() })
               <th class="px-4 py-3 text-right font-medium">収縮期±</th>
               <th class="px-4 py-3 text-right font-medium">拡張期±</th>
               <th class="px-4 py-3 text-right font-medium">体温±</th>
-              <th class="px-4 py-3 text-right font-medium">有効(分)</th>
+              <th class="px-4 py-3 text-right font-medium">体温の有効(分)</th>
+              <th class="px-4 py-3 text-right font-medium">血圧の有効</th>
               <th class="px-4 py-3 text-center font-medium">操作</th>
             </tr>
           </thead>
@@ -235,6 +270,15 @@ onMounted(() => { loadEmployees(); fetchData() })
                 <td class="px-4 py-3"><input v-model.number="editForm.diastolic_tolerance" type="number" class="w-full px-2 py-1 border border-gray-300 rounded text-sm text-right"></td>
                 <td class="px-4 py-3"><input v-model.number="editForm.temperature_tolerance" type="number" step="0.1" class="w-full px-2 py-1 border border-gray-300 rounded text-sm text-right"></td>
                 <td class="px-4 py-3"><input v-model.number="editForm.measurement_validity_minutes" type="number" class="w-full px-2 py-1 border border-gray-300 rounded text-sm text-right"></td>
+                <td class="px-4 py-3">
+                  <div class="flex gap-1">
+                    <select v-model="editBpMode" data-testid="edit-bp-mode" class="px-1 py-1 border border-gray-300 rounded text-sm">
+                      <option value="same_day">当日中</option>
+                      <option value="minutes">分</option>
+                    </select>
+                    <input v-if="editBpMode === 'minutes'" v-model.number="editBpMinutes" data-testid="edit-bp-minutes" type="number" min="1" class="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-right">
+                  </div>
+                </td>
                 <td class="px-4 py-3 text-center">
                   <div class="flex justify-center gap-1">
                     <button :disabled="isUpdating" class="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50" @click="handleUpdate">
@@ -255,6 +299,7 @@ onMounted(() => { loadEmployees(); fetchData() })
                 <td class="px-4 py-3 text-right text-gray-500">{{ b.diastolic_tolerance }}</td>
                 <td class="px-4 py-3 text-right text-gray-500">{{ b.temperature_tolerance.toFixed(1) }}</td>
                 <td class="px-4 py-3 text-right text-gray-500">{{ b.measurement_validity_minutes }}</td>
+                <td class="px-4 py-3 text-right text-gray-500" data-testid="bp-validity">{{ bpLabel(b.bp_validity_minutes) }}</td>
                 <td class="px-4 py-3 text-center">
                   <div class="flex justify-center gap-1">
                     <button class="px-2 py-1 text-blue-600 hover:bg-blue-50 rounded text-xs" @click="startEdit(b)">編集</button>
