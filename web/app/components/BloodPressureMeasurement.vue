@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getEmployeeByCode, getEmployeeByNfcId, lookupEmployeeByCard } from '~/utils/api'
+import { getBpCount, getEmployeeByCode, getEmployeeByNfcId, lookupEmployeeByCard } from '~/utils/api'
 import { cardEventLookupId } from '~/composables/useAlarmDevice'
 import { devTiming } from '~/utils/dev-timing'
 import { employeeNotFoundByCode, employeeNotFoundByNfc, employeeLookupFailureMessage } from '~/utils/employee-lookup-messages'
@@ -51,11 +51,14 @@ const vein = useVeinEmployeeIdentify({
   label: 'bp',
   missMessage: '照合できませんでした。もう一度指を置いてください',
   pendingMessage: name => `${name ?? 'この人'}さんの指静脈は未承認です。下の「未承認の指静脈」から運行管理者が承認してください`,
-  onEmployee: (emp, via) => {
+  onEmployee: async (emp, via) => {
     // カード・社員番号で決めた人と違う指: 置き直させる
     if (expected.value && emp.id !== expected.value.id) {
       return `${expected.value.name}さんの指静脈と一致しません。本人の指を置いてください`
     }
+    // 有効時間内の血圧が上限なら、測ってから保存で断られる前にここで止める (Refs ippoan/alc-app#676)。
+    // 問い合わせの間は照合中 (`vein.busy`) のままなので、指を置き直しても次の照合は始まらない
+    if (await bpLimitReached(emp.id)) return BP_LIMIT_MESSAGE
     proceedWithVeinEmployee(emp)
     refresh.offer(emp.id, via)
     return null
@@ -109,6 +112,19 @@ const saveLimited = ref(false)
 /** 血圧の保存が上限で断られたときの案内 */
 const BP_LIMIT_MESSAGE = '有効時間内の血圧の測定は 2 回までです。運行管理者に連絡してください'
 const savedReading = ref<{ systolic: number; diastolic: number; pulse?: number } | null>(null)
+
+/**
+ * 静脈認証が通った乗務員が、有効時間内の血圧の上限に達しているか。問い合わせが落ちた (ネットワーク・5xx) ときは
+ * 測定に進ませる (保存の 422 が保険として残る)
+ */
+async function bpLimitReached(employeeId: string): Promise<boolean> {
+  try {
+    return (await getBpCount(employeeId)).reached
+  } catch {
+    devTiming('bp.count.failed')
+    return false
+  }
+}
 
 /** 乗務員を控える */
 function selectEmployee(emp: { id: string; name: string }) {

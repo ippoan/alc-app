@@ -12,7 +12,7 @@ import {
   initApi,
   setBpStationJwtGetter,
   BP_STATION_DEVICE_AUTH_FAILED_MESSAGE,
-  getEmployeeByNfcId, getFaceData, startMeasurement, updateMeasurement,
+  getBpCount, getEmployeeByNfcId, getFaceData, startMeasurement, updateMeasurement,
   getEmployees, getEmployeeByCode, startTenkoSession, submitMedical, listSchedules,
 } from '~/utils/api'
 
@@ -68,6 +68,7 @@ const BP_STATION_CALLS: [string, () => Promise<unknown>][] = [
   ['getEmployeeByNfcId (POST /api/employees/lookup)', () => getEmployeeByNfcId('1234567890123456')],
   ['getFaceData (GET /api/employees/face-data)', () => getFaceData()],
   ['startMeasurement (POST /api/measurements/start)', () => startMeasurement('emp-1')],
+  ['getBpCount (GET /api/measurements/bp-count)', () => getBpCount('emp-1')],
   ['updateMeasurement (PUT /api/measurements/{id})', () => updateMeasurement('m-1', { status: 'completed' })],
 ]
 
